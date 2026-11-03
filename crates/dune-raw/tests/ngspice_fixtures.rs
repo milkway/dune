@@ -186,6 +186,13 @@ fn hostile_counts_fail_fast() {
     let _ = Rawfile::parse(spin2);
     assert!(t.elapsed().as_secs() < 1, "parser spun past vector lengths");
 
+    // Padded (default) with zero declared variables: the inner loop is
+    // empty, so iterations must be clamped to zero.
+    let spin3 = b"Plotname: p\nFlags: real\nNo. Variables: 0\nNo. Points: 9999999999\nBinary:\n";
+    let t = Instant::now();
+    let _ = Rawfile::parse(spin3);
+    assert!(t.elapsed().as_secs() < 1, "parser spun with no variables");
+
     // Huge declared counts with a tiny body must not allocate huge
     // columns up front (the reserve is bounded by the input size).
     let tiny = b"Plotname: p\nFlags: real\nNo. Variables: 1\nNo. Points: 9999999\n\

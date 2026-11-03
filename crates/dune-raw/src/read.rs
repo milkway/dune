@@ -346,11 +346,15 @@ impl<'a> Reader<'a> {
                 ));
             }
         }
-        // Unpadded data stops at the longest vector: past it no byte is
-        // consumed, so looping all the way to a hostile `No. Points`
-        // would be a pure CPU spin. In padded mode every point consumes
-        // bytes for every vector, which the check above already bounded.
-        let iters = if padded {
+        // Every iteration must consume input, or a hostile `No. Points`
+        // becomes a pure CPU spin: a section with nothing to read (zero
+        // bytes promised — no vectors, or all zero-length unpadded) gets
+        // zero iterations; unpadded data stops at the longest vector; and
+        // padded mode reads every vector at every point, already bounded
+        // by the byte check above.
+        let iters = if total == Some(0) {
+            0
+        } else if padded {
             npoints
         } else {
             lengths.iter().copied().max().unwrap_or(0)
