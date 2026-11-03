@@ -1,0 +1,9 @@
+RC lowpass test fixture
+v1 in 0 dc 1 ac 1 pulse (0 1 0 1n 1n 1u 2u)
+r1 in out 1k
+c1 out 0 1n
+.op
+.ac dec 4 1k 1meg
+.tran 0.2u 2u
+.options filetype=ascii
+.end

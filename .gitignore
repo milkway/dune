@@ -31,6 +31,7 @@ r/src/*.dll
 # Saídas de simulação locais
 *.raw
 !corpus/golden/**/*.raw
+!crates/*/tests/data/*.raw
 
 # macOS
 .DS_Store
