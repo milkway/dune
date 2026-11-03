@@ -1,0 +1,11 @@
+[package]
+name = "dune-raw"
+description = "SPICE3 rawfile reader/writer (ASCII and binary)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+num-complex.workspace = true

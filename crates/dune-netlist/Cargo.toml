@@ -1,0 +1,10 @@
+[package]
+name = "dune-netlist"
+description = "SPICE3f5 netlist lexer, parser, and IR"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true

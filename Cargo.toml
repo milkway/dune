@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/dune-netlist",
+    "crates/dune-core",
+    "crates/dune-raw",
+    "crates/dune-cli",
+    "crates/dune-oracle",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# MSRV: edition 2024 requires 1.85; raise only with a note in the commit.
+rust-version = "1.85"
+license = "BSD-3-Clause"
+
+[workspace.dependencies]
+thiserror = "2"
+anyhow = "1"
+num-complex = "0.4"
+
+dune-netlist = { path = "crates/dune-netlist" }
+dune-core = { path = "crates/dune-core" }
+dune-raw = { path = "crates/dune-raw" }

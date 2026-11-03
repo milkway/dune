@@ -1,0 +1,11 @@
+[package]
+name = "dune-core"
+description = "Circuit simulation engine: MNA, devices, Newton-Raphson, integration, analyses"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+num-complex.workspace = true

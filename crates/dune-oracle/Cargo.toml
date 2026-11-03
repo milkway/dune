@@ -1,0 +1,11 @@
+[package]
+name = "dune-oracle"
+description = "Comparison harness: runs ngspice, compares rawfiles, reports PASS/FAIL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dune-raw.workspace = true

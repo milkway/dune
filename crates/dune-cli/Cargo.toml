@@ -1,0 +1,17 @@
+[package]
+name = "dune-cli"
+description = "The `dune` command-line simulator (batch mode, spice3 -b compatible)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dune"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+dune-netlist.workspace = true
+dune-core.workspace = true
+dune-raw.workspace = true
