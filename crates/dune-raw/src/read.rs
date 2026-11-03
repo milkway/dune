@@ -172,8 +172,8 @@ impl<'a> Reader<'a> {
             self.warnings.push("misplaced Dimensions: line".into());
             return;
         }
-        match parse_dims(rest.trim()) {
-            Some(dims) if dims.iter().product::<usize>() == p.npoints => {
+        match parse_dims(rest.trim()).and_then(|d| checked_product(&d).map(|n| (d, n))) {
+            Some((dims, n)) if n == p.npoints => {
                 p.dimensions = Some(dims);
             }
             Some(_) => self
@@ -252,12 +252,10 @@ impl<'a> Reader<'a> {
             } else if let Some(v) = tok.strip_prefix("plot=") {
                 var.plottype = v.parse().ok();
             } else if let Some(v) = tok.strip_prefix("dims=") {
-                // `fixdims`: invalid or oversized dims fall back to the
-                // plot default.
-                match parse_dims(v) {
-                    Some(dims) if dims.iter().product::<usize>() <= npoints => {
-                        var.dims = Some(dims);
-                    }
+                // `fixdims`: invalid, overflowing or oversized dims fall
+                // back to the plot default.
+                match parse_dims(v).and_then(|d| checked_product(&d).map(|n| (d, n))) {
+                    Some((dims, n)) if n <= npoints => var.dims = Some(dims),
                     _ => self.warn("syntax error in dimensions, ignored"),
                 }
             } else {
@@ -312,7 +310,7 @@ impl<'a> Reader<'a> {
 
     fn parse_values(&mut self) -> Result<(), Error> {
         let (npoints, lengths, complex, padded) = self.data_shape()?;
-        let mut cols = new_columns(&lengths);
+        let mut cols = self.new_columns(&lengths, complex);
         for i in 0..npoints {
             // Point index: read and discarded, like the C `fscanf(" %d")`.
             self.ascii_token_f64("point index")?;
@@ -330,7 +328,29 @@ impl<'a> Reader<'a> {
 
     fn parse_binary(&mut self) -> Result<(), Error> {
         let (npoints, lengths, complex, padded) = self.data_shape()?;
-        let mut cols = new_columns(&lengths);
+        // Every double promised by the header must fit in the remaining
+        // input; checking up front rejects a hostile `No. Points` before
+        // the read loop (which would otherwise spin on point counts that
+        // consume no bytes, e.g. zero-length unpadded vectors).
+        let width = if complex { 16 } else { 8 };
+        let total: Option<usize> = lengths
+            .iter()
+            .map(|&len| if padded { npoints } else { len })
+            .try_fold(0usize, |acc, n| acc.checked_add(n.checked_mul(width)?));
+        match total {
+            Some(t) if t <= self.data.len() - self.pos => {}
+            _ => {
+                return Err(Error::parse(
+                    self.line,
+                    "bad rawfile: truncated binary data",
+                ));
+            }
+        }
+        // A section that promises bytes for no vector at all (unpadded
+        // zero-length vectors, or none declared) has nothing to read:
+        // skip the loop instead of spinning `npoints` times over it.
+        let npoints = if total == Some(0) { 0 } else { npoints };
+        let mut cols = self.new_columns(&lengths, complex);
         for i in 0..npoints {
             for (col, &len) in cols.iter_mut().zip(&lengths) {
                 if i < len {
@@ -347,6 +367,20 @@ impl<'a> Reader<'a> {
         }
         self.finish_plot(pack(cols, complex));
         Ok(())
+    }
+
+    /// Pre-allocate data columns. The reserve is bounded by what the
+    /// remaining input could possibly hold, so hostile `No. Points` /
+    /// `No. Variables` cannot force a large allocation up front: real
+    /// data still grows the vectors as it arrives.
+    fn new_columns(&self, lengths: &[usize], complex: bool) -> Vec<Vec<Complex64>> {
+        let remaining = self.data.len() - self.pos;
+        // At least 8 bytes per value in binary; ASCII values are wider.
+        let possible = remaining / (if complex { 16 } else { 8 }) / lengths.len().max(1);
+        lengths
+            .iter()
+            .map(|&n| Vec::with_capacity(n.min(possible)))
+            .collect()
     }
 
     // ---- low-level cursor ----------------------------------------------
@@ -433,14 +467,10 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// Pre-allocate data columns, capping the reserve so a hostile
-/// `No. Points` cannot force a huge allocation before any data exists.
-fn new_columns(lengths: &[usize]) -> Vec<Vec<Complex64>> {
-    const MAX_RESERVE: usize = 1 << 16;
-    lengths
-        .iter()
-        .map(|&n| Vec::with_capacity(n.min(MAX_RESERVE)))
-        .collect()
+/// `dims` product with overflow detection (a hostile `dims=` must not
+/// wrap in release builds nor panic in debug builds).
+fn checked_product(dims: &[usize]) -> Option<usize> {
+    dims.iter().try_fold(1usize, |acc, &d| acc.checked_mul(d))
 }
 
 fn pack(cols: Vec<Vec<Complex64>>, complex: bool) -> Data {

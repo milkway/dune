@@ -154,8 +154,32 @@ fn hostile_input_never_panics() {
         b"Title: \xff\xfe\nPlotname: p\n",
         b"No. Points: -1\n",
         b"Values:\n1 2 3\n",
+        // dims= product overflows usize: must not panic (debug) nor
+        // wrap into a bogus length (release).
+        b"Plotname: p\nFlags: real\nNo. Variables: 1\nNo. Points: 1\n\
+          Variables:\n\t0\tv\tvoltage dims=4294967296,4294967296,4294967296\n\
+          Values:\n0\t1.0\n",
+        b"Plotname: p\nNo. Points: 1\nDimensions: 4294967296,4294967296,4294967296\n",
     ];
     for j in junk {
         let _ = Rawfile::parse(j);
     }
+}
+
+#[test]
+fn hostile_counts_fail_fast() {
+    use std::time::Instant;
+    // A huge No. Points over an empty Binary: section must be rejected
+    // up front, not spun over point by point.
+    let spin = b"Plotname: p\nFlags: real unpadded\nNo. Variables: 1\nNo. Points: 9999999999\n\
+                 Variables:\n\t0\tv\tvoltage dims=0\nBinary:\n";
+    let t = Instant::now();
+    let _ = Rawfile::parse(spin); // empty plot or error; must not spin
+    assert!(t.elapsed().as_secs() < 1, "parser spun on hostile count");
+
+    // Huge declared counts with a tiny body must not allocate huge
+    // columns up front (the reserve is bounded by the input size).
+    let tiny = b"Plotname: p\nFlags: real\nNo. Variables: 1\nNo. Points: 9999999\n\
+                 Variables:\n\t0\tv\tvoltage\nValues:\n0\t1.0\n";
+    assert!(Rawfile::parse(tiny).is_err(), "truncated values must fail");
 }

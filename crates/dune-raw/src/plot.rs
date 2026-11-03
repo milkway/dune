@@ -43,12 +43,14 @@ impl Variable {
 
     /// The vector's true length in a plot with `npoints` rows
     /// (`fixdims` in the C: the product of `dims=` when valid).
+    /// Overflowing dims fall back to the plot default, like any other
+    /// invalid `dims=`.
     pub fn length(&self, npoints: usize) -> usize {
         match &self.dims {
-            Some(d) => {
-                let n: usize = d.iter().product();
-                if n > npoints { npoints } else { n }
-            }
+            Some(d) => d
+                .iter()
+                .try_fold(1usize, |acc, &x| acc.checked_mul(x))
+                .map_or(npoints, |n| n.min(npoints)),
             None => npoints,
         }
     }
