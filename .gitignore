@@ -1,0 +1,36 @@
+# Documentos de planejamento locais (não versionados por decisão do usuário)
+/CLAUDE.md
+/PLAN.md
+/DECISIONS.md
+/.claude/
+
+# Rust
+target/
+Cargo.lock.orig
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+python/dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Rdata
+*.Rcheck/
+r/src/*.o
+r/src/*.so
+r/src/*.dll
+
+# Saídas de simulação locais
+*.raw
+!corpus/golden/**/*.raw
+
+# macOS
+.DS_Store
