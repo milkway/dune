@@ -346,12 +346,17 @@ impl<'a> Reader<'a> {
                 ));
             }
         }
-        // A section that promises bytes for no vector at all (unpadded
-        // zero-length vectors, or none declared) has nothing to read:
-        // skip the loop instead of spinning `npoints` times over it.
-        let npoints = if total == Some(0) { 0 } else { npoints };
+        // Unpadded data stops at the longest vector: past it no byte is
+        // consumed, so looping all the way to a hostile `No. Points`
+        // would be a pure CPU spin. In padded mode every point consumes
+        // bytes for every vector, which the check above already bounded.
+        let iters = if padded {
+            npoints
+        } else {
+            lengths.iter().copied().max().unwrap_or(0)
+        };
         let mut cols = self.new_columns(&lengths, complex);
-        for i in 0..npoints {
+        for i in 0..iters {
             for (col, &len) in cols.iter_mut().zip(&lengths) {
                 if i < len {
                     let re = self.binary_f64()?;

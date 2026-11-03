@@ -177,6 +177,15 @@ fn hostile_counts_fail_fast() {
     let _ = Rawfile::parse(spin); // empty plot or error; must not spin
     assert!(t.elapsed().as_secs() < 1, "parser spun on hostile count");
 
+    // Unpadded with one short vector: points past its length consume no
+    // bytes, so the loop must stop at the longest real length, not at a
+    // hostile No. Points.
+    let spin2 = b"Plotname: p\nFlags: real unpadded\nNo. Variables: 1\nNo. Points: 9999999999\n\
+                  Variables:\n\t0\tv\tvoltage dims=1\nBinary:\n\0\0\0\0\0\0\0\0";
+    let t = Instant::now();
+    let _ = Rawfile::parse(spin2);
+    assert!(t.elapsed().as_secs() < 1, "parser spun past vector lengths");
+
     // Huge declared counts with a tiny body must not allocate huge
     // columns up front (the reserve is bounded by the input size).
     let tiny = b"Plotname: p\nFlags: real\nNo. Variables: 1\nNo. Points: 9999999\n\
