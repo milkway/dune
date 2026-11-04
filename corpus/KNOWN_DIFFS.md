@@ -11,3 +11,5 @@ uma divergência por tolerância larga (D-0006).
 | Nomes na expansão de `.subckt` | `r:x1:r1`, nós `x1:n1` | `r.x1.r1`, nós `x1.n1` | segue o ngspice | o oráculo compara nomes de vetores com o ngspice (D-0006); ver `docs/dune-netlist.md` |
 | R/C: token na posição do modelo | aceita qualquer token como modelo (`r1 1 2 100 w=5u` lê `w` como modelo e 5e-6 como resistência) | trata keyword como parâmetro | keyword conhecido é parâmetro, não modelo | bug do 3f5 que o ngspice corrigiu; `docs/dune-netlist.md` §4 |
 | Comentários | linha inteira `*` (e `$`/`#` na coluna 1) | também `$`/`;` de fim de linha | como o ngspice | D-0002 (superconjunto pragmático) |
+| Último ponto do `.dc` | comparação crua `valor > stop`: drift de acumulação pode comer o ponto final (ex.: `0:5m:0.25m` dá 20 pontos) | guarda `> stop + DBL_EPSILON·1e3` (21 pontos) | como o ngspice | o oráculo compara contagens de pontos com o ngspice; `docs/dune-core.md` |
+| Passo zero no `.dc` | laço infinito | erro | erro | entrada hostil nunca trava (CLAUDE.md princípio 4) |

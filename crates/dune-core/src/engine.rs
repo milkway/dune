@@ -2,6 +2,8 @@
 //! (`ni/niconv.c`) and the gmin/source-stepping driver `CKTop`
 //! (`ckt/cktop.c`), DC subset.
 
+use std::collections::HashMap;
+
 use crate::circuit::{Built, VarKind, Vars};
 use crate::devices::Device;
 use crate::error::Error;
@@ -24,6 +26,8 @@ pub(crate) struct Engine {
     nodesets: Vec<(Var, f64)>,
     /// Diagonal slots of nodeset rows (`node->ptr` in `cktload.c`).
     nodeset_diag: Vec<crate::matrix::Slot>,
+    /// V/I source name → (device index, is Vsource), for `.dc`.
+    pub sources: HashMap<String, (usize, bool)>,
 }
 
 impl Engine {
@@ -32,6 +36,7 @@ impl Engine {
             vars,
             mut devices,
             nodesets,
+            sources,
             ..
         } = built;
         let n = vars.len() - 1;
@@ -54,6 +59,7 @@ impl Engine {
             sol: vec![0.0; n + 1],
             nodesets,
             nodeset_diag,
+            sources,
         }
     }
 
@@ -235,4 +241,76 @@ impl Engine {
 
         last
     }
+
+    /// `DCtrCurv` (`ckt/dctrcurv.c`): sweep one or two sources, the
+    /// first one innermost. Each point tries `NIiter(itl2)` from the
+    /// previous solution and falls back to the full `CKTop`; the
+    /// inner source resets and re-junction-initializes whenever an
+    /// outer source steps. Returns `(scale, solution)` rows.
+    pub fn dc(
+        &mut self,
+        opts: &Options,
+        sweeps: &[SweepRef],
+    ) -> Result<Vec<(f64, Vec<f64>)>, Error> {
+        assert!(!sweeps.is_empty() && sweeps.len() <= 2);
+        // The C's SIGN(1., step): +1 for step >= 0.
+        let sign = |x: f64| if x >= 0.0 { 1.0 } else { -1.0 };
+
+        let mut cur: Vec<f64> = sweeps.iter().map(|s| s.start).collect();
+        for (s, v) in sweeps.iter().zip(&cur) {
+            self.devices[s.dev_index].set_dc(*v);
+        }
+        let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
+        let mut start_mode = InitMode::Jct;
+        let mut i = 0usize;
+        loop {
+            let s = &sweeps[i];
+            // ngspice's guard (dctrcurv.c there): the accumulated
+            // value may drift past the stop by rounding; the raw 3f5
+            // comparison would then drop the final point
+            // (corpus/KNOWN_DIFFS.md).
+            if cur[i] * sign(s.step) - sign(s.step) * s.stop > f64::EPSILON * 1e3 {
+                // This level finished: step the next one up (the
+                // C's `goto nextstep` with the incremented i).
+                i += 1;
+                start_mode = InitMode::Jct;
+                if i >= sweeps.len() {
+                    break;
+                }
+                cur[i] += sweeps[i].step;
+                self.devices[sweeps[i].dev_index].set_dc(cur[i]);
+                continue;
+            }
+            // Walk back down, resetting inner sources to their
+            // start values.
+            while i > 0 {
+                i -= 1;
+                cur[i] = sweeps[i].start;
+                self.devices[sweeps[i].dev_index].set_dc(cur[i]);
+            }
+            if self.ni_iter(opts, start_mode, opts.itl2, 0.0, 1.0).is_err() {
+                self.op(opts)?;
+            }
+            start_mode = InitMode::Float;
+            // Memory guard: the 3f5 has no bound here; a hostile
+            // sweep must fail cleanly instead of exhausting RAM.
+            if (rows.len() + 1).saturating_mul(self.vars.len()) > 50_000_000 {
+                return Err(Error::Build(
+                    "dc sweep produces too many points; refusing".into(),
+                ));
+            }
+            rows.push((cur[0], self.sol.clone()));
+            cur[0] += sweeps[0].step;
+            self.devices[sweeps[0].dev_index].set_dc(cur[0]);
+        }
+        Ok(rows)
+    }
+}
+
+/// One resolved `.dc` sweep level.
+pub(crate) struct SweepRef {
+    pub dev_index: usize,
+    pub start: f64,
+    pub stop: f64,
+    pub step: f64,
 }

@@ -36,9 +36,18 @@ resultados espelhando o rawfile).
   todo nó não-terra não-interno (`#` fica de fora, como no ngspice),
   `i(<nome>)` para ramos de V, L, E, H; `Plotname: Operating Point`.
 
+- **`.dc`** (`dc.rs`, `engine.rs::dc` ← `ckt/dctrcurv.c`): uma ou
+  duas fontes V/I, a primeira no laço interno; cada ponto tenta
+  `NIiter(itl2)` continuando da solução anterior e cai para o `CKTop`
+  completo; fonte interna volta ao início (e re-inicializa junções)
+  quando a externa avança; escala = valor da fonte interna, vetor
+  `v(v-sweep)`/`i(i-sweep)` como o ngspice, plot `DC transfer
+  characteristic`.
+
 Validação: `tests/op.rs` compara um deck-sonda (divisor, indutor,
 diodo com RS, E, F, G, H, I) com números do ngspice-47 dentro das
-tolerâncias SPICE.
+tolerâncias SPICE; os decks `.op`/`.dc` de `corpus/basic/` passam no
+oráculo contra o ngspice.
 
 ## Diferenças deliberadas
 
@@ -57,6 +66,12 @@ tolerâncias SPICE.
    convergência potencialmente diferente em decks patológicos.
 3. **Erros estruturados** (`error.rs`) em vez de códigos `E_*` +
    impressões; as mensagens-aviso do C viram `notes` no resultado.
+4. **Fim de varredura `.dc` com epsilon** (ngspice): o 3f5 compara o
+   valor acumulado cru com o stop e perde o último ponto quando o
+   arredondamento passa de raspão; o ngspice (e o Dune) usam
+   `> stop + DBL_EPSILON·1e3`. Passo zero/não-finito é erro (o 3f5
+   entraria em laço infinito). Varreduras hostis têm teto de memória
+   (~50 M valores) com erro limpo.
 
 ## Pendências (fases seguintes)
 

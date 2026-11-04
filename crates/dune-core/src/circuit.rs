@@ -298,6 +298,9 @@ pub(crate) struct Built {
     pub vars: Vars,
     pub devices: Vec<Box<dyn crate::devices::Device>>,
     pub nodesets: Vec<(Var, f64)>,
+    /// Independent V/I source element name → index in `devices`
+    /// (what a `.dc` sweep drives) and whether it is a V source.
+    pub sources: HashMap<String, (usize, bool)>,
     /// Diode temperature-adjust notes etc., surfaced by the caller.
     pub notes: Vec<String>,
 }
@@ -366,6 +369,7 @@ impl Circuit {
 
         // Pass 2: instances.
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
+        let mut sources: HashMap<String, (usize, bool)> = HashMap::new();
         let mut notes = Vec::new();
         let get = |node_ids: &HashMap<String, Var>, n: &str| node_ids[n];
         for spec in &self.specs {
@@ -397,6 +401,7 @@ impl Circuit {
                     devices.push(Box::new(MutualI));
                 }
                 Spec::Vsource(s) => {
+                    sources.insert(s.name.clone(), (devices.len(), true));
                     devices.push(Box::new(VsourceI::new(
                         s.dc,
                         get(&node_ids, &s.nodes[0]),
@@ -405,6 +410,7 @@ impl Circuit {
                     )));
                 }
                 Spec::Isource(s) => {
+                    sources.insert(s.name.clone(), (devices.len(), false));
                     devices.push(Box::new(IsourceI {
                         dc: s.dc,
                         pos: get(&node_ids, &s.nodes[0]),
@@ -480,6 +486,7 @@ impl Circuit {
             vars,
             devices,
             nodesets,
+            sources,
             notes,
         })
     }

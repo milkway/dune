@@ -20,22 +20,28 @@ cargo run -p dune-oracle -- NOME..                 # ngspice fresco vs golden
 `NOME` é o *stem* do circuito (`rc`), o caminho relativo ao `corpus/` ou o
 caminho do arquivo. Qualquer FAIL encerra com código 1.
 
-### Escopo da Fase 0
+### Quem é o candidato
 
-O `dune-cli` ainda não simula, então:
-
-- `NOME..` roda o ngspice de novo e compara com o golden versionado —
-  detecta deriva de ambiente/versão, e é o esqueleto do fluxo definitivo;
-- `--ci` compara cada golden **consigo mesmo** — sanidade de leitor +
-  comparador sem precisar de ngspice no runner de CI.
-
-Da Fase 1 em diante o lado "candidato" passa a ser a saída do Dune.
+Para decks cujas análises **e** letras de dispositivo o motor já
+implementa (inventário por varredura de linha; hoje `.op`/`.dc` com
+R C L K V I E F G H D X), o candidato é o próprio Dune, via biblioteca
+(`dune_run.rs`) — inclusive no `--ci`, que portanto exercita o motor a
+cada push sem precisar de ngspice no runner. Para o resto: `NOME..`
+roda o ngspice de novo (deriva de ambiente) e `--ci` compara o golden
+consigo mesmo (sanidade de leitor + comparador) até a análise existir.
 
 ## Semântica da comparação
 
-Dois valores concordam quando `|a − b| ≤ floor + reltol·max(|a|, |b|)`,
+Dois valores concordam quando `|a − b| ≤ 2·(floor + reltol·max(|a|, |b|))`,
 com `reltol = 1e-3` e `floor = vntol = 1e-6` para vetores `voltage`,
 `abstol = 1e-12` para todo o resto (defaults do 3f5, `spice.txt`).
+
+O fator 2 não é folga (D-0009): oráculo e candidato são dois Newtons
+*independentes*, cada um parando a ≤ 1 tolerância SPICE da solução
+exata; pela desigualdade triangular a distância entre eles é ≤ 2
+tolerâncias. Medido na prática: a curva do diodo (`dcdiode`) chega a
+margem 1,16 sem o fator — dois solvers correndo o mesmo algoritmo com
+roundoff diferente. Acima de 2 tolerâncias é desacordo real.
 
 - **Plots** são pareados em ordem e precisam ter o mesmo `Plotname`
   (case-insensitive).

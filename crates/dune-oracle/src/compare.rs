@@ -1,10 +1,15 @@
 //! Rawfile comparison with the SPICE tolerances (PLAN.md §2.4, D-0006).
 //!
-//! Two values agree when `|a - b| <= floor + reltol * max(|a|, |b|)`,
-//! where `floor` is `vntol` for voltage vectors and `abstol` for
-//! everything else — the same split the 3f5 Newton convergence test
-//! makes between node voltages and branch currents (`NIconvTest`,
-//! `src/lib/ckt/niconv.c`).
+//! Two values agree when `|a - b| <= 2 * (floor + reltol * max(|a|,
+//! |b|))`, where `floor` is `vntol` for voltage vectors and `abstol`
+//! for everything else — the same split the 3f5 Newton convergence
+//! test makes between node voltages and branch currents
+//! (`NIconvTest`, `src/lib/ckt/niconv.c`). The factor 2 is the
+//! triangle inequality, not slack: oracle and candidate are two
+//! *independent* Newton solvers, each stopping within one SPICE
+//! tolerance of the true solution, so their mutual distance is
+//! bounded by twice that tolerance. Anything beyond it is a real
+//! disagreement.
 //!
 //! Phase-0 scope: plots are paired in order and must have the same
 //! `Plotname`; variables are aligned by name (case-insensitive, like
@@ -43,9 +48,10 @@ impl Tolerances {
     }
 
     /// Allowed absolute deviation between `a` and `b` for a vector
-    /// with absolute floor `floor`.
+    /// with absolute floor `floor`: twice the SPICE allowance, since
+    /// both sides converged independently (see the module docs).
     fn allowance(&self, a: f64, b: f64, floor: f64) -> f64 {
-        floor + self.reltol * a.abs().max(b.abs())
+        2.0 * (floor + self.reltol * a.abs().max(b.abs()))
     }
 }
 
@@ -247,7 +253,8 @@ mod tests {
     #[test]
     fn voltage_uses_vntol_floor() {
         let t = Tolerances::default();
-        // 0.5 µV apart at ~0 V: inside vntol, far outside abstol.
+        // 0.5 µV apart at ~0 V: inside the vntol allowance, far
+        // outside the abstol one.
         let a = raw(plot(vec![v("v(1)")], Data::Real(vec![vec![0.0]])));
         let b = raw(plot(vec![v("v(1)")], Data::Real(vec![vec![5e-7]])));
         assert!(compare_rawfiles(&a, &b, &t).pass());
@@ -268,7 +275,8 @@ mod tests {
         let t = Tolerances::default();
         let a = raw(plot(vec![v("v(1)")], Data::Real(vec![vec![100.0]])));
         let ok = raw(plot(vec![v("v(1)")], Data::Real(vec![vec![100.05]])));
-        let bad = raw(plot(vec![v("v(1)")], Data::Real(vec![vec![100.2]])));
+        // 3e-3 relative: beyond even the doubled allowance.
+        let bad = raw(plot(vec![v("v(1)")], Data::Real(vec![vec![100.3]])));
         assert!(compare_rawfiles(&a, &ok, &t).pass());
         assert!(!compare_rawfiles(&a, &bad, &t).pass());
     }

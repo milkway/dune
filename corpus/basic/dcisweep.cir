@@ -1,0 +1,8 @@
+current sweep into a diode
+* written for Dune (Phase 2 .dc parity); not from Berkeley
+i1 0 1 dc 0
+d1 1 0 dmod
+r1 1 0 10k
+.model dmod d(is=2e-15)
+.dc i1 0 5m 0.25m
+.end

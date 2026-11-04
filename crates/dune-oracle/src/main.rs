@@ -50,7 +50,10 @@ fn main() -> Result<()> {
 
 fn list() -> Result<bool> {
     let corpus = Corpus::load()?;
-    println!("{:<28} {:<24} {:<7} note", "circuit", "analyses", "golden");
+    println!(
+        "{:<28} {:<20} {:<14} {:<7} note",
+        "circuit", "analyses", "devices", "golden"
+    );
     for c in &corpus.circuits {
         let golden = if corpus.golden_path(c).is_file() {
             "yes"
@@ -59,9 +62,10 @@ fn list() -> Result<bool> {
         };
         let note = c.skip.as_deref().map(|r| format!("SKIP: {r}"));
         println!(
-            "{:<28} {:<24} {:<7} {}",
+            "{:<28} {:<20} {:<14} {:<7} {}",
             c.rel,
             c.analyses.join(" "),
+            c.devices.iter().collect::<String>(),
             golden,
             note.unwrap_or_default()
         );

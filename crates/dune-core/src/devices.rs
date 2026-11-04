@@ -10,6 +10,9 @@ pub(crate) trait Device {
     fn alloc(&mut self, mb: &mut MatrixBuilder);
     /// Load the DC/operating-point stamps for one Newton iteration.
     fn load_dc(&mut self, ctx: &mut LoadCtx);
+    /// Overwrite the DC value (a `.dc` sweep writing `VSRCdcValue` /
+    /// `ISRCdcValue`, `dctrcurv.c`). No-op for everything else.
+    fn set_dc(&mut self, _value: f64) {}
 }
 
 /// `RESload` (`dev/res/resload.c`): conductance between two nodes.
@@ -128,6 +131,10 @@ impl Device for VsourceI {
         self.branch.load(ctx);
         ctx.rhs[self.branch.br] += ctx.srcfact * self.dc;
     }
+
+    fn set_dc(&mut self, value: f64) {
+        self.dc = value;
+    }
 }
 
 /// Inductor at DC: a zero-volt source (`INDload`, `MODEDC` branch).
@@ -168,6 +175,10 @@ impl Device for IsourceI {
         let v = ctx.srcfact * self.dc;
         ctx.rhs[self.pos] -= v;
         ctx.rhs[self.neg] += v;
+    }
+
+    fn set_dc(&mut self, value: f64) {
+        self.dc = value;
     }
 }
 

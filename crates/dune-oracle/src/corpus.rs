@@ -31,6 +31,8 @@ pub struct Circuit {
     pub rel: String,
     /// Analysis cards found in the deck, in order of first appearance.
     pub analyses: Vec<String>,
+    /// Device letters used by the deck's element cards (lowercase).
+    pub devices: Vec<char>,
     /// Reason from `corpus/SKIP`, when listed there.
     pub skip: Option<String>,
 }
@@ -132,12 +134,13 @@ fn collect_cir_files(dir: &Path, out: &mut Vec<Circuit>) -> Result<()> {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let analyses = scan_analyses(&path)?;
+            let (analyses, devices) = scan_deck(&path)?;
             out.push(Circuit {
                 stem,
                 path,
                 rel: String::new(),
                 analyses,
+                devices,
                 skip: None,
             });
         }
@@ -145,28 +148,48 @@ fn collect_cir_files(dir: &Path, out: &mut Vec<Circuit>) -> Result<()> {
     Ok(())
 }
 
-/// Collect the analysis cards of a deck, in order of first appearance.
-/// A plain line scan is enough for the inventory; the real parser is
-/// `dune-netlist` (Phase 1).
-fn scan_analyses(path: &Path) -> Result<Vec<String>> {
+/// Collect the analysis cards (in order of first appearance) and the
+/// element letters of a deck. A plain line scan is enough for the
+/// inventory; the real parser is `dune-netlist`. The first line is
+/// the title and `.control` blocks are commands, so both are skipped.
+fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>)> {
     let text = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let text = String::from_utf8_lossy(&text);
-    let mut found = Vec::new();
-    for line in text.lines() {
+    let mut analyses = Vec::new();
+    let mut devices = Vec::new();
+    let mut in_control = false;
+    for line in text.lines().skip(1) {
         let line = line.trim_start();
-        if !line.starts_with('.') {
+        let first = line.chars().next().unwrap_or('*');
+        if first == '.' {
+            let card = line
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            match card.as_str() {
+                ".control" => in_control = true,
+                ".endc" => in_control = false,
+                _ if !in_control
+                    && ANALYSES.contains(&card.as_str())
+                    && !analyses.contains(&card) =>
+                {
+                    analyses.push(card);
+                }
+                _ => {}
+            }
             continue;
         }
-        let card = line
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ANALYSES.contains(&card.as_str()) && !found.contains(&card) {
-            found.push(card);
+        if in_control || !first.is_ascii_alphabetic() {
+            continue; // comments, continuations, control commands
+        }
+        let letter = first.to_ascii_lowercase();
+        if !devices.contains(&letter) {
+            devices.push(letter);
         }
     }
-    Ok(found)
+    devices.sort_unstable();
+    Ok((analyses, devices))
 }
 
 fn read_skip_file(root: &Path) -> Result<std::collections::HashMap<String, String>> {
@@ -192,17 +215,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scan_finds_analysis_cards_in_order() {
+    fn scan_finds_analyses_and_devices() {
         let dir = std::env::temp_dir().join(format!("dune-oracle-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let p = dir.join("t.cir");
         fs::write(
             &p,
-            "test deck\n.OPTIONS reltol=1e-3\n .TRAN 1n 1u\nr1 1 0 1k\n.ac dec 10 1 1meg\n.tran 2n 2u\n.end\n",
+            "title line, not a device\n.OPTIONS reltol=1e-3\n .TRAN 1n 1u\nr1 1 0 1k\n             + 100\nQ3 1 2 3 mod\n.control\nrun\n.endc\n.ac dec 10 1 1meg\n.tran 2n 2u\n.end\n",
         )
         .unwrap();
-        let a = scan_analyses(&p).unwrap();
+        let (a, d) = scan_deck(&p).unwrap();
         assert_eq!(a, vec![".tran", ".ac"]);
+        // `run` inside .control and the `+` continuation are not
+        // devices; the title line is skipped.
+        assert_eq!(d, vec!['q', 'r']);
         fs::remove_dir_all(&dir).ok();
     }
 }

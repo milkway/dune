@@ -1,0 +1,8 @@
+diode i-v curve
+* written for Dune (Phase 2 .dc parity); not from Berkeley
+v1 1 0 dc 0
+r1 1 2 100
+d1 2 0 dmod
+.model dmod d(is=1e-14 rs=1.5 n=1.05)
+.dc v1 -5 0.8 0.05
+.end

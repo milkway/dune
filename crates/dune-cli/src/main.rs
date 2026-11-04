@@ -69,6 +69,22 @@ fn main() -> Result<()> {
                 }
                 plots.push(op.solution.to_plot(&parsed.netlist.title, ""));
             }
+            dune_netlist::ir::Analysis::Dc { sweeps, .. } => {
+                let sweeps: Vec<dune_core::DcSweep> = sweeps
+                    .iter()
+                    .map(|s| dune_core::DcSweep {
+                        src: s.src.clone(),
+                        start: s.start,
+                        stop: s.stop,
+                        step: s.step,
+                    })
+                    .collect();
+                let dc = circuit.dc(&options, &sweeps)?;
+                for n in &dc.notes {
+                    eprintln!("note: {n}");
+                }
+                plots.push(dc.solution.to_plot(&parsed.netlist.title, ""));
+            }
             other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
         }
     }

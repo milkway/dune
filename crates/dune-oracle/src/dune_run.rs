@@ -11,9 +11,16 @@ use dune_raw::Rawfile;
 
 use crate::corpus::Circuit as CorpusCircuit;
 
-/// Can Dune simulate everything this deck asks for?
+/// Can Dune simulate everything this deck asks for? Both the
+/// analyses and the device letters must be implemented (PLAN.md §3;
+/// `x` is fine because subcircuits expand to their contents, which
+/// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
-    !c.analyses.is_empty() && c.analyses.iter().all(|a| a == ".op")
+    const ANALYSES: &[&str] = &[".op", ".dc"];
+    const DEVICES: &[char] = &['r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'x'];
+    !c.analyses.is_empty()
+        && c.analyses.iter().all(|a| ANALYSES.contains(&a.as_str()))
+        && c.devices.iter().all(|d| DEVICES.contains(d))
 }
 
 /// Parse, elaborate and run every analysis of the deck, returning a
@@ -41,6 +48,19 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
             Analysis::Op { .. } => {
                 let op = circuit.op(&options).map_err(|e| e.to_string())?;
                 plots.push(op.solution.to_plot(&parsed.netlist.title, ""));
+            }
+            Analysis::Dc { sweeps, .. } => {
+                let sweeps: Vec<dune_core::DcSweep> = sweeps
+                    .iter()
+                    .map(|s| dune_core::DcSweep {
+                        src: s.src.clone(),
+                        start: s.start,
+                        stop: s.stop,
+                        step: s.step,
+                    })
+                    .collect();
+                let dc = circuit.dc(&options, &sweeps).map_err(|e| e.to_string())?;
+                plots.push(dc.solution.to_plot(&parsed.netlist.title, ""));
             }
             other => return Err(format!("analysis {other:?} not supported yet")),
         }

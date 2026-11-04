@@ -11,6 +11,7 @@ pub mod consts;
 pub mod linalg;
 
 mod circuit;
+mod dc;
 mod devices;
 mod diode;
 mod elaborate;
@@ -25,6 +26,7 @@ pub use circuit::{
     Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mutual, Resistor, Spec, Vccs, Vcvs,
     Vsource,
 };
+pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
 pub use error::Error;
 pub use op::Op;
