@@ -9,3 +9,6 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 dune-raw.workspace = true
+
+[dev-dependencies]
+num-complex.workspace = true
