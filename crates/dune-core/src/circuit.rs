@@ -123,6 +123,32 @@ pub struct Bjt {
     pub temp: Option<f64>,
 }
 
+/// `MXXXXXXX ND NG NS NB MNAME <L=> <W=> <AD=> <AS=> <PD=> <PS=>
+/// <NRD=> <NRS=> <OFF> <IC=VDS,VGS,VBS> <TEMP=T>` with its level-1
+/// model inline. `l`/`w`/`ad`/`as` fall back to the
+/// `.options defl/defw/defad/defas` values at build time.
+#[derive(Clone, Debug)]
+pub struct Mos1 {
+    pub name: String,
+    /// Drain, gate, source, bulk.
+    pub nodes: [String; 4],
+    pub model: crate::mos1::Mos1Model,
+    pub l: Option<f64>,
+    pub w: Option<f64>,
+    pub ad: Option<f64>,
+    pub as_: Option<f64>,
+    pub pd: f64,
+    pub ps: f64,
+    /// Squares of drain/source diffusion (`NRD`/`NRS`, default 1).
+    pub nrd: f64,
+    pub nrs: f64,
+    pub off: bool,
+    /// `IC=VDS,VGS,VBS`.
+    pub ic: (f64, f64, f64),
+    /// Instance temperature override, kelvin.
+    pub temp: Option<f64>,
+}
+
 /// `DXXXXXXX N+ N- MNAME <AREA> <OFF>` with its model inline.
 #[derive(Clone, Debug)]
 pub struct Diode {
@@ -141,6 +167,7 @@ pub struct Diode {
 #[derive(Clone, Debug)]
 pub enum Spec {
     Bjt(Box<Bjt>),
+    Mos1(Box<Mos1>),
     Resistor(Resistor),
     Capacitor(Capacitor),
     Inductor(Inductor),
@@ -171,10 +198,17 @@ impl From<Bjt> for Spec {
     }
 }
 
+impl From<Mos1> for Spec {
+    fn from(s: Mos1) -> Spec {
+        Spec::Mos1(Box::new(s))
+    }
+}
+
 impl Spec {
     fn name(&self) -> &str {
         match self {
             Spec::Bjt(s) => &s.name,
+            Spec::Mos1(s) => &s.name,
             Spec::Resistor(s) => &s.name,
             Spec::Capacitor(s) => &s.name,
             Spec::Inductor(s) => &s.name,
@@ -307,6 +341,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Mos1(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
     }
 }
 
@@ -385,6 +423,7 @@ impl Circuit {
         for spec in &self.specs {
             state_base.push(match spec {
                 Spec::Bjt(_) => st.alloc(crate::bjt::BJT_NUM_STATES),
+                Spec::Mos1(_) => st.alloc(crate::mos1::MOS1_NUM_STATES),
                 Spec::Capacitor(_) => st.alloc(2),
                 Spec::Inductor(s) => {
                     let flux = st.alloc(2);
@@ -396,6 +435,7 @@ impl Circuit {
             });
             let node_names: &[String] = match spec {
                 Spec::Bjt(s) => &s.nodes,
+                Spec::Mos1(s) => &s.nodes,
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
                 Spec::Inductor(s) => &s.nodes,
@@ -446,6 +486,16 @@ impl Circuit {
                         node(&mut vars, &mut node_ids, &format!("{}#emitter", s.name));
                     }
                 }
+                // `MOS1setup`: prime nodes past the series
+                // resistance (`m1#drain`/`m1#source`, `CKTmkVolt`).
+                Spec::Mos1(s) => {
+                    if s.model.needs_prime(s.nrd) {
+                        node(&mut vars, &mut node_ids, &format!("{}#drain", s.name));
+                    }
+                    if s.model.needs_prime(s.nrs) {
+                        node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
+                    }
+                }
                 _ => {}
             }
         }
@@ -483,6 +533,45 @@ impl Circuit {
                         primes,
                         bt,
                         s.area,
+                        s.off,
+                        s.ic,
+                        base,
+                    )));
+                }
+                Spec::Mos1(s) => {
+                    let d = get(&node_ids, &s.nodes[0]);
+                    let gt = get(&node_ids, &s.nodes[1]);
+                    let so = get(&node_ids, &s.nodes[2]);
+                    let b = get(&node_ids, &s.nodes[3]);
+                    let dp = if s.model.needs_prime(s.nrd) {
+                        node_ids[&format!("{}#drain", s.name)]
+                    } else {
+                        d
+                    };
+                    let sp = if s.model.needs_prime(s.nrs) {
+                        node_ids[&format!("{}#source", s.name)]
+                    } else {
+                        so
+                    };
+                    let geom = crate::mos1::Mos1Geom {
+                        l: s.l.unwrap_or(opts.defl),
+                        w: s.w.unwrap_or(opts.defw),
+                        ad: s.ad.unwrap_or(opts.defad),
+                        as_: s.as_.unwrap_or(opts.defas),
+                        pd: s.pd,
+                        ps: s.ps,
+                        nrd: s.nrd,
+                        nrs: s.nrs,
+                    };
+                    let temp = s.temp.unwrap_or(opts.temp);
+                    let mt = crate::mos1::Mos1Temp::new(&s.name, &s.model, &geom, temp, opts.tnom)
+                        .map_err(Error::Build)?;
+                    notes.extend(mt.notes.iter().cloned());
+                    devices.push(Box::new(crate::mos1::Mos1I::new(
+                        [d, gt, so, b],
+                        [dp, sp],
+                        mt,
+                        geom,
                         s.off,
                         s.ic,
                         base,

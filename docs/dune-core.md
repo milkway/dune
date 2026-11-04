@@ -67,6 +67,26 @@ resultados espelhando o rawfile).
   `rtlinv`, `rca3040` (ac+dc+tran) PASS; `schmitt` em
   `corpus/XFAIL` (D-0011).
 
+- **MOSFET nível 1** (`mos1.rs` ← `mos1load.c`, `mos1temp.c`,
+  `mos1set.c`, `mos1acld.c`, `mos1trunc.c`, `devsup.c`): corrente de
+  dreno Shichman–Hodges (corte/saturação/linear com `LAMBDA`),
+  limitação `DEVfetlim`/`DEVlimvds`/`DEVpnjlim` na ordem exata do C
+  (incluindo o modo invertido com `vgd`), diodos de corpo com
+  `MAX_EXP_ARG`, carga de depleção B-D/B-S com o atalho de `sqrt`
+  para `MJ=0.5` e a continuação linearizada `f2/f3/f4` acima de
+  `FC·PB` (CAPZEROBYPASS mantido), capacitâncias de porta de Meyer
+  (`DEVqmeyer`, metade não constante no estado + média com o passo
+  anterior + overlap constante), preditor de `vbs/vgs/vds` e das
+  cargas `qgs/qgd/qgb` por extrapolação, pré-processamento completo
+  do `MOS1temp` (KP de `U0·COX`, PHI/GAMMA/VTO de `NSUB/NSS/TPG` com
+  o erro fatal `Nsub < Ni`, `Vcrit` por lado, coeficientes de
+  junção por área/perímetro), nós internos `m1#drain`/`m1#source`
+  quando `RD`/`RSH` existem, defaults de geometria por
+  `.options defl/defw/defad/defas`. 17 estados, 22 posições de
+  matriz, LTE em `qgs/qgd/qgb`. Valida contra `mosmem` (tran,
+  margem 0.022, shift 0). O gate do oráculo lê o `LEVEL` dos
+  cartões `.model` (níveis 2/3/6 seguem golden-vs-golden).
+
 - **`.ac`** (`ac.rs`, `engine.rs::ac` ← `ckt/acan.c`,
   `ni/niaciter.c`, `dev/*acld.c`): ponto de operação, um passe
   `MODEINITSMSIG` (o diodo guarda `capd` em `capCurrent`), e um
@@ -130,5 +150,6 @@ oráculo contra o ngspice.
 - `.tf`, ruído, `.pz`, `.disto`; `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- BJT/MOS/JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).
+- MOS níveis 2/3/6, JFET/MESFET, chaves, linhas T/O/U, fonte B
+  (Fase 3).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.

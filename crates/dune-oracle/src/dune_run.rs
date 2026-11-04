@@ -18,11 +18,14 @@ use crate::corpus::Circuit as CorpusCircuit;
 pub fn supported(c: &CorpusCircuit) -> bool {
     const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac"];
     const DEVICES: &[char] = &[
-        'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'x',
+        'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'm', 'x',
     ];
+    // Only MOS level 1 is implemented so far.
+    const MOS_LEVELS: &[u32] = &[1];
     !c.analyses.is_empty()
         && c.analyses.iter().all(|a| ANALYSES.contains(&a.as_str()))
         && c.devices.iter().all(|d| DEVICES.contains(d))
+        && c.mos_levels.iter().all(|l| MOS_LEVELS.contains(l))
 }
 
 /// Parse, elaborate and run every analysis of the deck, returning a

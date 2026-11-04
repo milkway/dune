@@ -23,8 +23,11 @@ caminho do arquivo. Qualquer FAIL encerra com código 1.
 ### Quem é o candidato
 
 Para decks cujas análises **e** letras de dispositivo o motor já
-implementa (inventário por varredura de linha; hoje `.op`/`.dc` com
-R C L K V I E F G H D X), o candidato é o próprio Dune, via biblioteca
+implementa (inventário por varredura de linha; hoje `.op`/`.dc`/
+`.tran`/`.ac` com R C L K V I E F G H D Q M X — para o M a varredura
+também lê o `LEVEL` dos cartões `.model nmos/pmos`, inclusive em
+linhas de continuação, e só o nível 1 entra por enquanto), o
+candidato é o próprio Dune, via biblioteca
 (`dune_run.rs`) — inclusive no `--ci`, que portanto exercita o motor a
 cada push sem precisar de ngspice no runner. Para o resto: `NOME..`
 roda o ngspice de novo (deriva de ambiente) e `--ci` compara o golden

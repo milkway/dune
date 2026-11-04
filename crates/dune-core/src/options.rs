@@ -50,6 +50,14 @@ pub struct Options {
     pub maxord: usize,
     /// `NOPAGE`: suppress page breaks in printed output.
     pub nopage: bool,
+    /// `DEFL`/`DEFW`: default MOS channel length/width, meters
+    /// (`CKTdefaultMosL/W`, 1e-4).
+    pub defl: f64,
+    pub defw: f64,
+    /// `DEFAD`/`DEFAS`: default MOS drain/source diffusion area, m²
+    /// (`CKTdefaultMosAD/AS`, 0).
+    pub defad: f64,
+    pub defas: f64,
 }
 
 impl Default for Options {
@@ -74,6 +82,10 @@ impl Default for Options {
             method: Method::Trapezoidal,
             maxord: 2,
             nopage: false,
+            defl: 1e-4,
+            defw: 1e-4,
+            defad: 0.0,
+            defas: 0.0,
         }
     }
 }
@@ -164,10 +176,17 @@ impl Options {
                 },
                 "noopiter" => self.noopiter = true,
                 "nopage" => self.nopage = true,
+                // `cktsopt.c` has a copy-paste bug that makes `defas`
+                // set the drain area; ngspice fixed it and so do we
+                // (`corpus/KNOWN_DIFFS.md`).
+                "defl" => num_opt!(defl),
+                "defw" => num_opt!(defw),
+                "defad" => num_opt!(defad),
+                "defas" => num_opt!(defas),
                 // Recognized 3f5 options that only matter to later
                 // phases (output formatting, statistics, devices).
-                "itl3" | "itl5" | "acct" | "list" | "nomod" | "node" | "opts" | "defl" | "defw"
-                | "defad" | "defas" | "bypass" | "badmos3" | "keepopinfo" => {}
+                "itl3" | "itl5" | "acct" | "list" | "nomod" | "node" | "opts" | "bypass"
+                | "badmos3" | "keepopinfo" => {}
                 other => diags.push(Diagnostic::warning(
                     format!("option {other} is not implemented yet; ignored"),
                     p.span,

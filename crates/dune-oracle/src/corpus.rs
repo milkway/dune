@@ -33,6 +33,9 @@ pub struct Circuit {
     pub analyses: Vec<String>,
     /// Device letters used by the deck's element cards (lowercase).
     pub devices: Vec<char>,
+    /// `LEVEL` of every `nmos`/`pmos` `.model` card (default 1), so
+    /// the support gate can tell MOS1 decks from MOS2/3/6 ones.
+    pub mos_levels: Vec<u32>,
     /// Reason from `corpus/SKIP`, when listed there.
     pub skip: Option<String>,
 }
@@ -149,13 +152,14 @@ fn collect_cir_files(dir: &Path, out: &mut Vec<Circuit>) -> Result<()> {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let (analyses, devices) = scan_deck(&path)?;
+            let (analyses, devices, mos_levels) = scan_deck(&path)?;
             out.push(Circuit {
                 stem,
                 path,
                 rel: String::new(),
                 analyses,
                 devices,
+                mos_levels,
                 skip: None,
             });
         }
@@ -167,24 +171,43 @@ fn collect_cir_files(dir: &Path, out: &mut Vec<Circuit>) -> Result<()> {
 /// element letters of a deck. A plain line scan is enough for the
 /// inventory; the real parser is `dune-netlist`. The first line is
 /// the title and `.control` blocks are commands, so both are skipped.
-fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>)> {
+fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
     let text = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let text = String::from_utf8_lossy(&text);
     let mut analyses = Vec::new();
     let mut devices = Vec::new();
+    let mut mos_levels = Vec::new();
     let mut in_control = false;
+    let mut in_mos_model = false;
     for line in text.lines().skip(1) {
         let line = line.trim_start();
         let first = line.chars().next().unwrap_or('*');
+        // `.model` cards continue over `+` lines; `LEVEL` may sit on
+        // any of them (mosmem.cir does exactly that).
+        if first == '+' {
+            if in_mos_model && !in_control {
+                if let (Some(l), Some(slot)) = (scan_level(line), mos_levels.last_mut()) {
+                    *slot = l;
+                }
+            }
+            continue;
+        }
+        in_mos_model = false;
         if first == '.' {
-            let card = line
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase();
+            let lower = line.to_ascii_lowercase();
+            let card = lower.split_whitespace().next().unwrap_or("").to_string();
             match card.as_str() {
                 ".control" => in_control = true,
                 ".endc" => in_control = false,
+                ".model" if !in_control => {
+                    if lower
+                        .split(|c: char| c.is_whitespace() || c == '(')
+                        .any(|t| t == "nmos" || t == "pmos")
+                    {
+                        in_mos_model = true;
+                        mos_levels.push(scan_level(&lower).unwrap_or(1));
+                    }
+                }
                 _ if !in_control
                     && ANALYSES.contains(&card.as_str())
                     && !analyses.contains(&card) =>
@@ -196,7 +219,7 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>)> {
             continue;
         }
         if in_control || !first.is_ascii_alphabetic() {
-            continue; // comments, continuations, control commands
+            continue; // comments, control commands
         }
         let letter = first.to_ascii_lowercase();
         if !devices.contains(&letter) {
@@ -204,7 +227,40 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>)> {
         }
     }
     devices.sort_unstable();
-    Ok((analyses, devices))
+    Ok((analyses, devices, mos_levels))
+}
+
+/// Find `level=<n>` (spaces allowed around `=`) in a lowercased
+/// model-card line.
+fn scan_level(line: &str) -> Option<u32> {
+    let lower = line.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find("level") {
+        let at = from + pos;
+        from = at + 5;
+        // Must be a whole token.
+        if at > 0
+            && lower[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric())
+        {
+            continue;
+        }
+        let rest = lower[at + 5..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let digits: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if let Ok(v) = digits.parse::<f64>() {
+            return Some(v as u32);
+        }
+    }
+    None
 }
 
 fn read_xfail_file(root: &Path) -> Result<Vec<Xfail>> {
@@ -268,11 +324,29 @@ mod tests {
             "title line, not a device\n.OPTIONS reltol=1e-3\n .TRAN 1n 1u\nr1 1 0 1k\n             + 100\nQ3 1 2 3 mod\n.control\nrun\n.endc\n.ac dec 10 1 1meg\n.tran 2n 2u\n.end\n",
         )
         .unwrap();
-        let (a, d) = scan_deck(&p).unwrap();
+        let (a, d, m) = scan_deck(&p).unwrap();
         assert_eq!(a, vec![".tran", ".ac"]);
         // `run` inside .control and the `+` continuation are not
         // devices; the title line is skipped.
         assert_eq!(d, vec!['q', 'r']);
+        assert!(m.is_empty());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scan_reads_mos_levels_across_continuations() {
+        let dir = std::env::temp_dir().join(format!("dune-oracle-lvl-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("lvl.cir");
+        fs::write(
+            &p,
+            "t\nm1 1 2 3 4 a\n.model a nmos(vto=1\n+ level=2)\n\
+             .model b pmos level = 6\n.model c nmos(kp=1u)\n.op\n.end\n",
+        )
+        .unwrap();
+        let (_, d, m) = scan_deck(&p).unwrap();
+        assert_eq!(d, vec!['m']);
+        assert_eq!(m, vec![2, 6, 1]);
         fs::remove_dir_all(&dir).ok();
     }
 }
