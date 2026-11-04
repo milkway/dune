@@ -37,9 +37,19 @@ preciso, circuitos da suíte do ngspice (com proveniência anotada aqui).
 Versão do ngspice usada para gerar `golden/` (fixada; regenerar o golden
 exige a mesma versão ou uma entrada em `KNOWN_DIFFS.md`).
 
-## golden/ (gerado na Fase 0)
+## golden/
 
-Rawfiles do ngspice, versionados, um por circuito do corpus.
+Rawfiles do ngspice, versionados, um por circuito do corpus
+(`<stem>.raw`, ASCII). Gerados com
+`cargo run -p dune-oracle -- --gen-golden`, que exige o ngspice de
+`ORACLE` instalado. Regenerar com outra versão exige repinar `ORACLE` e
+anotar em `KNOWN_DIFFS.md`.
+
+## SKIP
+
+Circuitos que o oráculo não roda: `<caminho relativo a corpus/> <motivo>`,
+um por linha, `#` comenta. A história de cada entrada fica em
+`KNOWN_DIFFS.md`.
 
 ## regress/
 

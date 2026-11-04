@@ -1,0 +1,17 @@
+Title: test pz
+Date: Tue Nov  3 20:58:29  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 4
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(pole(4))	voltage
+Values:
+0		-1.019524000000000e+09,0.000000000000000e+00
+	-8.296965000000000e+08,0.000000000000000e+00
+	-8.652054000000001e+07,0.000000000000000e+00
+	-1.060594000000000e+07,0.000000000000000e+00

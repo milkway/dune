@@ -1,0 +1,4 @@
+# Circuits the oracle must not run. Format: <path relative to corpus/>
+# followed by the reason. Kept machine-readable for dune-oracle; the
+# human story behind each entry belongs in KNOWN_DIFFS.md.
+spice3f5/examples/mixdisto.cir no analysis card (the .disto lines are commented out upstream); ngspice-47 -b writes an empty rawfile

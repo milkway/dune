@@ -1,0 +1,13 @@
+Title: test circuit #1 for pz analysis:high pass filter
+Date: Tue Nov  3 20:58:29  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 2
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(zero(1))	voltage
+Values:
+0		-5.000000000000000e+08,0.000000000000000e+00
+	0.000000000000000e+00,0.000000000000000e+00
