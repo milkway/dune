@@ -1,15 +1,23 @@
-//! The Newton–Raphson engine: `NIiter` (`ni/niiter.c`), `NIconvTest`
-//! (`ni/niconv.c`) and the gmin/source-stepping driver `CKTop`
-//! (`ckt/cktop.c`), DC subset.
+//! The simulation engine: `NIiter` (`ni/niiter.c`), `NIconvTest`
+//! (`ni/niconv.c`), the gmin/source-stepping driver `CKTop`
+//! (`ckt/cktop.c`), the DC sweep `DCtrCurv` (`ckt/dctrcurv.c`) and
+//! the transient loop `DCtran` (`ckt/dctran.c`) with its breakpoint
+//! table (`cktsetbk.c`, `cktclrbk.c`) and LTE step control
+//! (`ckttrunc.c`).
 
 use std::collections::HashMap;
 
 use crate::circuit::{Built, VarKind, Vars};
 use crate::devices::Device;
 use crate::error::Error;
+use crate::integ::{Method, TerrCtx, com_cof};
 use crate::linalg::{LinalgError, LinearSolver};
-use crate::matrix::{InitMode, LoadCtx, MatrixBuilder, Var};
+use crate::matrix::{AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Var};
 use crate::options::Options;
+use crate::state::States;
+
+/// Memory guard for sweep/transient outputs: `points × vars` of f64.
+const MAX_OUTPUT_VALUES: usize = 50_000_000;
 
 pub(crate) struct Engine {
     pub vars: Vars,
@@ -17,17 +25,37 @@ pub(crate) struct Engine {
     mb: MatrixBuilder,
     solver: Box<dyn LinearSolver>,
     values: Vec<f64>,
-    /// `CKTrhs`: the RHS, overwritten by each solve with the new
-    /// solution (1-based, `[0]` trash).
+    /// `CKTrhs`: overwritten by each solve with the new solution.
     rhs: Vec<f64>,
-    /// `CKTrhsOld`: the previous solution; holds the final solution
-    /// after success.
+    /// `CKTrhsOld`: the previous solution; the final solution after
+    /// a successful solve.
     pub sol: Vec<f64>,
+    states: States,
     nodesets: Vec<(Var, f64)>,
-    /// Diagonal slots of nodeset rows (`node->ptr` in `cktload.c`).
     nodeset_diag: Vec<crate::matrix::Slot>,
+    /// `.ic` entries, forced during the transient operating point
+    /// (`cktload.c` under `MODETRANOP && !UIC`).
+    ics: Vec<(Var, f64)>,
+    ic_diag: Vec<crate::matrix::Slot>,
     /// V/I source name → (device index, is Vsource), for `.dc`.
     pub sources: HashMap<String, (usize, bool)>,
+
+    // Analysis mode (the C's CKTmode bits + time bookkeeping).
+    kind: AnKind,
+    uic: bool,
+    time: f64,
+    step: f64,
+    final_time: f64,
+    delta: f64,
+    delta_old: [f64; 8],
+    ag: [f64; 7],
+    order: usize,
+    maxord: usize,
+    method: Method,
+
+    // Breakpoint table (always ≥ 2 entries, sorted).
+    breaks: Vec<f64>,
+    min_break: f64,
 }
 
 impl Engine {
@@ -36,7 +64,9 @@ impl Engine {
             vars,
             mut devices,
             nodesets,
+            ics,
             sources,
+            num_states,
             ..
         } = built;
         let n = vars.len() - 1;
@@ -44,8 +74,8 @@ impl Engine {
         for d in &mut devices {
             d.alloc(&mut mb);
         }
-        // Nodeset rows need their diagonal present.
         let nodeset_diag = nodesets.iter().map(|&(v, _)| mb.slot(v, v)).collect();
+        let ic_diag = ics.iter().map(|&(v, _)| mb.slot(v, v)).collect();
         let mut solver = crate::linalg::default_solver();
         solver.analyze(&mb.pattern());
         let num_slots = mb.num_slots();
@@ -57,53 +87,74 @@ impl Engine {
             values: vec![0.0; num_slots],
             rhs: vec![0.0; n + 1],
             sol: vec![0.0; n + 1],
+            states: States::new(num_states.max(1)),
             nodesets,
             nodeset_diag,
+            ics,
+            ic_diag,
             sources,
+            kind: AnKind::DcOp,
+            uic: false,
+            time: 0.0,
+            step: 0.0,
+            final_time: 0.0,
+            delta: 0.0,
+            delta_old: [0.0; 8],
+            ag: [0.0; 7],
+            order: 1,
+            maxord: 2,
+            method: Method::Trapezoidal,
+            breaks: vec![0.0, 0.0],
+            min_break: 0.0,
         }
     }
 
-    /// One `NIiter` call: Newton iterations until convergence or
-    /// `maxiter`. `start` is the `INITF` state to begin in
-    /// (`MODEINITJCT` on a fresh start, `MODEINITFLOAT` to continue
-    /// from the previous solution during stepping).
-    fn ni_iter(
-        &mut self,
-        opts: &Options,
-        start: InitMode,
-        maxiter: usize,
-        diag_gmin: f64,
-        srcfact: f64,
-    ) -> Result<(), Error> {
-        let mut mode = start;
-        let mut iterno = 0usize;
-        let mut ipass = false;
-        let has_nodesets = !self.nodesets.is_empty();
+    pub fn set_kind(&mut self, kind: AnKind, uic: bool) {
+        self.kind = kind;
+        self.uic = uic;
+    }
 
-        loop {
-            // CKTload.
-            self.values.fill(0.0);
-            self.rhs.fill(0.0);
-            let mut ctx = LoadCtx {
-                values: &mut self.values,
-                rhs: &mut self.rhs,
-                sol: &self.sol,
-                mode,
-                gmin: opts.gmin,
-                srcfact,
-                noncon: false,
-                reltol: opts.reltol,
-                abstol: opts.abstol,
-            };
-            for d in &mut self.devices {
-                d.load_dc(&mut ctx);
-            }
-            let mut noncon = ctx.noncon;
+    fn load_all(&mut self, mode: InitMode, opts: &Options, srcfact: f64) -> bool {
+        self.values.fill(0.0);
+        self.rhs.fill(0.0);
+        let pred_xfact = if self.delta_old[1] != 0.0 {
+            self.delta / self.delta_old[1]
+        } else {
+            0.0
+        };
+        let mut ctx = LoadCtx {
+            values: &mut self.values,
+            rhs: &mut self.rhs,
+            sol: &self.sol,
+            mode,
+            kind: self.kind,
+            uic: self.uic,
+            time: self.time,
+            step: self.step,
+            final_time: self.final_time,
+            gmin: opts.gmin,
+            srcfact,
+            noncon: false,
+            states: &mut self.states,
+            ag: self.ag,
+            order: self.order,
+            method: self.method,
+            pred_xfact,
+        };
+        for d in &mut self.devices {
+            d.load(&mut ctx);
+        }
+        for d in &mut self.devices {
+            d.load_late(&mut ctx);
+        }
+        let noncon = ctx.noncon;
 
-            // Nodesets hold their nodes during INITJCT/INITFIX
-            // (`cktload.c`; we always use the row-replacement form,
-            // see docs/dune-core.md).
-            if has_nodesets && mode != InitMode::Float {
+        // Nodesets hold during INITJCT/INITFIX of DC solutions;
+        // `.ic` nodes hold throughout the transient operating point
+        // (`cktload.c`; row replacement, see docs/dune-core.md).
+        let is_dc = matches!(self.kind, AnKind::DcOp | AnKind::TranOp | AnKind::DcSweep);
+        if is_dc {
+            if matches!(mode, InitMode::Jct | InitMode::Fix) {
                 for (k, &(var, value)) in self.nodesets.iter().enumerate() {
                     for s in self.mb.slots_in_row(var) {
                         self.values[s.0] = 0.0;
@@ -112,8 +163,45 @@ impl Engine {
                     self.rhs[var] = value;
                 }
             }
+            if self.kind == AnKind::TranOp && !self.uic {
+                for (k, &(var, value)) in self.ics.iter().enumerate() {
+                    for s in self.mb.slots_in_row(var) {
+                        self.values[s.0] = 0.0;
+                    }
+                    self.values[self.ic_diag[k].0] = 1.0;
+                    self.rhs[var] = value;
+                }
+            }
+        }
+        noncon
+    }
 
-            // Factor + solve; the solution lands in `rhs`.
+    /// One `NIiter` call. `start` is the `INITF` state to begin in.
+    fn ni_iter(
+        &mut self,
+        opts: &Options,
+        start: InitMode,
+        maxiter: usize,
+        diag_gmin: f64,
+        srcfact: f64,
+    ) -> Result<(), Error> {
+        // The UIC transient operating point: one load, no solve
+        // (`niiter.c` top).
+        if self.kind == AnKind::TranOp && self.uic {
+            std::mem::swap(&mut self.sol, &mut self.rhs);
+            self.load_all(start, opts, srcfact);
+            return Ok(());
+        }
+
+        let mut mode = start;
+        let mut iterno = 0usize;
+        let mut ipass = false;
+        let has_nodesets =
+            !self.nodesets.is_empty() && matches!(self.kind, AnKind::DcOp | AnKind::DcSweep);
+
+        loop {
+            let mut noncon = self.load_all(mode, opts, srcfact);
+
             self.solver
                 .factor(&self.values[1..], diag_gmin)
                 .map_err(|e| self.map_singular(e))?;
@@ -121,10 +209,7 @@ impl Engine {
                 .solve_in_place(&mut self.rhs[1..])
                 .map_err(|e| self.map_singular(e))?;
             // The C zeroes the ground positions right after the
-            // solve (`*CKTrhs = 0; *CKTrhsOld = 0;` in niiter.c):
-            // devices trash grounded contributions into index 0, and
-            // without this the swap would turn that trash into a
-            // ground "voltage" read back by every grounded junction.
+            // solve (`*CKTrhs = 0; *CKTrhsOld = 0;` in niiter.c).
             self.rhs[0] = 0.0;
             self.sol[0] = 0.0;
 
@@ -141,8 +226,6 @@ impl Engine {
             match mode {
                 InitMode::Float => {
                     if has_nodesets {
-                        // The extra all-devices-released pass after
-                        // nodesets stop holding (`ipass` in the C).
                         if ipass {
                             noncon = true;
                         }
@@ -160,13 +243,13 @@ impl Engine {
                     }
                     ipass = true;
                 }
+                InitMode::Tran | InitMode::Pred => mode = InitMode::Float,
             }
             std::mem::swap(&mut self.sol, &mut self.rhs);
         }
     }
 
-    /// `NIconvTest`: node voltages against `vntol`, branch currents
-    /// against `abstol`, both with the `reltol` term.
+    /// `NIconvTest`.
     fn converged(&self, opts: &Options) -> bool {
         for i in 1..self.vars.len() {
             let new = self.rhs[i];
@@ -194,14 +277,13 @@ impl Engine {
         Error::Singular(name)
     }
 
-    /// `CKTop`: plain Newton first, then gmin stepping, then source
-    /// stepping, exactly in the C's control flow.
+    /// `CKTop`.
     pub fn op(&mut self, opts: &Options) -> Result<(), Error> {
         let first = InitMode::Jct;
         let direct = if !opts.noopiter {
             self.ni_iter(opts, first, opts.itl1, 0.0, 1.0)
         } else {
-            Err(Error::IterLim) // "go directly to gmin stepping"
+            Err(Error::IterLim)
         };
         if direct.is_ok() {
             return Ok(());
@@ -216,12 +298,11 @@ impl Engine {
             let mut mode = first;
             for _ in 0..=opts.gminsteps {
                 if self.ni_iter(opts, mode, opts.itl1, diag_gmin, 1.0).is_err() {
-                    break; // "Gmin step failed"
+                    break;
                 }
                 diag_gmin /= 10.0;
                 mode = InitMode::Float;
             }
-            // The C always tries once more at gmin zero.
             last = self.ni_iter(opts, mode, opts.itl1, 0.0, 1.0);
             if last.is_ok() {
                 return Ok(());
@@ -242,18 +323,14 @@ impl Engine {
         last
     }
 
-    /// `DCtrCurv` (`ckt/dctrcurv.c`): sweep one or two sources, the
-    /// first one innermost. Each point tries `NIiter(itl2)` from the
-    /// previous solution and falls back to the full `CKTop`; the
-    /// inner source resets and re-junction-initializes whenever an
-    /// outer source steps. Returns `(scale, solution)` rows.
+    /// `DCtrCurv`: sweep one or two sources, the first innermost.
     pub fn dc(
         &mut self,
         opts: &Options,
         sweeps: &[SweepRef],
     ) -> Result<Vec<(f64, Vec<f64>)>, Error> {
         assert!(!sweeps.is_empty() && sweeps.len() <= 2);
-        // The C's SIGN(1., step): +1 for step >= 0.
+        self.set_kind(AnKind::DcSweep, false);
         let sign = |x: f64| if x >= 0.0 { 1.0 } else { -1.0 };
 
         let mut cur: Vec<f64> = sweeps.iter().map(|s| s.start).collect();
@@ -265,13 +342,11 @@ impl Engine {
         let mut i = 0usize;
         loop {
             let s = &sweeps[i];
-            // ngspice's guard (dctrcurv.c there): the accumulated
+            // ngspice's guard (its dctrcurv.c): the accumulated
             // value may drift past the stop by rounding; the raw 3f5
             // comparison would then drop the final point
             // (corpus/KNOWN_DIFFS.md).
             if cur[i] * sign(s.step) - sign(s.step) * s.stop > f64::EPSILON * 1e3 {
-                // This level finished: step the next one up (the
-                // C's `goto nextstep` with the incremented i).
                 i += 1;
                 start_mode = InitMode::Jct;
                 if i >= sweeps.len() {
@@ -281,8 +356,6 @@ impl Engine {
                 self.devices[sweeps[i].dev_index].set_dc(cur[i]);
                 continue;
             }
-            // Walk back down, resetting inner sources to their
-            // start values.
             while i > 0 {
                 i -= 1;
                 cur[i] = sweeps[i].start;
@@ -292,9 +365,7 @@ impl Engine {
                 self.op(opts)?;
             }
             start_mode = InitMode::Float;
-            // Memory guard: the 3f5 has no bound here; a hostile
-            // sweep must fail cleanly instead of exhausting RAM.
-            if (rows.len() + 1).saturating_mul(self.vars.len()) > 50_000_000 {
+            if (rows.len() + 1).saturating_mul(self.vars.len()) > MAX_OUTPUT_VALUES {
                 return Err(Error::Build(
                     "dc sweep produces too many points; refusing".into(),
                 ));
@@ -305,6 +376,231 @@ impl Engine {
         }
         Ok(rows)
     }
+
+    /// `CKTsetBreak` (`cktsetbk.c`): sorted insert with `minBreak`
+    /// merging.
+    fn set_break(&mut self, time: f64) -> Result<(), Error> {
+        if self.time > time {
+            // "breakpoint in the past - HELP!" is E_INTERN in the C.
+            return Err(Error::Build("breakpoint in the past".into()));
+        }
+        for i in 0..self.breaks.len() {
+            if self.breaks[i] > time {
+                if self.breaks[i] - time <= self.min_break {
+                    return Ok(());
+                }
+                if i > 0 && time - self.breaks[i - 1] <= self.min_break {
+                    return Ok(());
+                }
+                self.breaks.insert(i, time);
+                return Ok(());
+            }
+        }
+        if time - self.breaks[self.breaks.len() - 1] <= self.min_break {
+            return Ok(());
+        }
+        self.breaks.push(time);
+        Ok(())
+    }
+
+    /// `CKTclrBreak`.
+    fn clr_break(&mut self) {
+        if self.breaks.len() > 2 {
+            self.breaks.remove(0);
+        } else {
+            self.breaks[0] = self.breaks[1];
+            self.breaks[1] = self.final_time;
+        }
+    }
+
+    /// `CKTtrunc`: every device's LTE estimate; growth capped at 2×.
+    fn trunc(&self, opts: &Options, time_step: &mut f64) {
+        let mut timetemp = f64::MAX;
+        let t = TerrCtx {
+            states: &self.states,
+            delta_old: &self.delta_old,
+            order: self.order,
+            method: self.method,
+            delta: self.delta,
+            reltol: opts.reltol,
+            abstol: opts.abstol,
+            chgtol: opts.chgtol,
+            trtol: opts.trtol,
+        };
+        for d in &self.devices {
+            d.trunc(&t, &mut timetemp);
+        }
+        *time_step = f64::min(2.0 * *time_step, timetemp);
+    }
+
+    /// `CKTaccept`: device hooks, then merge breakpoint requests.
+    fn accept(&mut self, brk: bool) -> Result<(), Error> {
+        let mut requests = Vec::new();
+        let mut ctx = AcceptCtx {
+            time: self.time,
+            brk,
+            step: self.step,
+            final_time: self.final_time,
+            requests: &mut requests,
+        };
+        for d in &mut self.devices {
+            d.accept(&mut ctx);
+        }
+        for t in requests {
+            self.set_break(t)?;
+        }
+        Ok(())
+    }
+
+    /// `DCtran`: the transient loop. Returns `(time, solution)` rows
+    /// for every accepted timepoint at or after `tstart`.
+    pub fn tran(&mut self, opts: &Options, p: &TranParams) -> Result<Vec<(f64, Vec<f64>)>, Error> {
+        // Default TMAX: the 3f5 used only (tstop-tstart)/50; ngspice
+        // restored the SPICE2 default min(tstep, span/50), which is
+        // what bounds its point density — the oracle's grid
+        // (corpus/KNOWN_DIFFS.md).
+        let max_step = match p.tmax {
+            Some(m) if m > 0.0 => m,
+            _ => f64::min(p.tstep, (p.tstop - p.tstart) / 50.0),
+        };
+        self.method = opts.method;
+        self.maxord = match self.method {
+            Method::Trapezoidal => 2,
+            Method::Gear => opts.maxord.clamp(1, 6),
+        };
+        self.step = p.tstep;
+        self.final_time = p.tstop;
+        self.time = 0.0;
+        self.breaks = vec![0.0, p.tstop];
+        self.min_break = 5e-5 * max_step;
+        let delmin = 1e-9 * max_step;
+        let mut delta = f64::min(p.tstop / 50.0, p.tstep) / 10.0;
+
+        // Transient operating point.
+        self.set_kind(AnKind::TranOp, p.uic);
+        if p.uic {
+            self.ni_iter(opts, InitMode::Jct, opts.itl1, 0.0, 1.0)?;
+        } else {
+            self.op(opts)?;
+        }
+
+        // Switch to transient proper (`MODETRAN | MODEINITTRAN`).
+        self.set_kind(AnKind::Tran, p.uic);
+        self.order = 1;
+        self.ag = [0.0; 7];
+        self.states.copy01();
+        self.delta_old = [max_step; 8];
+        self.delta = delta;
+        let mut save_delta = p.tstop / 50.0;
+        let mut firsttime = true;
+        let mut brk = true; // CKTbreak
+        let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
+
+        'next_time: loop {
+            // Accept the computed point: device hooks plant
+            // breakpoints, stale ones retire.
+            self.accept(brk)?;
+            if self.time > self.breaks[0] {
+                self.clr_break();
+            }
+            brk = false;
+            // Under UIC ngspice omits the t=0 point (the 3f5 dumped
+            // the untouched zero vector there — KNOWN_DIFFS.md).
+            let skip = p.uic && self.time == 0.0;
+            if self.time >= p.tstart && !skip {
+                if (rows.len() + 1).saturating_mul(self.vars.len()) > MAX_OUTPUT_VALUES {
+                    return Err(Error::Build(
+                        "transient produces too many points; refusing".into(),
+                    ));
+                }
+                rows.push((self.time, self.sol.clone()));
+            }
+            if (self.time - self.final_time).abs() < self.min_break {
+                return Ok(rows);
+            }
+
+            // "resume": pick the next delta.
+            delta = f64::min(delta, max_step);
+            if self.time == self.breaks[0] || self.breaks[0] - self.time <= delmin {
+                // First timepoint after a breakpoint: cut the order
+                // and limit the step by the breakpoint spacing.
+                self.order = 1;
+                delta = f64::min(
+                    delta,
+                    0.1 * f64::min(save_delta, self.breaks[1] - self.breaks[0]),
+                );
+                if firsttime {
+                    delta /= 10.0;
+                }
+                delta = f64::max(delta, 2.0 * delmin);
+            } else if self.time + delta >= self.breaks[0] {
+                save_delta = delta;
+                delta = self.breaks[0] - self.time;
+                brk = true;
+            }
+
+            for i in (0..=5).rev() {
+                self.delta_old[i + 1] = self.delta_old[i];
+            }
+            self.delta_old[0] = delta;
+            self.states.rotate(self.maxord);
+
+            loop {
+                let olddelta = delta;
+                self.time += delta;
+                self.delta_old[0] = delta;
+                self.delta = delta;
+                self.ag = com_cof(self.method, self.order, delta, &self.delta_old)?;
+
+                let start = if firsttime {
+                    InitMode::Tran
+                } else {
+                    InitMode::Pred
+                };
+                let converged = self.ni_iter(opts, start, opts.itl4, 0.0, 1.0);
+
+                if let Err(e) = converged {
+                    if matches!(e, Error::Singular(_)) {
+                        return Err(e);
+                    }
+                    // Rejected for non-convergence.
+                    self.time -= delta;
+                    delta /= 8.0;
+                    self.order = 1;
+                } else {
+                    if firsttime {
+                        firsttime = false;
+                        continue 'next_time; // no LTE check on the first point
+                    }
+                    let mut new = delta;
+                    self.trunc(opts, &mut new);
+                    if new > 0.9 * delta {
+                        if self.order == 1 {
+                            new = delta;
+                            self.order = 2;
+                            self.trunc(opts, &mut new);
+                            if new <= 1.05 * delta {
+                                self.order = 1;
+                            }
+                        }
+                        delta = new;
+                        continue 'next_time;
+                    } else {
+                        // Rejected for truncation error.
+                        self.time -= delta;
+                        delta = new;
+                    }
+                }
+                if delta <= delmin {
+                    if olddelta > delmin {
+                        delta = delmin;
+                    } else {
+                        return Err(Error::Timestep { time: self.time });
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// One resolved `.dc` sweep level.
@@ -313,4 +609,13 @@ pub(crate) struct SweepRef {
     pub start: f64,
     pub stop: f64,
     pub step: f64,
+}
+
+/// `.tran` parameters after validation.
+pub(crate) struct TranParams {
+    pub tstep: f64,
+    pub tstop: f64,
+    pub tstart: f64,
+    pub tmax: Option<f64>,
+    pub uic: bool,
 }

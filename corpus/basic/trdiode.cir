@@ -1,0 +1,9 @@
+half-wave rectifier with filter cap
+* written for Dune (Phase 2 .tran parity); not from Berkeley
+vin 1 0 sin(0 5 50k)
+d1 1 2 dmod
+rl 2 0 2k
+cf 2 0 100n
+.model dmod d(is=1e-14 rs=5 cjo=4p tt=5n)
+.tran 0.2u 60u
+.end

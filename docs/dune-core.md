@@ -36,6 +36,22 @@ resultados espelhando o rawfile).
   todo nó não-terra não-interno (`#` fica de fora, como no ngspice),
   `i(<nome>)` para ramos de V, L, E, H; `Plotname: Operating Point`.
 
+- **`.tran`** (`tran.rs`, `engine.rs::tran` ← `ckt/dctran.c`): laço
+  de tempo completo — TRANOP (com `.ic` forçado, ou UIC com uma única
+  carga sem solve, `niiter.c`), rotação de estados (`CKTstates`),
+  coeficientes trapezoidal/Gear 1–6 em grade não uniforme
+  (`nicomcof.c`, com o pequeno LU), companheiros via `NIintegrate`,
+  LTE por diferenças divididas (`cktterr.c`) com crescimento ≤ 2×
+  (`ckttrunc.c`), controle de ordem 1↔2 do `dctran`, rejeição por
+  não-convergência (δ/8) e por LTE (0.9·δ), tabela de breakpoints
+  ordenada com `minBreak` (`cktsetbk.c`/`cktclrbk.c`), breakpoints de
+  PULSE/PWL no accept (`vsrcacct.c`), fontes `pulse sin exp pwl sffm`
+  com os defaults dependentes de TSTEP/TSTOP (`vsrcload.c`, incluindo
+  o π de 3.141592654 só no SFFM). Capacitor (`capload.c`), indutor em
+  duas fases com acoplamento K (`indload.c`, fluxo→múto→integra),
+  capacitância do diodo (depleção + difusão com `f2`/`f3`) e seu
+  `DIOtrunc`.
+
 - **`.dc`** (`dc.rs`, `engine.rs::dc` ← `ckt/dctrcurv.c`): uma ou
   duas fontes V/I, a primeira no laço interno; cada ponto tenta
   `NIiter(itl2)` continuando da solução anterior e cai para o `CKTop`
@@ -66,7 +82,18 @@ oráculo contra o ngspice.
    convergência potencialmente diferente em decks patológicos.
 3. **Erros estruturados** (`error.rs`) em vez de códigos `E_*` +
    impressões; as mensagens-aviso do C viram `notes` no resultado.
-4. **Fim de varredura `.dc` com epsilon** (ngspice): o 3f5 compara o
+4. **`TMAX` default = `min(tstep, (tstop−tstart)/50)`** (ngspice,
+   que restaurou o default do SPICE2; o 3f5 usa só `span/50`). É o
+   que define a densidade de pontos do oráculo — sem isso o Dune
+   dava passos ~15× maiores que o ngspice (ambos dentro do LTE) e as
+   formas de onda divergiam na régua de comparação.
+5. **UIC não emite o ponto t=0** (ngspice; o 3f5 despeja o vetor
+   zerado intocado).
+6. **NEWCONV**: o teste de corrente do diodo (`DIOconvTest`) só faz
+   efeito com o bypass de dispositivos, que o Dune não implementa; a
+   convergência fica com o `NIconvTest` + o flag de limitação do
+   `pnjlim`, como no 3f5 efetivo.
+7. **Fim de varredura `.dc` com epsilon** (ngspice): o 3f5 compara o
    valor acumulado cru com o stop e perde o último ponto quando o
    arredondamento passa de raspão; o ngspice (e o Dune) usam
    `> stop + DBL_EPSILON·1e3`. Passo zero/não-finito é erro (o 3f5
@@ -75,8 +102,8 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- `.dc`, `.tran` (capacitância do diodo já tem as fórmulas no C
-  citadas em `diode.rs`), `.ac`, `.tf`, ruído.
+- `.ac`, `.tf`, ruído, `.pz`, `.disto`; `.dc` varrendo TEMP e
+  parâmetro de modelo.
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - BJT/MOS/JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.

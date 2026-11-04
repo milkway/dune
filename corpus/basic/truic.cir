@@ -1,0 +1,8 @@
+uic start from stored energy
+* written for Dune (Phase 2 .tran parity); not from Berkeley
+c1 1 0 1u ic=2
+r1 1 0 1k
+l1 1 2 1m ic=1m
+r2 2 0 50
+.tran 2u 3m uic
+.end

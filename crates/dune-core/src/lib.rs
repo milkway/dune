@@ -17,10 +17,14 @@ mod diode;
 mod elaborate;
 mod engine;
 mod error;
+mod integ;
 mod matrix;
 mod op;
 mod options;
 mod solution;
+mod srcfn;
+mod state;
+mod tran;
 
 pub use circuit::{
     Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mutual, Resistor, Spec, Vccs, Vcvs,
@@ -29,6 +33,9 @@ pub use circuit::{
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
 pub use error::Error;
+pub use integ::Method;
 pub use op::Op;
 pub use options::Options;
 pub use solution::Solution;
+pub use srcfn::Wave;
+pub use tran::Tran;

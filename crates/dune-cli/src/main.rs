@@ -85,6 +85,21 @@ fn main() -> Result<()> {
                 }
                 plots.push(dc.solution.to_plot(&parsed.netlist.title, ""));
             }
+            dune_netlist::ir::Analysis::Tran {
+                tstep,
+                tstop,
+                tstart,
+                tmax,
+                uic,
+                ..
+            } => {
+                let tr =
+                    circuit.tran(&options, *tstep, *tstop, tstart.unwrap_or(0.0), *tmax, *uic)?;
+                for n in &tr.notes {
+                    eprintln!("note: {n}");
+                }
+                plots.push(tr.solution.to_plot(&parsed.netlist.title, ""));
+            }
             other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
         }
     }

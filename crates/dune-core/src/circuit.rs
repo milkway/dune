@@ -18,21 +18,24 @@ pub struct Resistor {
     pub value: f64,
 }
 
-/// `CXXXXXXX N+ N- VALUE` (farads). Open at the operating point.
+/// `CXXXXXXX N+ N- VALUE <IC=INCOND>` (farads).
 #[derive(Clone, Debug)]
 pub struct Capacitor {
     pub name: String,
     pub nodes: [String; 2],
     pub value: f64,
+    /// Initial voltage, used under `.tran … UIC`.
+    pub ic: Option<f64>,
 }
 
-/// `LYYYYYYY N+ N- VALUE` (henries). A short at the operating point,
-/// with its branch current as an unknown.
+/// `LYYYYYYY N+ N- VALUE <IC=INCOND>` (henries).
 #[derive(Clone, Debug)]
 pub struct Inductor {
     pub name: String,
     pub nodes: [String; 2],
     pub value: f64,
+    /// Initial current, used under `.tran … UIC`.
+    pub ic: Option<f64>,
 }
 
 /// `KXXXXXXX L1 L2 K`. No effect at the operating point.
@@ -44,21 +47,25 @@ pub struct Mutual {
     pub k: f64,
 }
 
-/// `VXXXXXXX N+ N- DC VALUE`.
+/// `VXXXXXXX N+ N- <DC VALUE> <tranfn(…)>`.
 #[derive(Clone, Debug)]
 pub struct Vsource {
     pub name: String,
     pub nodes: [String; 2],
-    pub dc: f64,
+    /// `None` when no DC value was given (transient functions then
+    /// also provide the DC-mode value, like `VSRCload`).
+    pub dc: Option<f64>,
+    pub wave: Option<crate::srcfn::Wave>,
 }
 
-/// `IYYYYYYY N+ N- DC VALUE` (flows through the source from `+` to
-/// `-`).
+/// `IYYYYYYY N+ N- <DC VALUE> <tranfn(…)>` (flows through the source
+/// from `+` to `-`).
 #[derive(Clone, Debug)]
 pub struct Isource {
     pub name: String,
     pub nodes: [String; 2],
-    pub dc: f64,
+    pub dc: Option<f64>,
+    pub wave: Option<crate::srcfn::Wave>,
 }
 
 /// `EXXXXXXX N+ N- NC+ NC- VALUE` (VCVS).
@@ -106,6 +113,8 @@ pub struct Diode {
     /// Instance temperature override, kelvin (`TEMP=` is °C on the
     /// card).
     pub temp: Option<f64>,
+    /// `IC=VD`: initial junction voltage under `.tran … UIC`.
+    pub ic: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +169,9 @@ pub struct Circuit {
     pub(crate) specs: Vec<Spec>,
     /// `.nodeset` entries (node, volts).
     pub(crate) nodesets: Vec<(String, f64)>,
+    /// `.ic` entries (node, volts), applied at the transient
+    /// operating point.
+    pub(crate) ics: Vec<(String, f64)>,
 }
 
 impl Circuit {
@@ -200,6 +212,12 @@ impl Circuit {
     pub fn nodeset(&mut self, node: impl Into<String>, value: f64) {
         self.nodesets
             .push((node.into().to_ascii_lowercase(), value));
+    }
+
+    /// `.ic v(node) = value` (enforced at the transient operating
+    /// point; `.tran … UIC` ignores it in favor of device ICs).
+    pub fn ic(&mut self, node: impl Into<String>, value: f64) {
+        self.ics.push((node.into().to_ascii_lowercase(), value));
     }
 }
 
@@ -298,9 +316,12 @@ pub(crate) struct Built {
     pub vars: Vars,
     pub devices: Vec<Box<dyn crate::devices::Device>>,
     pub nodesets: Vec<(Var, f64)>,
+    pub ics: Vec<(Var, f64)>,
     /// Independent V/I source element name → index in `devices`
     /// (what a `.dc` sweep drives) and whether it is a V source.
     pub sources: HashMap<String, (usize, bool)>,
+    /// Total device state slots (`CKTnumStates`).
+    pub num_states: usize,
     /// Diode temperature-adjust notes etc., surfaced by the caller.
     pub notes: Vec<String>,
 }
@@ -320,11 +341,25 @@ impl Circuit {
                 .or_insert_with(|| vars.push(name.to_string(), VarKind::Node))
         };
 
-        // Pass 1: node variables in order of first appearance, then
-        // branch variables per device, and the map from element name
-        // to its branch (for F/H control references).
+        // Pass 1: node variables in order of first appearance,
+        // branch variables per device, the name→branch map (F/H
+        // control references), state-slot bases (`CKTnumStates`) and
+        // the inductor info the mutuals need.
         let mut branches: HashMap<String, Var> = HashMap::new();
+        let mut st = crate::state::StateAlloc::new();
+        let mut state_base: Vec<usize> = Vec::with_capacity(self.specs.len());
+        let mut inductors: HashMap<String, (usize, f64)> = HashMap::new(); // name → (flux, L)
         for spec in &self.specs {
+            state_base.push(match spec {
+                Spec::Capacitor(_) => st.alloc(2),
+                Spec::Inductor(s) => {
+                    let flux = st.alloc(2);
+                    inductors.insert(s.name.clone(), (flux, s.value));
+                    flux
+                }
+                Spec::Diode(_) => st.alloc(5),
+                _ => 0,
+            });
             let node_names: &[String] = match spec {
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
@@ -366,13 +401,14 @@ impl Circuit {
                 _ => {}
             }
         }
+        let num_states = st.total();
 
         // Pass 2: instances.
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
         let mut sources: HashMap<String, (usize, bool)> = HashMap::new();
         let mut notes = Vec::new();
         let get = |node_ids: &HashMap<String, Var>, n: &str| node_ids[n];
-        for spec in &self.specs {
+        for (spec, &base) in self.specs.iter().zip(&state_base) {
             match spec {
                 Spec::Resistor(s) => {
                     devices.push(Box::new(ResistorI::new(
@@ -381,29 +417,51 @@ impl Circuit {
                         get(&node_ids, &s.nodes[1]),
                     )));
                 }
-                Spec::Capacitor(_) => devices.push(Box::new(CapacitorI)),
+                Spec::Capacitor(s) => {
+                    devices.push(Box::new(CapacitorI::new(
+                        s.value,
+                        s.ic.unwrap_or(0.0),
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[1]),
+                        base,
+                    )));
+                }
                 Spec::Inductor(s) => {
                     devices.push(Box::new(InductorI::new(
+                        s.value,
+                        s.ic.unwrap_or(0.0),
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                         branches[&s.name],
+                        base,
                     )));
                 }
                 Spec::Mutual(s) => {
                     for l in [&s.l1, &s.l2] {
-                        if !branches.contains_key(l) {
+                        if !inductors.contains_key(l) {
                             return Err(Error::Build(format!(
                                 "`{}`: coupled inductor `{l}` does not exist",
                                 s.name
                             )));
                         }
                     }
-                    devices.push(Box::new(MutualI));
+                    let (flux1, l1) = inductors[&s.l1];
+                    let (flux2, l2) = inductors[&s.l2];
+                    // `MUTfactor = k·sqrt(L1·L2)` (`mutsetup.c`).
+                    let factor = s.k * (l1 * l2).abs().sqrt();
+                    devices.push(Box::new(MutualI::new(
+                        factor,
+                        branches[&s.l1],
+                        branches[&s.l2],
+                        flux1,
+                        flux2,
+                    )));
                 }
                 Spec::Vsource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), true));
                     devices.push(Box::new(VsourceI::new(
                         s.dc,
+                        s.wave.clone(),
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                         branches[&s.name],
@@ -413,6 +471,7 @@ impl Circuit {
                     sources.insert(s.name.clone(), (devices.len(), false));
                     devices.push(Box::new(IsourceI {
                         dc: s.dc,
+                        wave: s.wave.clone(),
                         pos: get(&node_ids, &s.nodes[0]),
                         neg: get(&node_ids, &s.nodes[1]),
                     }));
@@ -466,13 +525,20 @@ impl Circuit {
                     let t = DiodeTemp::new(&s.name, &s.model, s.area, temp, opts.tnom, opts.reltol);
                     notes.extend(t.notes.iter().cloned());
                     devices.push(Box::new(crate::diode::DiodeI::new(
-                        pos, neg, pos_prime, t, s.off,
+                        pos,
+                        neg,
+                        pos_prime,
+                        t,
+                        s.area,
+                        s.off,
+                        s.ic.unwrap_or(0.0),
+                        base,
                     )));
                 }
             }
         }
 
-        // Nodesets must name existing nodes.
+        // Nodesets and ics must name existing nodes.
         let mut nodesets = Vec::new();
         for (name, v) in &self.nodesets {
             match node_ids.get(name) {
@@ -481,12 +547,22 @@ impl Circuit {
                 None => notes.push(format!(".nodeset names unknown node `{name}`")),
             }
         }
+        let mut ics = Vec::new();
+        for (name, v) in &self.ics {
+            match node_ids.get(name) {
+                Some(&var) if var != 0 => ics.push((var, *v)),
+                Some(_) => notes.push(".ic on ground ignored".to_string()),
+                None => notes.push(format!(".ic names unknown node `{name}`")),
+            }
+        }
 
         Ok(Built {
             vars,
             devices,
             nodesets,
+            ics,
             sources,
+            num_states,
             notes,
         })
     }

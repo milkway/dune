@@ -24,4 +24,8 @@ pub enum Error {
     /// `NIiter` gave up (`E_ITERLIM`).
     #[error("too many iterations without convergence")]
     IterLim,
+
+    /// The transient step shrank below `delmin` (`E_TIMESTEP`).
+    #[error("timestep too small at t = {time:.6e}")]
+    Timestep { time: f64 },
 }

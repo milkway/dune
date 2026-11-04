@@ -67,13 +67,18 @@ impl Circuit {
                         None => problems.push(format!("`{name}`: resistor has no value")),
                     }
                 }
-                ir::Device::Capacitor { value, model, .. } => {
+                ir::Device::Capacitor {
+                    value,
+                    model,
+                    params,
+                } => {
                     if model.is_some() {
                         problems.push(format!(
                             "`{name}`: semiconductor capacitor models are not implemented yet"
                         ));
                         continue;
                     }
+                    let ic = num_param(params, "ic");
                     match value {
                         Some(v) => add(
                             &mut ckt,
@@ -81,24 +86,29 @@ impl Circuit {
                                 name,
                                 nodes: two(&el.nodes),
                                 value: *v,
+                                ic,
                             },
                             &mut problems,
                         ),
                         None => problems.push(format!("`{name}`: capacitor has no value")),
                     }
                 }
-                ir::Device::Inductor { value, .. } => match value {
-                    Some(v) => add(
-                        &mut ckt,
-                        Inductor {
-                            name,
-                            nodes: two(&el.nodes),
-                            value: *v,
-                        },
-                        &mut problems,
-                    ),
-                    None => problems.push(format!("`{name}`: inductor has no value")),
-                },
+                ir::Device::Inductor { value, params } => {
+                    let ic = num_param(params, "ic");
+                    match value {
+                        Some(v) => add(
+                            &mut ckt,
+                            Inductor {
+                                name,
+                                nodes: two(&el.nodes),
+                                value: *v,
+                                ic,
+                            },
+                            &mut problems,
+                        ),
+                        None => problems.push(format!("`{name}`: inductor has no value")),
+                    }
+                }
                 ir::Device::Mutual { l1, l2, k } => add(
                     &mut ckt,
                     Mutual {
@@ -109,15 +119,25 @@ impl Circuit {
                     },
                     &mut problems,
                 ),
-                ir::Device::Source { kind, dc, .. } => {
-                    let dc = dc.unwrap_or(0.0);
+                ir::Device::Source { kind, dc, tran, .. } => {
+                    let wave = tran.as_ref().map(|t| {
+                        let args = t.args.clone();
+                        match t.kind {
+                            ir::TranFnKind::Pulse => crate::srcfn::Wave::Pulse(args),
+                            ir::TranFnKind::Sin => crate::srcfn::Wave::Sin(args),
+                            ir::TranFnKind::Exp => crate::srcfn::Wave::Exp(args),
+                            ir::TranFnKind::Pwl => crate::srcfn::Wave::Pwl(args),
+                            ir::TranFnKind::Sffm => crate::srcfn::Wave::Sffm(args),
+                        }
+                    });
                     match kind {
                         ir::SourceKind::Voltage => add(
                             &mut ckt,
                             Vsource {
                                 name,
                                 nodes: two(&el.nodes),
-                                dc,
+                                dc: *dc,
+                                wave,
                             },
                             &mut problems,
                         ),
@@ -126,7 +146,8 @@ impl Circuit {
                             Isource {
                                 name,
                                 nodes: two(&el.nodes),
-                                dc,
+                                dc: *dc,
+                                wave,
                             },
                             &mut problems,
                         ),
@@ -183,12 +204,11 @@ impl Circuit {
                         continue;
                     };
                     let mut temp = None;
+                    let mut ic = None;
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
-                            ("ic", _) => notes.push(format!(
-                                "`{name}`: ic only matters to transient analysis (Phase 2)"
-                            )),
+                            ("ic", ParamValue::Num(v)) => ic = Some(*v),
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
@@ -201,6 +221,7 @@ impl Circuit {
                             area: area.unwrap_or(1.0),
                             off: *off,
                             temp,
+                            ic,
                         },
                         &mut problems,
                     );
@@ -218,10 +239,7 @@ impl Circuit {
         for ni in &nl.node_inits {
             match ni.kind {
                 ir::NodeInitKind::Nodeset => ckt.nodeset(ni.node.clone(), ni.value),
-                ir::NodeInitKind::Ic => notes.push(format!(
-                    ".ic v({})={} only matters to transient analysis (Phase 2)",
-                    ni.node, ni.value
-                )),
+                ir::NodeInitKind::Ic => ckt.ic(ni.node.clone(), ni.value),
             }
         }
 
@@ -236,6 +254,15 @@ fn add(ckt: &mut Circuit, spec: impl Into<crate::circuit::Spec>, problems: &mut 
     if let Err(e) = ckt.add(spec) {
         problems.push(e.to_string());
     }
+}
+
+fn num_param(params: &[ir::Param], name: &str) -> Option<f64> {
+    params
+        .iter()
+        .find_map(|p| match (&p.value, p.name == name) {
+            (ParamValue::Num(v), true) => Some(*v),
+            _ => None,
+        })
 }
 
 fn two(nodes: &[String]) -> [String; 2] {

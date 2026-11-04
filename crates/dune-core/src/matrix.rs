@@ -69,6 +69,17 @@ impl MatrixBuilder {
     }
 }
 
+/// Analysis-kind bits of `CKTmode`: the C's `MODEDCOP`,
+/// `MODETRANOP`, `MODEDCTRANCURVE` and `MODETRAN` (the composite
+/// `MODEDC` mask is [`LoadCtx::is_dc`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AnKind {
+    DcOp,
+    TranOp,
+    DcSweep,
+    Tran,
+}
+
 /// Everything a device sees while loading for one Newton iteration
 /// (the `CKTload` environment).
 pub(crate) struct LoadCtx<'a> {
@@ -79,27 +90,82 @@ pub(crate) struct LoadCtx<'a> {
     /// Previous solution (`CKTrhsOld`), var-indexed, `[0] == 0`.
     pub sol: &'a [f64],
     pub mode: InitMode,
+    pub kind: AnKind,
+    /// `MODEUIC`.
+    pub uic: bool,
+    /// `CKTtime` (0 in DC modes).
+    pub time: f64,
+    /// `CKTstep` — the user's TSTEP, which source-function defaults
+    /// depend on (0 outside transient jobs).
+    pub step: f64,
+    /// `CKTfinalTime` (0 outside transient jobs).
+    pub final_time: f64,
     pub gmin: f64,
     /// `CKTsrcFact`, the source-stepping scale.
     pub srcfact: f64,
-    /// Set by devices that limited or failed their own convergence
-    /// test (`CKTnoncon`).
+    /// Set by devices that limited (`CKTnoncon`).
     pub noncon: bool,
-    pub reltol: f64,
-    pub abstol: f64,
+    /// Device state banks.
+    pub states: &'a mut crate::state::States,
+    /// Integration coefficients (`CKTag`), order and method; only
+    /// meaningful when `kind == Tran`.
+    pub ag: [f64; 7],
+    pub order: usize,
+    pub method: crate::integ::Method,
+    /// `CKTdelta / CKTdeltaOld[1]`, for `DEVpred`.
+    pub pred_xfact: f64,
 }
 
 /// The `INITF` state the Newton loop drives (`MODEINITJCT`,
-/// `MODEINITFIX`, `MODEINITFLOAT`).
+/// `MODEINITFIX`, `MODEINITFLOAT`, `MODEINITTRAN`, `MODEINITPRED`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InitMode {
     Jct,
     Fix,
     Float,
+    /// First timepoint after the transient operating point.
+    Tran,
+    /// First Newton iteration of every later timepoint.
+    Pred,
 }
 
 impl LoadCtx<'_> {
     pub fn add(&mut self, s: Slot, v: f64) {
         self.values[s.0] += v;
+    }
+
+    /// The C's `MODEDC` composite mask.
+    pub fn is_dc(&self) -> bool {
+        matches!(self.kind, AnKind::DcOp | AnKind::TranOp | AnKind::DcSweep)
+    }
+
+    /// `NIintegrate` against the current coefficients.
+    pub fn integrate(&mut self, cap: f64, q: usize) -> (f64, f64) {
+        crate::integ::integrate(self.states, &self.ag, self.order, self.method, cap, q)
+    }
+
+    /// `DEVpred` (`devsup.c`): extrapolate a state linearly from the
+    /// two previous timepoints.
+    pub fn pred(&self, off: usize) -> f64 {
+        (1.0 + self.pred_xfact) * self.states.get(1, off)
+            - self.pred_xfact * self.states.get(2, off)
+    }
+}
+
+/// What a device's `accept` hook sees at an accepted timepoint
+/// (`CKTaccept`); breakpoint requests are merged by the engine's
+/// `CKTsetBreak` port.
+pub(crate) struct AcceptCtx<'a> {
+    pub time: f64,
+    /// `CKTbreak`: this timepoint sits on a breakpoint.
+    pub brk: bool,
+    pub step: f64,
+    pub final_time: f64,
+    pub requests: &'a mut Vec<f64>,
+}
+
+impl AcceptCtx<'_> {
+    pub fn set_break(&mut self, t: f64) {
+        self.requests.push(t);
     }
 }

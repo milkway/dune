@@ -23,7 +23,8 @@ fn voltage_divider() {
     ckt.add(Vsource {
         name: "v1".into(),
         nodes: ["1".into(), "0".into()],
-        dc: 5.0,
+        dc: Some(5.0),
+        wave: None,
     })
     .unwrap();
     ckt.add(Resistor {

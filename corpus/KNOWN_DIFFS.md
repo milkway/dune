@@ -13,3 +13,5 @@ uma divergência por tolerância larga (D-0006).
 | Comentários | linha inteira `*` (e `$`/`#` na coluna 1) | também `$`/`;` de fim de linha | como o ngspice | D-0002 (superconjunto pragmático) |
 | Último ponto do `.dc` | comparação crua `valor > stop`: drift de acumulação pode comer o ponto final (ex.: `0:5m:0.25m` dá 20 pontos) | guarda `> stop + DBL_EPSILON·1e3` (21 pontos) | como o ngspice | o oráculo compara contagens de pontos com o ngspice; `docs/dune-core.md` |
 | Passo zero no `.dc` | laço infinito | erro | erro | entrada hostil nunca trava (CLAUDE.md princípio 4) |
+| `TMAX` default do `.tran` | `(tstop−tstart)/50` | `min(tstep, span/50)` (default do SPICE2) | como o ngspice | densidade de pontos do oráculo; `docs/dune-core.md` §4 |
+| `.tran … UIC`, ponto t=0 | despeja o vetor zerado | omite o ponto t=0 | como o ngspice | D-0006; `docs/dune-core.md` §5 |

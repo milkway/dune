@@ -1,0 +1,7 @@
+pulse train into rc
+* written for Dune (Phase 2 .tran parity); not from Berkeley
+vin 1 0 pulse(0 5 1u 0.2u 0.2u 2u 5u)
+r1 1 2 1k
+c1 2 0 1n
+.tran 0.1u 20u
+.end

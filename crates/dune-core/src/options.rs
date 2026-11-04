@@ -7,6 +7,7 @@ use dune_netlist::Diagnostic;
 use dune_netlist::ir::{Param, ParamValue};
 
 use crate::consts::{CTOK, REFTEMP};
+use crate::integ::Method;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -22,6 +23,9 @@ pub struct Options {
     pub itl1: usize,
     /// `ITL2`: DC transfer-curve iteration limit, default 50.
     pub itl2: usize,
+    /// `ITL4`: transient timepoint iteration limit, default 10
+    /// (`CKTtranMaxIter`).
+    pub itl4: usize,
     /// Gmin steps in `CKTop`, default 10 (`TSKnumGminSteps`).
     pub gminsteps: usize,
     /// Source steps in `CKTop`, default 10 (`TSKnumSrcSteps`).
@@ -36,6 +40,14 @@ pub struct Options {
     pub pivrel: f64,
     /// `NOOPITER`: go directly to gmin stepping.
     pub noopiter: bool,
+    /// `TRTOL`: truncation-error overestimation factor, default 7.
+    pub trtol: f64,
+    /// `CHGTOL`: charge tolerance, default 1e-14.
+    pub chgtol: f64,
+    /// `METHOD`: `trap` (default) or `gear`.
+    pub method: Method,
+    /// `MAXORD` for Gear, default 2.
+    pub maxord: usize,
 }
 
 impl Default for Options {
@@ -47,6 +59,7 @@ impl Default for Options {
             gmin: 1e-12,
             itl1: 100,
             itl2: 50,
+            itl4: 10,
             gminsteps: 10,
             srcsteps: 10,
             temp: REFTEMP,
@@ -54,6 +67,10 @@ impl Default for Options {
             pivtol: 1e-13,
             pivrel: 1e-3,
             noopiter: false,
+            trtol: 7.0,
+            chgtol: 1e-14,
+            method: Method::Trapezoidal,
+            maxord: 2,
         }
     }
 }
@@ -96,6 +113,28 @@ impl Options {
                         self.itl2 = v;
                     }
                 }
+                "itl4" => {
+                    if let Some(v) = count(num, p, diags) {
+                        self.itl4 = v;
+                    }
+                }
+                "maxord" => {
+                    if let Some(v) = count(num, p, diags) {
+                        self.maxord = v;
+                    }
+                }
+                "trtol" => num_opt!(trtol),
+                "chgtol" => num_opt!(chgtol),
+                "method" => match &p.value {
+                    ParamValue::Str(s) if s == "gear" => self.method = Method::Gear,
+                    ParamValue::Str(s) if s == "trap" || s == "trapezoidal" => {
+                        self.method = Method::Trapezoidal;
+                    }
+                    _ => diags.push(Diagnostic::warning(
+                        "method must be trap or gear".to_string(),
+                        p.span,
+                    )),
+                },
                 "gminsteps" => {
                     if let Some(v) = count(num, p, diags) {
                         self.gminsteps = v;
@@ -122,10 +161,9 @@ impl Options {
                 },
                 "noopiter" => self.noopiter = true,
                 // Recognized 3f5 options that only matter to later
-                // phases (transient, output formatting, statistics).
-                "itl3" | "itl4" | "itl5" | "trtol" | "chgtol" | "method" | "maxord" | "acct"
-                | "list" | "nomod" | "nopage" | "node" | "opts" | "defl" | "defw" | "defad"
-                | "defas" | "bypass" | "badmos3" | "keepopinfo" => {}
+                // phases (output formatting, statistics, devices).
+                "itl3" | "itl5" | "acct" | "list" | "nomod" | "nopage" | "node" | "opts"
+                | "defl" | "defw" | "defad" | "defas" | "bypass" | "badmos3" | "keepopinfo" => {}
                 other => diags.push(Diagnostic::warning(
                     format!("option {other} is not implemented yet; ignored"),
                     p.span,

@@ -56,9 +56,11 @@ roundoff diferente. Acima de 2 tolerâncias é desacordo real.
 - O relatório traz `max|err|` e `margin` = pior razão
   `|a−b| / (floor + reltol·max)`; `margin ≤ 1` é PASS.
 
-Pendências deliberadas (Fase 2, PLAN.md §2.4): interpolar `.tran` do
-candidato na malha de tempo do oráculo (hoje malha diferente → FAIL
-estrutural) e comparar `.ac` como módulo em dB + fase (hoje re/im).
+`.tran` é comparado por interpolação linear do candidato na malha do
+oráculo, com a régua derivada do LTE (D-0010): `|a−b| ≤
+2·(trtol·reltol·S + floor)`, `S` = escala da forma de onda; o pior
+vetor sai com erro máximo e RMS numa nota. Pendência deliberada:
+`.ac` como módulo em dB + fase (hoje re/im).
 
 ## Corpus e golden
 

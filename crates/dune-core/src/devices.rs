@@ -1,17 +1,29 @@
-//! Device instances and their DC stamps. One type per device
-//! (CLAUDE.md, Princípios 3), stamps copied from the 3f5 `*load.c`
-//! files named on each type.
+//! Device instances and their stamps. One type per device (CLAUDE.md
+//! Princípios 3); stamps and state handling follow the 3f5 `*load.c`
+//! / `*trunc.c` / `*acct.c` files named on each type.
 
-use crate::matrix::{LoadCtx, MatrixBuilder, Slot, TRASH, Var};
+use crate::integ::TerrCtx;
+use crate::matrix::{AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
+use crate::srcfn::Wave;
 
-/// A device instance bound to matrix positions.
+/// A device instance bound to matrix positions and state slots.
 pub(crate) trait Device {
-    /// Reserve matrix positions (the `TSTALLOC` calls in `*setup.c`).
+    /// Reserve matrix positions (`*setup.c`); state offsets are
+    /// assigned at build time so coupled devices can reference each
+    /// other's states.
     fn alloc(&mut self, mb: &mut MatrixBuilder);
-    /// Load the DC/operating-point stamps for one Newton iteration.
-    fn load_dc(&mut self, ctx: &mut LoadCtx);
-    /// Overwrite the DC value (a `.dc` sweep writing `VSRCdcValue` /
-    /// `ISRCdcValue`, `dctrcurv.c`). No-op for everything else.
+    /// Load stamps for one Newton iteration (`*load.c`).
+    fn load(&mut self, ctx: &mut LoadCtx);
+    /// Second load phase; only the inductor uses it (the C loads all
+    /// inductor fluxes, then mutuals, then integrates — see
+    /// `indload.c`).
+    fn load_late(&mut self, _ctx: &mut LoadCtx) {}
+    /// Timestep limiting from local truncation error (`*trunc.c`).
+    fn trunc(&self, _t: &TerrCtx, _time_step: &mut f64) {}
+    /// Accepted-timepoint hook; sources plant breakpoints here
+    /// (`*acct.c`).
+    fn accept(&mut self, _ctx: &mut AcceptCtx) {}
+    /// Overwrite the DC value (`.dc` sweep). No-op elsewhere.
     fn set_dc(&mut self, _value: f64) {}
 }
 
@@ -44,7 +56,7 @@ impl Device for ResistorI {
         ];
     }
 
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
+    fn load(&mut self, ctx: &mut LoadCtx) {
         ctx.add(self.slots[0], self.g);
         ctx.add(self.slots[1], self.g);
         ctx.add(self.slots[2], -self.g);
@@ -52,26 +64,218 @@ impl Device for ResistorI {
     }
 }
 
-/// A capacitor is an open circuit at the operating point
-/// (`CAPload` only stamps in transient/AC modes).
-pub(crate) struct CapacitorI;
+/// `CAPload` (`dev/cap/capload.c`): open at DC, integrated charge in
+/// transient. States: charge, companion current.
+pub(crate) struct CapacitorI {
+    capac: f64,
+    ic: f64,
+    pos: Var,
+    neg: Var,
+    slots: [Slot; 4],
+    q: usize,
+}
+
+impl CapacitorI {
+    pub fn new(capac: f64, ic: f64, pos: Var, neg: Var, q: usize) -> Self {
+        CapacitorI {
+            capac,
+            ic,
+            pos,
+            neg,
+            slots: [TRASH; 4],
+            q,
+        }
+    }
+}
 
 impl Device for CapacitorI {
-    fn alloc(&mut self, _: &mut MatrixBuilder) {}
-    fn load_dc(&mut self, _: &mut LoadCtx) {}
+    fn alloc(&mut self, mb: &mut MatrixBuilder) {
+        self.slots = [
+            mb.slot(self.pos, self.pos),
+            mb.slot(self.neg, self.neg),
+            mb.slot(self.pos, self.neg),
+            mb.slot(self.neg, self.pos),
+        ];
+    }
+
+    fn load(&mut self, ctx: &mut LoadCtx) {
+        // Pure DC sweeps/op: the capacitor is simply absent.
+        if !(ctx.kind == AnKind::Tran || ctx.kind == AnKind::TranOp) {
+            return;
+        }
+        let cond1 =
+            (ctx.is_dc() && ctx.mode == InitMode::Jct) || (ctx.uic && ctx.mode == InitMode::Tran);
+        let vcap = if cond1 {
+            self.ic
+        } else {
+            ctx.sol[self.pos] - ctx.sol[self.neg]
+        };
+        if ctx.kind == AnKind::Tran {
+            if ctx.mode == InitMode::Pred {
+                let q1 = ctx.states.get(1, self.q);
+                ctx.states.set(0, self.q, q1);
+            } else {
+                ctx.states.set(0, self.q, self.capac * vcap);
+                if ctx.mode == InitMode::Tran {
+                    let q0 = ctx.states.get(0, self.q);
+                    ctx.states.set(1, self.q, q0);
+                }
+            }
+            let (geq, ceq) = ctx.integrate(self.capac, self.q);
+            if ctx.mode == InitMode::Tran {
+                let c0 = ctx.states.get(0, self.q + 1);
+                ctx.states.set(1, self.q + 1, c0);
+            }
+            ctx.add(self.slots[0], geq);
+            ctx.add(self.slots[1], geq);
+            ctx.add(self.slots[2], -geq);
+            ctx.add(self.slots[3], -geq);
+            ctx.rhs[self.pos] -= ceq;
+            ctx.rhs[self.neg] += ceq;
+        } else {
+            // Transient operating point: just record the charge.
+            ctx.states.set(0, self.q, self.capac * vcap);
+        }
+    }
+
+    fn trunc(&self, t: &TerrCtx, time_step: &mut f64) {
+        // `CAPtrunc` is one `CKTterr` call on the charge state.
+        crate::integ::terr(self.q, t, time_step);
+    }
 }
 
-/// Mutual inductance has no DC effect (`MUTload` stamps only the
-/// time-derivative terms).
-pub(crate) struct MutualI;
+/// `INDload` (`dev/ind/indload.c`): a branch equation whose flux is
+/// integrated; DC collapses it to a 0 V source. States: flux, volt.
+pub(crate) struct InductorI {
+    induct: f64,
+    ic: f64,
+    pos: Var,
+    neg: Var,
+    pub(crate) br: Var,
+    slots: [Slot; 4],
+    br_br: Slot,
+    pub(crate) flux: usize,
+}
+
+impl InductorI {
+    pub fn new(induct: f64, ic: f64, pos: Var, neg: Var, br: Var, flux: usize) -> Self {
+        InductorI {
+            induct,
+            ic,
+            pos,
+            neg,
+            br,
+            slots: [TRASH; 4],
+            br_br: TRASH,
+            flux,
+        }
+    }
+}
+
+impl Device for InductorI {
+    fn alloc(&mut self, mb: &mut MatrixBuilder) {
+        self.slots = [
+            mb.slot(self.pos, self.br),
+            mb.slot(self.br, self.pos),
+            mb.slot(self.neg, self.br),
+            mb.slot(self.br, self.neg),
+        ];
+        self.br_br = mb.slot(self.br, self.br);
+    }
+
+    /// Phase one: the flux from the previous iterate (mutual
+    /// couplings add theirs on top before `load_late` integrates).
+    fn load(&mut self, ctx: &mut LoadCtx) {
+        if !(ctx.is_dc() || ctx.mode == InitMode::Pred) {
+            let flux = if ctx.uic && ctx.mode == InitMode::Tran {
+                self.induct * self.ic
+            } else {
+                self.induct * ctx.sol[self.br]
+            };
+            ctx.states.set(0, self.flux, flux);
+        }
+    }
+
+    fn load_late(&mut self, ctx: &mut LoadCtx) {
+        let (req, veq);
+        if ctx.is_dc() {
+            req = 0.0;
+            veq = 0.0;
+        } else {
+            if ctx.mode == InitMode::Pred {
+                let f1 = ctx.states.get(1, self.flux);
+                ctx.states.set(0, self.flux, f1);
+            } else if ctx.mode == InitMode::Tran {
+                let f0 = ctx.states.get(0, self.flux);
+                ctx.states.set(1, self.flux, f0);
+            }
+            let (r, v) = ctx.integrate(self.induct, self.flux);
+            req = r;
+            veq = v;
+        }
+        ctx.rhs[self.br] += veq;
+        if ctx.mode == InitMode::Tran {
+            let v0 = ctx.states.get(0, self.flux + 1);
+            ctx.states.set(1, self.flux + 1, v0);
+        }
+        ctx.add(self.slots[0], 1.0);
+        ctx.add(self.slots[1], 1.0);
+        ctx.add(self.slots[2], -1.0);
+        ctx.add(self.slots[3], -1.0);
+        ctx.add(self.br_br, -req);
+    }
+
+    fn trunc(&self, t: &TerrCtx, time_step: &mut f64) {
+        // `INDtrunc`: `CKTterr` on the flux.
+        crate::integ::terr(self.flux, t, time_step);
+    }
+}
+
+/// `MUTload` (inside `indload.c`): adds `M·i(other)` to each coupled
+/// flux and stamps `-M·ag0` between the branch equations.
+pub(crate) struct MutualI {
+    /// `MUTfactor = k·sqrt(L1·L2)`.
+    pub factor: f64,
+    pub br1: Var,
+    pub br2: Var,
+    pub flux1: usize,
+    pub flux2: usize,
+    slots: [Slot; 2],
+}
 
 impl Device for MutualI {
-    fn alloc(&mut self, _: &mut MatrixBuilder) {}
-    fn load_dc(&mut self, _: &mut LoadCtx) {}
+    fn alloc(&mut self, mb: &mut MatrixBuilder) {
+        self.slots = [mb.slot(self.br1, self.br2), mb.slot(self.br2, self.br1)];
+    }
+
+    fn load(&mut self, ctx: &mut LoadCtx) {
+        if !(ctx.is_dc() || ctx.mode == InitMode::Pred) {
+            ctx.states
+                .add(0, self.flux1, self.factor * ctx.sol[self.br2]);
+            ctx.states
+                .add(0, self.flux2, self.factor * ctx.sol[self.br1]);
+        }
+        if !ctx.is_dc() {
+            ctx.add(self.slots[0], -self.factor * ctx.ag[0]);
+            ctx.add(self.slots[1], -self.factor * ctx.ag[0]);
+        }
+    }
 }
 
-/// Zero-volt branch between two nodes: the DC view of an inductor
-/// (`INDload` under `MODEDC`) and the skeleton of a voltage source.
+impl MutualI {
+    pub fn new(factor: f64, br1: Var, br2: Var, flux1: usize, flux2: usize) -> Self {
+        MutualI {
+            factor,
+            br1,
+            br2,
+            flux1,
+            flux2,
+            slots: [TRASH; 2],
+        }
+    }
+}
+
+/// Shared branch-equation stamps of V-like elements.
 struct BranchStamp {
     pos: Var,
     neg: Var,
@@ -106,17 +310,34 @@ impl BranchStamp {
     }
 }
 
-/// `VSRCload` (`dev/vsrc/vsrcload.c`): ideal voltage source; the DC
-/// value is scaled by `CKTsrcFact` during source stepping.
+/// Value of an independent source at this iteration (`VSRCload`,
+/// `ISRCload`): the DC value under DC modes when it was given,
+/// otherwise the transient function at `time` (0 under DC), else DC.
+fn source_value(ctx: &LoadCtx, dc: Option<f64>, wave: &Option<Wave>) -> f64 {
+    if ctx.is_dc() && dc.is_some() {
+        return ctx.srcfact * dc.unwrap_or(0.0);
+    }
+    match wave {
+        Some(w) => {
+            let time = if ctx.is_dc() { 0.0 } else { ctx.time };
+            w.value(time, ctx.step, ctx.final_time)
+        }
+        None => ctx.srcfact * dc.unwrap_or(0.0),
+    }
+}
+
+/// `VSRCload` (`dev/vsrc/vsrcload.c`).
 pub(crate) struct VsourceI {
-    pub dc: f64,
+    pub dc: Option<f64>,
+    pub wave: Option<Wave>,
     branch: BranchStamp,
 }
 
 impl VsourceI {
-    pub fn new(dc: f64, pos: Var, neg: Var, br: Var) -> Self {
+    pub fn new(dc: Option<f64>, wave: Option<Wave>, pos: Var, neg: Var, br: Var) -> Self {
         VsourceI {
             dc,
+            wave,
             branch: BranchStamp::new(pos, neg, br),
         }
     }
@@ -127,43 +348,27 @@ impl Device for VsourceI {
         self.branch.alloc(mb);
     }
 
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
+    fn load(&mut self, ctx: &mut LoadCtx) {
         self.branch.load(ctx);
-        ctx.rhs[self.branch.br] += ctx.srcfact * self.dc;
+        let v = source_value(ctx, self.dc, &self.wave);
+        ctx.rhs[self.branch.br] += v;
+    }
+
+    fn accept(&mut self, ctx: &mut AcceptCtx) {
+        if let Some(w) = &self.wave {
+            w.accept(ctx);
+        }
     }
 
     fn set_dc(&mut self, value: f64) {
-        self.dc = value;
+        self.dc = Some(value);
     }
 }
 
-/// Inductor at DC: a zero-volt source (`INDload`, `MODEDC` branch).
-pub(crate) struct InductorI {
-    branch: BranchStamp,
-}
-
-impl InductorI {
-    pub fn new(pos: Var, neg: Var, br: Var) -> Self {
-        InductorI {
-            branch: BranchStamp::new(pos, neg, br),
-        }
-    }
-}
-
-impl Device for InductorI {
-    fn alloc(&mut self, mb: &mut MatrixBuilder) {
-        self.branch.alloc(mb);
-    }
-
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
-        self.branch.load(ctx);
-    }
-}
-
-/// `ISRCload` (`dev/isrc/isrcload.c`): current flows through the
-/// source from the positive to the negative node.
+/// `ISRCload` (`dev/isrc/isrcload.c`).
 pub(crate) struct IsourceI {
-    pub dc: f64,
+    pub dc: Option<f64>,
+    pub wave: Option<Wave>,
     pub pos: Var,
     pub neg: Var,
 }
@@ -171,19 +376,24 @@ pub(crate) struct IsourceI {
 impl Device for IsourceI {
     fn alloc(&mut self, _: &mut MatrixBuilder) {}
 
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
-        let v = ctx.srcfact * self.dc;
+    fn load(&mut self, ctx: &mut LoadCtx) {
+        let v = source_value(ctx, self.dc, &self.wave);
         ctx.rhs[self.pos] -= v;
         ctx.rhs[self.neg] += v;
     }
 
+    fn accept(&mut self, ctx: &mut AcceptCtx) {
+        if let Some(w) = &self.wave {
+            w.accept(ctx);
+        }
+    }
+
     fn set_dc(&mut self, value: f64) {
-        self.dc = value;
+        self.dc = Some(value);
     }
 }
 
-/// `VCVSload` (`dev/vcvs/vcvsload.c`): E source,
-/// `v(pos) - v(neg) = gain * (v(cpos) - v(cneg))`.
+/// `VCVSload`: E source.
 pub(crate) struct VcvsI {
     pub gain: f64,
     branch: BranchStamp,
@@ -213,15 +423,14 @@ impl Device for VcvsI {
         ];
     }
 
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
+    fn load(&mut self, ctx: &mut LoadCtx) {
         self.branch.load(ctx);
         ctx.add(self.cslots[0], -self.gain);
         ctx.add(self.cslots[1], self.gain);
     }
 }
 
-/// `VCCSload` (`dev/vccs/vccsload.c`): G source,
-/// `i = gain * (v(cpos) - v(cneg))` out of `pos`.
+/// `VCCSload`: G source.
 pub(crate) struct VccsI {
     pub gain: f64,
     n: [Var; 4],
@@ -249,7 +458,7 @@ impl Device for VccsI {
         ];
     }
 
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
+    fn load(&mut self, ctx: &mut LoadCtx) {
         ctx.add(self.slots[0], self.gain);
         ctx.add(self.slots[1], -self.gain);
         ctx.add(self.slots[2], -self.gain);
@@ -257,8 +466,7 @@ impl Device for VccsI {
     }
 }
 
-/// `CCCSload` (`dev/cccs/cccsload.c`): F source,
-/// `i = gain * i(ctrl)`.
+/// `CCCSload`: F source.
 pub(crate) struct CccsI {
     pub gain: f64,
     pos: Var,
@@ -287,14 +495,13 @@ impl Device for CccsI {
         ];
     }
 
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
+    fn load(&mut self, ctx: &mut LoadCtx) {
         ctx.add(self.slots[0], self.gain);
         ctx.add(self.slots[1], -self.gain);
     }
 }
 
-/// `CCVSload` (`dev/ccvs/ccvsload.c`): H source,
-/// `v(pos) - v(neg) = coeff * i(ctrl)`.
+/// `CCVSload`: H source.
 pub(crate) struct CcvsI {
     pub coeff: f64,
     branch: BranchStamp,
@@ -319,7 +526,7 @@ impl Device for CcvsI {
         self.cslot = mb.slot(self.branch.br, self.ctrl_br);
     }
 
-    fn load_dc(&mut self, ctx: &mut LoadCtx) {
+    fn load(&mut self, ctx: &mut LoadCtx) {
         self.branch.load(ctx);
         ctx.add(self.cslot, -self.coeff);
     }

@@ -11,11 +11,24 @@
 //! bounded by twice that tolerance. Anything beyond it is a real
 //! disagreement.
 //!
-//! Phase-0 scope: plots are paired in order and must have the same
-//! `Plotname`; variables are aligned by name (case-insensitive, like
-//! the 3f5 front end's `cieq`); columns must have identical lengths.
-//! Interpolating `.tran` onto the oracle's time grid and comparing
-//! `.ac` as dB magnitude + phase are Phase-2 work.
+//! Plots are paired in order and must have the same `Plotname`;
+//! variables are aligned by name (case-insensitive, like the 3f5
+//! front end's `cieq`).
+//!
+//! A transient plot (scale variable `time`) is compared by linear
+//! interpolation of the candidate onto the oracle's time grid
+//! (PLAN.md §2.4), with a different ruler (D-0010): the step control
+//! (`ckttrunc.c`/`cktterr.c`) accepts any step whose estimated local
+//! truncation error stays within `trtol · (reltol · signal scale)`,
+//! so two independent integrators legitimately differ by up to twice
+//! that budget — pointwise `vntol` would reject correct waveforms
+//! whose time grids merely disagree (measured on `rc.cir`: both
+//! engines sit ~1e-3 from the analytic response, on opposite sides).
+//! The transient allowance is therefore
+//! `2 · (trtol · reltol · S + floor)` with `S` the vector's waveform
+//! scale; the maximum and RMS errors are reported per worst vector.
+//!
+//! Comparing `.ac` as dB magnitude + phase is still pending.
 
 use dune_raw::{Data, Plot, Rawfile, VarType};
 
@@ -37,6 +50,10 @@ impl Default for Tolerances {
         }
     }
 }
+
+/// `TRTOL`, the truncation-error overestimation factor of the step
+/// control (3f5 default 7): the transient comparison budget.
+const TRTOL: f64 = 7.0;
 
 impl Tolerances {
     /// Absolute floor for a vector of the given type.
@@ -124,6 +141,13 @@ pub fn compare_rawfiles(oracle: &Rawfile, candidate: &Rawfile, tol: &Tolerances)
 }
 
 fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport {
+    let is_tran = oracle
+        .variables
+        .first()
+        .is_some_and(|v| v.name.eq_ignore_ascii_case("time"));
+    if is_tran {
+        return compare_tran(oracle, candidate, tol);
+    }
     let mut r = PlotReport {
         name: oracle.name.clone(),
         nvars: oracle.variables.len(),
@@ -204,6 +228,111 @@ fn compare_column(
         if ratio > r.worst_ratio {
             r.worst_ratio = ratio;
             r.worst_var = Some(name.to_string());
+        }
+    }
+}
+
+/// Transient comparison: interpolate the candidate onto the oracle
+/// grid, judge against the LTE budget (module docs).
+fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport {
+    let mut r = PlotReport {
+        name: oracle.name.clone(),
+        nvars: oracle.variables.len(),
+        npoints: oracle.num_points(),
+        max_abs_err: 0.0,
+        worst_ratio: 0.0,
+        worst_var: None,
+        problems: Vec::new(),
+        notes: Vec::new(),
+    };
+    let (Data::Real(oc), Data::Real(cc)) = (&oracle.data, &candidate.data) else {
+        r.problems.push("transient plots must be real".into());
+        return r;
+    };
+    let Some(ct_idx) = candidate.variable_index("time") else {
+        r.problems.push("candidate has no time vector".into());
+        return r;
+    };
+    let ot = &oc[0];
+    let ct = &cc[ct_idx];
+    if ct.windows(2).any(|w| w[1] < w[0]) {
+        r.problems.push("candidate time is not monotonic".into());
+        return r;
+    }
+    // Both runs must cover the same window (a candidate that died
+    // early shows up here, not as clamped interpolation).
+    let t_end_o = ot.last().copied().unwrap_or(0.0);
+    let t_end_c = ct.last().copied().unwrap_or(0.0);
+    if (t_end_o - t_end_c).abs() > 2.0 * tol.reltol * t_end_o.abs() + 1e-15 {
+        r.problems.push(format!(
+            "time span differs: oracle ends at {t_end_o:.6e}, candidate at {t_end_c:.6e}"
+        ));
+    }
+
+    let mut worst_rms = 0.0f64;
+    for (i, var) in oracle.variables.iter().enumerate().skip(1) {
+        let Some(j) = candidate.variable_index(&var.name) else {
+            r.problems.push(format!("variable `{}` missing", var.name));
+            continue;
+        };
+        let a = &oc[i];
+        let b = &cc[j];
+        let scale = a.iter().chain(b.iter()).fold(0.0f64, |m, v| m.max(v.abs()));
+        let floor = tol.floor(&var.vtype);
+        let allow = 2.0 * (TRTOL * tol.reltol * scale + floor);
+        let mut max_err = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        for (k, t) in ot.iter().enumerate() {
+            let bv = interp(ct, b, *t);
+            let err = (a[k] - bv).abs();
+            if !err.is_finite() {
+                r.problems
+                    .push(format!("`{}` has non-finite disagreement", var.name));
+                return r;
+            }
+            max_err = max_err.max(err);
+            sum_sq += err * err;
+        }
+        let rms = (sum_sq / ot.len().max(1) as f64).sqrt();
+        let ratio = if max_err == 0.0 { 0.0 } else { max_err / allow };
+        if max_err > r.max_abs_err {
+            r.max_abs_err = max_err;
+        }
+        if ratio > r.worst_ratio {
+            r.worst_ratio = ratio;
+            r.worst_var = Some(var.name.clone());
+            worst_rms = rms;
+        }
+    }
+    if let Some(w) = &r.worst_var {
+        r.notes.push(format!(
+            "tran ruler (D-0010): worst `{w}` max {:.3e}, rms {worst_rms:.3e}",
+            r.max_abs_err
+        ));
+    }
+    for var in &candidate.variables {
+        if oracle.variable_index(&var.name).is_none() {
+            r.notes
+                .push(format!("extra variable `{}` in candidate", var.name));
+        }
+    }
+    r
+}
+
+/// Linear interpolation of `(xs, ys)` at `x`, clamped at the ends.
+fn interp(xs: &[f64], ys: &[f64], x: f64) -> f64 {
+    match xs.binary_search_by(|v| v.partial_cmp(&x).unwrap_or(std::cmp::Ordering::Less)) {
+        Ok(i) => ys[i],
+        Err(0) => ys.first().copied().unwrap_or(0.0),
+        Err(i) if i >= xs.len() => ys.last().copied().unwrap_or(0.0),
+        Err(i) => {
+            let (x0, x1) = (xs[i - 1], xs[i]);
+            let (y0, y1) = (ys[i - 1], ys[i]);
+            if x1 == x0 {
+                y0
+            } else {
+                y0 + (x - x0) / (x1 - x0) * (y1 - y0)
+            }
         }
     }
 }

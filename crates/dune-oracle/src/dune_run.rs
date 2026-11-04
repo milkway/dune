@@ -16,7 +16,7 @@ use crate::corpus::Circuit as CorpusCircuit;
 /// `x` is fine because subcircuits expand to their contents, which
 /// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
-    const ANALYSES: &[&str] = &[".op", ".dc"];
+    const ANALYSES: &[&str] = &[".op", ".dc", ".tran"];
     const DEVICES: &[char] = &['r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'x'];
     !c.analyses.is_empty()
         && c.analyses.iter().all(|a| ANALYSES.contains(&a.as_str()))
@@ -61,6 +61,19 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
                     .collect();
                 let dc = circuit.dc(&options, &sweeps).map_err(|e| e.to_string())?;
                 plots.push(dc.solution.to_plot(&parsed.netlist.title, ""));
+            }
+            Analysis::Tran {
+                tstep,
+                tstop,
+                tstart,
+                tmax,
+                uic,
+                ..
+            } => {
+                let tr = circuit
+                    .tran(&options, *tstep, *tstop, tstart.unwrap_or(0.0), *tmax, *uic)
+                    .map_err(|e| e.to_string())?;
+                plots.push(tr.solution.to_plot(&parsed.netlist.title, ""));
             }
             other => return Err(format!("analysis {other:?} not supported yet")),
         }

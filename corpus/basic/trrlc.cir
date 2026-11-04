@@ -1,0 +1,8 @@
+damped rlc with a sine drive
+* written for Dune (Phase 2 .tran parity); not from Berkeley
+vin 1 0 sin(0 1 100k 2u 2e4)
+r1 1 2 200
+l1 2 3 1m
+c1 3 0 2.5n
+.tran 0.05u 50u
+.end
