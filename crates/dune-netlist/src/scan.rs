@@ -87,10 +87,6 @@ impl<'c> Scanner<'c> {
         self.clone().next_tok()
     }
 
-    pub fn at_end(&self) -> bool {
-        self.peek_tok().is_none()
-    }
-
     /// `INPevaluate` with `gobble`: if a number starts here, consume
     /// its whole value token (`INPgetUTok` cut) and return the value.
     /// Otherwise consume nothing.
@@ -312,7 +308,7 @@ mod tests {
         assert_eq!(s.next_tok().unwrap().lc(), "w");
         let w = s.try_value().unwrap().0;
         assert!((w - 5e-6).abs() <= 5e-18);
-        assert!(s.at_end());
+        assert!(s.peek_tok().is_none());
     }
 
     #[test]

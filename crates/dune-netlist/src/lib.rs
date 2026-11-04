@@ -11,14 +11,19 @@
 
 pub mod deck;
 pub mod diag;
+pub mod ir;
 pub mod span;
 
-// `allow(dead_code)` until the card parsers land (next commits).
-#[allow(dead_code)]
+mod dot;
+mod elem;
+mod param;
+mod parse;
 mod scan;
+mod subckt;
 
 pub use deck::{Deck, IncludeLoader};
 pub use diag::{Diagnostic, Severity};
+pub use parse::{ParseOutcome, parse_file, parse_str, parse_with_loader};
 pub use span::{FileId, Location, SourceMap, Span};
 
 /// Hard failures outside the deck itself (the root file is unreadable).
