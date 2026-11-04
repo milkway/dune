@@ -155,3 +155,24 @@ r2 2 0 2k
     let op = ckt.op(&Options::default()).unwrap();
     assert_close(&op.solution, "v(2)", 10.0 / 3.0, VNTOL);
 }
+
+/// Regression: a junction returning to ground read the trash that
+/// grounded loads dump into rhs[0] as a ground "voltage" (the C
+/// zeroes `*CKTrhsOld` after every solve, niiter.c). ngspice-47:
+/// i(v1) = -12.93551714646209 A for this deck.
+#[test]
+fn grounded_diode_reads_ground_as_zero() {
+    let deck = "\
+min grounded diode
+v1 1 0 dc 0.9
+d1 1 0 dmod
+.model dmod d(is=1e-14)
+.op
+.end
+";
+    let parsed = dune_netlist::parse_str("min.cir", deck);
+    let (ckt, _) = dune_core::Circuit::from_netlist(&parsed.netlist).unwrap();
+    let op = ckt.op(&Options::default()).unwrap();
+    assert_close(&op.solution, "v(1)", 0.9, VNTOL);
+    assert_close(&op.solution, "i(v1)", -12.93551714646209, ABSTOL);
+}

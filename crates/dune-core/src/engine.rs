@@ -114,6 +114,13 @@ impl Engine {
             self.solver
                 .solve_in_place(&mut self.rhs[1..])
                 .map_err(|e| self.map_singular(e))?;
+            // The C zeroes the ground positions right after the
+            // solve (`*CKTrhs = 0; *CKTrhsOld = 0;` in niiter.c):
+            // devices trash grounded contributions into index 0, and
+            // without this the swap would turn that trash into a
+            // ground "voltage" read back by every grounded junction.
+            self.rhs[0] = 0.0;
+            self.sol[0] = 0.0;
 
             iterno += 1;
             if iterno > maxiter {
