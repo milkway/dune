@@ -6,6 +6,18 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["faer"]
+# Dense LU backend over the `faer` crate (D-0005; the sparse
+# `xingo-sparse` backend and the faer-vs-xingo benchmark are Phase 3).
+faer = ["dep:faer"]
+
 [dependencies]
 thiserror.workspace = true
 num-complex.workspace = true
+dune-netlist.workspace = true
+dune-raw.workspace = true
+faer = { version = "0.24", optional = true, default-features = false, features = [
+    "std",
+    "linalg",
+] }
