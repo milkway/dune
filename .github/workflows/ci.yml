@@ -23,7 +23,8 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
-      # Phase 0 will add: cargo run -p dune-oracle -- --ci (needs ngspice)
+      - name: Oracle golden check
+        run: cargo run -p dune-oracle -- --ci
       # Phase 4 will add: cargo build -p dune-wasm --target wasm32-unknown-unknown --release
 
   msrv:
