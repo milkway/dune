@@ -1,0 +1,15 @@
+Title: forward diode with series resistance and area
+Date: Tue Nov  3 22:06:42  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 3
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	i(v1)	current
+Values:
+0		9.000000000000000e-01
+	6.023302622842521e-02
+	-1.137744697779108e-02

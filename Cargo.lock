@@ -97,6 +97,8 @@ name = "dune-oracle"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dune-core",
+ "dune-netlist",
  "dune-raw",
  "num-complex",
  "tempfile",

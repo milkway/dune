@@ -1,0 +1,19 @@
+Title: diode bridge at dc
+Date: Tue Nov  3 22:06:42  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 5
+No. Points: 1       
+Variables:
+	0	v(inp)	voltage
+	1	v(a)	voltage
+	2	v(p)	voltage
+	3	v(n)	voltage
+	4	i(vin)	current
+Values:
+0		6.000000000000000e+00
+	1.866211818542170e+00
+	9.331059092710846e-01
+	9.331059092711200e-01
+	-4.133788181457831e-01

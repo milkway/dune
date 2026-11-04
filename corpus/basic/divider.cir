@@ -1,0 +1,9 @@
+resistive divider with both source kinds
+* written for Dune (Phase 1 .op parity); not from Berkeley
+v1 1 0 dc 5
+r1 1 2 1k
+r2 2 0 2k
+i1 0 3 dc 1m
+r3 3 0 4.7k
+.op
+.end

@@ -1,0 +1,12 @@
+diode bridge at dc
+* written for Dune (Phase 1 .op parity); not from Berkeley
+vin inp 0 dc 6
+rsrc inp a 10
+d1 a p dmod
+d2 n a dmod
+d3 0 n dmod
+d4 p 0 dmod
+rload p n 220
+.model dmod d(is=1e-12 rs=0.5 n=1.05)
+.op
+.end

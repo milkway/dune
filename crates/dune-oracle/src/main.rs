@@ -2,16 +2,17 @@
 //! ngspice in batch mode and compares SPICE3 rawfiles with the SPICE
 //! tolerances (`reltol=1e-3`, `abstol=1e-12`, `vntol=1e-6`).
 //!
-//! Phase-0 scope: `dune-cli` cannot simulate yet, so `<circuit>` runs
-//! ngspice afresh and compares it against the versioned golden rawfile
-//! (environment/version drift check), and `--ci` checks every golden
-//! rawfile against itself (parser + comparator sanity, no ngspice
-//! needed in CI). From Phase 1 on, the candidate side becomes Dune.
+//! The candidate side is Dune itself (library call) for every deck
+//! whose analyses the engine implements (Phase 1: `.op`). For the
+//! rest, `<circuit>` runs ngspice afresh against the golden
+//! (environment drift check) and `--ci` checks the golden against
+//! itself (reader + comparator sanity; CI has no ngspice).
 
 #![forbid(unsafe_code)]
 
 mod compare;
 mod corpus;
+mod dune_run;
 mod ngspice;
 
 use std::path::Path;
@@ -73,12 +74,15 @@ fn list() -> Result<bool> {
     Ok(true)
 }
 
-/// CI mode: every non-skipped circuit must have a golden rawfile that
-/// parses and agrees with itself. Needs no ngspice install.
+/// CI mode, no ngspice install needed: decks Dune can simulate run
+/// through the engine and compare against the golden; the rest get a
+/// golden-vs-golden sanity check until their analyses exist.
 fn ci() -> Result<bool> {
     let corpus = Corpus::load()?;
     let tol = Tolerances::default();
     let mut all_ok = true;
+    let mut via_dune = 0usize;
+    let mut via_self = 0usize;
     print_result_header();
     for c in &corpus.circuits {
         if let Some(reason) = &c.skip {
@@ -86,33 +90,49 @@ fn ci() -> Result<bool> {
             continue;
         }
         let golden_path = corpus.golden_path(c);
-        match load_raw(&golden_path) {
+        let golden = match load_raw(&golden_path) {
             Err(e) => {
                 println!("{:<14} {e:#}", c.stem);
                 println!("{:<14} FAIL (run --gen-golden and commit the result)", "");
                 all_ok = false;
+                continue;
             }
-            Ok(golden) => {
-                let report = compare_rawfiles(&golden, &golden, &tol);
-                all_ok &= print_report(&c.stem, &report);
+            Ok(g) => g,
+        };
+        if dune_run::supported(c) {
+            via_dune += 1;
+            match dune_run::run(&c.path) {
+                Ok(candidate) => {
+                    let report = compare_rawfiles(&golden, &candidate, &tol);
+                    all_ok &= print_report(&c.stem, "dune", &report);
+                }
+                Err(e) => {
+                    println!("{:<14} dune failed: {e}", c.stem);
+                    all_ok = false;
+                }
             }
+        } else {
+            via_self += 1;
+            let report = compare_rawfiles(&golden, &golden, &tol);
+            all_ok &= print_report(&c.stem, "self", &report);
         }
     }
     println!(
-        "\nnote: golden-vs-golden sanity check (Phase 0); the candidate \
-         side becomes Dune in Phase 1"
+        "\n{via_dune} circuit(s) simulated by dune, {via_self} still \
+         golden-vs-golden (analyses pending per PLAN.md §3)"
     );
     Ok(all_ok)
 }
 
-/// Run ngspice afresh for the named circuits and compare against the
-/// versioned golden rawfiles.
+/// Compare the named circuits against their goldens: through the
+/// engine when Dune supports the deck, through a fresh ngspice run
+/// otherwise.
 fn run_circuits(args: &[String]) -> Result<bool> {
     let corpus = Corpus::load()?;
-    ngspice::check_version(&corpus.root)?;
     let scratch = scratch_dir()?;
     let tol = Tolerances::default();
     let mut all_ok = true;
+    let mut version_checked = false;
     print_result_header();
     for arg in args {
         let Some(c) = corpus.find(arg) else {
@@ -124,11 +144,28 @@ fn run_circuits(args: &[String]) -> Result<bool> {
         }
         let golden = load_raw(&corpus.golden_path(c))
             .with_context(|| format!("no usable golden for `{}`; run --gen-golden", c.stem))?;
-        let fresh_path = scratch.path().join(format!("{}.raw", c.stem));
-        ngspice::run(&c.path, &fresh_path)?;
-        let fresh = load_raw(&fresh_path)?;
-        let report = compare_rawfiles(&golden, &fresh, &tol);
-        all_ok &= print_report(&c.stem, &report);
+        if dune_run::supported(c) {
+            match dune_run::run(&c.path) {
+                Ok(candidate) => {
+                    let report = compare_rawfiles(&golden, &candidate, &tol);
+                    all_ok &= print_report(&c.stem, "dune", &report);
+                }
+                Err(e) => {
+                    println!("{:<14} dune failed: {e}", c.stem);
+                    all_ok = false;
+                }
+            }
+        } else {
+            if !version_checked {
+                ngspice::check_version(&corpus.root)?;
+                version_checked = true;
+            }
+            let fresh_path = scratch.path().join(format!("{}.raw", c.stem));
+            ngspice::run(&c.path, &fresh_path)?;
+            let fresh = load_raw(&fresh_path)?;
+            let report = compare_rawfiles(&golden, &fresh, &tol);
+            all_ok &= print_report(&c.stem, "ngspice", &report);
+        }
     }
     Ok(all_ok)
 }
@@ -211,7 +248,7 @@ fn compare_files(args: &[String]) -> Result<bool> {
     let candidate = load_raw(Path::new(b))?;
     let report = compare_rawfiles(&oracle, &candidate, &Tolerances::default());
     print_result_header();
-    let ok = print_report(a, &report);
+    let ok = print_report(a, "file", &report);
     Ok(ok)
 }
 
@@ -235,8 +272,8 @@ fn scratch_dir() -> Result<tempfile::TempDir> {
 
 fn print_result_header() {
     println!(
-        "{:<14} {:<26} {:>4} {:>7} {:>10} {:>8}  result",
-        "circuit", "plot", "vars", "pts", "max|err|", "margin"
+        "{:<14} {:<26} {:<8} {:>4} {:>7} {:>10} {:>8}  result",
+        "circuit", "plot", "cand", "vars", "pts", "max|err|", "margin"
     );
 }
 
@@ -247,7 +284,7 @@ fn print_skip(name: &str, reason: &str) {
 /// Print one row per compared plot; returns whether everything passed.
 /// `margin` is the worst `|a-b| / (floor + reltol*max(|a|,|b|))` ratio:
 /// `<= 1.0` is within tolerance.
-fn print_report(name: &str, report: &Report) -> bool {
+fn print_report(name: &str, cand: &str, report: &Report) -> bool {
     for p in &report.plots {
         let verdict = if p.pass() { "PASS" } else { "FAIL" };
         let worst = p
@@ -256,8 +293,8 @@ fn print_report(name: &str, report: &Report) -> bool {
             .map(|v| format!(" worst: {v}"))
             .unwrap_or_default();
         println!(
-            "{:<14} {:<26} {:>4} {:>7} {:>10.3e} {:>8.3}  {verdict}{worst}",
-            name, p.name, p.nvars, p.npoints, p.max_abs_err, p.worst_ratio
+            "{:<14} {:<26} {:<8} {:>4} {:>7} {:>10.3e} {:>8.3}  {verdict}{worst}",
+            name, p.name, cand, p.nvars, p.npoints, p.max_abs_err, p.worst_ratio
         );
         for problem in &p.problems {
             println!("{:<14}   problem: {problem}", "");

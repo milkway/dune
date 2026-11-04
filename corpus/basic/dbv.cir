@@ -1,0 +1,8 @@
+diode driven into reverse breakdown
+* written for Dune (Phase 1 .op parity); not from Berkeley
+v1 1 0 dc -8
+r1 1 2 1k
+d1 2 0 zmod
+.model zmod d(is=1e-14 bv=5.1 ibv=1m)
+.op
+.end

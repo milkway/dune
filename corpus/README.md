@@ -32,6 +32,12 @@ espelho conhecido no GitHub. Pistas para retomar a busca:
 Enquanto isso, o corpus inicial do oráculo são os `spice3f5/examples/` e, se
 preciso, circuitos da suíte do ngspice (com proveniência anotada aqui).
 
+## basic/
+
+Decks mínimos escritos para o Dune (não vêm de Berkeley; proveniência
+anotada em cada arquivo): um por recurso da Fase 1, todos `.op`, para
+paridade com o ngspice enquanto `quarles_bench`/`qxdir` não aparecem.
+
 ## ORACLE
 
 Versão do ngspice usada para gerar `golden/` (fixada; regenerar o golden

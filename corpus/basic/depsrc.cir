@@ -1,0 +1,14 @@
+all four dependent sources
+* written for Dune (Phase 1 .op parity); not from Berkeley
+v1 1 0 dc 2
+r1 1 0 1k
+e1 2 0 1 0 2.5
+re 2 0 1k
+g1 0 3 1 0 1m
+rg 3 0 2k
+f1 0 4 v1 10
+rf 4 0 100
+h1 5 0 v1 -500
+rh 5 0 1k
+.op
+.end

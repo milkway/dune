@@ -1,9 +1,10 @@
 //! Corpus discovery and inventory (PLAN.md §3, Phase 0).
 //!
-//! Circuits live under `corpus/` in three roots: `spice3f5/examples`
+//! Circuits live under `corpus/` in four roots: `spice3f5/examples`
 //! (upstream examples, untouched), `berkeley` (quarles_bench + qxdir,
-//! still missing — see `corpus/README.md`) and `regress` (one minimal
-//! `.cir` per fixed bug). `corpus/SKIP` lists circuits the oracle must
+//! still missing — see `corpus/README.md`), `basic` (small decks
+//! written for Dune) and `regress` (one minimal `.cir` per fixed
+//! bug). `corpus/SKIP` lists circuits the oracle must
 //! not run, one per line: `<path relative to corpus/> <reason…>`.
 
 use std::fs;
@@ -12,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 /// Subdirectories of `corpus/` that are scanned for `.cir` files.
-const ROOTS: &[&str] = &["spice3f5/examples", "berkeley", "regress"];
+const ROOTS: &[&str] = &["spice3f5/examples", "berkeley", "basic", "regress"];
 
 /// Analysis cards recognized by the inventory scan (3f5 grammar).
 const ANALYSES: &[&str] = &[

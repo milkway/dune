@@ -1,0 +1,21 @@
+Title: inductors capacitors and coupling at the operating point
+Date: Tue Nov  3 22:06:42  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 6
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	i(l2)	current
+	4	i(l1)	current
+	5	i(v1)	current
+Values:
+0		3.000000000000000e+00
+	3.000000000000000e+00
+	0.000000000000000e+00
+	0.000000000000000e+00
+	2.000000000000000e-02
+	-2.000000000000000e-02

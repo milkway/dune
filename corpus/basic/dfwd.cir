@@ -1,0 +1,9 @@
+forward diode with series resistance and area
+* written for Dune (Phase 1 .op parity); not from Berkeley
+v1 1 0 dc 0.9
+d1 1 0 dmod 2.0
+d2 1 2 dmod
+r2 2 0 50
+.model dmod d(is=2.5e-15 rs=4 n=1.2)
+.op
+.end

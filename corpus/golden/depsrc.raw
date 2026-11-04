@@ -1,0 +1,25 @@
+Title: all four dependent sources
+Date: Tue Nov  3 22:06:42  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 8
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(5)	voltage
+	5	i(v1)	current
+	6	i(h1)	current
+	7	i(e1)	current
+Values:
+0		2.000000000000000e+00
+	5.000000000000000e+00
+	4.000000000000000e+00
+	-2.000000000000000e+00
+	1.000000000000000e+00
+	-2.000000000000000e-03
+	-1.000000000000000e-03
+	-5.000000000000000e-03

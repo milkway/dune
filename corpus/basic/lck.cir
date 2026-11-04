@@ -1,0 +1,12 @@
+inductors capacitors and coupling at the operating point
+* written for Dune (Phase 1 .op parity); not from Berkeley
+v1 1 0 dc 3
+l1 1 2 10m
+r1 2 0 150
+l2 3 0 20m
+k12 l1 l2 0.95
+c1 2 0 10u
+c2 3 0 22u
+r3 3 0 1k
+.op
+.end
