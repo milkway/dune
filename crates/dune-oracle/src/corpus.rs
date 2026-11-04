@@ -41,6 +41,16 @@ pub struct Circuit {
 pub struct Corpus {
     pub root: PathBuf,
     pub circuits: Vec<Circuit>,
+    pub xfails: Vec<Xfail>,
+}
+
+/// One `corpus/XFAIL` entry: an expected-marginal comparison.
+#[derive(Debug)]
+pub struct Xfail {
+    pub stem: String,
+    pub plot: String,
+    pub max_margin: f64,
+    pub reason: String,
 }
 
 impl Corpus {
@@ -49,6 +59,7 @@ impl Corpus {
     pub fn load() -> Result<Self> {
         let root = find_root()?;
         let skips = read_skip_file(&root)?;
+        let xfails = read_xfail_file(&root)?;
 
         let mut circuits = Vec::new();
         for sub in ROOTS {
@@ -78,7 +89,11 @@ impl Corpus {
                 );
             }
         }
-        Ok(Corpus { root, circuits })
+        Ok(Corpus {
+            root,
+            circuits,
+            xfails,
+        })
     }
 
     /// Where the golden rawfile of `c` lives (`corpus/golden/<stem>.raw`).
@@ -190,6 +205,35 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>)> {
     }
     devices.sort_unstable();
     Ok((analyses, devices))
+}
+
+fn read_xfail_file(root: &Path) -> Result<Vec<Xfail>> {
+    let mut out = Vec::new();
+    let path = root.join("XFAIL");
+    if !path.is_file() {
+        return Ok(out);
+    }
+    for line in fs::read_to_string(&path)?.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.splitn(4, '|').collect();
+        let [stem, plot, cap, reason] = parts.as_slice() else {
+            bail!("corpus/XFAIL: bad line `{line}`");
+        };
+        let max_margin: f64 = cap
+            .trim()
+            .parse()
+            .with_context(|| format!("corpus/XFAIL: bad margin in `{line}`"))?;
+        out.push(Xfail {
+            stem: stem.trim().to_string(),
+            plot: plot.trim().to_string(),
+            max_margin,
+            reason: reason.trim().to_string(),
+        });
+    }
+    Ok(out)
 }
 
 fn read_skip_file(root: &Path) -> Result<std::collections::HashMap<String, String>> {

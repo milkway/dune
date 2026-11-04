@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mutual, Resistor, Vccs, Vcvs, Vsource,
+    Bjt, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mutual, Resistor, Vccs, Vcvs,
+    Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -22,16 +23,24 @@ impl Circuit {
         let mut problems: Vec<String> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
 
-        // Diode models (`.model … d(…)`).
+        // Diode and BJT models.
         let mut dmodels: HashMap<&str, DiodeModel> = HashMap::new();
+        let mut qmodels: HashMap<&str, crate::bjt::BjtModel> = HashMap::new();
         for m in &nl.models {
-            if m.mtype == "d" {
-                match diode_model(m) {
+            match m.mtype.as_str() {
+                "d" => match diode_model(m) {
                     Ok(dm) => {
                         dmodels.insert(m.name.as_str(), dm);
                     }
                     Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
-                }
+                },
+                "npn" | "pnp" => match bjt_model(m) {
+                    Ok(bm) => {
+                        qmodels.insert(m.name.as_str(), bm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
+                _ => {}
             }
         }
 
@@ -231,6 +240,57 @@ impl Circuit {
                         &mut problems,
                     );
                 }
+                ir::Device::Bjt {
+                    model,
+                    area,
+                    off,
+                    params,
+                } => {
+                    let Some(bm) = qmodels.get(model.as_str()) else {
+                        problems.push(format!(
+                            "`{name}`: unable to find definition of model `{model}`"
+                        ));
+                        continue;
+                    };
+                    let mut temp = None;
+                    let mut ic = (0.0, 0.0);
+                    for p in params {
+                        match (p.name.as_str(), &p.value) {
+                            ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
+                            ("ic", ParamValue::Num(v)) => ic = (*v, 0.0),
+                            ("ic", ParamValue::NumList(v)) => {
+                                ic = (
+                                    v.first().copied().unwrap_or(0.0),
+                                    v.get(1).copied().unwrap_or(0.0),
+                                );
+                            }
+                            ("area", ParamValue::Num(_)) => {}
+                            _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
+                        }
+                    }
+                    let mut nodes4 = [
+                        el.nodes[0].clone(),
+                        el.nodes[1].clone(),
+                        el.nodes[2].clone(),
+                        "0".to_string(),
+                    ];
+                    if let Some(s) = el.nodes.get(3) {
+                        nodes4[3] = s.clone();
+                    }
+                    add(
+                        &mut ckt,
+                        Bjt {
+                            name,
+                            nodes: nodes4,
+                            model: bm.clone(),
+                            area: area.unwrap_or(1.0),
+                            off: *off,
+                            ic,
+                            temp,
+                        },
+                        &mut problems,
+                    );
+                }
                 other => {
                     problems.push(format!(
                         "`{name}`: {} is not implemented yet (Phase {})",
@@ -253,6 +313,68 @@ impl Circuit {
         }
         Ok((ckt, notes))
     }
+}
+
+/// `.model x npn/pnp(...)` → [`crate::bjt::BjtModel`], 3f5 names
+/// with the documented aliases (`bjt.c`).
+fn bjt_model(m: &ir::Model) -> Result<crate::bjt::BjtModel, String> {
+    let mut bm = crate::bjt::BjtModel::new(m.mtype == "npn");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            // The npn/pnp type may also appear as a flag parameter.
+            ParamValue::Flag if p.name == "npn" || p.name == "pnp" => {
+                bm.npn = p.name == "npn";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "is" => bm.is = v,
+            "bf" => bm.bf = v,
+            "nf" => bm.nf = v,
+            "vaf" | "va" => bm.vaf = v,
+            "ikf" | "ik" => bm.ikf = v,
+            "ise" => bm.ise = v,
+            "ne" => bm.ne = v,
+            "br" => bm.br = v,
+            "nr" => bm.nr = v,
+            "var" | "vb" => bm.var = v,
+            "ikr" => bm.ikr = v,
+            "isc" => bm.isc = v,
+            "nc" => bm.nc = v,
+            "rb" => bm.rb = v,
+            "irb" => bm.irb = v,
+            "rbm" => bm.rbm = Some(v),
+            "re" => bm.re = v,
+            "rc" => bm.rc = v,
+            "cje" => bm.cje = v,
+            "vje" | "pe" => bm.vje = v,
+            "mje" | "me" => bm.mje = v,
+            "tf" => bm.tf = v,
+            "xtf" => bm.xtf = v,
+            "vtf" => bm.vtf = v,
+            "itf" => bm.itf = v,
+            "ptf" => bm.ptf = v,
+            "cjc" => bm.cjc = v,
+            "vjc" | "pc" => bm.vjc = v,
+            "mjc" | "mc" => bm.mjc = v,
+            "xcjc" => bm.xcjc = v,
+            "tr" => bm.tr = v,
+            "cjs" | "ccs" => bm.cjs = v,
+            "vjs" | "ps" => bm.vjs = v,
+            "mjs" | "ms" => bm.mjs = v,
+            "xtb" => bm.xtb = v,
+            "eg" => bm.eg = v,
+            "xti" => bm.xti = v,
+            "fc" => bm.fc = Some(v),
+            "kf" => bm.kf = v,
+            "af" => bm.af = v,
+            "tnom" => bm.tnom = Some(v + CTOK),
+            other => return Err(format!("unknown parameter ({other})")),
+        }
+    }
+    Ok(bm)
 }
 
 fn add(ckt: &mut Circuit, spec: impl Into<crate::circuit::Spec>, problems: &mut Vec<String>) {

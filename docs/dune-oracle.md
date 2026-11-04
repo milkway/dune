@@ -61,6 +61,22 @@ oráculo, com a régua derivada do LTE (D-0010): `|a−b| ≤
 2·(trtol·reltol·S + floor)`, `S` = escala da forma de onda; o pior
 vetor sai com erro máximo e RMS numa nota.
 
+O `.tran` ganhou três refinamentos (D-0011): um **tubo temporal**
+por ponto (um desvio é julgado contra o valor do candidato mais
+próximo dentro de ±1 passo local do oráculo — dentro desse intervalo
+o golden é só interpolação linear e não localiza borda nenhuma); um
+**deslocamento global único** por plot, limitado ao orçamento de
+fase acumulada `±2·trtol·reltol·tstop` e sempre reportado (eventos
+auto-temporizados herdam a fase integrada dos dois motores); e o
+veredito **decidido pelas tensões de nó** — correntes de ramo são
+comparadas e reportadas, mas não decidem, porque são grandezas
+diferenciais (`i(vin) = (v1−v2)/R`) cuja régua na própria escala não
+é reconstruível do rawfile. `corpus/XFAIL` registra comparações
+conhecidamente marginais (hoje: o transiente do `schmitt`, bordas
+regenerativas) com teto de margem: rodam e aparecem em todo CI,
+XFAIL dentro do teto não derruba, estourar o teto derruba, e passar
+pede remoção da entrada.
+
 `.ac` compara parte real e imaginária com a régua de D-0009 — mais
 apertado que o módulo-em-dB + fase que o PLAN §2.4 esboçou, e viável
 porque o AC é um solve linear direto (sem folga de Newton): os três

@@ -108,7 +108,7 @@ fn ci() -> Result<bool> {
             match dune_run::run(&c.path) {
                 Ok(candidate) => {
                     let report = compare_rawfiles(&golden, &candidate, &tol);
-                    all_ok &= print_report(&c.stem, "dune", &report);
+                    all_ok &= print_report(&c.stem, "dune", &report, &corpus.xfails);
                 }
                 Err(e) => {
                     println!("{:<14} dune failed: {e}", c.stem);
@@ -118,7 +118,7 @@ fn ci() -> Result<bool> {
         } else {
             via_self += 1;
             let report = compare_rawfiles(&golden, &golden, &tol);
-            all_ok &= print_report(&c.stem, "self", &report);
+            all_ok &= print_report(&c.stem, "self", &report, &corpus.xfails);
         }
     }
     println!(
@@ -152,7 +152,7 @@ fn run_circuits(args: &[String]) -> Result<bool> {
             match dune_run::run(&c.path) {
                 Ok(candidate) => {
                     let report = compare_rawfiles(&golden, &candidate, &tol);
-                    all_ok &= print_report(&c.stem, "dune", &report);
+                    all_ok &= print_report(&c.stem, "dune", &report, &corpus.xfails);
                 }
                 Err(e) => {
                     println!("{:<14} dune failed: {e}", c.stem);
@@ -168,7 +168,7 @@ fn run_circuits(args: &[String]) -> Result<bool> {
             ngspice::run(&c.path, &fresh_path)?;
             let fresh = load_raw(&fresh_path)?;
             let report = compare_rawfiles(&golden, &fresh, &tol);
-            all_ok &= print_report(&c.stem, "ngspice", &report);
+            all_ok &= print_report(&c.stem, "ngspice", &report, &corpus.xfails);
         }
     }
     Ok(all_ok)
@@ -252,7 +252,7 @@ fn compare_files(args: &[String]) -> Result<bool> {
     let candidate = load_raw(Path::new(b))?;
     let report = compare_rawfiles(&oracle, &candidate, &Tolerances::default());
     print_result_header();
-    let ok = print_report(a, "file", &report);
+    let ok = print_report(a, "file", &report, &[]);
     Ok(ok)
 }
 
@@ -288,9 +288,19 @@ fn print_skip(name: &str, reason: &str) {
 /// Print one row per compared plot; returns whether everything passed.
 /// `margin` is the worst `|a-b| / (floor + reltol*max(|a|,|b|))` ratio:
 /// `<= 1.0` is within tolerance.
-fn print_report(name: &str, cand: &str, report: &Report) -> bool {
+fn print_report(name: &str, cand: &str, report: &Report, xfails: &[corpus::Xfail]) -> bool {
+    let mut all_ok = true;
     for p in &report.plots {
-        let verdict = if p.pass() { "PASS" } else { "FAIL" };
+        let xfail = xfails
+            .iter()
+            .find(|x| x.stem == name && p.name.eq_ignore_ascii_case(&x.plot));
+        let verdict = match (&xfail, p.pass()) {
+            (_, true) => "PASS",
+            // An expected failure within its recorded margin cap is
+            // reported but does not fail the run (corpus/XFAIL).
+            (Some(x), false) if p.problems.is_empty() && p.worst_ratio <= x.max_margin => "XFAIL",
+            _ => "FAIL",
+        };
         let worst = p
             .worst_var
             .as_deref()
@@ -306,9 +316,25 @@ fn print_report(name: &str, cand: &str, report: &Report) -> bool {
         for note in &p.notes {
             println!("{:<14}   note: {note}", "");
         }
+        match (&xfail, verdict) {
+            (Some(x), "XFAIL") => {
+                println!("{:<14}   xfail: {} (cap {})", "", x.reason, x.max_margin);
+            }
+            (Some(_), "PASS") => {
+                println!(
+                    "{:<14}   note: listed in corpus/XFAIL but passing; remove the entry",
+                    ""
+                );
+            }
+            _ => {}
+        }
+        if verdict == "FAIL" {
+            all_ok = false;
+        }
     }
     for problem in &report.problems {
         println!("{name:<14} problem: {problem}");
+        all_ok = false;
     }
-    report.pass()
+    all_ok
 }

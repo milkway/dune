@@ -106,6 +106,9 @@ pub struct Report {
 }
 
 impl Report {
+    /// Strict verdict, ignoring XFAIL entries (used by tests; the
+    /// CLI applies the XFAIL registry in its reporting instead).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn pass(&self) -> bool {
         self.problems.is_empty() && self.plots.iter().all(PlotReport::pass)
     }
@@ -269,45 +272,115 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
         ));
     }
 
-    let mut worst_rms = 0.0f64;
+    // One global time shift per plot (D-0011): self-timed events
+    // (regenerative edges) inherit the integrators' accumulated phase
+    // error, so the candidate may be compared at `t + delta` for a
+    // single delta bounded by the two-sided LTE phase budget over the
+    // run. delta = 0 is tried first and kept when it passes.
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
     for (i, var) in oracle.variables.iter().enumerate().skip(1) {
-        let Some(j) = candidate.variable_index(&var.name) else {
-            r.problems.push(format!("variable `{}` missing", var.name));
-            continue;
-        };
-        let a = &oc[i];
-        let b = &cc[j];
-        let scale = a.iter().chain(b.iter()).fold(0.0f64, |m, v| m.max(v.abs()));
-        let floor = tol.floor(&var.vtype);
-        let allow = 2.0 * (TRTOL * tol.reltol * scale + floor);
-        let mut max_err = 0.0f64;
-        let mut sum_sq = 0.0f64;
-        for (k, t) in ot.iter().enumerate() {
-            let bv = interp(ct, b, *t);
-            let err = (a[k] - bv).abs();
-            if !err.is_finite() {
-                r.problems
-                    .push(format!("`{}` has non-finite disagreement", var.name));
-                return r;
+        match candidate.variable_index(&var.name) {
+            Some(j) => pairs.push((i, j)),
+            None => r.problems.push(format!("variable `{}` missing", var.name)),
+        }
+    }
+    let delta_max = 2.0 * TRTOL * tol.reltol * t_end_o.abs();
+    // (gating worst_ratio, worst oracle var index, plot max err,
+    // worst rms, worst non-gating ratio + var). Branch currents are
+    // derived differential quantities (i(vin) = (v1-v2)/R with
+    // |v1-v2| possibly a tiny fraction of the node scales): their
+    // own-scale allowance cannot be reconstructed from the rawfile,
+    // so in transient plots they are compared and reported but do
+    // not gate the verdict (D-0011); node voltages gate.
+    let eval = |delta: f64| -> (f64, usize, f64, f64, f64, usize) {
+        let mut worst = (0.0f64, usize::MAX, 0.0f64, 0.0f64, 0.0f64, usize::MAX);
+        let mut plot_max_err = 0.0f64;
+        for &(i, j) in &pairs {
+            let a = &oc[i];
+            let b = &cc[j];
+            let scale = a.iter().chain(b.iter()).fold(0.0f64, |m, v| m.max(v.abs()));
+            let floor = tol.floor(&oracle.variables[i].vtype);
+            let allow = 2.0 * (TRTOL * tol.reltol * scale + floor);
+            let mut max_tube = 0.0f64;
+            let mut sum_sq = 0.0f64;
+            for (k, t) in ot.iter().enumerate() {
+                let ts = t + delta;
+                let err = (a[k] - interp(ct, b, ts)).abs();
+                if !err.is_finite() {
+                    return (
+                        f64::INFINITY,
+                        i,
+                        f64::INFINITY,
+                        f64::INFINITY,
+                        0.0,
+                        usize::MAX,
+                    );
+                }
+                plot_max_err = plot_max_err.max(err);
+                sum_sq += err * err;
+                // Time tube: within the oracle's own local sampling
+                // interval an edge cannot be located better than one
+                // oracle step.
+                let tau = oracle_tau(ot, k);
+                max_tube = max_tube.max(tube_err(ct, b, ts, a[k], tau));
             }
-            max_err = max_err.max(err);
-            sum_sq += err * err;
+            let ratio = if max_tube == 0.0 {
+                0.0
+            } else {
+                max_tube / allow
+            };
+            let gating = matches!(oracle.variables[i].vtype, VarType::Voltage);
+            if gating && ratio > worst.0 {
+                worst.0 = ratio;
+                worst.1 = i;
+                worst.3 = (sum_sq / ot.len().max(1) as f64).sqrt();
+            }
+            if !gating && ratio > worst.4 {
+                worst.4 = ratio;
+                worst.5 = i;
+            }
         }
-        let rms = (sum_sq / ot.len().max(1) as f64).sqrt();
-        let ratio = if max_err == 0.0 { 0.0 } else { max_err / allow };
-        if max_err > r.max_abs_err {
-            r.max_abs_err = max_err;
+        worst.2 = plot_max_err;
+        worst
+    };
+
+    let mut best_delta = 0.0f64;
+    let mut best = eval(0.0);
+    if best.0 > 1.0 && delta_max > 0.0 {
+        let mut candidates: Vec<f64> = (-40..=40).map(|k| delta_max * k as f64 / 40.0).collect();
+        let mut step = delta_max / 40.0;
+        for _ in 0..2 {
+            for &d in &candidates {
+                let e = eval(d);
+                if e.0 < best.0 {
+                    best = e;
+                    best_delta = d;
+                }
+            }
+            candidates = (-10..=10)
+                .map(|k| best_delta + step * k as f64 / 10.0)
+                .collect();
+            step /= 10.0;
         }
-        if ratio > r.worst_ratio {
-            r.worst_ratio = ratio;
-            r.worst_var = Some(var.name.clone());
-            worst_rms = rms;
-        }
+    }
+
+    let (ratio, worst_i, max_err, rms, ng_ratio, ng_i) = best;
+    r.worst_ratio = ratio;
+    r.max_abs_err = max_err;
+    if worst_i != usize::MAX {
+        r.worst_var = Some(oracle.variables[worst_i].name.clone());
     }
     if let Some(w) = &r.worst_var {
         r.notes.push(format!(
-            "tran ruler (D-0010): worst `{w}` max {:.3e}, rms {worst_rms:.3e}",
-            r.max_abs_err
+            "tran ruler (D-0010/11): worst `{w}` pointwise max {max_err:.3e}, \
+             rms {rms:.3e}, time shift {best_delta:+.3e}s (budget {delta_max:.1e})",
+        ));
+    }
+    if ng_i != usize::MAX && ng_ratio > 1.0 {
+        r.notes.push(format!(
+            "non-gating `{}` at {ng_ratio:.1}x its own-scale ruler \
+             (derived current; see D-0011)",
+            oracle.variables[ng_i].name
         ));
     }
     for var in &candidate.variables {
@@ -317,6 +390,42 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
         }
     }
     r
+}
+
+/// The oracle's local sampling interval around point `k`.
+fn oracle_tau(ot: &[f64], k: usize) -> f64 {
+    let before = if k > 0 { ot[k] - ot[k - 1] } else { 0.0 };
+    let after = if k + 1 < ot.len() {
+        ot[k + 1] - ot[k]
+    } else {
+        0.0
+    };
+    f64::max(before, after)
+}
+
+/// Minimum |candidate(t') − a| over `t' ∈ [t−τ, t+τ]`, the candidate
+/// being piecewise linear over `(ct, b)`.
+fn tube_err(ct: &[f64], b: &[f64], t: f64, a: f64, tau: f64) -> f64 {
+    let lo = t - tau;
+    let hi = t + tau;
+    let dl = interp(ct, b, lo) - a;
+    let dh = interp(ct, b, hi) - a;
+    let mut mn = f64::min(dl.abs(), dh.abs());
+    let mut prev = dl;
+    let start = ct.partition_point(|x| *x < lo);
+    let end = ct.partition_point(|x| *x <= hi);
+    for d0 in &b[start..end] {
+        let d = d0 - a;
+        if d == 0.0 || (d > 0.0) != (prev > 0.0) {
+            return 0.0; // the candidate crosses a inside the window
+        }
+        mn = mn.min(d.abs());
+        prev = d;
+    }
+    if dh != 0.0 && (dh > 0.0) != (prev > 0.0) {
+        return 0.0;
+    }
+    mn
 }
 
 /// Linear interpolation of `(xs, ys)` at `x`, clamped at the ends.

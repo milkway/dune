@@ -106,6 +106,23 @@ pub struct Ccvs {
     pub gain: f64,
 }
 
+/// `QXXXXXXX NC NB NE <NS> MNAME <AREA> <OFF> <IC=VBE,VCE> <TEMP=T>`
+/// with its model inline. `nodes[3]` is ground when no substrate was
+/// given.
+#[derive(Clone, Debug)]
+pub struct Bjt {
+    pub name: String,
+    /// Collector, base, emitter, substrate.
+    pub nodes: [String; 4],
+    pub model: crate::bjt::BjtModel,
+    pub area: f64,
+    pub off: bool,
+    /// `IC=VBE,VCE`.
+    pub ic: (f64, f64),
+    /// Instance temperature override, kelvin.
+    pub temp: Option<f64>,
+}
+
 /// `DXXXXXXX N+ N- MNAME <AREA> <OFF>` with its model inline.
 #[derive(Clone, Debug)]
 pub struct Diode {
@@ -123,6 +140,7 @@ pub struct Diode {
 
 #[derive(Clone, Debug)]
 pub enum Spec {
+    Bjt(Box<Bjt>),
     Resistor(Resistor),
     Capacitor(Capacitor),
     Inductor(Inductor),
@@ -147,9 +165,16 @@ impl_into_spec!(
     Resistor, Capacitor, Inductor, Mutual, Vsource, Isource, Vcvs, Vccs, Cccs, Ccvs, Diode
 );
 
+impl From<Bjt> for Spec {
+    fn from(s: Bjt) -> Spec {
+        Spec::Bjt(Box::new(s))
+    }
+}
+
 impl Spec {
     fn name(&self) -> &str {
         match self {
+            Spec::Bjt(s) => &s.name,
             Spec::Resistor(s) => &s.name,
             Spec::Capacitor(s) => &s.name,
             Spec::Inductor(s) => &s.name,
@@ -278,6 +303,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Bjt(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
     }
 }
 
@@ -355,6 +384,7 @@ impl Circuit {
         let mut inductors: HashMap<String, (usize, f64)> = HashMap::new(); // name → (flux, L)
         for spec in &self.specs {
             state_base.push(match spec {
+                Spec::Bjt(_) => st.alloc(crate::bjt::BJT_NUM_STATES),
                 Spec::Capacitor(_) => st.alloc(2),
                 Spec::Inductor(s) => {
                     let flux = st.alloc(2);
@@ -365,6 +395,7 @@ impl Circuit {
                 _ => 0,
             });
             let node_names: &[String] = match spec {
+                Spec::Bjt(s) => &s.nodes,
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
                 Spec::Inductor(s) => &s.nodes,
@@ -402,6 +433,19 @@ impl Circuit {
                 Spec::Diode(s) if s.model.rs != 0.0 => {
                     node(&mut vars, &mut node_ids, &format!("{}#internal", s.name));
                 }
+                // `BJTsetup`: one prime node per nonzero parasitic
+                // resistance (`q1#collector` etc., `CKTmkVolt`).
+                Spec::Bjt(s) => {
+                    if s.model.rc != 0.0 {
+                        node(&mut vars, &mut node_ids, &format!("{}#collector", s.name));
+                    }
+                    if s.model.rb != 0.0 {
+                        node(&mut vars, &mut node_ids, &format!("{}#base", s.name));
+                    }
+                    if s.model.re != 0.0 {
+                        node(&mut vars, &mut node_ids, &format!("{}#emitter", s.name));
+                    }
+                }
                 _ => {}
             }
         }
@@ -414,6 +458,36 @@ impl Circuit {
         let get = |node_ids: &HashMap<String, Var>, n: &str| node_ids[n];
         for (spec, &base) in self.specs.iter().zip(&state_base) {
             match spec {
+                Spec::Bjt(s) => {
+                    let col = get(&node_ids, &s.nodes[0]);
+                    let bse = get(&node_ids, &s.nodes[1]);
+                    let emi = get(&node_ids, &s.nodes[2]);
+                    let sub = get(&node_ids, &s.nodes[3]);
+                    let prime = |rz: f64, suffix: &str, outer: Var| {
+                        if rz != 0.0 {
+                            node_ids[&format!("{}#{suffix}", s.name)]
+                        } else {
+                            outer
+                        }
+                    };
+                    let primes = [
+                        prime(s.model.rc, "collector", col),
+                        prime(s.model.rb, "base", bse),
+                        prime(s.model.re, "emitter", emi),
+                    ];
+                    let temp = s.temp.unwrap_or(opts.temp);
+                    let bt = crate::bjt::BjtTemp::new(&s.name, &s.model, temp, opts.tnom);
+                    notes.extend(bt.notes.iter().cloned());
+                    devices.push(Box::new(crate::bjt::BjtI::new(
+                        [col, bse, emi, sub],
+                        primes,
+                        bt,
+                        s.area,
+                        s.off,
+                        s.ic,
+                        base,
+                    )));
+                }
                 Spec::Resistor(s) => {
                     devices.push(Box::new(ResistorI::new(
                         1.0 / s.value,

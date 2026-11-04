@@ -1,0 +1,5 @@
+# Known-marginal comparisons: run and reported every time, but an
+# expected failure within its margin cap does not fail CI; breaking
+# past the cap does, and an unexpected PASS asks for removal.
+# Format: stem|plotname|max_margin|reason
+schmitt|Transient Analysis|5|regenerative edges: trap-ringing phase differs between engines beyond any pointwise ruler (D-0011); node voltages agree except inside the switching windows

@@ -141,6 +141,7 @@ impl Engine {
             order: self.order,
             method: self.method,
             pred_xfact,
+            delta: self.delta,
         };
         for d in &mut self.devices {
             d.load(&mut ctx);

@@ -52,6 +52,21 @@ resultados espelhando o rawfile).
   capacitância do diodo (depleção + difusão com `f2`/`f3`) e seu
   `DIOtrunc`.
 
+- **BJT Gummel–Poon completo** (`bjt.rs` ← `bjtload.c`,
+  `bjttemp.c`, `bjtsetup.c`, `bjtacld.c`, `bjttrunc.c`): junções B-E
+  e B-C com fugas (`ISE/ISC`), Early (`VAF/VAR`), roll-off de alta
+  injeção (`IKF/IKR`, `qb` com `sqarg`), resistência de base
+  dependente de corrente (`IRB`, com a fórmula da tangente),
+  `DEVpnjlim` nas duas junções, quatro cargas (B-E, B-C interna,
+  B-X externa via `XCJC`, C-S) com as formas `f2/f3/f6/f7`, TF
+  dependente de polarização (`XTF/VTF/ITF`), fase em excesso de Weil
+  (`PTF`) com Euler regressivo no transiente e `sin/cos` no AC, nós
+  internos `q1#collector/base/emitter`, NPN/PNP via `type`, ajuste
+  completo de temperatura. 21 estados, 23 posições de matriz, LTE em
+  `qbe/qbc/qcs`. Valida contra os decks de Berkeley: `diffpair`,
+  `rtlinv`, `rca3040` (ac+dc+tran) PASS; `schmitt` em
+  `corpus/XFAIL` (D-0011).
+
 - **`.ac`** (`ac.rs`, `engine.rs::ac` ← `ckt/acan.c`,
   `ni/niaciter.c`, `dev/*acld.c`): ponto de operação, um passe
   `MODEINITSMSIG` (o diodo guarda `capd` em `capCurrent`), e um

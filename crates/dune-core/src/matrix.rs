@@ -114,6 +114,8 @@ pub(crate) struct LoadCtx<'a> {
     pub method: crate::integ::Method,
     /// `CKTdelta / CKTdeltaOld[1]`, for `DEVpred`.
     pub pred_xfact: f64,
+    /// `CKTdelta` (0 outside transient).
+    pub delta: f64,
 }
 
 /// The `INITF` state the Newton loop drives (`MODEINITJCT`,

@@ -51,6 +51,13 @@ Rawfiles do ngspice, versionados, um por circuito do corpus
 `ORACLE` instalado. Regenerar com outra versão exige repinar `ORACLE` e
 anotar em `KNOWN_DIFFS.md`.
 
+## XFAIL
+
+Comparações conhecidamente marginais (`stem|plot|teto|motivo`): rodam
+e aparecem em todo relatório; XFAIL dentro do teto não derruba o CI,
+estourar o teto derruba, e passar pede a remoção da entrada. Ver
+D-0011.
+
 ## SKIP
 
 Circuitos que o oráculo não roda: `<caminho relativo a corpus/> <motivo>`,
