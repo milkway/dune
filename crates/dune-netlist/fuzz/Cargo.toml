@@ -1,0 +1,23 @@
+[package]
+name = "dune-netlist-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+dune-netlist = { path = ".." }
+
+# Keep this crate out of the main workspace (cargo-fuzz convention;
+# it needs nightly and never ships).
+[workspace]
+
+[[bin]]
+name = "parse_deck"
+path = "fuzz_targets/parse_deck.rs"
+test = false
+doc = false
+bench = false
