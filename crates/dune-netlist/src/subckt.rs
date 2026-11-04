@@ -40,9 +40,11 @@ pub(crate) struct SubcktDef {
 
 /// Nesting bound for subcircuit instantiation.
 const MAX_DEPTH: usize = 64;
-/// Bound on the flattened element count, so a subcircuit bomb cannot
-/// exhaust memory.
-const MAX_ELEMENTS: usize = 1 << 20;
+/// Single work budget for the whole expansion: every element visit,
+/// instantiation and emitted model costs one unit, so a subcircuit
+/// bomb (wide `X`-only trees, model-heavy bodies) cannot exhaust
+/// memory or CPU regardless of its shape.
+const MAX_WORK: usize = 1 << 20;
 
 /// Flatten the top scope: expand every `X` call, return the flat
 /// element list and all models (global + instantiated local ones).
@@ -51,6 +53,7 @@ pub(crate) fn expand(top: &Scope, diags: &mut Vec<Diagnostic>) -> (Vec<Element>,
         diags,
         elements: Vec::new(),
         models: top.models.clone(),
+        work: 0,
         overflowed: false,
     };
     let mut defs: Vec<&[SubcktDef]> = vec![&top.subckts];
@@ -66,10 +69,29 @@ struct Expander<'a> {
     diags: &'a mut Vec<Diagnostic>,
     elements: Vec<Element>,
     models: Vec<Model>,
+    work: usize,
     overflowed: bool,
 }
 
 impl Expander<'_> {
+    /// Spend one unit of the expansion budget; `false` means stop
+    /// (the diagnostic is emitted once).
+    fn charge(&mut self, span: Span) -> bool {
+        if self.overflowed {
+            return false;
+        }
+        self.work += 1;
+        if self.work > MAX_WORK {
+            self.overflowed = true;
+            self.diags.push(Diagnostic::error(
+                format!("subcircuit expansion exceeds {MAX_WORK} steps; giving up"),
+                span,
+            ));
+            return false;
+        }
+        true
+    }
+
     /// Emit one element: either a flattened copy or, for `X`, the
     /// instantiated body of its subcircuit.
     fn emit<'s>(
@@ -81,18 +103,11 @@ impl Expander<'_> {
         model_map: &HashMap<String, String>,
         depth: usize,
     ) {
-        if let Device::SubcktCall { subname } = &el.device {
-            self.instantiate(el, subname, defs, path, node_map, model_map, depth);
+        if !self.charge(el.span) {
             return;
         }
-        if self.elements.len() >= MAX_ELEMENTS {
-            if !self.overflowed {
-                self.overflowed = true;
-                self.diags.push(Diagnostic::error(
-                    format!("expansion exceeds {MAX_ELEMENTS} elements; giving up"),
-                    el.span,
-                ));
-            }
+        if let Device::SubcktCall { subname } = &el.device {
+            self.instantiate(el, subname, defs, path, node_map, model_map, depth);
             return;
         }
         let mut out = el.clone();
@@ -176,6 +191,9 @@ impl Expander<'_> {
         // Local models shadow outer renames.
         let mut inner_models = model_map.clone();
         for m in &def.scope.models {
+            if !self.charge(m.span) {
+                return;
+            }
             let new_name = format!("{inst_path}.{}", m.name);
             inner_models.insert(m.name.clone(), new_name.clone());
             let mut renamed = m.clone();

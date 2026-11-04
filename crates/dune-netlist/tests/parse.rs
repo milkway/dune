@@ -322,3 +322,27 @@ fn hostile_decks_do_not_hang_or_panic() {
     let out = parse_str("test.cir", &junk);
     assert!(!out.diags.is_empty());
 }
+
+#[test]
+fn subckt_bomb_is_bounded() {
+    // 8 levels of 8-way fan-out would flatten to 8^8 = 16M copies;
+    // the expansion budget must cut it off with one error instead.
+    let mut deck = String::from("bomb\n.subckt s0 a b\nr1 a b 1k\n.ends\n");
+    for level in 1..=8 {
+        deck.push_str(&format!(".subckt s{level} a b\n"));
+        for i in 0..8 {
+            deck.push_str(&format!("x{i} a b s{}\n", level - 1));
+        }
+        deck.push_str(".ends\n");
+    }
+    deck.push_str("xtop p q s8\n.end\n");
+    let out = dune_netlist::parse_str("bomb.cir", &deck);
+    assert!(
+        out.diags
+            .iter()
+            .any(|d| d.message.contains("expansion exceeds")),
+        "{:?}",
+        out.diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+    assert!(out.netlist.elements.len() <= 1 << 20);
+}
