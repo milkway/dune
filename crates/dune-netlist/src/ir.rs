@@ -24,6 +24,9 @@ pub struct Netlist {
     pub node_inits: Vec<NodeInit>,
     /// `.control` … `.endc` lines, verbatim and uninterpreted.
     pub control: Vec<String>,
+    /// `.width out=N`: print column width (the `in=` half only ever
+    /// mattered to punched-card decks and is ignored).
+    pub width_out: Option<usize>,
 }
 
 /// One circuit element (an instance line).

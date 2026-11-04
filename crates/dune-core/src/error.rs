@@ -28,4 +28,8 @@ pub enum Error {
     /// The transient step shrank below `delmin` (`E_TIMESTEP`).
     #[error("timestep too small at t = {time:.6e}")]
     Timestep { time: f64 },
+
+    /// An output selection named a vector the solution does not have.
+    #[error("no such vector `{0}`")]
+    UnknownVector(String),
 }

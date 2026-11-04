@@ -31,7 +31,7 @@ mod write;
 pub use error::Error;
 pub use plot::{Data, Plot, Variable};
 pub use types::VarType;
-pub use write::Format;
+pub use write::{Format, fmt_e};
 
 /// A parsed rawfile: one or more plots, in file order.
 #[derive(Clone, Debug, PartialEq)]

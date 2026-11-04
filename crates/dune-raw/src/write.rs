@@ -14,7 +14,9 @@ pub enum Format {
 /// `%.*e` with the given precision, as C's `printf` renders it
 /// (`1.000000000000000e+03`): sign on the exponent, at least two
 /// exponent digits. Rust's `{:e}` writes `1e3`, so this reshapes it.
-fn fmt_e(x: f64, prec: usize) -> String {
+/// Public because every text surface that mimics the 3f5 (rawfiles,
+/// the CLI's `.print` columns) needs the same rendering.
+pub fn fmt_e(x: f64, prec: usize) -> String {
     let s = format!("{x:.prec$e}");
     match s.rfind('e') {
         Some(pos) => {

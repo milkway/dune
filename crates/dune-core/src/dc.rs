@@ -94,6 +94,7 @@ impl Circuit {
                 plotname: "DC transfer characteristic".to_string(),
                 variables,
                 columns,
+                scale: Some(0),
             },
             notes,
         })

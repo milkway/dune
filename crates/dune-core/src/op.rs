@@ -50,6 +50,7 @@ impl Circuit {
                 plotname: "Operating Point".to_string(),
                 variables,
                 columns,
+                scale: None,
             },
             notes,
         })

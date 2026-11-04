@@ -95,7 +95,7 @@ pub(crate) fn parse_dot(
         ".plot" => dot_print_plot(&mut ctx, nl, span, OutputKind::Plot),
         ".save" => dot_save(&mut ctx, nl, span),
         ".four" | ".fourier" => dot_four(&mut ctx, nl, span),
-        ".width" => ctx.warn(span, ".width is ignored (output formatting, Phase 1)"),
+        ".width" => dot_width(&mut ctx, nl, span),
         ".temp" => ctx.warn(span, ".temp card obsolete - use .options temp and tnom"),
         ".lib" => ctx.err(span, ".lib is not supported yet (use .include)"),
         _ => return false,
@@ -530,6 +530,29 @@ fn dot_print_plot(ctx: &mut DotCtx, nl: &mut Netlist, span: Span, kind: OutputKi
         vars,
         span,
     });
+}
+
+/// `.width out=N` (`fte/dotcards.c` keeps only `out`; `in` was for
+/// card readers).
+fn dot_width(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
+    let mut sc = Scanner::new(ctx.card);
+    sc.next_tok();
+    while let Some(tok) = sc.next_tok() {
+        let tspan = sc.span(&tok);
+        match tok.lc().as_str() {
+            "out" => match ctx.value_opt(&mut sc) {
+                Some(v) if (1.0..1e6).contains(&v) => nl.width_out = Some(v as usize),
+                _ => ctx.err(tspan, ".width out needs a positive count"),
+            },
+            "in" => {
+                ctx.value_opt(&mut sc);
+            }
+            other => ctx.err(tspan, format!("unknown parameter ({other})")),
+        }
+    }
+    if nl.width_out.is_none() {
+        ctx.warn(span, ".width without out= has no effect");
+    }
 }
 
 /// `.save vec vec …`

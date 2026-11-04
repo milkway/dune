@@ -11,6 +11,9 @@ pub struct Solution {
     pub variables: Vec<(String, VarType)>,
     /// One column per variable, all the same length.
     pub columns: Vec<Vec<f64>>,
+    /// Index of the abscissa (`time`, `v(v-sweep)`, …) in
+    /// `variables`; `None` for the operating point.
+    pub scale: Option<usize>,
 }
 
 impl Solution {

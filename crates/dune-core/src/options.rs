@@ -48,6 +48,8 @@ pub struct Options {
     pub method: Method,
     /// `MAXORD` for Gear, default 2.
     pub maxord: usize,
+    /// `NOPAGE`: suppress page breaks in printed output.
+    pub nopage: bool,
 }
 
 impl Default for Options {
@@ -71,6 +73,7 @@ impl Default for Options {
             chgtol: 1e-14,
             method: Method::Trapezoidal,
             maxord: 2,
+            nopage: false,
         }
     }
 }
@@ -160,10 +163,11 @@ impl Options {
                     )),
                 },
                 "noopiter" => self.noopiter = true,
+                "nopage" => self.nopage = true,
                 // Recognized 3f5 options that only matter to later
                 // phases (output formatting, statistics, devices).
-                "itl3" | "itl5" | "acct" | "list" | "nomod" | "nopage" | "node" | "opts"
-                | "defl" | "defw" | "defad" | "defas" | "bypass" | "badmos3" | "keepopinfo" => {}
+                "itl3" | "itl5" | "acct" | "list" | "nomod" | "node" | "opts" | "defl" | "defw"
+                | "defad" | "defas" | "bypass" | "badmos3" | "keepopinfo" => {}
                 other => diags.push(Diagnostic::warning(
                     format!("option {other} is not implemented yet; ignored"),
                     p.span,

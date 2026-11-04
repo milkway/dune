@@ -1,14 +1,20 @@
 //! The `dune` batch-mode simulator, flag-compatible with `spice3 -b`:
-//! `dune -b input.cir -r output.raw`. Phase 1 runs `.op`; the other
-//! analyses arrive with their phases (PLAN.md §3).
+//! `dune -b input.cir [-r output.raw]`. With `-r` the results go to
+//! a binary SPICE3 rawfile and `.print` cards are skipped, like the
+//! 3f5; without it, `.print` cards render in the spice3 column
+//! format (`print.rs`). `.op`, `.dc` and `.tran` run; the others
+//! arrive with their phases (PLAN.md §3).
 
 #![forbid(unsafe_code)]
+
+mod print;
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use dune_core::{Circuit, Options};
+use dune_core::{Circuit, Options, OutExpr, Solution};
 use dune_netlist::Severity;
+use dune_netlist::ir::{Output, OutputKind};
 use dune_raw::{Format, Rawfile};
 
 const USAGE: &str = "usage: dune -b INPUT.cir [-r OUTPUT.raw]";
@@ -59,7 +65,7 @@ fn main() -> Result<()> {
         eprintln!("{}", d.render(&parsed.sources));
     }
 
-    let mut plots = Vec::new();
+    let mut solutions: Vec<Solution> = Vec::new();
     for analysis in &parsed.netlist.analyses {
         match analysis {
             dune_netlist::ir::Analysis::Op { .. } => {
@@ -67,7 +73,7 @@ fn main() -> Result<()> {
                 for n in &op.notes {
                     eprintln!("note: {n}");
                 }
-                plots.push(op.solution.to_plot(&parsed.netlist.title, ""));
+                solutions.push(op.solution);
             }
             dune_netlist::ir::Analysis::Dc { sweeps, .. } => {
                 let sweeps: Vec<dune_core::DcSweep> = sweeps
@@ -83,7 +89,7 @@ fn main() -> Result<()> {
                 for n in &dc.notes {
                     eprintln!("note: {n}");
                 }
-                plots.push(dc.solution.to_plot(&parsed.netlist.title, ""));
+                solutions.push(dc.solution);
             }
             dune_netlist::ir::Analysis::Tran {
                 tstep,
@@ -98,36 +104,103 @@ fn main() -> Result<()> {
                 for n in &tr.notes {
                     eprintln!("note: {n}");
                 }
-                plots.push(tr.solution.to_plot(&parsed.netlist.title, ""));
+                solutions.push(tr.solution);
             }
             other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
         }
     }
-    if plots.is_empty() {
+    if solutions.is_empty() {
         eprintln!("note: no analyses in the deck; nothing to do");
         return Ok(());
     }
 
-    let raw = Rawfile {
-        plots,
-        warnings: Vec::new(),
-    };
     match rawfile {
         Some(path) => {
+            // Rawfile mode: like `spice3 -b -r`, everything goes to
+            // the rawfile and `.print` cards are not rendered.
+            let raw = Rawfile {
+                plots: solutions
+                    .iter()
+                    .map(|s| s.to_plot(&parsed.netlist.title, ""))
+                    .collect(),
+                warnings: Vec::new(),
+            };
             let mut f = std::fs::File::create(&path)
                 .with_context(|| format!("creating {}", path.display()))?;
             // Binary is the 3f5's default rawfile format.
             raw.write(&mut f, Format::Binary)?;
         }
         None => {
-            // Plain value listing until the spice3 .print formats
-            // land (PLAN Phase 1 leftover, see docs/dune-core.md).
-            for plot in &raw.plots {
-                println!("{}", plot.name);
-                for (i, v) in plot.variables.iter().enumerate() {
-                    if let dune_raw::Data::Real(cols) = &plot.data {
-                        println!("{:<24} = {:.6e}", v.name, cols[i][0]);
-                    }
+            run_prints(&parsed.netlist, &solutions, &options)?;
+        }
+    }
+    Ok(())
+}
+
+/// Render the deck's `.print` cards in the spice3 column format;
+/// fall back to a bare value listing when the deck has none (so an
+/// `.op`-only deck still shows its numbers).
+fn run_prints(
+    nl: &dune_netlist::ir::Netlist,
+    solutions: &[Solution],
+    options: &Options,
+) -> Result<()> {
+    let page = print::PageSetup {
+        width: nl.width_out.unwrap_or(print::DEF_WIDTH),
+        height: print::DEF_HEIGHT,
+        nobreak: options.nopage,
+    };
+    let mut printed = false;
+    for output in &nl.outputs {
+        let Output {
+            kind,
+            analysis,
+            vars,
+            ..
+        } = output;
+        match kind {
+            OutputKind::Print => {}
+            OutputKind::Plot => {
+                eprintln!("note: .plot (ascii graphs) is not implemented yet; use .print");
+                continue;
+            }
+            // `.save` narrows what gets saved; Dune currently saves
+            // everything. `.four` waits for its analysis.
+            _ => continue,
+        }
+        let plotname = match analysis.as_deref() {
+            Some("tran") => "Transient Analysis",
+            Some("dc") => "DC transfer characteristic",
+            Some(other) => {
+                eprintln!("note: .print {other}: analysis not implemented yet");
+                continue;
+            }
+            None => continue,
+        };
+        let Some(solution) = solutions.iter().find(|s| s.plotname == plotname) else {
+            eprintln!(
+                "note: .print {}: no such analysis in this run",
+                analysis.as_deref().unwrap_or("")
+            );
+            continue;
+        };
+        let exprs: Vec<OutExpr> = vars.iter().map(OutExpr::from_ir).collect();
+        match solution.select(&exprs) {
+            Ok(sel) => {
+                let mut out = String::new();
+                print::print_columns(&mut out, &nl.title, &solution.plotname, "", &sel, &page);
+                print!("{out}");
+                printed = true;
+            }
+            Err(e) => eprintln!("warning: .print: {e}"),
+        }
+    }
+    if !printed {
+        for s in solutions {
+            if s.num_points() == 1 {
+                println!("{}", s.plotname);
+                for (i, (name, _)) in s.variables.iter().enumerate() {
+                    println!("{:<24} = {}", name, dune_raw::fmt_e(s.columns[i][0], 6));
                 }
             }
         }

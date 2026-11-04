@@ -70,6 +70,7 @@ impl Circuit {
                 plotname: "Transient Analysis".to_string(),
                 variables,
                 columns,
+                scale: Some(0),
             },
             notes,
         })
