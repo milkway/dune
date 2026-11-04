@@ -93,7 +93,7 @@ impl Circuit {
             solution: Solution {
                 plotname: "DC transfer characteristic".to_string(),
                 variables,
-                columns,
+                data: dune_raw::Data::Real(columns),
                 scale: Some(0),
             },
             notes,

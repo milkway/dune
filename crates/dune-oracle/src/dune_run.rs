@@ -16,7 +16,7 @@ use crate::corpus::Circuit as CorpusCircuit;
 /// `x` is fine because subcircuits expand to their contents, which
 /// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
-    const ANALYSES: &[&str] = &[".op", ".dc", ".tran"];
+    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac"];
     const DEVICES: &[char] = &['r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'x'];
     !c.analyses.is_empty()
         && c.analyses.iter().all(|a| ANALYSES.contains(&a.as_str()))
@@ -74,6 +74,23 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
                     .tran(&options, *tstep, *tstop, tstart.unwrap_or(0.0), *tmax, *uic)
                     .map_err(|e| e.to_string())?;
                 plots.push(tr.solution.to_plot(&parsed.netlist.title, ""));
+            }
+            Analysis::Ac {
+                variation,
+                points,
+                fstart,
+                fstop,
+                ..
+            } => {
+                let sweep = match variation {
+                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                };
+                let ac = circuit
+                    .ac(&options, sweep, *points as usize, *fstart, *fstop)
+                    .map_err(|e| e.to_string())?;
+                plots.push(ac.solution.to_plot(&parsed.netlist.title, ""));
             }
             other => return Err(format!("analysis {other:?} not supported yet")),
         }

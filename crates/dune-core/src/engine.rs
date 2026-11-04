@@ -12,9 +12,10 @@ use crate::devices::Device;
 use crate::error::Error;
 use crate::integ::{Method, TerrCtx, com_cof};
 use crate::linalg::{LinalgError, LinearSolver};
-use crate::matrix::{AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Var};
+use crate::matrix::{AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Var};
 use crate::options::Options;
 use crate::state::States;
+use num_complex::Complex64;
 
 /// Memory guard for sweep/transient outputs: `points × vars` of f64.
 const MAX_OUTPUT_VALUES: usize = 50_000_000;
@@ -243,7 +244,7 @@ impl Engine {
                     }
                     ipass = true;
                 }
-                InitMode::Tran | InitMode::Pred => mode = InitMode::Float,
+                InitMode::Tran | InitMode::Pred | InitMode::Smsig => mode = InitMode::Float,
             }
             std::mem::swap(&mut self.sol, &mut self.rhs);
         }
@@ -601,6 +602,117 @@ impl Engine {
             }
         }
     }
+}
+
+impl Engine {
+    /// `ACan` (`ckt/acan.c`): operating point, one `MODEINITSMSIG`
+    /// load to store small-signal parameters, then one complex
+    /// solve per frequency (`NIacIter`). Returns `(freq, solution)`
+    /// rows.
+    pub fn ac(
+        &mut self,
+        opts: &Options,
+        step_type: AcStepType,
+        number_steps: usize,
+        fstart: f64,
+        fstop: f64,
+    ) -> Result<Vec<(f64, Vec<Complex64>)>, Error> {
+        let n = number_steps.max(1);
+        let freq_delta = match step_type {
+            AcStepType::Decade => f64::exp(f64::ln(10.0) / n as f64),
+            AcStepType::Octave => f64::exp(f64::ln(2.0) / n as f64),
+            AcStepType::Linear => {
+                // The C: delta = (stop-start)/(n-1) only when
+                // n-1 > 1, else HUGE (a 2-point linear sweep yields
+                // one point; quirk kept).
+                if n - 1 > 1 {
+                    (fstop - fstart) / (n - 1) as f64
+                } else {
+                    f64::MAX
+                }
+            }
+        };
+
+        // DC operating point, then the small-signal storage pass.
+        self.set_kind(AnKind::DcOp, false);
+        self.op(opts)?;
+        self.load_all(InitMode::Smsig, opts, 1.0);
+
+        let freq_tol = match step_type {
+            AcStepType::Linear => freq_delta * opts.reltol,
+            _ => freq_delta * fstop * opts.reltol,
+        };
+
+        let nvars = self.vars.len();
+        let num_slots = self.values.len();
+        let mut g = vec![0.0; num_slots];
+        let mut b = vec![0.0; num_slots];
+        let mut re = vec![0.0; nvars];
+        let mut im = vec![0.0; nvars];
+        let mut rows: Vec<(f64, Vec<Complex64>)> = Vec::new();
+        let mut freq = fstart;
+        while freq <= fstop + freq_tol {
+            let omega = 2.0 * std::f64::consts::PI * freq;
+            g.fill(0.0);
+            b.fill(0.0);
+            re.fill(0.0);
+            im.fill(0.0);
+            let mut ctx = AcCtx {
+                g: &mut g,
+                b: &mut b,
+                rhs_re: &mut re,
+                rhs_im: &mut im,
+                omega,
+                states: &self.states,
+            };
+            for d in &mut self.devices {
+                d.load_ac(&mut ctx);
+            }
+            self.solver
+                .factor_complex(&g[1..], &b[1..])
+                .map_err(|e| self.map_singular(e))?;
+            self.solver
+                .solve_complex_in_place(&mut re[1..], &mut im[1..])
+                .map_err(|e| self.map_singular(e))?;
+            re[0] = 0.0;
+            im[0] = 0.0;
+            if (rows.len() + 1).saturating_mul(nvars) > MAX_OUTPUT_VALUES {
+                return Err(Error::Build(
+                    "ac sweep produces too many points; refusing".into(),
+                ));
+            }
+            rows.push((
+                freq,
+                re.iter()
+                    .zip(&im)
+                    .map(|(r, i)| Complex64::new(*r, *i))
+                    .collect(),
+            ));
+            match step_type {
+                AcStepType::Decade | AcStepType::Octave => {
+                    freq *= freq_delta;
+                    if freq_delta == 1.0 {
+                        break;
+                    }
+                }
+                AcStepType::Linear => {
+                    freq += freq_delta;
+                    if freq_delta == 0.0 {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(rows)
+    }
+}
+
+/// `.ac` sweep spacing (`DEC OCT LIN`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AcStepType {
+    Decade,
+    Octave,
+    Linear,
 }
 
 /// One resolved `.dc` sweep level.

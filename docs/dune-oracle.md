@@ -59,8 +59,12 @@ roundoff diferente. Acima de 2 tolerâncias é desacordo real.
 `.tran` é comparado por interpolação linear do candidato na malha do
 oráculo, com a régua derivada do LTE (D-0010): `|a−b| ≤
 2·(trtol·reltol·S + floor)`, `S` = escala da forma de onda; o pior
-vetor sai com erro máximo e RMS numa nota. Pendência deliberada:
-`.ac` como módulo em dB + fase (hoje re/im).
+vetor sai com erro máximo e RMS numa nota.
+
+`.ac` compara parte real e imaginária com a régua de D-0009 — mais
+apertado que o módulo-em-dB + fase que o PLAN §2.4 esboçou, e viável
+porque o AC é um solve linear direto (sem folga de Newton): os três
+decks do corpus batem a ~1e-9..1e-6.
 
 ## Corpus e golden
 

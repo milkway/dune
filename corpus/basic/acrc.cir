@@ -1,0 +1,7 @@
+rc lowpass bode
+* written for Dune (Phase 2 .ac parity); not from Berkeley
+vin 1 0 dc 0 ac 1
+r1 1 2 1k
+c1 2 0 159.155n
+.ac dec 10 10 1meg
+.end

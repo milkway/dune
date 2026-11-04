@@ -52,6 +52,16 @@ resultados espelhando o rawfile).
   capacitância do diodo (depleção + difusão com `f2`/`f3`) e seu
   `DIOtrunc`.
 
+- **`.ac`** (`ac.rs`, `engine.rs::ac` ← `ckt/acan.c`,
+  `ni/niaciter.c`, `dev/*acld.c`): ponto de operação, um passe
+  `MODEINITSMSIG` (o diodo guarda `capd` em `capCurrent`), e um
+  solve complexo direto por frequência (`G + jB`, sem iteração).
+  Varredura dec/oct/lin com o `freqTol` do C — incluindo o quirk de
+  `lin` com 2 pontos render 1 (delta = HUGE). Stamps: R/E/F/G/H
+  reais; C `+jωC`; L `−jωL` no ramo; K `−jωM`; fonte V com
+  `mag·e^{jfase°}`; diodo `gd + jω·capd` do ponto de operação.
+  Fase do `ACPHASE` em graus (`vsrctemp.c`).
+
 - **`.dc`** (`dc.rs`, `engine.rs::dc` ← `ckt/dctrcurv.c`): uma ou
   duas fontes V/I, a primeira no laço interno; cada ponto tenta
   `NIiter(itl2)` continuando da solução anterior e cai para o `CKTop`
@@ -102,8 +112,8 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- `.ac`, `.tf`, ruído, `.pz`, `.disto`; `.dc` varrendo TEMP e
-  parâmetro de modelo.
+- `.tf`, ruído, `.pz`, `.disto`; `.dc` varrendo TEMP e parâmetro de
+  modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - BJT/MOS/JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.

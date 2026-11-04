@@ -13,7 +13,7 @@
 //! header; pages break every `height` lines with a form feed.
 //! Values are C `%e` (`1.000000e+00`), tab-separated.
 
-use dune_core::{OutColumn, Selection};
+use dune_core::{ColData, OutColumn, Selection};
 use dune_raw::fmt_e;
 
 /// `DEF_WIDTH`/`DEF_HEIGHT` (`ftedefs.h`), the line-printer page.
@@ -34,6 +34,13 @@ impl Default for PageSetup {
             height: DEF_HEIGHT,
             nobreak: false,
         }
+    }
+}
+
+fn col_width(col: &OutColumn) -> usize {
+    match col.data {
+        ColData::Real(_) => 16,
+        ColData::Complex(_) => 32,
     }
 }
 
@@ -66,8 +73,8 @@ pub fn print_columns(
         }
         let mut ll = 8;
         while let Some(col) = remaining.first() {
-            ll += 16;
-            // "Make sure we have at least 2 vectors per page".
+            // "Two tabs for real, 4 for complex."
+            ll += col_width(col);
             if ll > width && block.len() >= 2 {
                 break;
             }
@@ -117,10 +124,15 @@ fn render_block(
     out.push_str(&dashes);
     out.push('\n');
 
-    // `Index` header: `%-16.15s` per (real) vector.
+    // `Index` header: `%-16.15s` per real vector, `%-32.31s` per
+    // complex one.
     let mut header = String::from("Index   ");
     for col in block {
-        header.push_str(&format!("{:<16.15}", col.label));
+        if col_width(col) == 16 {
+            header.push_str(&format!("{:<16.15}", col.label));
+        } else {
+            header.push_str(&format!("{:<32.31}", col.label));
+        }
     }
 
     let npoints = block.iter().map(|c| c.data.len()).max().unwrap_or(0);
@@ -135,12 +147,23 @@ fn render_block(
         while j < npoints && (nobreak || lineno < height) {
             out.push_str(&format!("{j}\t"));
             for col in block {
-                match col.data.get(j) {
-                    Some(v) => {
-                        out.push_str(&fmt_e(*v, 6));
-                        out.push('\t');
-                    }
-                    None => out.push_str("\t\t"),
+                match &col.data {
+                    ColData::Real(v) => match v.get(j) {
+                        Some(x) => {
+                            out.push_str(&fmt_e(*x, 6));
+                            out.push('\t');
+                        }
+                        None => out.push_str("\t\t"),
+                    },
+                    ColData::Complex(v) => match v.get(j) {
+                        Some(z) => {
+                            out.push_str(&fmt_e(z.re, 6));
+                            out.push_str(",\t");
+                            out.push_str(&fmt_e(z.im, 6));
+                            out.push('\t');
+                        }
+                        None => out.push_str("\t\t\t\t"),
+                    },
                 }
             }
             out.push('\n');
@@ -166,12 +189,12 @@ mod tests {
             scale: Some(OutColumn {
                 label: "time".into(),
                 unit: VarType::Time,
-                data: vec![0.0, 1e-9, 2e-9],
+                data: ColData::Real(vec![0.0, 1e-9, 2e-9]),
             }),
             columns: vec![OutColumn {
                 label: "v(2)".into(),
                 unit: VarType::Voltage,
-                data: vec![0.0, 0.5, -1.25],
+                data: ColData::Real(vec![0.0, 0.5, -1.25]),
             }],
         }
     }
@@ -208,7 +231,7 @@ mod tests {
             columns: vec![OutColumn {
                 label: "v(a-very-long-node-name)".into(),
                 unit: VarType::Voltage,
-                data: vec![1.0],
+                data: ColData::Real(vec![1.0]),
             }],
         };
         print_columns(
@@ -235,7 +258,7 @@ mod tests {
             columns: vec![OutColumn {
                 label: "v(1)".into(),
                 unit: VarType::Voltage,
-                data: (0..100).map(|i| i as f64).collect(),
+                data: ColData::Real((0..100).map(|i| i as f64).collect()),
             }],
         };
         let page = PageSetup {
@@ -256,14 +279,14 @@ mod tests {
             .map(|k| OutColumn {
                 label: format!("v({k})"),
                 unit: VarType::Voltage,
-                data: vec![k as f64],
+                data: ColData::Real(vec![k as f64]),
             })
             .collect();
         let s = Selection {
             scale: Some(OutColumn {
                 label: "time".into(),
                 unit: VarType::Time,
-                data: vec![0.0],
+                data: ColData::Real(vec![0.0]),
             }),
             columns: cols,
         };

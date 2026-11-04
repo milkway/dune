@@ -49,7 +49,7 @@ impl Circuit {
             solution: Solution {
                 plotname: "Operating Point".to_string(),
                 variables,
-                columns,
+                data: dune_raw::Data::Real(columns),
                 scale: None,
             },
             notes,

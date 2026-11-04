@@ -106,6 +106,24 @@ fn main() -> Result<()> {
                 }
                 solutions.push(tr.solution);
             }
+            dune_netlist::ir::Analysis::Ac {
+                variation,
+                points,
+                fstart,
+                fstop,
+                ..
+            } => {
+                let sweep = match variation {
+                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                };
+                let ac = circuit.ac(&options, sweep, *points as usize, *fstart, *fstop)?;
+                for n in &ac.notes {
+                    eprintln!("note: {n}");
+                }
+                solutions.push(ac.solution);
+            }
             other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
         }
     }
@@ -171,6 +189,7 @@ fn run_prints(
         let plotname = match analysis.as_deref() {
             Some("tran") => "Transient Analysis",
             Some("dc") => "DC transfer characteristic",
+            Some("ac") => "AC Analysis",
             Some(other) => {
                 eprintln!("note: .print {other}: analysis not implemented yet");
                 continue;
@@ -199,8 +218,10 @@ fn run_prints(
         for s in solutions {
             if s.num_points() == 1 {
                 println!("{}", s.plotname);
-                for (i, (name, _)) in s.variables.iter().enumerate() {
-                    println!("{:<24} = {}", name, dune_raw::fmt_e(s.columns[i][0], 6));
+                for (name, _) in &s.variables {
+                    if let Some(col) = s.column(name) {
+                        println!("{:<24} = {}", name, dune_raw::fmt_e(col[0], 6));
+                    }
                 }
             }
         }

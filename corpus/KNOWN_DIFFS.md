@@ -15,3 +15,4 @@ uma divergência por tolerância larga (D-0006).
 | Passo zero no `.dc` | laço infinito | erro | erro | entrada hostil nunca trava (CLAUDE.md princípio 4) |
 | `TMAX` default do `.tran` | `(tstop−tstart)/50` | `min(tstep, span/50)` (default do SPICE2) | como o ngspice | densidade de pontos do oráculo; `docs/dune-core.md` §4 |
 | `.tran … UIC`, ponto t=0 | despeja o vetor zerado | omite o ponto t=0 | como o ngspice | D-0006; `docs/dune-core.md` §5 |
+| Sinal do estímulo AC da fonte I | `isrcacld.c` soma com polaridade oposta à do próprio load DC (deslize histórico) | corrigido (mesma polaridade do DC) | como o ngspice | flip de 180° medido no oráculo (`acdiode`); `devices.rs::IsourceI::load_ac` |

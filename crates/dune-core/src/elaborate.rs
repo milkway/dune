@@ -119,7 +119,10 @@ impl Circuit {
                     },
                     &mut problems,
                 ),
-                ir::Device::Source { kind, dc, tran, .. } => {
+                ir::Device::Source {
+                    kind, dc, tran, ac, ..
+                } => {
+                    let ac = ac.as_ref().map(|a| (a.mag, a.phase));
                     let wave = tran.as_ref().map(|t| {
                         let args = t.args.clone();
                         match t.kind {
@@ -138,6 +141,7 @@ impl Circuit {
                                 nodes: two(&el.nodes),
                                 dc: *dc,
                                 wave,
+                                ac,
                             },
                             &mut problems,
                         ),
@@ -148,6 +152,7 @@ impl Circuit {
                                 nodes: two(&el.nodes),
                                 dc: *dc,
                                 wave,
+                                ac,
                             },
                             &mut problems,
                         ),

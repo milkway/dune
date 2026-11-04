@@ -286,6 +286,7 @@ impl crate::devices::Device for DiodeI {
         let mut check = true;
 
         let vd = match ctx.mode {
+            InitMode::Smsig => ctx.states.get(0, st + VOLTAGE),
             InitMode::Tran => ctx.states.get(1, st + VOLTAGE),
             InitMode::Jct if ctx.kind == AnKind::TranOp && ctx.uic => self.init_cond,
             InitMode::Jct if self.off => 0.0,
@@ -331,8 +332,12 @@ impl crate::devices::Device for DiodeI {
         let mut cd = cd0;
         let mut gd = gd0;
 
-        // Charge storage (transient and UIC transient op).
-        if ctx.kind == AnKind::Tran || (ctx.kind == AnKind::TranOp && ctx.uic) {
+        // Charge storage (transient, UIC transient op, and the
+        // small-signal pass before `.ac`).
+        if ctx.kind == AnKind::Tran
+            || (ctx.kind == AnKind::TranOp && ctx.uic)
+            || ctx.mode == InitMode::Smsig
+        {
             let czero = self.t.t_jct_cap * self.area;
             #[allow(clippy::needless_late_init)] // mirrors dioload.c
             let capd;
@@ -360,6 +365,14 @@ impl crate::devices::Device for DiodeI {
                 capd = self.t.tt * gd + czof2 * (self.t.f3 + self.t.m * vd / self.t.vj);
             }
 
+            // `MODEINITSMSIG`: store the small-signal capacitance
+            // into the capCurrent slot and stop — no stamps
+            // (`dioload.c` does `continue` here; `DIOacLoad` reads
+            // it back as `xceq = capd·ω`).
+            if ctx.mode == InitMode::Smsig {
+                ctx.states.set(0, st + CAP_CHARGE + 1, capd);
+                return;
+            }
             if ctx.kind == AnKind::Tran {
                 if ctx.mode == InitMode::Tran {
                     let q0 = ctx.states.get(0, st + CAP_CHARGE);
@@ -405,6 +418,24 @@ impl crate::devices::Device for DiodeI {
     fn trunc(&self, t: &crate::integ::TerrCtx, time_step: &mut f64) {
         // `DIOtrunc`: `CKTterr` on the junction charge.
         crate::integ::terr(self.st + CAP_CHARGE, t, time_step);
+    }
+
+    /// `DIOacLoad`: `gd` from the operating point plus `jω·capd`.
+    fn load_ac(&mut self, ctx: &mut crate::matrix::AcCtx) {
+        let gspr = self.t.gspr;
+        let geq = ctx.states.get(0, self.st + CONDUCT);
+        let xceq = ctx.states.get(0, self.st + CAP_CHARGE + 1) * ctx.omega;
+        ctx.add_g(self.slots[0], gspr);
+        ctx.add_g(self.slots[1], geq);
+        ctx.add_b(self.slots[1], xceq);
+        ctx.add_g(self.slots[2], geq + gspr);
+        ctx.add_b(self.slots[2], xceq);
+        ctx.add_g(self.slots[3], -gspr);
+        ctx.add_g(self.slots[4], -geq);
+        ctx.add_b(self.slots[4], -xceq);
+        ctx.add_g(self.slots[5], -gspr);
+        ctx.add_g(self.slots[6], -geq);
+        ctx.add_b(self.slots[6], -xceq);
     }
 }
 

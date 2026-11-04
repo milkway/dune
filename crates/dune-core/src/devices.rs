@@ -3,7 +3,7 @@
 //! / `*trunc.c` / `*acct.c` files named on each type.
 
 use crate::integ::TerrCtx;
-use crate::matrix::{AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
+use crate::matrix::{AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 use crate::srcfn::Wave;
 
 /// A device instance bound to matrix positions and state slots.
@@ -20,6 +20,8 @@ pub(crate) trait Device {
     fn load_late(&mut self, _ctx: &mut LoadCtx) {}
     /// Timestep limiting from local truncation error (`*trunc.c`).
     fn trunc(&self, _t: &TerrCtx, _time_step: &mut f64) {}
+    /// AC small-signal stamps (`*acld.c`). Default: no AC presence.
+    fn load_ac(&mut self, _ctx: &mut AcCtx) {}
     /// Accepted-timepoint hook; sources plant breakpoints here
     /// (`*acct.c`).
     fn accept(&mut self, _ctx: &mut AcceptCtx) {}
@@ -61,6 +63,13 @@ impl Device for ResistorI {
         ctx.add(self.slots[1], self.g);
         ctx.add(self.slots[2], -self.g);
         ctx.add(self.slots[3], -self.g);
+    }
+
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        ctx.add_g(self.slots[0], self.g);
+        ctx.add_g(self.slots[1], self.g);
+        ctx.add_g(self.slots[2], -self.g);
+        ctx.add_g(self.slots[3], -self.g);
     }
 }
 
@@ -141,6 +150,15 @@ impl Device for CapacitorI {
     fn trunc(&self, t: &TerrCtx, time_step: &mut f64) {
         // `CAPtrunc` is one `CKTterr` call on the charge state.
         crate::integ::terr(self.q, t, time_step);
+    }
+
+    /// `CAPacLoad`: `+jωC`.
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        let val = ctx.omega * self.capac;
+        ctx.add_b(self.slots[0], val);
+        ctx.add_b(self.slots[1], val);
+        ctx.add_b(self.slots[2], -val);
+        ctx.add_b(self.slots[3], -val);
     }
 }
 
@@ -229,6 +247,16 @@ impl Device for InductorI {
         // `INDtrunc`: `CKTterr` on the flux.
         crate::integ::terr(self.flux, t, time_step);
     }
+
+    /// `INDacLoad`: the branch equation with `-jωL`.
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        let val = ctx.omega * self.induct;
+        ctx.add_g(self.slots[0], 1.0);
+        ctx.add_g(self.slots[1], 1.0);
+        ctx.add_g(self.slots[2], -1.0);
+        ctx.add_g(self.slots[3], -1.0);
+        ctx.add_b(self.br_br, -val);
+    }
 }
 
 /// `MUTload` (inside `indload.c`): adds `M·i(other)` to each coupled
@@ -259,6 +287,13 @@ impl Device for MutualI {
             ctx.add(self.slots[0], -self.factor * ctx.ag[0]);
             ctx.add(self.slots[1], -self.factor * ctx.ag[0]);
         }
+    }
+
+    /// `MUTacLoad`: `-jωM` between the branch equations.
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        let val = ctx.omega * self.factor;
+        ctx.add_b(self.slots[0], -val);
+        ctx.add_b(self.slots[1], -val);
     }
 }
 
@@ -330,16 +365,40 @@ fn source_value(ctx: &LoadCtx, dc: Option<f64>, wave: &Option<Wave>) -> f64 {
 pub(crate) struct VsourceI {
     pub dc: Option<f64>,
     pub wave: Option<Wave>,
+    /// `VSRCacReal`/`VSRCacImag` (`vsrctemp.c`: phase in degrees).
+    ac_re: f64,
+    ac_im: f64,
     branch: BranchStamp,
 }
 
 impl VsourceI {
-    pub fn new(dc: Option<f64>, wave: Option<Wave>, pos: Var, neg: Var, br: Var) -> Self {
+    pub fn new(
+        dc: Option<f64>,
+        wave: Option<Wave>,
+        ac: Option<(f64, f64)>,
+        pos: Var,
+        neg: Var,
+        br: Var,
+    ) -> Self {
+        let (ac_re, ac_im) = ac_parts(ac);
         VsourceI {
             dc,
             wave,
+            ac_re,
+            ac_im,
             branch: BranchStamp::new(pos, neg, br),
         }
+    }
+}
+
+/// `(mag, phase°)` → rectangular (`vsrctemp.c`).
+fn ac_parts(ac: Option<(f64, f64)>) -> (f64, f64) {
+    match ac {
+        Some((mag, phase)) => {
+            let radians = phase * std::f64::consts::PI / 180.0;
+            (mag * radians.cos(), mag * radians.sin())
+        }
+        None => (0.0, 0.0),
     }
 }
 
@@ -352,6 +411,16 @@ impl Device for VsourceI {
         self.branch.load(ctx);
         let v = source_value(ctx, self.dc, &self.wave);
         ctx.rhs[self.branch.br] += v;
+    }
+
+    /// `VSRCacLoad`.
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        ctx.add_g(self.branch.slots[0], 1.0);
+        ctx.add_g(self.branch.slots[1], 1.0);
+        ctx.add_g(self.branch.slots[2], -1.0);
+        ctx.add_g(self.branch.slots[3], -1.0);
+        ctx.rhs_re[self.branch.br] += self.ac_re;
+        ctx.rhs_im[self.branch.br] += self.ac_im;
     }
 
     fn accept(&mut self, ctx: &mut AcceptCtx) {
@@ -369,8 +438,30 @@ impl Device for VsourceI {
 pub(crate) struct IsourceI {
     pub dc: Option<f64>,
     pub wave: Option<Wave>,
+    ac_re: f64,
+    ac_im: f64,
     pub pos: Var,
     pub neg: Var,
+}
+
+impl IsourceI {
+    pub fn new(
+        dc: Option<f64>,
+        wave: Option<Wave>,
+        ac: Option<(f64, f64)>,
+        pos: Var,
+        neg: Var,
+    ) -> Self {
+        let (ac_re, ac_im) = ac_parts(ac);
+        IsourceI {
+            dc,
+            wave,
+            ac_re,
+            ac_im,
+            pos,
+            neg,
+        }
+    }
 }
 
 impl Device for IsourceI {
@@ -380,6 +471,18 @@ impl Device for IsourceI {
         let v = source_value(ctx, self.dc, &self.wave);
         ctx.rhs[self.pos] -= v;
         ctx.rhs[self.neg] += v;
+    }
+
+    /// `ISRCacLoad`. The 3f5 adds the AC stimulus with the polarity
+    /// opposite to its own DC load (a long-known sign slip); ngspice
+    /// fixed it, and the oracle confirmed the flip (180° on a
+    /// current-driven deck). Dune follows ngspice
+    /// (corpus/KNOWN_DIFFS.md).
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        ctx.rhs_re[self.pos] -= self.ac_re;
+        ctx.rhs_re[self.neg] += self.ac_re;
+        ctx.rhs_im[self.pos] -= self.ac_im;
+        ctx.rhs_im[self.neg] += self.ac_im;
     }
 
     fn accept(&mut self, ctx: &mut AcceptCtx) {
@@ -428,6 +531,15 @@ impl Device for VcvsI {
         ctx.add(self.cslots[0], -self.gain);
         ctx.add(self.cslots[1], self.gain);
     }
+
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        ctx.add_g(self.branch.slots[0], 1.0);
+        ctx.add_g(self.branch.slots[1], 1.0);
+        ctx.add_g(self.branch.slots[2], -1.0);
+        ctx.add_g(self.branch.slots[3], -1.0);
+        ctx.add_g(self.cslots[0], -self.gain);
+        ctx.add_g(self.cslots[1], self.gain);
+    }
 }
 
 /// `VCCSload`: G source.
@@ -464,6 +576,13 @@ impl Device for VccsI {
         ctx.add(self.slots[2], -self.gain);
         ctx.add(self.slots[3], self.gain);
     }
+
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        ctx.add_g(self.slots[0], self.gain);
+        ctx.add_g(self.slots[1], -self.gain);
+        ctx.add_g(self.slots[2], -self.gain);
+        ctx.add_g(self.slots[3], self.gain);
+    }
 }
 
 /// `CCCSload`: F source.
@@ -499,6 +618,11 @@ impl Device for CccsI {
         ctx.add(self.slots[0], self.gain);
         ctx.add(self.slots[1], -self.gain);
     }
+
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        ctx.add_g(self.slots[0], self.gain);
+        ctx.add_g(self.slots[1], -self.gain);
+    }
 }
 
 /// `CCVSload`: H source.
@@ -529,5 +653,13 @@ impl Device for CcvsI {
     fn load(&mut self, ctx: &mut LoadCtx) {
         self.branch.load(ctx);
         ctx.add(self.cslot, -self.coeff);
+    }
+
+    fn load_ac(&mut self, ctx: &mut AcCtx) {
+        ctx.add_g(self.branch.slots[0], 1.0);
+        ctx.add_g(self.branch.slots[1], 1.0);
+        ctx.add_g(self.branch.slots[2], -1.0);
+        ctx.add_g(self.branch.slots[3], -1.0);
+        ctx.add_g(self.cslot, -self.coeff);
     }
 }

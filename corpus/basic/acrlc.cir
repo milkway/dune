@@ -1,0 +1,13 @@
+coupled resonator with phase-shifted drive
+* written for Dune (Phase 2 .ac parity); not from Berkeley
+vin 1 0 ac 2 45
+rs 1 2 50
+l1 2 0 10u
+l2 3 0 10u
+k12 l1 l2 0.3
+rl 3 4 5
+c2 4 0 253.3p
+e1 5 0 3 0 2
+re 5 0 1k
+.ac lin 50 1meg 5meg
+.end

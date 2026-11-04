@@ -127,6 +127,9 @@ pub(crate) enum InitMode {
     Tran,
     /// First Newton iteration of every later timepoint.
     Pred,
+    /// Small-signal parameter storage pass before `.ac`
+    /// (`MODEINITSMSIG`).
+    Smsig,
 }
 
 impl LoadCtx<'_> {
@@ -149,6 +152,31 @@ impl LoadCtx<'_> {
     pub fn pred(&self, off: usize) -> f64 {
         (1.0 + self.pred_xfact) * self.states.get(1, off)
             - self.pred_xfact * self.states.get(2, off)
+    }
+}
+
+/// The AC load environment (`CKTacLoad`): the complex matrix
+/// `G + jB` over the same sparsity pattern, split into parallel
+/// real/imaginary slot arrays, plus the complex RHS.
+pub(crate) struct AcCtx<'a> {
+    pub g: &'a mut [f64],
+    pub b: &'a mut [f64],
+    pub rhs_re: &'a mut [f64],
+    pub rhs_im: &'a mut [f64],
+    /// `CKTomega = 2πf`.
+    pub omega: f64,
+    /// Small-signal parameters stored by the `MODEINITSMSIG` pass
+    /// (`CKTstate0`, read-only here).
+    pub states: &'a crate::state::States,
+}
+
+impl AcCtx<'_> {
+    pub fn add_g(&mut self, s: Slot, v: f64) {
+        self.g[s.0] += v;
+    }
+
+    pub fn add_b(&mut self, s: Slot, v: f64) {
+        self.b[s.0] += v;
     }
 }
 

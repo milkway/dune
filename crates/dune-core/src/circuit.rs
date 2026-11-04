@@ -56,6 +56,8 @@ pub struct Vsource {
     /// also provide the DC-mode value, like `VSRCload`).
     pub dc: Option<f64>,
     pub wave: Option<crate::srcfn::Wave>,
+    /// `AC <MAG <PHASE°>>`: the small-signal stimulus.
+    pub ac: Option<(f64, f64)>,
 }
 
 /// `IYYYYYYY N+ N- <DC VALUE> <tranfn(…)>` (flows through the source
@@ -66,6 +68,8 @@ pub struct Isource {
     pub nodes: [String; 2],
     pub dc: Option<f64>,
     pub wave: Option<crate::srcfn::Wave>,
+    /// `AC <MAG <PHASE°>>`.
+    pub ac: Option<(f64, f64)>,
 }
 
 /// `EXXXXXXX N+ N- NC+ NC- VALUE` (VCVS).
@@ -462,6 +466,7 @@ impl Circuit {
                     devices.push(Box::new(VsourceI::new(
                         s.dc,
                         s.wave.clone(),
+                        s.ac,
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                         branches[&s.name],
@@ -469,12 +474,13 @@ impl Circuit {
                 }
                 Spec::Isource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), false));
-                    devices.push(Box::new(IsourceI {
-                        dc: s.dc,
-                        wave: s.wave.clone(),
-                        pos: get(&node_ids, &s.nodes[0]),
-                        neg: get(&node_ids, &s.nodes[1]),
-                    }));
+                    devices.push(Box::new(IsourceI::new(
+                        s.dc,
+                        s.wave.clone(),
+                        s.ac,
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[1]),
+                    )));
                 }
                 Spec::Vcvs(s) => {
                     let n = [

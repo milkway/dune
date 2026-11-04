@@ -38,6 +38,17 @@ pub trait LinearSolver {
 
     /// Solve `A x = rhs`, overwriting `rhs` with `x`.
     fn solve_in_place(&mut self, rhs: &mut [f64]) -> Result<(), LinalgError>;
+
+    /// Factor the complex matrix `G + jB` over the same pattern
+    /// (`SMPcLUfac`); `re`/`im` are parallel to the pattern entries.
+    fn factor_complex(&mut self, re: &[f64], im: &[f64]) -> Result<(), LinalgError>;
+
+    /// Solve the complex system in place (`SMPcSolve`).
+    fn solve_complex_in_place(
+        &mut self,
+        rhs_re: &mut [f64],
+        rhs_im: &mut [f64],
+    ) -> Result<(), LinalgError>;
 }
 
 /// The default backend for this build.

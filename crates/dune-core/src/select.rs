@@ -8,7 +8,8 @@
 //! tibbles and JSON column arrays. No consumer ever parses formatted
 //! text, and all of them see identical numbers.
 
-use dune_raw::VarType;
+use dune_raw::{Data, VarType};
+use num_complex::Complex64;
 
 use crate::error::Error;
 use crate::solution::Solution;
@@ -68,14 +69,15 @@ impl Part {
         })
     }
 
-    /// Apply to a real-valued sample (complex comes with `.ac`).
-    fn apply(self, x: f64) -> f64 {
+    /// Apply to one complex sample (`cx_real`, `cx_imag`, `cx_mag`,
+    /// `cx_ph`, `cx_db`); real data is the `im == 0` case.
+    fn apply(self, z: Complex64) -> f64 {
         match self {
-            Part::Real => x,
-            Part::Imag => 0.0,
-            Part::Mag => x.abs(),
-            Part::Phase => f64::atan2(0.0, x),
-            Part::Db => 20.0 * x.abs().log10(),
+            Part::Real => z.re,
+            Part::Imag => z.im,
+            Part::Mag => z.norm(),
+            Part::Phase => z.im.atan2(z.re),
+            Part::Db => 20.0 * z.norm().log10(),
         }
     }
 }
@@ -191,18 +193,78 @@ impl OutExpr {
     }
 }
 
+/// Column data: real for `.op`/`.dc`/`.tran`, complex for `.ac`
+/// vectors selected without a part.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ColData {
+    Real(Vec<f64>),
+    Complex(Vec<Complex64>),
+}
+
+impl ColData {
+    pub fn len(&self) -> usize {
+        match self {
+            ColData::Real(v) => v.len(),
+            ColData::Complex(v) => v.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The real view, when real.
+    pub fn real(&self) -> Option<&[f64]> {
+        match self {
+            ColData::Real(v) => Some(v),
+            ColData::Complex(_) => None,
+        }
+    }
+
+    fn as_complex(&self) -> Vec<Complex64> {
+        match self {
+            ColData::Real(v) => v.iter().map(|x| Complex64::new(*x, 0.0)).collect(),
+            ColData::Complex(v) => v.clone(),
+        }
+    }
+
+    fn sub(&self, other: &ColData) -> ColData {
+        match (self, other) {
+            (ColData::Real(a), ColData::Real(b)) => {
+                ColData::Real(a.iter().zip(b).map(|(x, y)| x - y).collect())
+            }
+            _ => {
+                let a = self.as_complex();
+                let b = other.as_complex();
+                ColData::Complex(a.iter().zip(&b).map(|(x, y)| x - y).collect())
+            }
+        }
+    }
+
+    fn part(&self, p: Part) -> ColData {
+        match self {
+            ColData::Real(v) => {
+                ColData::Real(v.iter().map(|x| p.apply(Complex64::new(*x, 0.0))).collect())
+            }
+            ColData::Complex(v) => ColData::Real(v.iter().map(|z| p.apply(*z)).collect()),
+        }
+    }
+}
+
 /// One selected column: pure data, ready for a numpy array, an R
-/// vector, a JSON `Float64Array` or the CLI formatter.
+/// vector, a JSON column or the CLI formatter.
 #[derive(Clone, Debug)]
 pub struct OutColumn {
     pub label: String,
     pub unit: VarType,
-    pub data: Vec<f64>,
+    pub data: ColData,
 }
 
 /// A resolved selection. `scale` is the plot's abscissa (`time`,
-/// `v(v-sweep)`, …) when the analysis has one, whether or not it was
-/// asked for — consumers building tables want it alongside.
+/// `frequency`, `v(v-sweep)`) when the analysis has one, whether or
+/// not it was asked for — consumers building tables want it
+/// alongside. The scale is real by construction, also in complex
+/// plots (the 3f5's `pl_scale` is a real vector).
 #[derive(Clone, Debug)]
 pub struct Selection {
     pub scale: Option<OutColumn>,
@@ -220,16 +282,16 @@ impl Solution {
                         columns.push(OutColumn {
                             label: name.clone(),
                             unit: unit.clone(),
-                            data: self.columns[i].clone(),
+                            data: self.col(i),
                         });
                     }
                 }
                 OutExpr::Name(n) => {
-                    let (i, (name, unit)) = self.lookup(n)?;
+                    let i = self.index_or_err(n)?;
                     columns.push(OutColumn {
-                        label: name.clone(),
-                        unit: unit.clone(),
-                        data: self.columns[i].clone(),
+                        label: self.variables[i].0.clone(),
+                        unit: self.variables[i].1.clone(),
+                        data: self.col(i),
                     });
                 }
                 OutExpr::Voltage {
@@ -237,19 +299,14 @@ impl Solution {
                     reference,
                     part,
                 } => {
-                    let a = self.voltage_data(node)?;
+                    let a = self.voltage_col(node)?;
                     let mut data = match reference {
-                        None => a.to_vec(),
-                        Some(r) if r == "0" => a.to_vec(),
-                        Some(r) => {
-                            let b = self.voltage_data(r)?;
-                            a.iter().zip(b).map(|(x, y)| x - y).collect()
-                        }
+                        None => a,
+                        Some(r) if r == "0" => a,
+                        Some(r) => a.sub(&self.voltage_col(r)?),
                     };
                     if let Some(p) = part {
-                        for v in &mut data {
-                            *v = p.apply(*v);
-                        }
+                        data = data.part(*p);
                     }
                     columns.push(OutColumn {
                         label: e.label(),
@@ -258,12 +315,10 @@ impl Solution {
                     });
                 }
                 OutExpr::Current { source, part } => {
-                    let (i, _) = self.lookup(&format!("i({source})"))?;
-                    let mut data = self.columns[i].clone();
+                    let i = self.index_or_err(&format!("i({source})"))?;
+                    let mut data = self.col(i);
                     if let Some(p) = part {
-                        for v in &mut data {
-                            *v = p.apply(*v);
-                        }
+                        data = data.part(*p);
                     }
                     columns.push(OutColumn {
                         label: e.label(),
@@ -276,28 +331,37 @@ impl Solution {
         let scale = self.scale.map(|i| OutColumn {
             label: self.variables[i].0.clone(),
             unit: self.variables[i].1.clone(),
-            data: self.columns[i].clone(),
+            // The abscissa is real by construction; strip the zero
+            // imaginary part complex plots carry.
+            data: match self.col(i) {
+                ColData::Complex(v) => ColData::Real(v.iter().map(|z| z.re).collect()),
+                real => real,
+            },
         });
         Ok(Selection { scale, columns })
     }
 
-    fn lookup(&self, name: &str) -> Result<(usize, &(String, VarType)), Error> {
-        self.variables
-            .iter()
-            .enumerate()
-            .find(|(_, (n, _))| n.eq_ignore_ascii_case(name))
+    fn col(&self, i: usize) -> ColData {
+        match &self.data {
+            Data::Real(cols) => ColData::Real(cols[i].clone()),
+            Data::Complex(cols) => ColData::Complex(cols[i].clone()),
+        }
+    }
+
+    fn index_or_err(&self, name: &str) -> Result<usize, Error> {
+        self.index(name)
             .ok_or_else(|| Error::UnknownVector(name.to_string()))
     }
 
     /// `v(<node>)` by node name, with `v(v-sweep)`-style names also
     /// reachable as plain vectors.
-    fn voltage_data(&self, node: &str) -> Result<&[f64], Error> {
+    fn voltage_col(&self, node: &str) -> Result<ColData, Error> {
         let wrapped = format!("v({node})");
-        if let Ok((i, _)) = self.lookup(&wrapped) {
-            return Ok(&self.columns[i]);
+        if let Some(i) = self.index(&wrapped) {
+            return Ok(self.col(i));
         }
-        let (i, _) = self.lookup(node)?;
-        Ok(&self.columns[i])
+        let i = self.index_or_err(node)?;
+        Ok(self.col(i))
     }
 }
 
@@ -314,12 +378,27 @@ mod tests {
                 ("v(2)".into(), VarType::Voltage),
                 ("i(vin)".into(), VarType::Current),
             ],
-            columns: vec![
+            data: Data::Real(vec![
                 vec![0.0, 1.0, 2.0],
                 vec![1.0, 1.0, 1.0],
                 vec![0.25, 0.5, -1.0],
                 vec![-1e-3, -2e-3, -3e-3],
+            ]),
+            scale: Some(0),
+        }
+    }
+
+    fn sol_ac() -> Solution {
+        Solution {
+            plotname: "AC Analysis".into(),
+            variables: vec![
+                ("frequency".into(), VarType::Frequency),
+                ("v(2)".into(), VarType::Voltage),
             ],
+            data: Data::Complex(vec![
+                vec![Complex64::new(1.0, 0.0), Complex64::new(10.0, 0.0)],
+                vec![Complex64::new(1.0, 0.0), Complex64::new(0.0, -0.5)],
+            ]),
             scale: Some(0),
         }
     }
@@ -369,9 +448,9 @@ mod tests {
                 OutExpr::parse("i(vin)").unwrap(),
             ])
             .unwrap();
-        assert_eq!(sel.columns[0].data, vec![0.25, 0.5, -1.0]);
+        assert_eq!(sel.columns[0].data.real().unwrap(), &[0.25, 0.5, -1.0]);
         assert_eq!(sel.columns[1].label, "v(1,2)");
-        assert_eq!(sel.columns[1].data, vec![0.75, 0.5, 2.0]);
+        assert_eq!(sel.columns[1].data.real().unwrap(), &[0.75, 0.5, 2.0]);
         assert_eq!(sel.columns[2].unit, VarType::Current);
         // The scale rides along without being asked for.
         assert_eq!(sel.scale.as_ref().unwrap().label, "time");
@@ -387,9 +466,35 @@ mod tests {
                 OutExpr::parse("vp(2)").unwrap(),
             ])
             .unwrap();
-        assert_eq!(sel.columns[0].data, vec![0.25, 0.5, 1.0]);
-        assert_eq!(sel.columns[1].data, vec![0.0, 0.0, 0.0]); // 20·log10(1)
-        assert_eq!(sel.columns[2].data[2], std::f64::consts::PI); // phase of -1
+        assert_eq!(sel.columns[0].data.real().unwrap(), &[0.25, 0.5, 1.0]);
+        assert_eq!(sel.columns[1].data.real().unwrap(), &[0.0, 0.0, 0.0]);
+        assert_eq!(sel.columns[2].data.real().unwrap()[2], std::f64::consts::PI);
+    }
+
+    #[test]
+    fn parts_on_complex_data() {
+        let s = sol_ac();
+        let sel = s
+            .select(&[
+                OutExpr::parse("v(2)").unwrap(),
+                OutExpr::parse("vm(2)").unwrap(),
+                OutExpr::parse("vdb(2)").unwrap(),
+                OutExpr::parse("vp(2)").unwrap(),
+            ])
+            .unwrap();
+        // No part: the complex column comes through complex.
+        assert!(matches!(sel.columns[0].data, ColData::Complex(_)));
+        let m = sel.columns[1].data.real().unwrap();
+        assert_eq!(m, &[1.0, 0.5]);
+        let db = sel.columns[2].data.real().unwrap();
+        assert!((db[1] - 20.0 * 0.5f64.log10()).abs() < 1e-12);
+        let ph = sel.columns[3].data.real().unwrap();
+        assert!((ph[1] + std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        // The frequency scale is delivered real.
+        assert_eq!(
+            sel.scale.as_ref().unwrap().data.real().unwrap(),
+            &[1.0, 10.0]
+        );
     }
 
     #[test]
@@ -405,6 +510,6 @@ mod tests {
     fn v_zero_reference_is_identity() {
         let s = sol();
         let sel = s.select(&[OutExpr::parse("v(2,0)").unwrap()]).unwrap();
-        assert_eq!(sel.columns[0].data, vec![0.25, 0.5, -1.0]);
+        assert_eq!(sel.columns[0].data.real().unwrap(), &[0.25, 0.5, -1.0]);
     }
 }

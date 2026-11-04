@@ -10,6 +10,7 @@
 pub mod consts;
 pub mod linalg;
 
+mod ac;
 mod circuit;
 mod dc;
 mod devices;
@@ -27,6 +28,7 @@ mod srcfn;
 mod state;
 mod tran;
 
+pub use ac::{Ac, AcSweep};
 pub use circuit::{
     Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mutual, Resistor, Spec, Vccs, Vcvs,
     Vsource,
@@ -37,7 +39,7 @@ pub use error::Error;
 pub use integ::Method;
 pub use op::Op;
 pub use options::Options;
-pub use select::{OutColumn, OutExpr, Part, Selection};
+pub use select::{ColData, OutColumn, OutExpr, Part, Selection};
 pub use solution::Solution;
 pub use srcfn::Wave;
 pub use tran::Tran;

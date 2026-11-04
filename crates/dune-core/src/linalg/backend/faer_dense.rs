@@ -3,7 +3,7 @@
 //! circuit profile) is Phase-3 work with its own benchmark (P-3).
 
 use faer::linalg::solvers::{PartialPivLu, Solve};
-use faer::{Mat, MatMut};
+use faer::{Mat, MatMut, c64};
 
 use super::super::{LinalgError, LinearSolver, Pattern};
 
@@ -15,6 +15,8 @@ pub struct FaerDense {
     diags: Vec<usize>,
     mat: Mat<f64>,
     lu: Option<PartialPivLu<f64>>,
+    cmat: Mat<c64>,
+    clu: Option<PartialPivLu<c64>>,
 }
 
 impl Default for FaerDense {
@@ -25,6 +27,8 @@ impl Default for FaerDense {
             diags: Vec::new(),
             mat: Mat::new(),
             lu: None,
+            cmat: Mat::new(),
+            clu: None,
         }
     }
 }
@@ -42,6 +46,8 @@ impl LinearSolver for FaerDense {
             .collect();
         self.mat = Mat::zeros(self.n, self.n);
         self.lu = None;
+        self.cmat = Mat::zeros(self.n, self.n);
+        self.clu = None;
     }
 
     fn factor(&mut self, values: &[f64], diag_gmin: f64) -> Result<(), LinalgError> {
@@ -76,6 +82,47 @@ impl LinearSolver for FaerDense {
         lu.solve_in_place(m);
         if let Some(row) = rhs.iter().position(|v| !v.is_finite()) {
             return Err(LinalgError::Singular { row });
+        }
+        Ok(())
+    }
+
+    fn factor_complex(&mut self, re: &[f64], im: &[f64]) -> Result<(), LinalgError> {
+        debug_assert_eq!(re.len(), self.entries.len());
+        self.cmat.fill(c64::new(0.0, 0.0));
+        for (k, (r, c)) in self.entries.iter().enumerate() {
+            self.cmat[(*r, *c)] += c64::new(re[k], im[k]);
+        }
+        for i in 0..self.n {
+            let row_zero = (0..self.n).all(|j| self.cmat[(i, j)] == c64::new(0.0, 0.0));
+            let col_zero = (0..self.n).all(|j| self.cmat[(j, i)] == c64::new(0.0, 0.0));
+            if row_zero || col_zero {
+                return Err(LinalgError::Singular { row: i });
+            }
+        }
+        self.clu = Some(self.cmat.partial_piv_lu());
+        Ok(())
+    }
+
+    fn solve_complex_in_place(
+        &mut self,
+        rhs_re: &mut [f64],
+        rhs_im: &mut [f64],
+    ) -> Result<(), LinalgError> {
+        let lu = self.clu.as_ref().expect("factor before solve");
+        debug_assert_eq!(rhs_re.len(), self.n);
+        let mut rhs: Vec<c64> = rhs_re
+            .iter()
+            .zip(rhs_im.iter())
+            .map(|(r, i)| c64::new(*r, *i))
+            .collect();
+        let m = MatMut::from_column_major_slice_mut(&mut rhs, self.n, 1);
+        lu.solve_in_place(m);
+        for (k, v) in rhs.iter().enumerate() {
+            if !v.re.is_finite() || !v.im.is_finite() {
+                return Err(LinalgError::Singular { row: k });
+            }
+            rhs_re[k] = v.re;
+            rhs_im[k] = v.im;
         }
         Ok(())
     }
