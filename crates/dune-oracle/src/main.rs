@@ -14,7 +14,7 @@ mod compare;
 mod corpus;
 mod ngspice;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use dune_raw::Rawfile;
@@ -124,13 +124,12 @@ fn run_circuits(args: &[String]) -> Result<bool> {
         }
         let golden = load_raw(&corpus.golden_path(c))
             .with_context(|| format!("no usable golden for `{}`; run --gen-golden", c.stem))?;
-        let fresh_path = scratch.join(format!("{}.raw", c.stem));
+        let fresh_path = scratch.path().join(format!("{}.raw", c.stem));
         ngspice::run(&c.path, &fresh_path)?;
         let fresh = load_raw(&fresh_path)?;
         let report = compare_rawfiles(&golden, &fresh, &tol);
         all_ok &= print_report(&c.stem, &report);
     }
-    std::fs::remove_dir_all(&scratch).ok();
     Ok(all_ok)
 }
 
@@ -162,7 +161,7 @@ fn gen_golden(args: &[String]) -> Result<bool> {
             print_skip(&c.stem, reason);
             continue;
         }
-        let tmp = scratch.join(format!("{}.raw", c.stem));
+        let tmp = scratch.path().join(format!("{}.raw", c.stem));
         if let Err(e) = ngspice::run(&c.path, &tmp) {
             println!("{:<14} {e:#}", c.stem);
             all_ok = false;
@@ -197,7 +196,6 @@ fn gen_golden(args: &[String]) -> Result<bool> {
             }
         }
     }
-    std::fs::remove_dir_all(&scratch).ok();
     println!(
         "\ngolden generated with {pin} into {}",
         golden_dir.display()
@@ -225,10 +223,14 @@ fn load_raw(path: &Path) -> Result<Rawfile> {
     Ok(raw)
 }
 
-fn scratch_dir() -> Result<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("dune-oracle-{}", std::process::id()));
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
+/// Private scratch directory for ngspice output: random name, created
+/// atomically with owner-only permissions, removed on drop (a
+/// predictable `/tmp` name would be open to symlink squatting).
+fn scratch_dir() -> Result<tempfile::TempDir> {
+    tempfile::Builder::new()
+        .prefix("dune-oracle-")
+        .tempdir()
+        .context("creating scratch directory")
 }
 
 fn print_result_header() {
