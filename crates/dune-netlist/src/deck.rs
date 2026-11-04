@@ -30,16 +30,36 @@ const MAX_TOTAL_BYTES: usize = 256 << 20;
 
 /// Loads the text of an `.include`d file. The default implementation
 /// reads the file system; a WASM host can supply its own.
+///
+/// `limit` is the byte budget left for this deck: an implementation
+/// must not return more than `limit` bytes, and must refuse sources
+/// it cannot bound (pipes, device files) — otherwise a hostile
+/// `.include /dev/zero` would hang the read before any cap applies.
 pub trait IncludeLoader {
-    fn load(&mut self, path: &Path) -> Result<String, String>;
+    fn load(&mut self, path: &Path, limit: u64) -> Result<String, String>;
 }
 
 /// [`IncludeLoader`] over `std::fs`.
 pub struct FsLoader;
 
 impl IncludeLoader for FsLoader {
-    fn load(&mut self, path: &Path) -> Result<String, String> {
-        std::fs::read_to_string(path).map_err(|e| e.to_string())
+    fn load(&mut self, path: &Path, limit: u64) -> Result<String, String> {
+        use std::io::Read;
+        let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            return Err("not a regular file".into());
+        }
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut text = String::new();
+        file.take(limit.saturating_add(1))
+            .read_to_string(&mut text)
+            .map_err(|e| e.to_string())?;
+        if text.len() as u64 > limit {
+            return Err(format!(
+                "larger than the deck's remaining {limit}-byte budget"
+            ));
+        }
+        Ok(text)
     }
 }
 
@@ -124,10 +144,12 @@ pub struct Deck {
 
 /// Read a deck from the file system (root file + includes).
 pub fn read_file(path: &Path) -> Result<Deck, crate::Error> {
-    let text = std::fs::read_to_string(path).map_err(|source| crate::Error::Io {
-        path: path.to_path_buf(),
-        message: source.to_string(),
-    })?;
+    let text = FsLoader
+        .load(path, MAX_TOTAL_BYTES as u64)
+        .map_err(|message| crate::Error::Io {
+            path: path.to_path_buf(),
+            message,
+        })?;
     Ok(read_with_loader(path, text, &mut FsLoader))
 }
 
@@ -254,7 +276,8 @@ impl Reader<'_> {
                 includer.parent().unwrap_or(Path::new(".")).join(p)
             }
         };
-        match self.loader.load(&path) {
+        let budget = (MAX_TOTAL_BYTES.saturating_sub(self.loaded_bytes)) as u64;
+        match self.loader.load(&path, budget) {
             Ok(text) => self.load(path, text, depth + 1),
             Err(e) => self.diags.push(Diagnostic::error(
                 format!("cannot open .include file {}: {e}", path.display()),
@@ -313,7 +336,11 @@ impl Reader<'_> {
 }
 
 fn starts_with_ignore_case(s: &str, prefix: &str) -> bool {
-    s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix)
+    // Byte-wise: slicing `s[..prefix.len()]` would panic when the
+    // boundary lands inside a multi-byte character.
+    s.as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|p| p.eq_ignore_ascii_case(prefix.as_bytes()))
 }
 
 /// Byte offset where an end-of-line comment begins (`$` or `;` at the
@@ -339,7 +366,7 @@ mod tests {
 
     struct FailLoader;
     impl IncludeLoader for FailLoader {
-        fn load(&mut self, _: &Path) -> Result<String, String> {
+        fn load(&mut self, _: &Path, _: u64) -> Result<String, String> {
             Err("no includes in this test".into())
         }
     }
@@ -395,7 +422,7 @@ mod tests {
     fn include_depth_is_bounded() {
         struct SelfLoader;
         impl IncludeLoader for SelfLoader {
-            fn load(&mut self, _: &Path) -> Result<String, String> {
+            fn load(&mut self, _: &Path, _: u64) -> Result<String, String> {
                 Ok(".include self.cir\n".into())
             }
         }
@@ -418,6 +445,34 @@ mod tests {
         // "r1" sits in the first segment.
         let span = card.span_of(0, 2);
         assert_eq!(d.sources.snippet(span), "r1");
+    }
+
+    #[test]
+    fn multibyte_line_start_does_not_panic() {
+        // `starts_with_ignore_case` must not slice mid-character.
+        let d = read("t\nréseau 1 0 1k\n\u{e9}\u{e9}\u{e9} x y\n");
+        assert_eq!(d.cards.len(), 2);
+    }
+
+    #[test]
+    fn loader_budget_shrinks_with_each_include() {
+        struct Probe(Vec<u64>);
+        impl IncludeLoader for Probe {
+            fn load(&mut self, _: &Path, limit: u64) -> Result<String, String> {
+                self.0.push(limit);
+                Ok("rinc 1 0 1k\n".into())
+            }
+        }
+        let mut probe = Probe(Vec::new());
+        let d = read_with_loader(
+            Path::new("test.cir"),
+            "t\n.include a.cir\n.include b.cir\n".into(),
+            &mut probe,
+        );
+        assert_eq!(d.cards.len(), 2);
+        assert_eq!(probe.0.len(), 2);
+        // The second include's budget is smaller than the first's.
+        assert!(probe.0[1] < probe.0[0]);
     }
 
     #[test]

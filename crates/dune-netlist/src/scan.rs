@@ -240,7 +240,7 @@ mod tests {
     fn card(line: &str) -> Card {
         struct NoInc;
         impl crate::deck::IncludeLoader for NoInc {
-            fn load(&mut self, _: &Path) -> Result<String, String> {
+            fn load(&mut self, _: &Path, _: u64) -> Result<String, String> {
                 Err("none".into())
             }
         }
