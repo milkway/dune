@@ -18,6 +18,7 @@ mod circuit;
 mod dc;
 mod devices;
 mod diode;
+mod disto;
 mod elaborate;
 mod engine;
 mod error;
@@ -46,6 +47,7 @@ pub use circuit::{
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
+pub use disto::Disto;
 pub use error::Error;
 pub use integ::Method;
 pub use mos1::Mos1Model;

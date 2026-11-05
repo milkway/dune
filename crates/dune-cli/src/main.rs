@@ -190,6 +190,32 @@ fn main() -> Result<()> {
                     solutions.push(integ);
                 }
             }
+            dune_netlist::ir::Analysis::Disto {
+                variation,
+                points,
+                fstart,
+                fstop,
+                f2overf1,
+                ..
+            } => {
+                let sweep = match variation {
+                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                };
+                let di = circuit.disto(
+                    &options,
+                    sweep,
+                    *points as usize,
+                    *fstart,
+                    *fstop,
+                    *f2overf1,
+                )?;
+                for n in &di.notes {
+                    eprintln!("note: {n}");
+                }
+                solutions.extend(di.solutions);
+            }
             other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
         }
     }

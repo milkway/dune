@@ -14,6 +14,10 @@
 //! - else the `f2`/`f3` linearized form of `dioload.c`.
 
 use crate::consts::{BOLTZ, CHARGE, KOVERQ, REFTEMP, ROOT2};
+use crate::disto::{
+    DistoCtx, DistoKernels, DistoMode, DistoSetupCtx, d1i2f1, d1i2f12, d1i3f1, d1if12, d1n2f1,
+    d1n2f12, d1n3f1, d1nf12,
+};
 use crate::matrix::{AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 
 /// `.model … d(…)` parameters, 3f5 names and defaults
@@ -80,6 +84,8 @@ impl Default for DiodeModel {
 pub(crate) struct DiodeTemp {
     pub csat: f64,
     pub gspr: f64,
+    /// `vt = CONSTKoverQ·T` (`DIOdSetup` uses it in breakdown).
+    pub vt: f64,
     pub vte: f64,
     pub vcrit: f64,
     pub brkdwn: Option<f64>,
@@ -203,6 +209,7 @@ impl DiodeTemp {
         DiodeTemp {
             csat: t_sat_cur * area,
             gspr,
+            vt,
             vte,
             vcrit,
             brkdwn,
@@ -233,6 +240,22 @@ pub(crate) struct DiodeI {
     /// capCurrent (`DIOvoltage` …, `diosetup.c`).
     st: usize,
     slots: [Slot; 7],
+    /// `DIOdCoeffs` (`diodefs.h`): `id_x2, id_x3, cdif_x2, cdif_x3,
+    /// cjnc_x2, cjnc_x3`, set by `DIOdSetup`.
+    d: DioDistoCoeffs,
+}
+
+/// Taylor coefficients of the diode nonlinearities at the operating
+/// point (`diodset.c`): conductance (`id_x*`), diffusion (`cdif_x*`)
+/// and junction (`cjnc_x*`) capacitance, 2nd and 3rd order.
+#[derive(Clone, Copy, Debug, Default)]
+struct DioDistoCoeffs {
+    id_x2: f64,
+    id_x3: f64,
+    cdif_x2: f64,
+    cdif_x3: f64,
+    cjnc_x2: f64,
+    cjnc_x3: f64,
 }
 
 const VOLTAGE: usize = 0;
@@ -262,6 +285,7 @@ impl DiodeI {
             init_cond,
             st,
             slots: [TRASH; 7],
+            d: DioDistoCoeffs::default(),
         }
     }
 }
@@ -447,6 +471,153 @@ impl crate::devices::Device for DiodeI {
         ctx.add_g(self.slots[5], -gspr);
         ctx.add_g(self.slots[6], -geq);
         ctx.add_b(self.slots[6], -xceq);
+    }
+
+    /// `DIOdSetup` (`dev/dio/diodset.c`): the 2nd/3rd-order Taylor
+    /// coefficients at the operating point in `CKTrhsOld`.
+    fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        let csat = self.t.csat;
+        let vt = self.t.vt;
+        let vte = self.t.vte;
+        let gmin = ctx.gmin;
+        let vd = ctx.sol[self.pos_prime] - ctx.sol[self.neg];
+
+        // Derivatives of the junction current.
+        let (g2, g3, cdiff2, cdiff3);
+        if vd >= -5.0 * vte {
+            let evd = f64::exp(vd / vte);
+            let gd = csat * evd / vte + gmin;
+            g2 = 0.5 * (gd - gmin) / vte;
+            cdiff2 = g2 * self.t.tt;
+            g3 = g2 / 3.0 / vte;
+            cdiff3 = g3 * self.t.tt;
+        } else if self.t.brkdwn.is_none_or(|bv| bv == 0.0 || vd >= -bv) {
+            // off
+            g2 = 0.0;
+            g3 = 0.0;
+            cdiff2 = 0.0;
+            cdiff3 = 0.0;
+        } else {
+            // Reverse breakdown ("why using csat instead of
+            // breakdowncurrent?" — the C's own question; kept).
+            let bv = self.t.brkdwn.unwrap_or(0.0);
+            let evrev = f64::exp(-(bv + vd) / vt);
+            let gd = csat * evrev / vt;
+            g2 = -gd / 2.0 / vt;
+            g3 = -g2 / 3.0 / vt;
+            cdiff2 = 0.0;
+            cdiff3 = 0.0;
+        }
+
+        // Junction (depletion) charge storage.
+        let czero = self.t.t_jct_cap * self.area;
+        let (cjunc2, cjunc3);
+        if czero != 0.0 {
+            let (m, vj) = (self.t.m, self.t.vj);
+            if vd < self.t.t_dep_cap {
+                let arg = 1.0 - vd / vj;
+                let sarg = f64::exp(-m * f64::ln(arg));
+                let cjunc1 = czero * sarg;
+                cjunc2 = cjunc1 / 2.0 / vj * m / arg;
+                cjunc3 = cjunc2 / 3.0 / vj / arg * (m + 1.0);
+            } else {
+                let czof2 = czero / self.t.f2;
+                cjunc2 = czof2 / 2.0 / vj * m;
+                cjunc3 = 0.0;
+            }
+        } else {
+            cjunc2 = 0.0;
+            cjunc3 = 0.0;
+        }
+
+        self.d = DioDistoCoeffs {
+            id_x2: g2,
+            id_x3: g3,
+            cdif_x2: cdiff2,
+            cdif_x3: cdiff3,
+            cjnc_x2: cjunc2,
+            cjnc_x3: cjunc3,
+        };
+        Ok(())
+    }
+
+    /// `DIOdisto` (`dev/dio/diodisto.c`), the load modes: the
+    /// memoryless current term plus `jω×` the charge term, both
+    /// contracted with the lower-order kernels of `v(pos') − v(neg)`.
+    fn disto_load(&self, ctx: &mut DistoCtx) {
+        let d = &self.d;
+        let (pp, nn) = (self.pos_prime, self.neg);
+        let h = &ctx.h;
+        let omega = ctx.omega;
+        let g2 = d.id_x2;
+        let g3 = d.id_x3;
+        let c2 = d.cdif_x2 + d.cjnc_x2;
+        let c3 = d.cdif_x3 + d.cjnc_x3;
+        let (r1h1x, i1h1x) = DistoKernels::branch(h.r1h1, h.i1h1, pp, nn);
+
+        let (temp, itemp) = match ctx.mode {
+            DistoMode::TwoF1 => {
+                let mut temp = d1n2f1(g2, r1h1x, i1h1x);
+                let mut itemp = d1i2f1(g2, r1h1x, i1h1x);
+                if c2 != 0.0 {
+                    temp += -omega * d1i2f1(c2, r1h1x, i1h1x);
+                    itemp += omega * d1n2f1(c2, r1h1x, i1h1x);
+                }
+                (temp, itemp)
+            }
+            DistoMode::ThrF1 => {
+                let (r2h11x, i2h11x) = DistoKernels::branch(h.r2h11, h.i2h11, pp, nn);
+                let mut temp = d1n3f1(g2, g3, r1h1x, i1h1x, r2h11x, i2h11x);
+                let mut itemp = d1i3f1(g2, g3, r1h1x, i1h1x, r2h11x, i2h11x);
+                if c2 != 0.0 {
+                    temp += -omega * d1i3f1(c2, c3, r1h1x, i1h1x, r2h11x, i2h11x);
+                    itemp += omega * d1n3f1(c2, c3, r1h1x, i1h1x, r2h11x, i2h11x);
+                }
+                (temp, itemp)
+            }
+            DistoMode::F1pF2 | DistoMode::F1mF2 => {
+                let (r1h2x, mut i1h2x) = DistoKernels::branch(h.r1h2, h.i1h2, pp, nn);
+                if ctx.mode == DistoMode::F1mF2 {
+                    // H1(−f2) = conj(H1(f2)).
+                    i1h2x = -i1h2x;
+                }
+                let mut temp = d1nf12(g2, r1h1x, i1h1x, r1h2x, i1h2x);
+                let mut itemp = d1if12(g2, r1h1x, i1h1x, r1h2x, i1h2x);
+                if c2 != 0.0 {
+                    temp += -omega * d1if12(c2, r1h1x, i1h1x, r1h2x, i1h2x);
+                    itemp += omega * d1nf12(c2, r1h1x, i1h1x, r1h2x, i1h2x);
+                }
+                (temp, itemp)
+            }
+            DistoMode::TwoF1mF2 => {
+                let (r1h2x, i1h2x) = DistoKernels::branch(h.r1h2, h.i1h2, pp, nn);
+                let i1hm2x = -i1h2x;
+                let (r2h11x, i2h11x) = DistoKernels::branch(h.r2h11, h.i2h11, pp, nn);
+                let (r2h1m2x, i2h1m2x) = DistoKernels::branch(h.r2h1m2, h.i2h1m2, pp, nn);
+                let mut temp = d1n2f12(
+                    g2, g3, r1h1x, i1h1x, r1h2x, i1hm2x, r2h11x, i2h11x, r2h1m2x, i2h1m2x,
+                );
+                let mut itemp = d1i2f12(
+                    g2, g3, r1h1x, i1h1x, r1h2x, i1hm2x, r2h11x, i2h11x, r2h1m2x, i2h1m2x,
+                );
+                if c2 != 0.0 {
+                    temp += -omega
+                        * d1i2f12(
+                            c2, c3, r1h1x, i1h1x, r1h2x, i1hm2x, r2h11x, i2h11x, r2h1m2x, i2h1m2x,
+                        );
+                    itemp += omega
+                        * d1n2f12(
+                            c2, c3, r1h1x, i1h1x, r1h2x, i1hm2x, r2h11x, i2h11x, r2h1m2x, i2h1m2x,
+                        );
+                }
+                (temp, itemp)
+            }
+        };
+
+        ctx.rhs_re[pp] -= temp;
+        ctx.rhs_im[pp] -= itemp;
+        ctx.rhs_re[nn] += temp;
+        ctx.rhs_im[nn] += itemp;
     }
 
     /// `DIOpzLoad`: the AC stamps at a general complex frequency.

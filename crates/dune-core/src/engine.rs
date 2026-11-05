@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::circuit::{Built, VarKind, Vars};
 use crate::devices::Device;
+use crate::disto::{DistoCtx, DistoInput, DistoKernels, DistoMode, DistoSetupCtx};
 use crate::error::Error;
 use crate::integ::{Method, TerrCtx, com_cof};
 use crate::linalg::{LinalgError, LinearSolver};
@@ -887,6 +888,338 @@ impl Engine {
             states: &self.states,
         };
         self.devices[d].noise_dens(&ctx)
+    }
+
+    /// `DISTOan` (`ckt/distoan.c`): operating point, the
+    /// `MODEINITSMSIG` pass, `DEVdisto(D_SETUP)` for the Taylor
+    /// coefficients, then per f1 the chain of complex solves
+    /// (`CKTacLoad` for the matrix at the combination frequency,
+    /// `CKTdisto` for the RHS, `NIdIter`). Returns one
+    /// `(plot name, rows)` per output plot, each row already scaled
+    /// by `DkerProc`.
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    pub fn disto(
+        &mut self,
+        opts: &Options,
+        step_type: AcStepType,
+        num_steps: usize,
+        fstart: f64,
+        fstop: f64,
+        f2ovr_f1: Option<f64>,
+    ) -> Result<Vec<(&'static str, Vec<(f64, Vec<Complex64>)>)>, Error> {
+        // `DnumSteps` is an int; a zero step count would make the
+        // decade multiplier infinite and the loop endless.
+        let n = num_steps.max(1) as f64;
+        let (freq_delta, freq_tol) = match step_type {
+            AcStepType::Decade => {
+                let d = f64::exp(f64::ln(10.0) / n);
+                (d, d * fstop * opts.reltol)
+            }
+            AcStepType::Octave => {
+                let d = f64::exp(f64::ln(2.0) / n);
+                (d, d * fstop * opts.reltol)
+            }
+            // The 3f5 divides by DnumSteps+1 here (unlike ACan).
+            AcStepType::Linear => {
+                let d = (fstop - fstart) / (n + 1.0);
+                (d, d * opts.reltol)
+            }
+        };
+
+        self.set_kind(AnKind::DcOp, false);
+        self.op(opts)?;
+        self.load_all(InitMode::Smsig, opts, 1.0);
+
+        // `CKTdisto(D_SETUP)`: every device must know its
+        // distortion coefficients (the C skips devices whose
+        // `DEVdisto` is NULL; Dune's linear devices opt in, and a
+        // nonlinear device without the port is refused).
+        {
+            let ctx = DistoSetupCtx {
+                sol: &self.sol,
+                gmin: opts.gmin,
+            };
+            for (k, d) in self.devices.iter_mut().enumerate() {
+                d.disto_setup(&ctx).map_err(|what| Error::Unsupported {
+                    name: self.names[k].clone(),
+                    what: what.to_string(),
+                })?;
+            }
+        }
+
+        let f2wanted = f2ovr_f1.is_some();
+        let f2ovr_f1 = f2ovr_f1.unwrap_or(0.0);
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mut freq = fstart;
+        // "keeping f2 const to be compatible with hbsim": ω2 is set
+        // once, from the start frequency.
+        let omega2 = two_pi * freq * f2ovr_f1;
+
+        let nvars = self.vars.len();
+        let num_slots = self.values.len();
+        let mut g = vec![0.0; num_slots];
+        let mut b = vec![0.0; num_slots];
+        let empty: [f64; 0] = [];
+
+        let mut out: Vec<(DistoMode, Vec<(f64, Vec<Complex64>)>)> = if f2wanted {
+            vec![
+                (DistoMode::F1pF2, Vec::new()),
+                (DistoMode::F1mF2, Vec::new()),
+                (DistoMode::TwoF1mF2, Vec::new()),
+            ]
+        } else {
+            vec![
+                (DistoMode::TwoF1, Vec::new()),
+                (DistoMode::ThrF1, Vec::new()),
+            ]
+        };
+
+        while freq <= fstop + freq_tol {
+            let omega1 = two_pi * freq;
+
+            // H1(f1): sources' DISTOF1 inputs (`D_RHSF1`).
+            self.disto_factor(omega1, &mut g, &mut b)?;
+            let mut f2given = false;
+            let (r1h1, i1h1) = {
+                let mut re = vec![0.0; nvars];
+                let mut im = vec![0.0; nvars];
+                for d in &self.devices {
+                    f2given |= d.disto_rhs(DistoInput::F1, &mut re, &mut im);
+                }
+                self.disto_solve(re, im)?
+            };
+
+            // H2(f1, f1) at 2·ω1 (`D_TWOF1`).
+            let omega = 2.0 * omega1;
+            let (r2h11, i2h11) = self.disto_kernel(
+                DistoMode::TwoF1,
+                omega,
+                &mut g,
+                &mut b,
+                DistoKernels {
+                    r1h1: &r1h1,
+                    i1h1: &i1h1,
+                    r2h11: &empty,
+                    i2h11: &empty,
+                    r1h2: &empty,
+                    i1h2: &empty,
+                    r2h1m2: &empty,
+                    i2h1m2: &empty,
+                },
+            )?;
+
+            let mut results: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
+            if !f2wanted {
+                // H3(f1, f1, f1) at 3·ω1 (`D_THRF1`).
+                let h3 = self.disto_kernel(
+                    DistoMode::ThrF1,
+                    3.0 * omega1,
+                    &mut g,
+                    &mut b,
+                    DistoKernels {
+                        r1h1: &r1h1,
+                        i1h1: &i1h1,
+                        r2h11: &r2h11,
+                        i2h11: &i2h11,
+                        r1h2: &empty,
+                        i1h2: &empty,
+                        r2h1m2: &empty,
+                        i2h1m2: &empty,
+                    },
+                )?;
+                results.push((r2h11, i2h11));
+                results.push(h3);
+            } else if f2given {
+                // H1(f2): DISTOF2 inputs (`D_RHSF2`).
+                self.disto_factor(omega2, &mut g, &mut b)?;
+                let (r1h2, i1h2) = {
+                    let mut re = vec![0.0; nvars];
+                    let mut im = vec![0.0; nvars];
+                    for d in &self.devices {
+                        d.disto_rhs(DistoInput::F2, &mut re, &mut im);
+                    }
+                    self.disto_solve(re, im)?
+                };
+                // H2(f1, f2) at ω1+ω2 (`D_F1PF2`).
+                let h12 = self.disto_kernel(
+                    DistoMode::F1pF2,
+                    omega1 + omega2,
+                    &mut g,
+                    &mut b,
+                    DistoKernels {
+                        r1h1: &r1h1,
+                        i1h1: &i1h1,
+                        r2h11: &r2h11,
+                        i2h11: &i2h11,
+                        r1h2: &r1h2,
+                        i1h2: &i1h2,
+                        r2h1m2: &empty,
+                        i2h1m2: &empty,
+                    },
+                )?;
+                // H2(f1, −f2) at ω1−ω2 (`D_F1MF2`).
+                let (r2h1m2, i2h1m2) = self.disto_kernel(
+                    DistoMode::F1mF2,
+                    omega1 - omega2,
+                    &mut g,
+                    &mut b,
+                    DistoKernels {
+                        r1h1: &r1h1,
+                        i1h1: &i1h1,
+                        r2h11: &r2h11,
+                        i2h11: &i2h11,
+                        r1h2: &r1h2,
+                        i1h2: &i1h2,
+                        r2h1m2: &empty,
+                        i2h1m2: &empty,
+                    },
+                )?;
+                // H3(f1, f1, −f2) at 2ω1−ω2 (`D_2F1MF2`).
+                let h3 = self.disto_kernel(
+                    DistoMode::TwoF1mF2,
+                    2.0 * omega1 - omega2,
+                    &mut g,
+                    &mut b,
+                    DistoKernels {
+                        r1h1: &r1h1,
+                        i1h1: &i1h1,
+                        r2h11: &r2h11,
+                        i2h11: &i2h11,
+                        r1h2: &r1h2,
+                        i1h2: &i1h2,
+                        r2h1m2: &r2h1m2,
+                        i2h1m2: &i2h1m2,
+                    },
+                )?;
+                results.push(h12);
+                results.push((r2h1m2, i2h1m2));
+                results.push(h3);
+            } else {
+                // `E_NOF2SRC`.
+                return Err(Error::Build(
+                    ".disto: no source with f2 distortion input".into(),
+                ));
+            }
+
+            let total: usize = out.iter().map(|(_, r)| r.len() + 1).sum();
+            if total.saturating_mul(nvars) > MAX_OUTPUT_VALUES {
+                return Err(Error::Build(
+                    "disto sweep produces too many points; refusing".into(),
+                ));
+            }
+            // `DkerProc` + `CKTacDump`.
+            for ((mode, rows), (re, im)) in out.iter_mut().zip(results) {
+                let k = mode.ker_factor();
+                let mut sol: Vec<Complex64> = re
+                    .iter()
+                    .zip(&im)
+                    .map(|(r, i)| Complex64::new(r * k, i * k))
+                    .collect();
+                sol[0] = Complex64::new(0.0, 0.0);
+                rows.push((freq, sol));
+            }
+
+            match step_type {
+                AcStepType::Decade | AcStepType::Octave => {
+                    freq *= freq_delta;
+                    if freq_delta == 1.0 {
+                        break;
+                    }
+                }
+                AcStepType::Linear => {
+                    freq += freq_delta;
+                    if freq_delta == 0.0 {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(out
+            .into_iter()
+            .map(|(mode, rows)| {
+                let name = match mode {
+                    DistoMode::TwoF1 => "DISTORTION - 2nd harmonic",
+                    DistoMode::ThrF1 => "DISTORTION - 3rd harmonic",
+                    DistoMode::F1pF2 => "DISTORTION - IM: f1+f2",
+                    DistoMode::F1mF2 => "DISTORTION - IM: f1-f2",
+                    DistoMode::TwoF1mF2 => "DISTORTION - IM: 2f1-f2",
+                };
+                (name, rows)
+            })
+            .collect())
+    }
+
+    /// `CKTacLoad` at `omega` (matrix only — the RHS it would stamp
+    /// is overwritten by `CKTdisto`) and the complex factorization
+    /// `NIdIter` performs.
+    fn disto_factor(&mut self, omega: f64, g: &mut [f64], b: &mut [f64]) -> Result<(), Error> {
+        let nvars = self.vars.len();
+        let mut scratch_re = vec![0.0; nvars];
+        let mut scratch_im = vec![0.0; nvars];
+        g.fill(0.0);
+        b.fill(0.0);
+        let mut ctx = AcCtx {
+            g,
+            b,
+            rhs_re: &mut scratch_re,
+            rhs_im: &mut scratch_im,
+            omega,
+            states: &self.states,
+        };
+        for d in &mut self.devices {
+            d.load_ac(&mut ctx);
+        }
+        self.solver
+            .factor_complex(&g[1..], &b[1..])
+            .map_err(|e| self.map_singular(e))
+    }
+
+    /// `NIdIter`'s solve on the current factorization; zeroes the
+    /// ground entry like the C.
+    fn disto_solve(
+        &mut self,
+        mut re: Vec<f64>,
+        mut im: Vec<f64>,
+    ) -> Result<(Vec<f64>, Vec<f64>), Error> {
+        re[0] = 0.0;
+        im[0] = 0.0;
+        self.solver
+            .solve_complex_in_place(&mut re[1..], &mut im[1..])
+            .map_err(|e| self.map_singular(e))?;
+        re[0] = 0.0;
+        im[0] = 0.0;
+        Ok((re, im))
+    }
+
+    /// One higher-order kernel: factor at the combination frequency,
+    /// `CKTdisto(mode)` (zeroed RHS + every device's nonlinear
+    /// load), solve.
+    fn disto_kernel(
+        &mut self,
+        mode: DistoMode,
+        omega: f64,
+        g: &mut [f64],
+        b: &mut [f64],
+        h: DistoKernels,
+    ) -> Result<(Vec<f64>, Vec<f64>), Error> {
+        self.disto_factor(omega, g, b)?;
+        let nvars = self.vars.len();
+        let mut re = vec![0.0; nvars];
+        let mut im = vec![0.0; nvars];
+        {
+            let mut ctx = DistoCtx {
+                mode,
+                omega,
+                h,
+                rhs_re: &mut re,
+                rhs_im: &mut im,
+            };
+            for d in &self.devices {
+                d.disto_load(&mut ctx);
+            }
+        }
+        self.disto_solve(re, im)
     }
 
     /// `CKTpzSetup` (`ckt/cktpzset.c`): rebuild the matrix pattern

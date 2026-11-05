@@ -5,7 +5,7 @@
 use dune_raw::{Data, VarType};
 use num_complex::Complex64;
 
-use crate::circuit::{Circuit, VarKind};
+use crate::circuit::{Circuit, VarKind, Vars};
 use crate::engine::{AcStepType, Engine};
 use crate::error::Error;
 use crate::options::Options;
@@ -53,23 +53,7 @@ impl Circuit {
         };
         let rows = engine.ac(opts, step_type, points, fstart, fstop)?;
 
-        let mut variables = vec![("frequency".to_string(), VarType::Frequency)];
-        let mut columns: Vec<Vec<Complex64>> =
-            vec![rows.iter().map(|(f, _)| Complex64::new(*f, 0.0)).collect()];
-        for i in 1..engine.vars.len() {
-            let name = &engine.vars.names[i];
-            match engine.vars.kinds[i] {
-                VarKind::Node if !name.contains('#') => {
-                    variables.push((format!("v({name})"), VarType::Voltage));
-                    columns.push(rows.iter().map(|(_, sol)| sol[i]).collect());
-                }
-                VarKind::Branch => {
-                    variables.push((format!("i({name})"), VarType::Current));
-                    columns.push(rows.iter().map(|(_, sol)| sol[i]).collect());
-                }
-                _ => {}
-            }
-        }
+        let (variables, columns) = ac_columns(&engine.vars, &rows);
         Ok(Ac {
             solution: Solution {
                 plotname: "AC Analysis".to_string(),
@@ -80,4 +64,31 @@ impl Circuit {
             notes,
         })
     }
+}
+
+/// `CKTacDump` columns for complex sweep rows: the `frequency` scale,
+/// then `v(node)` for every external node and `i(branch)` for every
+/// branch, in variable order (internal `#` nodes are not saved).
+pub(crate) fn ac_columns(
+    vars: &Vars,
+    rows: &[(f64, Vec<Complex64>)],
+) -> (Vec<(String, VarType)>, Vec<Vec<Complex64>>) {
+    let mut variables = vec![("frequency".to_string(), VarType::Frequency)];
+    let mut columns: Vec<Vec<Complex64>> =
+        vec![rows.iter().map(|(f, _)| Complex64::new(*f, 0.0)).collect()];
+    for i in 1..vars.len() {
+        let name = &vars.names[i];
+        match vars.kinds[i] {
+            VarKind::Node if !name.contains('#') => {
+                variables.push((format!("v({name})"), VarType::Voltage));
+                columns.push(rows.iter().map(|(_, sol)| sol[i]).collect());
+            }
+            VarKind::Branch => {
+                variables.push((format!("i({name})"), VarType::Current));
+                columns.push(rows.iter().map(|(_, sol)| sol[i]).collect());
+            }
+            _ => {}
+        }
+    }
+    (variables, columns)
 }

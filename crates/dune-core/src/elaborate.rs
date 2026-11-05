@@ -190,9 +190,16 @@ impl Circuit {
                     &mut problems,
                 ),
                 ir::Device::Source {
-                    kind, dc, tran, ac, ..
+                    kind,
+                    dc,
+                    tran,
+                    ac,
+                    distof1,
+                    distof2,
                 } => {
                     let ac = ac.as_ref().map(|a| (a.mag, a.phase));
+                    let distof1 = distof1.as_ref().map(|d| (d.mag, d.phase));
+                    let distof2 = distof2.as_ref().map(|d| (d.mag, d.phase));
                     let wave = tran.as_ref().map(|t| {
                         let args = t.args.clone();
                         match t.kind {
@@ -212,6 +219,8 @@ impl Circuit {
                                 dc: *dc,
                                 wave,
                                 ac,
+                                distof1,
+                                distof2,
                             },
                             &mut problems,
                         ),
@@ -223,6 +232,8 @@ impl Circuit {
                                 dc: *dc,
                                 wave,
                                 ac,
+                                distof1,
+                                distof2,
                             },
                             &mut problems,
                         ),

@@ -26,6 +26,8 @@ fn voltage_divider() {
         dc: Some(5.0),
         wave: None,
         ac: None,
+        distof1: None,
+        distof2: None,
     })
     .unwrap();
     ckt.add(Resistor {

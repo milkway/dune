@@ -58,6 +58,10 @@ pub struct Vsource {
     pub wave: Option<crate::srcfn::Wave>,
     /// `AC <MAG <PHASE°>>`: the small-signal stimulus.
     pub ac: Option<(f64, f64)>,
+    /// `DISTOF1 <MAG <PHASE°>>`: the `.disto` input at f1.
+    pub distof1: Option<(f64, f64)>,
+    /// `DISTOF2 <MAG <PHASE°>>`: the `.disto` input at f2.
+    pub distof2: Option<(f64, f64)>,
 }
 
 /// `IYYYYYYY N+ N- <DC VALUE> <tranfn(…)>` (flows through the source
@@ -70,6 +74,10 @@ pub struct Isource {
     pub wave: Option<crate::srcfn::Wave>,
     /// `AC <MAG <PHASE°>>`.
     pub ac: Option<(f64, f64)>,
+    /// `DISTOF1 <MAG <PHASE°>>`.
+    pub distof1: Option<(f64, f64)>,
+    /// `DISTOF2 <MAG <PHASE°>>`.
+    pub distof2: Option<(f64, f64)>,
 }
 
 /// `EXXXXXXX N+ N- NC+ NC- VALUE` (VCVS).
@@ -973,24 +981,30 @@ impl Circuit {
                 }
                 Spec::Vsource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), true));
-                    devices.push(Box::new(VsourceI::new(
-                        s.dc,
-                        s.wave.clone(),
-                        s.ac,
-                        get(&node_ids, &s.nodes[0]),
-                        get(&node_ids, &s.nodes[1]),
-                        branches[&s.name],
-                    )));
+                    devices.push(Box::new(
+                        VsourceI::new(
+                            s.dc,
+                            s.wave.clone(),
+                            s.ac,
+                            get(&node_ids, &s.nodes[0]),
+                            get(&node_ids, &s.nodes[1]),
+                            branches[&s.name],
+                        )
+                        .with_disto(s.distof1, s.distof2),
+                    ));
                 }
                 Spec::Isource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), false));
-                    devices.push(Box::new(IsourceI::new(
-                        s.dc,
-                        s.wave.clone(),
-                        s.ac,
-                        get(&node_ids, &s.nodes[0]),
-                        get(&node_ids, &s.nodes[1]),
-                    )));
+                    devices.push(Box::new(
+                        IsourceI::new(
+                            s.dc,
+                            s.wave.clone(),
+                            s.ac,
+                            get(&node_ids, &s.nodes[0]),
+                            get(&node_ids, &s.nodes[1]),
+                        )
+                        .with_disto(s.distof1, s.distof2),
+                    ));
                 }
                 Spec::Vcvs(s) => {
                     let n = [

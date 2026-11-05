@@ -16,7 +16,7 @@ use crate::corpus::Circuit as CorpusCircuit;
 /// `x` is fine because subcircuits expand to their contents, which
 /// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
-    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac", ".pz", ".noise"];
+    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac", ".pz", ".noise", ".disto"];
     const DEVICES: &[char] = &[
         'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'm', 'x',
     ];
@@ -159,6 +159,33 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
                 plots.push(no.density.to_plot(&parsed.netlist.title, ""));
                 if let Some(integ) = no.integrated {
                     plots.push(integ.to_plot(&parsed.netlist.title, ""));
+                }
+            }
+            Analysis::Disto {
+                variation,
+                points,
+                fstart,
+                fstop,
+                f2overf1,
+                ..
+            } => {
+                let sweep = match variation {
+                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                };
+                let di = circuit
+                    .disto(
+                        &options,
+                        sweep,
+                        *points as usize,
+                        *fstart,
+                        *fstop,
+                        *f2overf1,
+                    )
+                    .map_err(|e| e.to_string())?;
+                for sol in di.solutions {
+                    plots.push(sol.to_plot(&parsed.netlist.title, ""));
                 }
             }
             other => return Err(format!("analysis {other:?} not supported yet")),

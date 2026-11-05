@@ -2,6 +2,7 @@
 //! Princípios 3); stamps and state handling follow the 3f5 `*load.c`
 //! / `*trunc.c` / `*acct.c` files named on each type.
 
+use crate::disto::{DistoCtx, DistoInput, DistoSetupCtx};
 use crate::integ::TerrCtx;
 use crate::matrix::{
     AcCtx, AcceptCtx, AnKind, ConvCtx, InitMode, LoadCtx, MatrixBuilder, NoiseCtx, PzCtx, Slot,
@@ -55,6 +56,35 @@ pub(crate) trait Device {
     fn noise_dens(&self, _ctx: &NoiseCtx) -> Vec<f64> {
         Vec::new()
     }
+    /// `DEVdisto(D_SETUP)` (`dev/*dset.c`): evaluate the Taylor
+    /// coefficients of the device nonlinearities at the operating
+    /// point. Inherently linear devices (the C's `DEVdisto == NULL`)
+    /// return `Ok`; the default refuses, so a `.disto` deck with a
+    /// nonlinear device that lacks the port fails loudly instead of
+    /// silently dropping its distortion.
+    fn disto_setup(&mut self, _ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        Err("distortion analysis for this device")
+    }
+    /// `DEVdisto` in the load modes (`D_TWOF1` … `D_2F1MF2`):
+    /// accumulate the nonlinear excitation into the RHS. Linear
+    /// devices contribute nothing.
+    fn disto_load(&self, _ctx: &mut DistoCtx) {}
+    /// `CKTdisto(D_RHSF1/D_RHSF2)` for independent sources: write
+    /// the `DISTOF1`/`DISTOF2` input into the RHS; returns whether
+    /// this source has a `DISTOF2` input (`Df2given`).
+    fn disto_rhs(&self, _which: DistoInput, _re: &mut [f64], _im: &mut [f64]) -> bool {
+        false
+    }
+}
+
+/// The `disto_setup` of a device with no nonlinearity (`DEVdisto ==
+/// NULL` in its `*itf.h`).
+macro_rules! disto_linear {
+    () => {
+        fn disto_setup(&mut self, _ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+            Ok(())
+        }
+    };
 }
 
 /// `RESload` (`dev/res/resload.c`): conductance between two nodes.
@@ -77,6 +107,8 @@ impl ResistorI {
 }
 
 impl Device for ResistorI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.slots = [
             mb.slot(self.pos, self.pos),
@@ -148,6 +180,8 @@ impl CapacitorI {
 }
 
 impl Device for CapacitorI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.slots = [
             mb.slot(self.pos, self.pos),
@@ -249,6 +283,8 @@ impl InductorI {
 }
 
 impl Device for InductorI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.slots = [
             mb.slot(self.pos, self.br),
@@ -339,6 +375,8 @@ pub(crate) struct MutualI {
 }
 
 impl Device for MutualI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.slots = [mb.slot(self.br1, self.br2), mb.slot(self.br2, self.br1)];
     }
@@ -452,6 +490,8 @@ pub(crate) struct VsourceI {
     ac_re: f64,
     ac_im: f64,
     branch: BranchStamp,
+    /// `DISTOF1`/`DISTOF2 <MAG <PHASE°>>` (`VSRCdF1mag` …).
+    disto: SourceDisto,
 }
 
 impl VsourceI {
@@ -470,7 +510,34 @@ impl VsourceI {
             ac_re,
             ac_im,
             branch: BranchStamp::new(pos, neg, br),
+            disto: SourceDisto::default(),
         }
+    }
+
+    /// Attach the `DISTOF1`/`DISTOF2` inputs.
+    pub fn with_disto(mut self, f1: Option<(f64, f64)>, f2: Option<(f64, f64)>) -> Self {
+        self.disto = SourceDisto { f1, f2 };
+        self
+    }
+}
+
+/// A source's distortion inputs, `(mag, phase°)` each.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SourceDisto {
+    pub f1: Option<(f64, f64)>,
+    pub f2: Option<(f64, f64)>,
+}
+
+impl SourceDisto {
+    /// The `(0.5·mag·cos, 0.5·mag·sin)` phasor `CKTdisto` stamps for
+    /// the requested input (`ckt/cktdisto.c`, `D_RHSF1/D_RHSF2`).
+    fn input(&self, which: DistoInput) -> Option<(f64, f64)> {
+        let (mag, phase) = match which {
+            DistoInput::F1 => self.f1?,
+            DistoInput::F2 => self.f2?,
+        };
+        let arg = std::f64::consts::PI * phase / 180.0;
+        Some((0.5 * mag * arg.cos(), 0.5 * mag * arg.sin()))
     }
 }
 
@@ -486,8 +553,20 @@ fn ac_parts(ac: Option<(f64, f64)>) -> (f64, f64) {
 }
 
 impl Device for VsourceI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.branch.alloc(mb);
+    }
+
+    /// `CKTdisto` for `VSRC`: the input phasor on the branch
+    /// equation (assigned, not added, as in the C).
+    fn disto_rhs(&self, which: DistoInput, re: &mut [f64], im: &mut [f64]) -> bool {
+        if let Some((r, i)) = self.disto.input(which) {
+            re[self.branch.br] = r;
+            im[self.branch.br] = i;
+        }
+        self.disto.f2.is_some()
     }
 
     fn load(&mut self, ctx: &mut LoadCtx) {
@@ -535,6 +614,7 @@ pub(crate) struct IsourceI {
     ac_im: f64,
     pub pos: Var,
     pub neg: Var,
+    disto: SourceDisto,
 }
 
 impl IsourceI {
@@ -553,12 +633,38 @@ impl IsourceI {
             ac_im,
             pos,
             neg,
+            disto: SourceDisto::default(),
         }
+    }
+
+    /// Attach the `DISTOF1`/`DISTOF2` inputs.
+    pub fn with_disto(mut self, f1: Option<(f64, f64)>, f2: Option<(f64, f64)>) -> Self {
+        self.disto = SourceDisto { f1, f2 };
+        self
     }
 }
 
 impl Device for IsourceI {
+    disto_linear!();
+
     fn alloc(&mut self, _: &mut MatrixBuilder) {}
+
+    /// `CKTdisto` for `ISRC` (assigned, not added, as in the C).
+    /// The 3f5 stamps `−input` at `N+` and `+input` at `N−`;
+    /// ngspice-47 stamps the opposite polarity — measured on the
+    /// oracle as an exact sign flip of every odd-order kernel
+    /// (3rd harmonic, 2f1−f2) of a current-driven deck, with the
+    /// even orders unchanged. Dune follows ngspice
+    /// (corpus/KNOWN_DIFFS.md), as for `ISRCacLoad`.
+    fn disto_rhs(&self, which: DistoInput, re: &mut [f64], im: &mut [f64]) -> bool {
+        if let Some((r, i)) = self.disto.input(which) {
+            re[self.pos] = r;
+            re[self.neg] = -r;
+            im[self.pos] = i;
+            im[self.neg] = -i;
+        }
+        self.disto.f2.is_some()
+    }
 
     fn load(&mut self, ctx: &mut LoadCtx) {
         let v = source_value(ctx, self.dc, &self.wave);
@@ -616,6 +722,8 @@ impl VcvsI {
 }
 
 impl Device for VcvsI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.branch.alloc(mb);
         self.cslots = [
@@ -668,6 +776,8 @@ impl VccsI {
 }
 
 impl Device for VccsI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         let [pos, neg, cpos, cneg] = self.n;
         self.slots = [
@@ -723,6 +833,8 @@ impl CccsI {
 }
 
 impl Device for CccsI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.slots = [
             mb.slot(self.pos, self.ctrl_br),
@@ -767,6 +879,8 @@ impl CcvsI {
 }
 
 impl Device for CcvsI {
+    disto_linear!();
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.branch.alloc(mb);
         self.cslot = mb.slot(self.branch.br, self.ctrl_br);

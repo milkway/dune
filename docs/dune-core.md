@@ -189,6 +189,36 @@ resultados espelhando o rawfile).
   físicas (o ngspice usa CODATA/SI-2019; o Dune mantém as do 3f5 —
   `corpus/KNOWN_DIFFS.md`).
 
+- **`.disto`** (`disto.rs`, `engine.rs::disto` ← `ckt/distoan.c`,
+  `ckt/cktdisto.c`, `ckt/dkerproc.c`, `ckt/dloadfns.c`,
+  `ni/niditer.c`; Roychowdhury 1988): método de Volterra em torno
+  do ponto de operação. H1(f1)/H1(f2) são solves AC ordinários
+  excitados pelos `DISTOF1`/`DISTOF2` das fontes (o `AC` delas não
+  participa); cada kernel de ordem superior é mais um solve
+  complexo do mesmo sistema linearizado, na frequência de
+  combinação, com RHS vindo das não-linearidades
+  (`Device::disto_setup/disto_load`: coeficientes de Taylor no OP
+  contraídos com os kernels menores pelas funções multinomiais
+  `S*`/`D1*` do `dloadfns.c`, portadas uma a uma com testes
+  unitários contra produtos complexos). `DkerProc` escala 2/2/4/4/6
+  para amplitudes de senóide. Sem `F2OVERF1`: plots do 2º e 3º
+  harmônicos; com: IM f1+f2, f1−f2, 2f1−f2, com ω2 fixado **uma
+  vez** em `2π·FSTART·F2OVERF1` (o comentário hbsim do C). LIN usa
+  `delta=(stop−start)/(N+1)`, diferente do `.ac`. Dispositivos:
+  diodo (`diodset.c`/`diodisto.c`: junção, difusão e depleção, com
+  o VJ *do modelo*, não o ajustado por temperatura, e o ramo de
+  ruptura sobre `vt` — tudo como o C, dúvidas dele preservadas em
+  comentário); os lineares declaram-se sem não-linearidade
+  (`DEVdisto == NULL`); BJT/MOS/BSIM ainda não (erro estruturado).
+  Fontes estampam por **atribuição** (não soma), VSRC no ramo, ISRC
+  nos nós com a polaridade do ngspice (flip de ordem ímpar medido —
+  `corpus/KNOWN_DIFFS.md`). Valida: `diodisto` PASS nos 3 plots IM;
+  o resíduo de 1.7e-4/3.7e-4 relativo contra o golden é o Newton do
+  ngspice parando ~3e-6 V antes do exato + as constantes físicas —
+  com tolerâncias apertadas e as constantes do ngspice, o porte
+  bate a ≤3e-13 em quatro decks de sonda (harmônicos, IM com fases,
+  diodo com RS e reverso, excitação por ISRC).
+
 - **BSIM1 (nível 4)** (`bsim1.rs` ← `b1ld.c`, `b1eval.c`,
   `b1temp.c`, `b1set.c`, `b1moscap.c`, `b1acld.c`, `b1cvtest.c`):
   cada parâmetro elétrico vem em tripla (valor, dep. L, dep. W)
@@ -305,10 +335,11 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- `.tf`, `.disto`; ruído dos demais dispositivos (diodo/MOS têm
+- `.tf`; ruído dos demais dispositivos (diodo/MOS têm
   `*noise.c` no C, aqui ainda não; R sem fNcoef → flicker 0); `.pz` dos semicondutores restantes (BJT/
-  MOS têm `pzLoad` no C, aqui ainda não); `.dc` varrendo TEMP e parâmetro de
-  modelo; `keepopinfo` (plot "AC Operating Point").
+  MOS têm `pzLoad` no C, aqui ainda não); `.disto` de BJT/MOS/BSIM
+  (`bjtdisto.c`/`mos*dist.c` no C); `.dc` varrendo TEMP e parâmetro
+  de modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - MOS nível 3, JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).
 - Controlador de passo: cruzamento de `vds=0` num breakpoint com nó
