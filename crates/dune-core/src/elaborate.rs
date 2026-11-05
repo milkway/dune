@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Bjt, Bsim1, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6, Mutual,
-    Resistor, Vccs, Vcvs, Vsource,
+    Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6,
+    Mutual, Resistor, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -31,6 +31,7 @@ impl Circuit {
             M2(crate::mos2::Mos2Model),
             M6(crate::mos6::Mos6Model),
             B1(Box<crate::bsim1::Bsim1Model>),
+            B2(Box<crate::bsim2::Bsim2Model>),
         }
         let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
         // Unsupported-level MOS models only become an error when an
@@ -73,6 +74,13 @@ impl Circuit {
                         match bsim1_model(m, &mut notes) {
                             Ok(mm) => {
                                 mmodels.insert(m.name.as_str(), MosModel::B1(Box::new(mm)));
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                    } else if level == 5.0 {
+                        match bsim2_model(m, &mut notes) {
+                            Ok(mm) => {
+                                mmodels.insert(m.name.as_str(), MosModel::B2(Box::new(mm)));
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
@@ -447,6 +455,25 @@ impl Circuit {
                                 name,
                                 nodes,
                                 model: (**b1).clone(),
+                                l: inst.l,
+                                w: inst.w,
+                                ad: inst.ad,
+                                as_: inst.as_,
+                                pd: inst.pd,
+                                ps: inst.ps,
+                                nrd: inst.nrd,
+                                nrs: inst.nrs,
+                                off: inst.off,
+                                ic: inst.ic,
+                            },
+                            &mut problems,
+                        ),
+                        MosModel::B2(b2) => add(
+                            &mut ckt,
+                            Bsim2 {
+                                name,
+                                nodes,
+                                model: (**b2).clone(),
                                 l: inst.l,
                                 w: inst.w,
                                 ad: inst.ad,
@@ -838,6 +865,165 @@ fn bsim1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim1::B
             "tox" => b.tox = v,
             "temp" => b.temp = v,
             "vdd" => b.vdd = v,
+            "cgso" => b.cgso = v,
+            "cgdo" => b.cgdo = v,
+            "cgbo" => b.cgbo = v,
+            "xpart" => b.xpart = v,
+            "rsh" => b.rsh = v,
+            "js" => b.js = v,
+            "pb" => b.pb = v,
+            "mj" => b.mj = v,
+            "pbsw" => b.pbsw = v,
+            "mjsw" => b.mjsw = v,
+            "cj" => b.cj = v,
+            "cjsw" => b.cjsw = v,
+            "wdf" => b.wdf = v,
+            "dell" => b.dell = v,
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(b)
+}
+
+/// Map `.model x nmos/pmos(level=5 …)` parameters onto
+/// [`crate::bsim2::Bsim2Model`] (`b2.c` keyword table; defaults
+/// from `b2set.c` via [`crate::bsim2::Bsim2Model::new`]).
+#[allow(clippy::too_many_lines)]
+fn bsim2_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim2::Bsim2Model, String> {
+    let mut b = crate::bsim2::Bsim2Model::new(m.mtype == "nmos");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmos" || p.name == "pmos" => {
+                b.nmos = p.name == "nmos";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "level" => {}
+            "vfb" => b.vfb = v,
+            "lvfb" => b.lvfb = v,
+            "wvfb" => b.wvfb = v,
+            "phi" => b.phi = v,
+            "lphi" => b.lphi = v,
+            "wphi" => b.wphi = v,
+            "k1" => b.k1 = v,
+            "lk1" => b.lk1 = v,
+            "wk1" => b.wk1 = v,
+            "k2" => b.k2 = v,
+            "lk2" => b.lk2 = v,
+            "wk2" => b.wk2 = v,
+            "eta0" => b.eta0 = v,
+            "leta0" => b.leta0 = v,
+            "weta0" => b.weta0 = v,
+            "etab" => b.etab = v,
+            "letab" => b.letab = v,
+            "wetab" => b.wetab = v,
+            "dl" => b.dl = v,
+            "dw" => b.dw = v,
+            "mu0" => b.mu0 = v,
+            "mu0b" => b.mu0b = v,
+            "lmu0b" => b.lmu0b = v,
+            "wmu0b" => b.wmu0b = v,
+            "mus0" => b.mus0 = v,
+            "lmus0" => b.lmus0 = v,
+            "wmus0" => b.wmus0 = v,
+            "musb" => b.musb = v,
+            "lmusb" => b.lmusb = v,
+            "wmusb" => b.wmusb = v,
+            "mu20" => b.mu20 = v,
+            "lmu20" => b.lmu20 = v,
+            "wmu20" => b.wmu20 = v,
+            "mu2b" => b.mu2b = v,
+            "lmu2b" => b.lmu2b = v,
+            "wmu2b" => b.wmu2b = v,
+            "mu2g" => b.mu2g = v,
+            "lmu2g" => b.lmu2g = v,
+            "wmu2g" => b.wmu2g = v,
+            "mu30" => b.mu30 = v,
+            "lmu30" => b.lmu30 = v,
+            "wmu30" => b.wmu30 = v,
+            "mu3b" => b.mu3b = v,
+            "lmu3b" => b.lmu3b = v,
+            "wmu3b" => b.wmu3b = v,
+            "mu3g" => b.mu3g = v,
+            "lmu3g" => b.lmu3g = v,
+            "wmu3g" => b.wmu3g = v,
+            "mu40" => b.mu40 = v,
+            "lmu40" => b.lmu40 = v,
+            "wmu40" => b.wmu40 = v,
+            "mu4b" => b.mu4b = v,
+            "lmu4b" => b.lmu4b = v,
+            "wmu4b" => b.wmu4b = v,
+            "mu4g" => b.mu4g = v,
+            "lmu4g" => b.lmu4g = v,
+            "wmu4g" => b.wmu4g = v,
+            "ua0" => b.ua0 = v,
+            "lua0" => b.lua0 = v,
+            "wua0" => b.wua0 = v,
+            "uab" => b.uab = v,
+            "luab" => b.luab = v,
+            "wuab" => b.wuab = v,
+            "ub0" => b.ub0 = v,
+            "lub0" => b.lub0 = v,
+            "wub0" => b.wub0 = v,
+            "ubb" => b.ubb = v,
+            "lubb" => b.lubb = v,
+            "wubb" => b.wubb = v,
+            "u10" => b.u10 = v,
+            "lu10" => b.lu10 = v,
+            "wu10" => b.wu10 = v,
+            "u1b" => b.u1b = v,
+            "lu1b" => b.lu1b = v,
+            "wu1b" => b.wu1b = v,
+            "u1d" => b.u1d = v,
+            "lu1d" => b.lu1d = v,
+            "wu1d" => b.wu1d = v,
+            "n0" => b.n0 = v,
+            "ln0" => b.ln0 = v,
+            "wn0" => b.wn0 = v,
+            "nb" => b.nb = v,
+            "lnb" => b.lnb = v,
+            "wnb" => b.wnb = v,
+            "nd" => b.nd = v,
+            "lnd" => b.lnd = v,
+            "wnd" => b.wnd = v,
+            "vof0" => b.vof0 = v,
+            "lvof0" => b.lvof0 = v,
+            "wvof0" => b.wvof0 = v,
+            "vofb" => b.vofb = v,
+            "lvofb" => b.lvofb = v,
+            "wvofb" => b.wvofb = v,
+            "vofd" => b.vofd = v,
+            "lvofd" => b.lvofd = v,
+            "wvofd" => b.wvofd = v,
+            "ai0" => b.ai0 = v,
+            "lai0" => b.lai0 = v,
+            "wai0" => b.wai0 = v,
+            "aib" => b.aib = v,
+            "laib" => b.laib = v,
+            "waib" => b.waib = v,
+            "bi0" => b.bi0 = v,
+            "lbi0" => b.lbi0 = v,
+            "wbi0" => b.wbi0 = v,
+            "bib" => b.bib = v,
+            "lbib" => b.lbib = v,
+            "wbib" => b.wbib = v,
+            "vghigh" => b.vghigh = v,
+            "lvghigh" => b.lvghigh = v,
+            "wvghigh" => b.wvghigh = v,
+            "vglow" => b.vglow = v,
+            "lvglow" => b.lvglow = v,
+            "wvglow" => b.wvglow = v,
+            "tox" => b.tox = v,
+            "temp" => b.temp = v,
+            "vdd" => b.vdd = v,
+            "vgg" => b.vgg = v,
+            "vbb" => b.vbb = v,
             "cgso" => b.cgso = v,
             "cgdo" => b.cgdo = v,
             "cgbo" => b.cgbo = v,

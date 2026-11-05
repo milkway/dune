@@ -216,6 +216,26 @@ pub struct Bsim1 {
     pub ic: (f64, f64, f64),
 }
 
+/// Like [`Mos1`], but with the BSIM2 (level-5) model.
+#[derive(Clone, Debug)]
+pub struct Bsim2 {
+    pub name: String,
+    /// Drain, gate, source, bulk.
+    pub nodes: [String; 4],
+    pub model: crate::bsim2::Bsim2Model,
+    pub l: Option<f64>,
+    pub w: Option<f64>,
+    pub ad: Option<f64>,
+    pub as_: Option<f64>,
+    pub pd: f64,
+    pub ps: f64,
+    pub nrd: f64,
+    pub nrs: f64,
+    pub off: bool,
+    /// `IC=VDS,VGS,VBS`.
+    pub ic: (f64, f64, f64),
+}
+
 /// `DXXXXXXX N+ N- MNAME <AREA> <OFF>` with its model inline.
 #[derive(Clone, Debug)]
 pub struct Diode {
@@ -238,6 +258,7 @@ pub enum Spec {
     Mos2(Box<Mos2>),
     Mos6(Box<Mos6>),
     Bsim1(Box<Bsim1>),
+    Bsim2(Box<Bsim2>),
     Resistor(Resistor),
     Capacitor(Capacitor),
     Inductor(Inductor),
@@ -292,6 +313,12 @@ impl From<Bsim1> for Spec {
     }
 }
 
+impl From<Bsim2> for Spec {
+    fn from(s: Bsim2) -> Spec {
+        Spec::Bsim2(Box::new(s))
+    }
+}
+
 impl Spec {
     fn name(&self) -> &str {
         match self {
@@ -300,6 +327,7 @@ impl Spec {
             Spec::Mos2(s) => &s.name,
             Spec::Mos6(s) => &s.name,
             Spec::Bsim1(s) => &s.name,
+            Spec::Bsim2(s) => &s.name,
             Spec::Resistor(s) => &s.name,
             Spec::Capacitor(s) => &s.name,
             Spec::Inductor(s) => &s.name,
@@ -448,6 +476,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Bsim2(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
     }
 }
 
@@ -533,6 +565,7 @@ impl Circuit {
                 Spec::Mos2(_) => st.alloc(crate::mos2::MOS2_NUM_STATES),
                 Spec::Mos6(_) => st.alloc(crate::mos6::MOS6_NUM_STATES),
                 Spec::Bsim1(_) => st.alloc(crate::bsim1::BSIM1_NUM_STATES),
+                Spec::Bsim2(_) => st.alloc(crate::bsim2::BSIM2_NUM_STATES),
                 Spec::Capacitor(_) => st.alloc(2),
                 Spec::Inductor(s) => {
                     let flux = st.alloc(2);
@@ -548,6 +581,7 @@ impl Circuit {
                 Spec::Mos2(s) => &s.nodes,
                 Spec::Mos6(s) => &s.nodes,
                 Spec::Bsim1(s) => &s.nodes,
+                Spec::Bsim2(s) => &s.nodes,
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
                 Spec::Inductor(s) => &s.nodes,
@@ -633,8 +667,16 @@ impl Circuit {
                         node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
                     }
                 }
-                // `B1setup` names them like MOS1's too.
+                // `B1setup`/`B2setup` name them like MOS1's too.
                 Spec::Bsim1(s) => {
+                    if s.model.needs_prime(s.nrd) {
+                        node(&mut vars, &mut node_ids, &format!("{}#drain", s.name));
+                    }
+                    if s.model.needs_prime(s.nrs) {
+                        node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
+                    }
+                }
+                Spec::Bsim2(s) => {
                     if s.model.needs_prime(s.nrd) {
                         node(&mut vars, &mut node_ids, &format!("{}#drain", s.name));
                     }
@@ -834,6 +876,45 @@ impl Circuit {
                     let sz = crate::bsim1::Bsim1Size::new(&s.name, &s.model, &geom)
                         .map_err(Error::Build)?;
                     devices.push(Box::new(crate::bsim1::Bsim1I::new(
+                        [d, gt, so, b],
+                        [dp, sp],
+                        sz,
+                        geom,
+                        s.off,
+                        s.ic,
+                        base,
+                    )));
+                }
+                Spec::Bsim2(s) => {
+                    let d = get(&node_ids, &s.nodes[0]);
+                    let gt = get(&node_ids, &s.nodes[1]);
+                    let so = get(&node_ids, &s.nodes[2]);
+                    let b = get(&node_ids, &s.nodes[3]);
+                    let dp = if s.model.needs_prime(s.nrd) {
+                        node_ids[&format!("{}#drain", s.name)]
+                    } else {
+                        d
+                    };
+                    let sp = if s.model.needs_prime(s.nrs) {
+                        node_ids[&format!("{}#source", s.name)]
+                    } else {
+                        so
+                    };
+                    // `b2set.c`: L and W default to 5 µm, not the
+                    // `.options` MOS defaults.
+                    let geom = crate::mos1::MosGeom {
+                        l: s.l.unwrap_or(5e-6),
+                        w: s.w.unwrap_or(5e-6),
+                        ad: s.ad.unwrap_or(0.0),
+                        as_: s.as_.unwrap_or(0.0),
+                        pd: s.pd,
+                        ps: s.ps,
+                        nrd: s.nrd,
+                        nrs: s.nrs,
+                    };
+                    let sz = crate::bsim2::Bsim2Size::new(&s.name, &s.model, &geom)
+                        .map_err(Error::Build)?;
+                    devices.push(Box::new(crate::bsim2::Bsim2I::new(
                         [d, gt, so, b],
                         [dp, sp],
                         sz,
