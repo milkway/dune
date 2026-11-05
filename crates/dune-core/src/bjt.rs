@@ -197,6 +197,8 @@ pub(crate) struct BjtTemp {
     pub mjs: f64,
     pub mje: f64,
     pub mjc: f64,
+    pub kf: f64,
+    pub af: f64,
     pub notes: Vec<String>,
 }
 
@@ -316,6 +318,8 @@ impl BjtTemp {
             mjs: m.mjs,
             mje: m.mje,
             mjc: m.mjc,
+            kf: m.kf,
+            af: m.af,
             notes,
         }
     }
@@ -441,6 +445,29 @@ impl crate::devices::Device for BjtI {
         }
         let tol = ctx.reltol * f64::max(cbhat.abs(), cb.abs()) + ctx.abstol;
         (cbhat - cb).abs() <= tol
+    }
+
+    /// `BJTnoise` (ngspice): thermal on RC/RB/RE, shot on Ic and
+    /// Ib, flicker on Ib, plus the total.
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(&["_rc", "_rb", "_re", "_ic", "_ib", "_1overf", ""])
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        const N_MINLOG: f64 = 1e-38;
+        let st = self.st;
+        let rc = ctx.thermal(self.col_p, self.col, self.t.col_conduct * self.area);
+        let rb = ctx.thermal(self.base_p, self.base, ctx.states.get(0, st + GX));
+        let re = ctx.thermal(self.emit_p, self.emit, self.t.emit_conduct * self.area);
+        let ic = ctx.shot(self.col_p, self.emit_p, ctx.states.get(0, st + CC));
+        let ib = ctx.shot(self.base_p, self.emit_p, ctx.states.get(0, st + CB));
+        let cb = ctx.states.get(0, st + CB);
+        let flicker = ctx.gain2(self.base_p, self.emit_p)
+            * self.t.kf
+            * f64::exp(self.t.af * f64::ln(f64::max(cb.abs(), N_MINLOG)))
+            / ctx.freq;
+        let total = rc + rb + re + ic + ib + flicker;
+        vec![rc, rb, re, ic, ib, flicker, total]
     }
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {

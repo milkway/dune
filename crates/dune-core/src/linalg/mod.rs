@@ -50,6 +50,15 @@ pub trait LinearSolver {
         rhs_im: &mut [f64],
     ) -> Result<(), LinalgError>;
 
+    /// Solve the **transposed** complex system in place
+    /// (`SMPcaSolve`, the noise adjoint). Requires a prior
+    /// [`LinearSolver::factor_complex`].
+    fn solve_complex_transposed_in_place(
+        &mut self,
+        rhs_re: &mut [f64],
+        rhs_im: &mut [f64],
+    ) -> Result<(), LinalgError>;
+
     /// Determinant of the complex matrix `G + jB` as a base-2
     /// mantissa/exponent pair (`SMPcLUfac` + `SMPcDProd`): the
     /// mantissa is normalized so `max(|re|,|im|) ∈ (0.5, 1]` like

@@ -457,6 +457,9 @@ impl Vars {
 pub(crate) struct Built {
     pub vars: Vars,
     pub devices: Vec<Box<dyn crate::devices::Device>>,
+    /// Element name per device index (noise generators are named
+    /// `onoise_<name>_<suffix>`).
+    pub names: Vec<String>,
     pub nodesets: Vec<(Var, f64)>,
     pub ics: Vec<(Var, f64)>,
     /// Independent V/I source element name → index in `devices`
@@ -603,10 +606,12 @@ impl Circuit {
 
         // Pass 2: instances.
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
         let mut sources: HashMap<String, (usize, bool)> = HashMap::new();
         let mut notes = Vec::new();
         let get = |node_ids: &HashMap<String, Var>, n: &str| node_ids[n];
         for (spec, &base) in self.specs.iter().zip(&state_base) {
+            names.push(spec.name().to_string());
             match spec {
                 Spec::Bjt(s) => {
                     let col = get(&node_ids, &s.nodes[0]);
@@ -904,9 +909,12 @@ impl Circuit {
             }
         }
 
+        // The mutual inductor adds no matrix row of its own but
+        // keeps `devices` and `names` aligned by construction.
         Ok(Built {
             vars,
             devices,
+            names,
             nodesets,
             ics,
             sources,

@@ -155,6 +155,41 @@ fn main() -> Result<()> {
                 }
                 solutions.push(pz.solution);
             }
+            dune_netlist::ir::Analysis::Noise {
+                output,
+                output_ref,
+                src,
+                variation,
+                points,
+                fstart,
+                fstop,
+                pts_per_summary,
+                ..
+            } => {
+                let sweep = match variation {
+                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                };
+                let no = circuit.noise(
+                    &options,
+                    output,
+                    output_ref.as_deref(),
+                    src,
+                    sweep,
+                    *points as usize,
+                    *fstart,
+                    *fstop,
+                    pts_per_summary.map(|p| p as usize),
+                )?;
+                for n in &no.notes {
+                    eprintln!("note: {n}");
+                }
+                solutions.push(no.density);
+                if let Some(integ) = no.integrated {
+                    solutions.push(integ);
+                }
+            }
             other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
         }
     }

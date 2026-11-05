@@ -164,6 +164,31 @@ resultados espelhando o rawfile).
   fallback de ponto médio. Valida: `simplepz`, `pz2`, `pzt` PASS
   contra o ngspice-47 a ≤1.5e-8.
 
+- **`.noise`** (`noise.rs`, `engine.rs::noise_point` ←
+  `ckt/noisean.c`, `ckt/cktnoise.c`, `ni/niniter.c::NInzIter`,
+  `dev/{res,bjt}noise.c` na forma ngspice): por frequência, o
+  sistema AC ordinário dá o ganho entrada→saída e o sistema
+  **adjunto** (transposto, `solve_complex_transposed_in_place` no
+  backend) com corrente unitária na saída dá, num só solve, a
+  transferência de cada gerador interno para a saída
+  (`NevalSrc`: térmico `4kT·g`, shot `2q|I|`, flicker
+  `kf·|I|^af/f`). Gerações por dispositivo via
+  `Device::noise_suffixes/noise_dens`: R (térmico + 1/f + total,
+  nomes ngspice `_thermal`/`_1overf`) e BJT (rc/rb/re térmicos com
+  `gx` do estado, shot em Ic/Ib, flicker em Ib, total). Integração
+  espectral por segmento log-log (`Nintegrate`, limiares
+  `N_INTFTHRESH`/`N_INTUSELOG`), somatórios por fonte e por
+  circuito, sumários a cada `pts_per_summary` pontos. A saída segue
+  o formato **default** do ngspice: √(V²/Hz) (o `.options sqrnoise`
+  de lá manteria os quadrados), plotnames curtos ("Noise Spectral
+  Density Curves", "Integrated Noise"), vetores de densidade com
+  nome cru e os integrados embrulhados `v(...)`/`i(...)` conforme a
+  fonte de entrada é V ou I. Passo linear divide por n−1 (ngspice;
+  o 3f5 usava n+1). Valida: `resnoise` e `bjtnoise` PASS (margens
+  0.004/0.056); a diferença residual ~2e-5 vem das constantes
+  físicas (o ngspice usa CODATA/SI-2019; o Dune mantém as do 3f5 —
+  `corpus/KNOWN_DIFFS.md`).
+
 Validação: `tests/op.rs` compara um deck-sonda (divisor, indutor,
 diodo com RS, E, F, G, H, I) com números do ngspice-47 dentro das
 tolerâncias SPICE; os decks `.op`/`.dc` de `corpus/basic/` passam no
@@ -222,7 +247,8 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- `.tf`, ruído, `.disto`; `.pz` dos semicondutores restantes (BJT/
+- `.tf`, `.disto`; ruído dos demais dispositivos (diodo/MOS têm
+  `*noise.c` no C, aqui ainda não; R sem fNcoef → flicker 0); `.pz` dos semicondutores restantes (BJT/
   MOS têm `pzLoad` no C, aqui ainda não); `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.

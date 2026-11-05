@@ -4,7 +4,8 @@
 
 use crate::integ::TerrCtx;
 use crate::matrix::{
-    AcCtx, AcceptCtx, AnKind, ConvCtx, InitMode, LoadCtx, MatrixBuilder, PzCtx, Slot, TRASH, Var,
+    AcCtx, AcceptCtx, AnKind, ConvCtx, InitMode, LoadCtx, MatrixBuilder, NoiseCtx, PzCtx, Slot,
+    TRASH, Var,
 };
 use crate::srcfn::Wave;
 
@@ -42,6 +43,17 @@ pub(crate) trait Device {
     /// determinant).
     fn load_pz(&mut self, _ctx: &mut PzCtx) -> Result<(), &'static str> {
         Err("this device has no pole-zero load yet")
+    }
+    /// Noise generators (`*noise.c`): the per-generator name
+    /// suffixes, the last entry being the device total (empty
+    /// suffix). `None` marks a noiseless device.
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        None
+    }
+    /// Spectral densities at the adjoint solution, one per suffix
+    /// (the device computes its own total, like the C).
+    fn noise_dens(&self, _ctx: &NoiseCtx) -> Vec<f64> {
+        Vec::new()
     }
 }
 
@@ -94,6 +106,20 @@ impl Device for ResistorI {
         ctx.add_g(self.slots[2], -self.g);
         ctx.add_g(self.slots[3], -self.g);
         Ok(())
+    }
+
+    /// `RESnoise` (ngspice): thermal + flicker + total. Plain
+    /// resistors have no model card, so `fNcoef` is 0 and the
+    /// flicker density is identically zero (the vector still
+    /// exists, as in the golden rawfiles).
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(&["_thermal", "_1overf", ""])
+    }
+
+    fn noise_dens(&self, ctx: &NoiseCtx) -> Vec<f64> {
+        let thermal = ctx.thermal(self.pos, self.neg, self.g);
+        let flicker = 0.0;
+        vec![thermal, flicker, thermal + flicker]
     }
 }
 

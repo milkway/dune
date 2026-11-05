@@ -195,6 +195,39 @@ impl PzCtx<'_> {
     }
 }
 
+/// What a device's noise evaluation sees (`CKTnoise` → `*noise.c`):
+/// the adjoint AC solution (transfer from each internal source to
+/// the output) and the shared per-frequency data.
+pub(crate) struct NoiseCtx<'a> {
+    /// Adjoint solution, real and imaginary parts, var-indexed.
+    pub re: &'a [f64],
+    pub im: &'a [f64],
+    pub freq: f64,
+    /// `CKTtemp`, kelvin.
+    pub temp: f64,
+    pub states: &'a crate::state::States,
+}
+
+impl NoiseCtx<'_> {
+    /// `|V(n1) − V(n2)|²` of the adjoint solution (the squared
+    /// transfer gain in `NevalSrc`).
+    pub fn gain2(&self, n1: Var, n2: Var) -> f64 {
+        let r = self.re[n1] - self.re[n2];
+        let i = self.im[n1] - self.im[n2];
+        r * r + i * i
+    }
+
+    /// `NevalSrc(THERMNOISE)`: `4kT·g` times the squared gain.
+    pub fn thermal(&self, n1: Var, n2: Var, g: f64) -> f64 {
+        self.gain2(n1, n2) * 4.0 * crate::consts::BOLTZ * self.temp * g
+    }
+
+    /// `NevalSrc(SHOTNOISE)`: `2q|I|` times the squared gain.
+    pub fn shot(&self, n1: Var, n2: Var, current: f64) -> f64 {
+        self.gain2(n1, n2) * 2.0 * crate::consts::CHARGE * current.abs()
+    }
+}
+
 /// What a device's convergence test sees (`CKTconvTest` →
 /// `dev/*conv.c`, active under NEWCONV): the fresh solution
 /// (`CKTrhs`), the previous one (`CKTrhsOld`) and the state banks

@@ -12,7 +12,9 @@ use crate::devices::Device;
 use crate::error::Error;
 use crate::integ::{Method, TerrCtx, com_cof};
 use crate::linalg::{LinalgError, LinearSolver};
-use crate::matrix::{AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, PzCtx, Slot, Var};
+use crate::matrix::{
+    AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, NoiseCtx, PzCtx, Slot, Var,
+};
 use crate::options::Options;
 use crate::state::States;
 use num_complex::Complex64;
@@ -23,6 +25,8 @@ const MAX_OUTPUT_VALUES: usize = 50_000_000;
 pub(crate) struct Engine {
     pub vars: Vars,
     devices: Vec<Box<dyn Device>>,
+    /// Element name per device index.
+    pub names: Vec<String>,
     mb: MatrixBuilder,
     solver: Box<dyn LinearSolver>,
     values: Vec<f64>,
@@ -64,6 +68,7 @@ impl Engine {
         let Built {
             vars,
             mut devices,
+            names,
             nodesets,
             ics,
             sources,
@@ -83,6 +88,7 @@ impl Engine {
         Engine {
             vars,
             devices,
+            names,
             mb,
             solver,
             values: vec![0.0; num_slots],
@@ -795,6 +801,92 @@ impl Engine {
             }
         }
         Ok(rows)
+    }
+
+    /// Devices with noise generators, in device order (`CKTnoise`).
+    pub fn noise_devices(&self) -> Vec<(usize, &'static [&'static str])> {
+        self.devices
+            .iter()
+            .enumerate()
+            .filter_map(|(i, d)| d.noise_suffixes().map(|sfx| (i, sfx)))
+            .collect()
+    }
+
+    /// One noise frequency point: the ordinary AC solve for the
+    /// output gain, then the adjoint (transposed) solve with a unit
+    /// current at the output (`NIacIter` + `NInzIter`). Returns the
+    /// squared gain and the adjoint solution.
+    pub fn noise_point(
+        &mut self,
+        freq: f64,
+        pos_out: Var,
+        neg_out: Var,
+    ) -> Result<(f64, Vec<f64>, Vec<f64>), Error> {
+        let omega = 2.0 * std::f64::consts::PI * freq;
+        let num_slots = self.values.len();
+        let nvars = self.vars.len();
+        let mut g = vec![0.0; num_slots];
+        let mut b = vec![0.0; num_slots];
+        let mut re = vec![0.0; nvars];
+        let mut im = vec![0.0; nvars];
+        {
+            let mut ctx = AcCtx {
+                g: &mut g,
+                b: &mut b,
+                rhs_re: &mut re,
+                rhs_im: &mut im,
+                omega,
+                states: &self.states,
+            };
+            for d in &mut self.devices {
+                d.load_ac(&mut ctx);
+            }
+        }
+        self.solver
+            .factor_complex(&g[1..], &b[1..])
+            .map_err(|e| self.map_singular(e))?;
+        self.solver
+            .solve_complex_in_place(&mut re[1..], &mut im[1..])
+            .map_err(|e| self.map_singular(e))?;
+        re[0] = 0.0;
+        im[0] = 0.0;
+        let gr = re[pos_out] - re[neg_out];
+        let gi = im[pos_out] - im[neg_out];
+        let gain2 = gr * gr + gi * gi;
+
+        // Adjoint system: unit current excitation at the output.
+        re.fill(0.0);
+        im.fill(0.0);
+        re[pos_out] = 1.0;
+        re[neg_out] -= 1.0;
+        re[0] = 0.0;
+        im[0] = 0.0;
+        self.solver
+            .solve_complex_transposed_in_place(&mut re[1..], &mut im[1..])
+            .map_err(|e| self.map_singular(e))?;
+        re[0] = 0.0;
+        im[0] = 0.0;
+        Ok((gain2, re, im))
+    }
+
+    /// Spectral densities of device `d` against the adjoint
+    /// solution.
+    pub fn noise_dens_of(
+        &self,
+        d: usize,
+        freq: f64,
+        re: &[f64],
+        im: &[f64],
+        temp: f64,
+    ) -> Vec<f64> {
+        let ctx = NoiseCtx {
+            re,
+            im,
+            freq,
+            temp,
+            states: &self.states,
+        };
+        self.devices[d].noise_dens(&ctx)
     }
 
     /// `CKTpzSetup` (`ckt/cktpzset.c`): rebuild the matrix pattern

@@ -127,6 +127,34 @@ impl LinearSolver for FaerDense {
         Ok(())
     }
 
+    /// `SMPcaSolve`: solve `Aᵀ x = b` from the matrix stored by the
+    /// last [`LinearSolver::factor_complex`] (a fresh LU of the
+    /// transpose; noise matrices are corpus-sized).
+    fn solve_complex_transposed_in_place(
+        &mut self,
+        rhs_re: &mut [f64],
+        rhs_im: &mut [f64],
+    ) -> Result<(), LinalgError> {
+        debug_assert_eq!(rhs_re.len(), self.n);
+        let at: Mat<c64> = Mat::from_fn(self.n, self.n, |i, j| self.cmat[(j, i)]);
+        let lu = at.partial_piv_lu();
+        let mut rhs: Vec<c64> = rhs_re
+            .iter()
+            .zip(rhs_im.iter())
+            .map(|(r, i)| c64::new(*r, *i))
+            .collect();
+        let m = MatMut::from_column_major_slice_mut(&mut rhs, self.n, 1);
+        lu.solve_in_place(m);
+        for (k, v) in rhs.iter().enumerate() {
+            if !v.re.is_finite() || !v.im.is_finite() {
+                return Err(LinalgError::Singular { row: k });
+            }
+            rhs_re[k] = v.re;
+            rhs_im[k] = v.im;
+        }
+        Ok(())
+    }
+
     /// Complex determinant with a dedicated small LU: partial
     /// pivoting on `|re|+|im|`, the running product kept normalized
     /// to `max(|re|,|im|) ∈ (0.5, 1]` with a base-2 exponent, like

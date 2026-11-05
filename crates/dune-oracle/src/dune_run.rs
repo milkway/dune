@@ -16,7 +16,7 @@ use crate::corpus::Circuit as CorpusCircuit;
 /// `x` is fine because subcircuits expand to their contents, which
 /// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
-    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac", ".pz"];
+    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac", ".pz", ".noise"];
     const DEVICES: &[char] = &[
         'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'm', 'x',
     ];
@@ -126,6 +126,40 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
                     )
                     .map_err(|e| e.to_string())?;
                 plots.push(pz.solution.to_plot(&parsed.netlist.title, ""));
+            }
+            Analysis::Noise {
+                output,
+                output_ref,
+                src,
+                variation,
+                points,
+                fstart,
+                fstop,
+                pts_per_summary,
+                ..
+            } => {
+                let sweep = match variation {
+                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                };
+                let no = circuit
+                    .noise(
+                        &options,
+                        output,
+                        output_ref.as_deref(),
+                        src,
+                        sweep,
+                        *points as usize,
+                        *fstart,
+                        *fstop,
+                        pts_per_summary.map(|p| p as usize),
+                    )
+                    .map_err(|e| e.to_string())?;
+                plots.push(no.density.to_plot(&parsed.netlist.title, ""));
+                if let Some(integ) = no.integrated {
+                    plots.push(integ.to_plot(&parsed.netlist.title, ""));
+                }
             }
             other => return Err(format!("analysis {other:?} not supported yet")),
         }
