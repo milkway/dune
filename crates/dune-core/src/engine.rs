@@ -12,7 +12,7 @@ use crate::devices::Device;
 use crate::error::Error;
 use crate::integ::{Method, TerrCtx, com_cof};
 use crate::linalg::{LinalgError, LinearSolver};
-use crate::matrix::{AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Var};
+use crate::matrix::{AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, PzCtx, Slot, Var};
 use crate::options::Options;
 use crate::state::States;
 use num_complex::Complex64;
@@ -113,6 +113,12 @@ impl Engine {
     pub fn set_kind(&mut self, kind: AnKind, uic: bool) {
         self.kind = kind;
         self.uic = uic;
+    }
+
+    /// One load pass for callers outside this module (the pole-zero
+    /// analysis runs `MODEINITSMSIG` through it).
+    pub fn load_all_public(&mut self, mode: InitMode, opts: &Options) {
+        self.load_all(mode, opts, 1.0);
     }
 
     fn load_all(&mut self, mode: InitMode, opts: &Options, srcfact: f64) -> bool {
@@ -790,6 +796,139 @@ impl Engine {
         }
         Ok(rows)
     }
+
+    /// `CKTpzSetup` (`ckt/cktpzset.c`): rebuild the matrix pattern
+    /// for a pole or zero search — the transfer-function columns,
+    /// the drive entries and the slots the column surgery needs.
+    /// The engine's solver is re-analyzed; only `pz_det` may be
+    /// used afterwards.
+    pub fn pz_setup(
+        &mut self,
+        in_pos: Var,
+        in_neg: Var,
+        out_pos: Var,
+        out_neg: Var,
+        vol_input: bool,
+        zeros: bool,
+    ) -> PzSetup {
+        let n = self.vars.len() - 1;
+        let mut mb = MatrixBuilder::new(n);
+        for d in &mut self.devices {
+            d.alloc(&mut mb);
+        }
+
+        let mut input_pos = in_pos;
+        let mut input_neg = in_neg;
+        let (output_pos, output_neg) = if zeros {
+            (out_pos, out_neg)
+        } else if vol_input {
+            // Vi/Ii in Y.
+            (in_pos, in_neg)
+        } else {
+            // Denominator only.
+            input_pos = 0;
+            input_neg = 0;
+            (0, 0)
+        };
+
+        let solution_col;
+        let mut balance_col = 0;
+        if output_pos != 0 {
+            solution_col = output_pos;
+            if output_neg != 0 {
+                balance_col = output_neg;
+            }
+        } else {
+            solution_col = output_neg;
+            std::mem::swap(&mut input_pos, &mut input_neg);
+        }
+
+        let drive_p =
+            (input_pos != 0 && solution_col != 0).then(|| mb.slot(input_pos, solution_col));
+        let drive_n =
+            (input_neg != 0 && solution_col != 0).then(|| mb.slot(input_neg, solution_col));
+
+        // `SMPcAddCol` needs a slot in the solution column for every
+        // row the balance column touches.
+        let mut bal_pairs = Vec::new();
+        if balance_col != 0 && solution_col != 0 {
+            for (r, bs) in mb.rows_in_col(balance_col) {
+                let ss = mb.slot(r, solution_col);
+                bal_pairs.push((bs, ss));
+            }
+        }
+        let sol_slots: Vec<Slot> = if solution_col != 0 {
+            mb.rows_in_col(solution_col)
+                .into_iter()
+                .map(|(_, s)| s)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        self.solver.analyze(&mb.pattern());
+        let num_slots = mb.num_slots();
+        self.mb = mb;
+        PzSetup {
+            bal_pairs,
+            sol_slots,
+            drive_p,
+            drive_n,
+            g: vec![0.0; num_slots],
+            b: vec![0.0; num_slots],
+        }
+    }
+
+    /// `CKTpzLoad` + `SMPcLUfac` + `SMPcDProd`: the transfer
+    /// function's determinant at the trial frequency, as a base-2
+    /// mantissa/exponent pair (zero mantissa means singular — a
+    /// root).
+    pub fn pz_det(&mut self, setup: &mut PzSetup, s: Complex64) -> Result<(Complex64, i32), Error> {
+        setup.g.fill(0.0);
+        setup.b.fill(0.0);
+        let mut ctx = PzCtx {
+            g: &mut setup.g,
+            b: &mut setup.b,
+            s,
+            states: &self.states,
+        };
+        for d in &mut self.devices {
+            d.load_pz(&mut ctx)
+                .map_err(|e| Error::Build(format!("pole-zero: {e}")))?;
+        }
+        // Column surgery: fold the balance column into the solution
+        // column, zero the solution column, then set the drive.
+        for &(bs, ss) in &setup.bal_pairs {
+            setup.g[ss.0] += setup.g[bs.0];
+            setup.b[ss.0] += setup.b[bs.0];
+        }
+        for sl in &setup.sol_slots {
+            setup.g[sl.0] = 0.0;
+            setup.b[sl.0] = 0.0;
+        }
+        if let Some(dp) = setup.drive_p {
+            setup.g[dp.0] = 1.0;
+            setup.b[dp.0] = 0.0;
+        }
+        if let Some(dn) = setup.drive_n {
+            setup.g[dn.0] = -1.0;
+            setup.b[dn.0] = 0.0;
+        }
+        Ok(self.solver.det_complex(&setup.g[1..], &setup.b[1..]))
+    }
+}
+
+/// Matrix bookkeeping for one pole or zero search
+/// (`CKTpzSetup`'s products).
+pub(crate) struct PzSetup {
+    /// (balance slot, solution slot) per shared row (`SMPcAddCol`).
+    bal_pairs: Vec<(Slot, Slot)>,
+    /// Every slot of the solution column (`SMPcZeroCol`).
+    sol_slots: Vec<Slot>,
+    drive_p: Option<Slot>,
+    drive_n: Option<Slot>,
+    g: Vec<f64>,
+    b: Vec<f64>,
 }
 
 /// `.ac` sweep spacing (`DEC OCT LIN`).

@@ -124,6 +124,37 @@ fn main() -> Result<()> {
                 }
                 solutions.push(ac.solution);
             }
+            dune_netlist::ir::Analysis::Pz {
+                nodes,
+                input,
+                which,
+                ..
+            } => {
+                let input = match input {
+                    dune_netlist::ir::PzInput::Current => dune_core::PzInput::Current,
+                    dune_netlist::ir::PzInput::Voltage => dune_core::PzInput::Voltage,
+                };
+                let which = match which {
+                    dune_netlist::ir::PzWhich::Poles => dune_core::PzWhich::Poles,
+                    dune_netlist::ir::PzWhich::Zeros => dune_core::PzWhich::Zeros,
+                    dune_netlist::ir::PzWhich::Both => dune_core::PzWhich::Both,
+                };
+                let pz = circuit.pz(
+                    &options,
+                    [
+                        nodes[0].as_str(),
+                        nodes[1].as_str(),
+                        nodes[2].as_str(),
+                        nodes[3].as_str(),
+                    ],
+                    input,
+                    which,
+                )?;
+                for n in &pz.notes {
+                    eprintln!("note: {n}");
+                }
+                solutions.push(pz.solution);
+            }
             other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
         }
     }

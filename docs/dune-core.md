@@ -142,6 +142,28 @@ resultados espelhando o rawfile).
   `v(v-sweep)`/`i(i-sweep)` como o ngspice, plot `DC transfer
   characteristic`.
 
+- **`.pz`** (`pz.rs`, `engine.rs::pz_setup/pz_det` ← `ckt/pzan.c`,
+  `cktpzset.c`, `cktpzld.c`, `cktpzstr.c`, `ni/nipzmeth.c`): polos e
+  zeros como raízes do determinante da MNA complexa após a cirurgia
+  de colunas do `CKTpzSetup` (coluna-solução zerada, coluna-balanço
+  somada, entradas de excitação ±1). A busca é o "zeroin" do 3f5
+  intacto: estratégias SHIFT/SKIP/SPLIT/GUESS no eixo real, SYM2
+  (série quadrática em aritmética bloco-normalizada mantissa ×
+  2^expoente — `zaddeq`/`R_NORM`/`C_NORM` literais), Muller para
+  pares complexos semeados pelo radical do mínimo (`NIpzK`),
+  deflação multiplicativa das raízes achadas, `alter` para
+  desgrudar de pontos repetidos e o registro ordenado de trials
+  (lista ligada por índices). Determinante via LU complexa própria
+  do backend (`det_complex`, mantissa/expoente base 2 como o
+  `SMPcDProd`); matriz singular = raiz. Cargas `pzLoad` para
+  R C L K V I E F G H e diodo (`G + s·C`); dispositivo sem porte
+  falha alto (o C pula silenciosamente). Bugs do C tratados: o
+  `b = 0.0 ||` do `NIpzSym2` (atribuição dentro da condição)
+  portado literal; `vonbm`/`new_mag` não inicializados viram 0;
+  o `abort()` do Strat e o "Lost numerical stability" viram
+  fallback de ponto médio. Valida: `simplepz`, `pz2`, `pzt` PASS
+  contra o ngspice-47 a ≤1.5e-8.
+
 Validação: `tests/op.rs` compara um deck-sonda (divisor, indutor,
 diodo com RS, E, F, G, H, I) com números do ngspice-47 dentro das
 tolerâncias SPICE; os decks `.op`/`.dc` de `corpus/basic/` passam no
@@ -200,7 +222,8 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- `.tf`, ruído, `.pz`, `.disto`; `.dc` varrendo TEMP e parâmetro de
+- `.tf`, ruído, `.disto`; `.pz` dos semicondutores restantes (BJT/
+  MOS têm `pzLoad` no C, aqui ainda não); `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - MOS nível 3, JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).

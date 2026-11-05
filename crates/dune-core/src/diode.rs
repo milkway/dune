@@ -448,6 +448,25 @@ impl crate::devices::Device for DiodeI {
         ctx.add_g(self.slots[6], -geq);
         ctx.add_b(self.slots[6], -xceq);
     }
+
+    /// `DIOpzLoad`: the AC stamps at a general complex frequency.
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let gspr = self.t.gspr;
+        let geq = ctx.states.get(0, self.st + CONDUCT);
+        let capd = ctx.states.get(0, self.st + CAP_CHARGE + 1);
+        ctx.add_g(self.slots[0], gspr);
+        ctx.add_g(self.slots[1], geq);
+        ctx.add_cap(self.slots[1], capd);
+        ctx.add_g(self.slots[2], geq + gspr);
+        ctx.add_cap(self.slots[2], capd);
+        ctx.add_g(self.slots[3], -gspr);
+        ctx.add_g(self.slots[4], -geq);
+        ctx.add_cap(self.slots[4], -capd);
+        ctx.add_g(self.slots[5], -gspr);
+        ctx.add_g(self.slots[6], -geq);
+        ctx.add_cap(self.slots[6], -capd);
+        Ok(())
+    }
 }
 
 /// `DEVpnjlim` (`dev/devsup.c`).

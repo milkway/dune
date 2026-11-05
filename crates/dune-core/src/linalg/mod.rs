@@ -49,6 +49,13 @@ pub trait LinearSolver {
         rhs_re: &mut [f64],
         rhs_im: &mut [f64],
     ) -> Result<(), LinalgError>;
+
+    /// Determinant of the complex matrix `G + jB` as a base-2
+    /// mantissa/exponent pair (`SMPcLUfac` + `SMPcDProd`): the
+    /// mantissa is normalized so `max(|re|,|im|) ∈ (0.5, 1]` like
+    /// the 3f5's `C_NORM`. A singular matrix returns a zero
+    /// mantissa — the pole-zero search treats that as a root.
+    fn det_complex(&mut self, re: &[f64], im: &[f64]) -> (num_complex::Complex64, i32);
 }
 
 /// The default backend for this build.

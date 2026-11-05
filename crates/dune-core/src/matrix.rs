@@ -67,6 +67,19 @@ impl MatrixBuilder {
     pub fn slots_in_row(&self, r: Var) -> &[Slot] {
         &self.row_slots[r]
     }
+
+    /// All (row, slot) pairs of column `c` (the pole-zero column
+    /// surgery needs them: `SMPcZeroCol`/`SMPcAddCol`).
+    pub fn rows_in_col(&self, c: Var) -> Vec<(Var, Slot)> {
+        let mut v: Vec<(Var, Slot)> = self
+            .map
+            .iter()
+            .filter(|((_, cc), _)| *cc == c)
+            .map(|((r, _), s)| (*r, *s))
+            .collect();
+        v.sort_unstable_by_key(|(r, _)| *r);
+        v
+    }
 }
 
 /// Analysis-kind bits of `CKTmode`: the C's `MODEDCOP`,
@@ -154,6 +167,31 @@ impl LoadCtx<'_> {
     pub fn pred(&self, off: usize) -> f64 {
         (1.0 + self.pred_xfact) * self.states.get(1, off)
             - self.pred_xfact * self.states.get(2, off)
+    }
+}
+
+/// The pole-zero load environment (`CKTpzLoad` → `dev/*pzld.c`):
+/// the complex MNA matrix at an arbitrary complex frequency `s`,
+/// split into parallel real/imaginary slot arrays like [`AcCtx`].
+pub(crate) struct PzCtx<'a> {
+    pub g: &'a mut [f64],
+    pub b: &'a mut [f64],
+    /// The complex frequency under trial.
+    pub s: num_complex::Complex64,
+    /// Small-signal parameters from the `MODEINITSMSIG` pass.
+    pub states: &'a crate::state::States,
+}
+
+impl PzCtx<'_> {
+    pub fn add_g(&mut self, sl: Slot, v: f64) {
+        self.g[sl.0] += v;
+    }
+
+    /// Stamp `s·c` — a capacitance (or inductance on a branch row)
+    /// evaluated at the trial frequency.
+    pub fn add_cap(&mut self, sl: Slot, c: f64) {
+        self.g[sl.0] += self.s.re * c;
+        self.b[sl.0] += self.s.im * c;
     }
 }
 

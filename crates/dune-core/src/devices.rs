@@ -4,7 +4,7 @@
 
 use crate::integ::TerrCtx;
 use crate::matrix::{
-    AcCtx, AcceptCtx, AnKind, ConvCtx, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var,
+    AcCtx, AcceptCtx, AnKind, ConvCtx, InitMode, LoadCtx, MatrixBuilder, PzCtx, Slot, TRASH, Var,
 };
 use crate::srcfn::Wave;
 
@@ -34,6 +34,14 @@ pub(crate) trait Device {
     /// device's current disagrees with its own linearization.
     fn conv_test(&self, _ctx: &ConvCtx) -> bool {
         true
+    }
+    /// Complex-frequency stamps for pole-zero analysis
+    /// (`dev/*pzld.c`). The default refuses, so a `.pz` deck with a
+    /// device that lacks the port fails loudly (the C silently
+    /// skips devices without `DEVpzLoad`, which would corrupt the
+    /// determinant).
+    fn load_pz(&mut self, _ctx: &mut PzCtx) -> Result<(), &'static str> {
+        Err("this device has no pole-zero load yet")
     }
 }
 
@@ -78,6 +86,14 @@ impl Device for ResistorI {
         ctx.add_g(self.slots[1], self.g);
         ctx.add_g(self.slots[2], -self.g);
         ctx.add_g(self.slots[3], -self.g);
+    }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_g(self.slots[0], self.g);
+        ctx.add_g(self.slots[1], self.g);
+        ctx.add_g(self.slots[2], -self.g);
+        ctx.add_g(self.slots[3], -self.g);
+        Ok(())
     }
 }
 
@@ -167,6 +183,14 @@ impl Device for CapacitorI {
         ctx.add_b(self.slots[1], val);
         ctx.add_b(self.slots[2], -val);
         ctx.add_b(self.slots[3], -val);
+    }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_cap(self.slots[0], self.capac);
+        ctx.add_cap(self.slots[1], self.capac);
+        ctx.add_cap(self.slots[2], -self.capac);
+        ctx.add_cap(self.slots[3], -self.capac);
+        Ok(())
     }
 }
 
@@ -265,6 +289,15 @@ impl Device for InductorI {
         ctx.add_g(self.slots[3], -1.0);
         ctx.add_b(self.br_br, -val);
     }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_g(self.slots[0], 1.0);
+        ctx.add_g(self.slots[1], 1.0);
+        ctx.add_g(self.slots[2], -1.0);
+        ctx.add_g(self.slots[3], -1.0);
+        ctx.add_cap(self.br_br, -self.induct);
+        Ok(())
+    }
 }
 
 /// `MUTload` (inside `indload.c`): adds `M·i(other)` to each coupled
@@ -302,6 +335,12 @@ impl Device for MutualI {
         let val = ctx.omega * self.factor;
         ctx.add_b(self.slots[0], -val);
         ctx.add_b(self.slots[1], -val);
+    }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_cap(self.slots[0], -self.factor);
+        ctx.add_cap(self.slots[1], -self.factor);
+        Ok(())
     }
 }
 
@@ -441,6 +480,16 @@ impl Device for VsourceI {
         ctx.rhs_im[self.branch.br] += self.ac_im;
     }
 
+    /// `VSRCpzLoad`: the branch incidence, no excitation (the PZ
+    /// drive comes from the column surgery).
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_g(self.branch.slots[0], 1.0);
+        ctx.add_g(self.branch.slots[1], 1.0);
+        ctx.add_g(self.branch.slots[2], -1.0);
+        ctx.add_g(self.branch.slots[3], -1.0);
+        Ok(())
+    }
+
     fn accept(&mut self, ctx: &mut AcceptCtx) {
         if let Some(w) = &self.wave {
             w.accept(ctx);
@@ -503,6 +552,11 @@ impl Device for IsourceI {
         ctx.rhs_im[self.neg] += self.ac_im;
     }
 
+    /// `ISRCpzLoad`: an ideal current source is open-circuit.
+    fn load_pz(&mut self, _ctx: &mut PzCtx) -> Result<(), &'static str> {
+        Ok(())
+    }
+
     fn accept(&mut self, ctx: &mut AcceptCtx) {
         if let Some(w) = &self.wave {
             w.accept(ctx);
@@ -558,6 +612,16 @@ impl Device for VcvsI {
         ctx.add_g(self.cslots[0], -self.gain);
         ctx.add_g(self.cslots[1], self.gain);
     }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_g(self.branch.slots[0], 1.0);
+        ctx.add_g(self.branch.slots[1], 1.0);
+        ctx.add_g(self.branch.slots[2], -1.0);
+        ctx.add_g(self.branch.slots[3], -1.0);
+        ctx.add_g(self.cslots[0], -self.gain);
+        ctx.add_g(self.cslots[1], self.gain);
+        Ok(())
+    }
 }
 
 /// `VCCSload`: G source.
@@ -601,6 +665,14 @@ impl Device for VccsI {
         ctx.add_g(self.slots[2], -self.gain);
         ctx.add_g(self.slots[3], self.gain);
     }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_g(self.slots[0], self.gain);
+        ctx.add_g(self.slots[1], -self.gain);
+        ctx.add_g(self.slots[2], -self.gain);
+        ctx.add_g(self.slots[3], self.gain);
+        Ok(())
+    }
 }
 
 /// `CCCSload`: F source.
@@ -641,6 +713,12 @@ impl Device for CccsI {
         ctx.add_g(self.slots[0], self.gain);
         ctx.add_g(self.slots[1], -self.gain);
     }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_g(self.slots[0], self.gain);
+        ctx.add_g(self.slots[1], -self.gain);
+        Ok(())
+    }
 }
 
 /// `CCVSload`: H source.
@@ -679,5 +757,14 @@ impl Device for CcvsI {
         ctx.add_g(self.branch.slots[2], -1.0);
         ctx.add_g(self.branch.slots[3], -1.0);
         ctx.add_g(self.cslot, -self.coeff);
+    }
+
+    fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
+        ctx.add_g(self.branch.slots[0], 1.0);
+        ctx.add_g(self.branch.slots[1], 1.0);
+        ctx.add_g(self.branch.slots[2], -1.0);
+        ctx.add_g(self.branch.slots[3], -1.0);
+        ctx.add_g(self.cslot, -self.coeff);
+        Ok(())
     }
 }

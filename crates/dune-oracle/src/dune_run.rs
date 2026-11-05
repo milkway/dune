@@ -16,7 +16,7 @@ use crate::corpus::Circuit as CorpusCircuit;
 /// `x` is fine because subcircuits expand to their contents, which
 /// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
-    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac"];
+    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac", ".pz"];
     const DEVICES: &[char] = &[
         'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'm', 'x',
     ];
@@ -96,6 +96,36 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
                     .ac(&options, sweep, *points as usize, *fstart, *fstop)
                     .map_err(|e| e.to_string())?;
                 plots.push(ac.solution.to_plot(&parsed.netlist.title, ""));
+            }
+            Analysis::Pz {
+                nodes,
+                input,
+                which,
+                ..
+            } => {
+                let input = match input {
+                    dune_netlist::ir::PzInput::Current => dune_core::PzInput::Current,
+                    dune_netlist::ir::PzInput::Voltage => dune_core::PzInput::Voltage,
+                };
+                let which = match which {
+                    dune_netlist::ir::PzWhich::Poles => dune_core::PzWhich::Poles,
+                    dune_netlist::ir::PzWhich::Zeros => dune_core::PzWhich::Zeros,
+                    dune_netlist::ir::PzWhich::Both => dune_core::PzWhich::Both,
+                };
+                let pz = circuit
+                    .pz(
+                        &options,
+                        [
+                            nodes[0].as_str(),
+                            nodes[1].as_str(),
+                            nodes[2].as_str(),
+                            nodes[3].as_str(),
+                        ],
+                        input,
+                        which,
+                    )
+                    .map_err(|e| e.to_string())?;
+                plots.push(pz.solution.to_plot(&parsed.netlist.title, ""));
             }
             other => return Err(format!("analysis {other:?} not supported yet")),
         }
