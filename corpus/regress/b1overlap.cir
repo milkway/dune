@@ -1,0 +1,36 @@
+BSIM1 transient overlap caps use drawn W and effective L (b1ld.c)
+* Regression: the transient load builds the gate overlap caps from the
+* DRAWN width (gs/gd) and the EFFECTIVE length (gb), per b1ld.c, while
+* b1temp.c's per-instance values (effective W, drawn L) feed only the
+* AC load. Dune once used the b1temp.c values in both places. Here the
+* gate pulse (device always cut off) couples through Cgdo onto a
+* floating 1 fF drain node, and the stored plateau voltage measures
+* the overlap cap directly: drawn vs effective W differs by ~24%.
+m1 2 1 0 0 nmos l=2u w=2u ad=0.1p as=0.1p
+c1 2 0 1f
+rbias 3 2 1g
+vdd 3 0 2
+vin 1 0 pulse(-2 0 5ns 1ns 1ns 20ns 50ns)
+.tran 0.5ns 40ns
+.print tran v(1) v(2)
+.model nmos nmos
++ level=4 tox=3.00000e-2 vdd=5 temp=27
++ dl=7.97991e-1 dw=4.77402e-1
++ vfb=-1.0087 phi=7.96434e-1 k1=1.31191 k2=1.46640e-1
++ eta=-1.0027e-3 muz=5.34334e+2 u0=4.38497e-2 u1=-5.7332e-2
++ x2e=-7.6911e-4 x3e=7.86777e-4 x2mz=8.25434
++ mus=5.40612e+2 x2ms=-1.2992e+1 x3ms=-9.4035
++ x2u0=1.06821e-3 x2u1=-1.9209e-2 x3u1=7.76925e-3
++ lvfb=-2.1402e-1 wvfb=3.44354e-1 lk1=3.23395e-1 wk1=-5.7698e-1
++ lk2=1.68585e-1 wk2=-1.8796e-1 leta=-9.4847e-3 weta=1.47316e-2
++ lu0=6.38105e-2 wu0=-6.1053e-2 lu1=1.01174 wu1=1.62706e-2
++ lx2e=9.62411e-3 wx2e=-3.7951e-3 lx3e=7.35448e-4 wx3e=-1.7796e-3
++ lx2mz=-2.4197e+1 wx2mz=1.95696e+1 lmus=6.21401e+2 wmus=-1.9190e+2
++ lx2ms=-6.4900e+1 wx2ms=4.29043e+1 lx3ms=1.18239e+2 wx3ms=-2.9747e+1
++ lx2u0=-8.0958e-3 wx2u0=4.03379e-3 lx2u1=-7.4573e-2 wx2u1=1.47520e-2
++ lx3u1=-1.0940e-1 wx3u1=-8.3353e-3
++ n0=1.55 nb=0.09 nd=0.0
++ cgdo=2.70000e-10 cgso=2.70000e-10 cgbo=1.40000e-10 xpart=1.0
++ rsh=35.0 cj=2.75e-4 cjsw=1.90e-10 js=1.0e-8
++ pb=0.7 pbsw=0.8 mj=0.5 mjsw=0.33 wdf=0.0
+.end

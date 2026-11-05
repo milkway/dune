@@ -145,9 +145,15 @@ pub(crate) struct Bsim1Size {
     pub nb: f64,
     pub nd: f64,
     pub vt0: f64,
+    /// `b1temp.c` overlaps (effective W, drawn L) — the AC load's.
     pub gd_overlap: f64,
     pub gs_overlap: f64,
     pub gb_overlap: f64,
+    /// `b1ld.c` overlaps (drawn W, effective L) — the transient
+    /// load recomputes them per iteration from the model card.
+    pub ld_gd_overlap: f64,
+    pub ld_gs_overlap: f64,
+    pub ld_gb_overlap: f64,
     pub drain_conductance: f64,
     pub source_conductance: f64,
     /// `B1Cox` in F/cm².
@@ -237,6 +243,9 @@ impl Bsim1Size {
             gd_overlap: eff_w * m.cgdo,
             gs_overlap: eff_w * m.cgso,
             gb_overlap: g.l * m.cgbo,
+            ld_gd_overlap: g.w * m.cgdo,
+            ld_gs_overlap: g.w * m.cgso,
+            ld_gb_overlap: eff_l * m.cgbo,
             drain_conductance: series(g.nrd),
             source_conductance: series(g.nrs),
             cox,
@@ -1070,9 +1079,9 @@ impl crate::devices::Device for Bsim1I {
             let (args, c_b, c_d): ([f64; 8], [f64; 3], [f64; 3]);
             if mode > 0.0 {
                 args = [
-                    t.gd_overlap,
-                    t.gs_overlap,
-                    t.gb_overlap,
+                    t.ld_gd_overlap,
+                    t.ld_gs_overlap,
+                    t.ld_gb_overlap,
                     capbd,
                     capbs,
                     cggb,
@@ -1083,9 +1092,9 @@ impl crate::devices::Device for Bsim1I {
                 c_d = [cdgb, cddb, cdsb];
             } else {
                 args = [
-                    t.gs_overlap,
-                    t.gd_overlap,
-                    t.gb_overlap,
+                    t.ld_gs_overlap,
+                    t.ld_gd_overlap,
+                    t.ld_gb_overlap,
                     capbs,
                     capbd,
                     cggb,
