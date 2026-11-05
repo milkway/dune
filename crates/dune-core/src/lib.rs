@@ -23,6 +23,7 @@ mod integ;
 mod matrix;
 mod mos1;
 mod mos2;
+mod mos6;
 mod op;
 mod options;
 mod select;
@@ -34,8 +35,8 @@ mod tran;
 pub use ac::{Ac, AcSweep};
 pub use bjt::BjtModel;
 pub use circuit::{
-    Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mutual, Resistor, Spec,
-    Vccs, Vcvs, Vsource,
+    Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6, Mutual, Resistor,
+    Spec, Vccs, Vcvs, Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
@@ -43,6 +44,7 @@ pub use error::Error;
 pub use integ::Method;
 pub use mos1::Mos1Model;
 pub use mos2::Mos2Model;
+pub use mos6::Mos6Model;
 pub use op::Op;
 pub use options::Options;
 pub use select::{ColData, OutColumn, OutExpr, Part, Selection};

@@ -33,8 +33,11 @@ pub struct Circuit {
     pub analyses: Vec<String>,
     /// Device letters used by the deck's element cards (lowercase).
     pub devices: Vec<char>,
-    /// `LEVEL` of every `nmos`/`pmos` `.model` card (default 1), so
-    /// the support gate can tell MOS1 decks from MOS2/3/6 ones.
+    /// `LEVEL` of every `nmos`/`pmos` `.model` card that some
+    /// M-card actually uses (default 1), so the support gate can
+    /// tell MOS1/2/6 decks from MOS3 ones — decks routinely carry
+    /// alternative model cards for levels they never instantiate
+    /// (mos6inv.cir).
     pub mos_levels: Vec<u32>,
     /// Reason from `corpus/SKIP`, when listed there.
     pub skip: Option<String>,
@@ -176,7 +179,10 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
     let text = String::from_utf8_lossy(&text);
     let mut analyses = Vec::new();
     let mut devices = Vec::new();
-    let mut mos_levels = Vec::new();
+    // (name, level) of every nmos/pmos model card, and the model
+    // names the M-cards reference.
+    let mut mos_models: Vec<(String, u32)> = Vec::new();
+    let mut mos_used: Vec<String> = Vec::new();
     let mut in_control = false;
     let mut in_mos_model = false;
     for line in text.lines().skip(1) {
@@ -186,8 +192,8 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
         // any of them (mosmem.cir does exactly that).
         if first == '+' {
             if in_mos_model && !in_control {
-                if let (Some(l), Some(slot)) = (scan_level(line), mos_levels.last_mut()) {
-                    *slot = l;
+                if let (Some(l), Some(slot)) = (scan_level(line), mos_models.last_mut()) {
+                    slot.1 = l;
                 }
             }
             continue;
@@ -205,7 +211,8 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
                         .any(|t| t == "nmos" || t == "pmos")
                     {
                         in_mos_model = true;
-                        mos_levels.push(scan_level(&lower).unwrap_or(1));
+                        let name = lower.split_whitespace().nth(1).unwrap_or("").to_string();
+                        mos_models.push((name, scan_level(&lower).unwrap_or(1)));
                     }
                 }
                 _ if !in_control
@@ -222,11 +229,32 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
             continue; // comments, control commands
         }
         let letter = first.to_ascii_lowercase();
+        if letter == 'm' {
+            // `Mxxx d g s b MNAME …`: the model is the 6th token.
+            if let Some(name) = line.split_whitespace().nth(5) {
+                let name = name.to_ascii_lowercase();
+                if !mos_used.contains(&name) {
+                    mos_used.push(name);
+                }
+            }
+        }
         if !devices.contains(&letter) {
             devices.push(letter);
         }
     }
     devices.sort_unstable();
+    // Levels of the models the deck instantiates; a reference the
+    // scan cannot resolve is kept as level 0 (never supported), so
+    // the gate stays conservative.
+    let mut mos_levels: Vec<u32> = Vec::new();
+    for name in &mos_used {
+        let level = mos_models
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, l)| *l)
+            .unwrap_or(0);
+        mos_levels.push(level);
+    }
     Ok((analyses, devices, mos_levels))
 }
 
@@ -346,7 +374,9 @@ mod tests {
         .unwrap();
         let (_, d, m) = scan_deck(&p).unwrap();
         assert_eq!(d, vec!['m']);
-        assert_eq!(m, vec![2, 6, 1]);
+        // Only model `a` (level 2) is instantiated; the unused
+        // level-6 and level-1 cards do not gate the deck.
+        assert_eq!(m, vec![2]);
         fs::remove_dir_all(&dir).ok();
     }
 }

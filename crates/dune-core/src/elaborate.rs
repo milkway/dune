@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Bjt, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mutual, Resistor,
-    Vccs, Vcvs, Vsource,
+    Bjt, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6, Mutual,
+    Resistor, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -29,17 +29,22 @@ impl Circuit {
         enum MosModel {
             M1(crate::mos1::Mos1Model),
             M2(crate::mos2::Mos2Model),
+            M6(crate::mos6::Mos6Model),
         }
         let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
+        // Unsupported-level MOS models only become an error when an
+        // element uses them: decks routinely carry alternative model
+        // cards for levels they never instantiate (mos6inv.cir).
+        let mut mos_unsupported: HashMap<&str, String> = HashMap::new();
         for m in &nl.models {
             match m.mtype.as_str() {
-                "d" => match diode_model(m) {
+                "d" => match diode_model(m, &mut notes) {
                     Ok(dm) => {
                         dmodels.insert(m.name.as_str(), dm);
                     }
                     Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                 },
-                "npn" | "pnp" => match bjt_model(m) {
+                "npn" | "pnp" => match bjt_model(m, &mut notes) {
                     Ok(bm) => {
                         qmodels.insert(m.name.as_str(), bm);
                     }
@@ -50,24 +55,34 @@ impl Circuit {
                     // (`MOSdSetup` dispatch in `inpdomod.c`).
                     let level = num_param(&m.params, "level").unwrap_or(1.0);
                     if level == 1.0 {
-                        match mos1_model(m) {
+                        match mos1_model(m, &mut notes) {
                             Ok(mm) => {
                                 mmodels.insert(m.name.as_str(), MosModel::M1(mm));
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
                     } else if level == 2.0 {
-                        match mos2_model(m) {
+                        match mos2_model(m, &mut notes) {
                             Ok(mm) => {
                                 mmodels.insert(m.name.as_str(), MosModel::M2(mm));
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
+                    } else if level == 6.0 {
+                        match mos6_model(m, &mut notes) {
+                            Ok(mm) => {
+                                mmodels.insert(m.name.as_str(), MosModel::M6(mm));
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
                     } else {
-                        problems.push(format!(
-                            "model `{}`: MOS level {level} is not implemented yet (Phase 3)",
-                            m.name
-                        ));
+                        mos_unsupported.insert(
+                            m.name.as_str(),
+                            format!(
+                                "model `{}`: MOS level {level} is not implemented yet (Phase 3)",
+                                m.name
+                            ),
+                        );
                     }
                 }
                 _ => {}
@@ -323,9 +338,13 @@ impl Circuit {
                 }
                 ir::Device::Mosfet { model, params } => {
                     let Some(mm) = mmodels.get(model.as_str()) else {
-                        problems.push(format!(
-                            "`{name}`: unable to find definition of model `{model}`"
-                        ));
+                        if let Some(reason) = mos_unsupported.get(model.as_str()) {
+                            problems.push(format!("`{name}`: {reason}"));
+                        } else {
+                            problems.push(format!(
+                                "`{name}`: unable to find definition of model `{model}`"
+                            ));
+                        }
                         continue;
                     };
                     let mut inst = MosInst::new();
@@ -394,6 +413,26 @@ impl Circuit {
                             },
                             &mut problems,
                         ),
+                        MosModel::M6(m6) => add(
+                            &mut ckt,
+                            Mos6 {
+                                name,
+                                nodes,
+                                model: m6.clone(),
+                                l: inst.l,
+                                w: inst.w,
+                                ad: inst.ad,
+                                as_: inst.as_,
+                                pd: inst.pd,
+                                ps: inst.ps,
+                                nrd: inst.nrd,
+                                nrs: inst.nrs,
+                                off: inst.off,
+                                ic: inst.ic,
+                                temp: inst.temp,
+                            },
+                            &mut problems,
+                        ),
                     }
                 }
                 other => {
@@ -422,7 +461,7 @@ impl Circuit {
 
 /// `.model x npn/pnp(...)` → [`crate::bjt::BjtModel`], 3f5 names
 /// with the documented aliases (`bjt.c`).
-fn bjt_model(m: &ir::Model) -> Result<crate::bjt::BjtModel, String> {
+fn bjt_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bjt::BjtModel, String> {
     let mut bm = crate::bjt::BjtModel::new(m.mtype == "npn");
     for p in &m.params {
         let v = match p.value {
@@ -476,7 +515,10 @@ fn bjt_model(m: &ir::Model) -> Result<crate::bjt::BjtModel, String> {
             "kf" => bm.kf = v,
             "af" => bm.af = v,
             "tnom" => bm.tnom = Some(v + CTOK),
-            other => return Err(format!("unknown parameter ({other})")),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
         }
     }
     Ok(bm)
@@ -485,7 +527,7 @@ fn bjt_model(m: &ir::Model) -> Result<crate::bjt::BjtModel, String> {
 /// Map `.model x nmos/pmos(level=1 …)` parameters onto
 /// [`crate::mos1::Mos1Model`], 3f5 names with the documented aliases
 /// (`mos1.c`).
-fn mos1_model(m: &ir::Model) -> Result<crate::mos1::Mos1Model, String> {
+fn mos1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos1::Mos1Model, String> {
     let mut mm = crate::mos1::Mos1Model::new(m.mtype == "nmos");
     for p in &m.params {
         let v = match p.value {
@@ -529,7 +571,10 @@ fn mos1_model(m: &ir::Model) -> Result<crate::mos1::Mos1Model, String> {
             "kf" => mm.kf = v,
             "af" => mm.af = v,
             "tnom" => mm.tnom = Some(v + CTOK),
-            other => return Err(format!("unknown parameter ({other})")),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
         }
     }
     Ok(mm)
@@ -565,7 +610,7 @@ impl MosInst {
 
 /// Map `.model x nmos/pmos(level=2 …)` parameters onto
 /// [`crate::mos2::Mos2Model`] (`mos2.c`).
-fn mos2_model(m: &ir::Model) -> Result<crate::mos2::Mos2Model, String> {
+fn mos2_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos2::Mos2Model, String> {
     let mut mm = crate::mos2::Mos2Model::new(m.mtype == "nmos");
     for p in &m.params {
         let v = match p.value {
@@ -615,7 +660,73 @@ fn mos2_model(m: &ir::Model) -> Result<crate::mos2::Mos2Model, String> {
             "kf" => mm.kf = v,
             "af" => mm.af = v,
             "tnom" => mm.tnom = Some(v + CTOK),
-            other => return Err(format!("unknown parameter ({other})")),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(mm)
+}
+
+/// Map `.model x nmos/pmos(level=6 …)` parameters onto
+/// [`crate::mos6::Mos6Model`] (`mos6.c`).
+fn mos6_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos6::Mos6Model, String> {
+    let mut mm = crate::mos6::Mos6Model::new(m.mtype == "nmos");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmos" || p.name == "pmos" => {
+                mm.nmos = p.name == "nmos";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "level" => {}
+            "vto" | "vt0" => mm.vto = Some(v),
+            "kv" => mm.kv = v,
+            "nv" => mm.nv = v,
+            "kc" => mm.kc = Some(v),
+            "nc" => mm.nc = v,
+            "nvth" => mm.nvth = v,
+            "ps" => mm.ps = v,
+            "gamma" => mm.gamma = Some(v),
+            "gamma1" => mm.gamma1 = v,
+            "sigma" => mm.sigma = v,
+            "phi" => mm.phi = Some(v),
+            "lambda" => mm.lambda = Some(v),
+            "lambda0" => mm.lambda0 = Some(v),
+            "lambda1" => mm.lambda1 = v,
+            "rd" => mm.rd = Some(v),
+            "rs" => mm.rs = Some(v),
+            "cbd" => mm.cbd = Some(v),
+            "cbs" => mm.cbs = Some(v),
+            "is" => mm.is = v,
+            "pb" => mm.pb = v,
+            "cgso" => mm.cgso = v,
+            "cgdo" => mm.cgdo = v,
+            "cgbo" => mm.cgbo = v,
+            "rsh" => mm.rsh = Some(v),
+            "cj" => mm.cj = Some(v),
+            "mj" => mm.mj = v,
+            "cjsw" => mm.cjsw = Some(v),
+            "mjsw" => mm.mjsw = v,
+            "js" => mm.js = v,
+            "tox" => mm.tox = Some(v),
+            "ld" => mm.ld = v,
+            "u0" | "uo" => mm.u0 = Some(v),
+            "fc" => mm.fc = v,
+            "nsub" => mm.nsub = Some(v),
+            "tpg" => mm.tpg = Some(v),
+            "nss" => mm.nss = Some(v),
+            "kf" => mm.kf = v,
+            "af" => mm.af = v,
+            "tnom" => mm.tnom = Some(v + CTOK),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
         }
     }
     Ok(mm)
@@ -673,7 +784,7 @@ fn device_phase(d: &ir::Device) -> &'static str {
 
 /// Map `.model x d(...)` parameters onto [`DiodeModel`], 3f5 names
 /// (`dev/dio/diompar.c`; `cj0` is accepted for `cjo` like the C).
-fn diode_model(m: &ir::Model) -> Result<DiodeModel, String> {
+fn diode_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<DiodeModel, String> {
     let mut dm = DiodeModel::default();
     for p in &m.params {
         let v = match p.value {
@@ -696,7 +807,10 @@ fn diode_model(m: &ir::Model) -> Result<DiodeModel, String> {
             "bv" => dm.bv = Some(v),
             "ibv" => dm.ibv = v,
             "tnom" => dm.tnom = Some(v + CTOK),
-            other => return Err(format!("unknown parameter ({other})")),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
         }
     }
     Ok(dm)

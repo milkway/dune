@@ -106,6 +106,24 @@ resultados espelhando o rawfile).
   mosamp2 é XFAIL documentado (dependência de caminho do modelo de
   Meyer — ver `corpus/XFAIL`).
 
+- **MOSFET nível 6** (`mos6.rs` ← `mos6load.c`, `mos6temp.c`,
+  `mos6set.c`, `mos6trunc.c`; Sakurai–Newton): corrente de saturação
+  `KC·(vgs−von)^NC`, tensão de saturação `KV·(vgs−von)^NV`, correção
+  linear `(2−vdst)·vdst` abaixo de `vdsat`, limiar com
+  `GAMMA·sqrt(φ−vbs) − GAMMA1·vbs − SIGMA·vds` (o 3f5 mata o termo
+  SIGMA com um `;` perdido; o ngspice corrigiu e o Dune segue o
+  ngspice — KNOWN_DIFFS), `LAMBDA0−LAMBDA1·vbs`, `KC` default
+  `0.5·U0·COX`, alias `LAMBDA`→`LAMBDA0`, `vonbm` zerado onde o 3f5
+  lê lixo (`sarg≤0`), `NVTH`/`PS` aceitos e ignorados como no 3f5.
+  Sem carga AC (o 3f5 não tem `mos6acld.c`). Mesmo andaime do MOS1.
+  Valida: `mos6inv` (4 inversores NAND/NOR em subcircuitos, 44 MOS)
+  PASS com máx 1.3 mV. Parâmetro de modelo desconhecido agora é
+  aviso ("unrecognized parameter - ignored", como o `INPmakeMod`),
+  não erro — os decks do 3f5 carregam XJ em cartões nível 1/6 que as
+  tabelas desses níveis nem listam; e cartões de nível não suportado
+  só viram erro quando algum M os instancia (mos6inv traz cartões
+  nível 3 sem uso).
+
 - **`.ac`** (`ac.rs`, `engine.rs::ac` ← `ckt/acan.c`,
   `ni/niaciter.c`, `dev/*acld.c`): ponto de operação, um passe
   `MODEINITSMSIG` (o diodo guarda `capd` em `capCurrent`), e um
@@ -185,8 +203,7 @@ oráculo contra o ngspice.
 - `.tf`, ruído, `.pz`, `.disto`; `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- MOS níveis 2/3/6, JFET/MESFET, chaves, linhas T/O/U, fonte B
-  (Fase 3).
+- MOS nível 3, JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.
 - Fallbacks restantes do op do ngspice: `gillespie_src` (rampa
   adaptativa de fontes) e o *transient op* (acha o `.op` por um
