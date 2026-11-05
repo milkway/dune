@@ -12,6 +12,7 @@ pub mod linalg;
 
 mod ac;
 mod bjt;
+mod bsim1;
 mod circuit;
 mod dc;
 mod devices;
@@ -36,9 +37,10 @@ mod tran;
 
 pub use ac::{Ac, AcSweep};
 pub use bjt::BjtModel;
+pub use bsim1::Bsim1Model;
 pub use circuit::{
-    Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6, Mutual, Resistor,
-    Spec, Vccs, Vcvs, Vsource,
+    Bsim1, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6, Mutual,
+    Resistor, Spec, Vccs, Vcvs, Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;

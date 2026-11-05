@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Bjt, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6, Mutual,
+    Bjt, Bsim1, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6, Mutual,
     Resistor, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
@@ -30,6 +30,7 @@ impl Circuit {
             M1(crate::mos1::Mos1Model),
             M2(crate::mos2::Mos2Model),
             M6(crate::mos6::Mos6Model),
+            B1(Box<crate::bsim1::Bsim1Model>),
         }
         let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
         // Unsupported-level MOS models only become an error when an
@@ -65,6 +66,13 @@ impl Circuit {
                         match mos2_model(m, &mut notes) {
                             Ok(mm) => {
                                 mmodels.insert(m.name.as_str(), MosModel::M2(mm));
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                    } else if level == 4.0 {
+                        match bsim1_model(m, &mut notes) {
+                            Ok(mm) => {
+                                mmodels.insert(m.name.as_str(), MosModel::B1(Box::new(mm)));
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
@@ -433,6 +441,25 @@ impl Circuit {
                             },
                             &mut problems,
                         ),
+                        MosModel::B1(b1) => add(
+                            &mut ckt,
+                            Bsim1 {
+                                name,
+                                nodes,
+                                model: (**b1).clone(),
+                                l: inst.l,
+                                w: inst.w,
+                                ad: inst.ad,
+                                as_: inst.as_,
+                                pd: inst.pd,
+                                ps: inst.ps,
+                                nrd: inst.nrd,
+                                nrs: inst.nrs,
+                                off: inst.off,
+                                ic: inst.ic,
+                            },
+                            &mut problems,
+                        ),
                     }
                 }
                 other => {
@@ -730,6 +757,108 @@ fn mos6_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos6::Mos
         }
     }
     Ok(mm)
+}
+
+/// Map `.model x nmos/pmos(level=4 …)` parameters onto
+/// [`crate::bsim1::Bsim1Model`] (`b1.c` keyword table).
+#[allow(clippy::too_many_lines)]
+fn bsim1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim1::Bsim1Model, String> {
+    let mut b = crate::bsim1::Bsim1Model::new(m.mtype == "nmos");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmos" || p.name == "pmos" => {
+                b.nmos = p.name == "nmos";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "level" => {}
+            "vfb" => b.vfb0 = v,
+            "lvfb" => b.vfbl = v,
+            "wvfb" => b.vfbw = v,
+            "phi" => b.phi0 = v,
+            "lphi" => b.phil = v,
+            "wphi" => b.phiw = v,
+            "k1" => b.k10 = v,
+            "lk1" => b.k1l = v,
+            "wk1" => b.k1w = v,
+            "k2" => b.k20 = v,
+            "lk2" => b.k2l = v,
+            "wk2" => b.k2w = v,
+            "eta" => b.eta0 = v,
+            "leta" => b.etal = v,
+            "weta" => b.etaw = v,
+            "x2e" => b.etab0 = v,
+            "lx2e" => b.etabl = v,
+            "wx2e" => b.etabw = v,
+            "x3e" => b.etad0 = v,
+            "lx3e" => b.etadl = v,
+            "wx3e" => b.etadw = v,
+            "dl" => b.deltal = v,
+            "dw" => b.deltaw = v,
+            "muz" => b.mobzero = v,
+            "x2mz" => b.mobzerob0 = v,
+            "lx2mz" => b.mobzerobl = v,
+            "wx2mz" => b.mobzerobw = v,
+            "mus" => b.mobvdd0 = v,
+            "lmus" => b.mobvddl = v,
+            "wmus" => b.mobvddw = v,
+            "x2ms" => b.mobvddb0 = v,
+            "lx2ms" => b.mobvddbl = v,
+            "wx2ms" => b.mobvddbw = v,
+            "x3ms" => b.mobvddd0 = v,
+            "lx3ms" => b.mobvdddl = v,
+            "wx3ms" => b.mobvdddw = v,
+            "u0" => b.ugs0 = v,
+            "lu0" => b.ugsl = v,
+            "wu0" => b.ugsw = v,
+            "x2u0" => b.ugsb0 = v,
+            "lx2u0" => b.ugsbl = v,
+            "wx2u0" => b.ugsbw = v,
+            "u1" => b.uds0 = v,
+            "lu1" => b.udsl = v,
+            "wu1" => b.udsw = v,
+            "x2u1" => b.udsb0 = v,
+            "lx2u1" => b.udsbl = v,
+            "wx2u1" => b.udsbw = v,
+            "x3u1" => b.udsd0 = v,
+            "lx3u1" => b.udsdl = v,
+            "wx3u1" => b.udsdw = v,
+            "n0" => b.n00 = v,
+            "ln0" => b.n0l = v,
+            "wn0" => b.n0w = v,
+            "nb" => b.nb0 = v,
+            "lnb" => b.nbl = v,
+            "wnb" => b.nbw = v,
+            "nd" => b.nd0 = v,
+            "lnd" => b.ndl = v,
+            "wnd" => b.ndw = v,
+            "tox" => b.tox = v,
+            "temp" => b.temp = v,
+            "vdd" => b.vdd = v,
+            "cgso" => b.cgso = v,
+            "cgdo" => b.cgdo = v,
+            "cgbo" => b.cgbo = v,
+            "xpart" => b.xpart = v,
+            "rsh" => b.rsh = v,
+            "js" => b.js = v,
+            "pb" => b.pb = v,
+            "mj" => b.mj = v,
+            "pbsw" => b.pbsw = v,
+            "mjsw" => b.mjsw = v,
+            "cj" => b.cj = v,
+            "cjsw" => b.cjsw = v,
+            "wdf" => b.wdf = v,
+            "dell" => b.dell = v,
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(b)
 }
 
 fn add(ckt: &mut Circuit, spec: impl Into<crate::circuit::Spec>, problems: &mut Vec<String>) {

@@ -189,6 +189,25 @@ resultados espelhando o rawfile).
   físicas (o ngspice usa CODATA/SI-2019; o Dune mantém as do 3f5 —
   `corpus/KNOWN_DIFFS.md`).
 
+- **BSIM1 (nível 4)** (`bsim1.rs` ← `b1ld.c`, `b1eval.c`,
+  `b1temp.c`, `b1set.c`, `b1moscap.c`, `b1acld.c`, `b1cvtest.c`):
+  cada parâmetro elétrico vem em tripla (valor, dep. L, dep. W)
+  resolvida por instância como `p0 + pL/Leff + pW/Weff` com
+  Leff/Weff em µm; `TOX`/`DL`/`DW` em µm e mobilidades em cm², com
+  a dança de unidades do C intacta (`Cox = 3.453e-13/(tox·1e-4)`
+  F/cm²). Corrente: interpolação quadrática de Beta0 entre VDS=0 e
+  VDD, mobilidade `1/(1+UGS·(vgs−vth))`, saturação pelo `K` de
+  `0.5(1+Vc+√(1+2Vc))`, sublimiar exponencial com `Ilimit` (fix de
+  Peter M. Lee de 1990 mantido), tudo sobre `CONSTvt0` (BSIM1
+  ignora a temperatura do dispositivo). Cargas analíticas por
+  região (acumulação/sublimiar/trioda/saturação) nas partições
+  0/100 (`XPART≥1`) e 40/60, com as condutâncias-companheiras do
+  `B1mosCap` (`ag0`·matriz de capacitâncias) e o swap d↔s no modo
+  inverso. 35 estados, 22 posições, `B1convTest` em
+  `Device::conv_test`, LTE em qb/qg/qd. O ngspice carrega este
+  código sem mudanças. Valida: `bsim1tst` (varredura `.dc` de 5
+  transistores) PASS a 2.8e-10 A.
+
 Validação: `tests/op.rs` compara um deck-sonda (divisor, indutor,
 diodo com RS, E, F, G, H, I) com números do ngspice-47 dentro das
 tolerâncias SPICE; os decks `.op`/`.dc` de `corpus/basic/` passam no
