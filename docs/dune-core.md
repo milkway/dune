@@ -206,7 +206,46 @@ resultados espelhando o rawfile).
   inverso. 35 estados, 22 posições, `B1convTest` em
   `Device::conv_test`, LTE em qb/qg/qd. O ngspice carrega este
   código sem mudanças. Valida: `bsim1tst` (varredura `.dc` de 5
-  transistores) PASS a 2.8e-10 A.
+  transistores) PASS a 2.8e-10 A. **Armadilha dos overlaps:** o
+  `b1ld.c` monta os caps de overlap do transiente com W *desenhado*
+  (gs/gd) e L *efetivo* (gb), enquanto o `b1temp.c` guarda na
+  instância os valores com W efetivo e L desenhado — e só o
+  `b1acld.c` usa estes. São dois conjuntos (`ld_*` vs os do temp);
+  usar o do temp no load erra as cargas quando DL/DW ≠ 0
+  (regressão: `corpus/regress/b1overlap.cir`, acoplamento por Cgdo
+  num nó de 1 fF — 0.118 V de erro antes da correção).
+
+- **BSIM2 (nível 5)** (`bsim2.rs` ← `b2ld.c`, `b2eval.c`,
+  `b2temp.c`, `b2set.c`, `b2cvtest.c`, `b2acld.c`): triplas
+  valor/L/W como no BSIM1 (`p0 + pL·(1e-6/Leff) + pW·(1e-6/Weff)`),
+  com os clamps do `b2temp.c` (`betas0 ≥ 1.01·beta0`, teto de
+  `betasB`) e `Arg = betasB − beta0B − vdd·(beta3B − vdd·beta4B)`.
+  O `B2evaluate` inteiro: limiar com `Gg`/`Aa`, spline cúbica de
+  `Vgeff` entre VGLOW e VGHIGH (sublimiar exponencial abaixo),
+  mobilidade vertical `Uvert`, saturação por `Vc`/`Kk`, interpolação
+  tanh de Beta em VDS, ionização por impacto `AI`/`BI` (fator FR), e
+  o modelo de cargas por região com o recálculo de Vdsat *sem* a
+  suavização de Vgeff dentro do bloco de cargas (quando
+  `Vgst ≥ VGHIGH` as derivadas de Vdsat da seção DC são
+  reaproveitadas, como no C; o `*vdsat` reportado é o recalculado).
+  Defaults não-nulos do `b2set.c` (VFB=−1, PHI=0.75, K1=0.8,
+  MU0=400, N0=1.4, VOF0=1.8, VGHIGH=0.2, VGLOW=−0.15, TOX=0.03 µm,
+  VDD=VGG=VBB=5, WDF=10…); L/W de instância caem em 5 µm, não nos
+  defaults de `.options`. O shell de load/conv/AC/trunc é o do
+  BSIM1 (o C é idêntico fora a indireção `pParam`), overlaps na
+  mesma convenção dupla do BSIM1, junções de corpo sobre
+  `CONSTvt0`. Os modos de diagnóstico do `valuetypeflag` (XPART
+  negativo) não vieram. O ngspice carrega este código sem
+  mudanças. Valida: `bsim2tst` (`.dc`) PASS a 8.9e-16; sondas
+  extra-oráculo tran (inversor CMOS com RSH) e `.ac` contra o
+  ngspice-47 a 1.2e-2 (tubo, shift 0) e 1.6e-13.
+
+  **Caso-limite conhecido:** nó quase-flutuante (1 fF) cujo `vds`
+  cruza 0 exatamente num breakpoint mata o passo ("timestep too
+  small") no BSIM1/2 — o flip de modo d↔s no canto; o ngspice
+  sobrevive por margem. Não gateia nenhum deck do corpus (o
+  `b1overlap.cir` polariza o nó para evitar o cruzamento); fica
+  para a investigação do controlador de passo.
 
 Validação: `tests/op.rs` compara um deck-sonda (divisor, indutor,
 diodo com RS, E, F, G, H, I) com números do ngspice-47 dentro das
@@ -272,6 +311,8 @@ oráculo contra o ngspice.
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - MOS nível 3, JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).
+- Controlador de passo: cruzamento de `vds=0` num breakpoint com nó
+  de ~1 fF mata o passo no BSIM1/2 (ver o caso-limite acima).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.
 - Fallbacks restantes do op do ngspice: `gillespie_src` (rampa
   adaptativa de fontes) e o *transient op* (acha o `.op` por um
