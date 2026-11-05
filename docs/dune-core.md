@@ -87,6 +87,25 @@ resultados espelhando o rawfile).
   margem 0.022, shift 0). O gate do oráculo lê o `LEVEL` dos
   cartões `.model` (níveis 2/3/6 seguem golden-vs-golden).
 
+- **MOSFET nível 2** (`mos2.rs` ← `mos2load.c`, `mos2temp.c`,
+  `mos2set.c`, `mos2acld.c`, `mos2trunc.c`): Grove-Frohman completo —
+  correção de canal curto pela profundidade de junção (`XJ`),
+  estreitamento (`DELTA`), degradação de mobilidade
+  (`UCRIT`/`UEXP`), saturação de velocidade pela quártica de Baum
+  (`VMAX`/`NEFF`, com as tabelas `sig1`/`sig2` e o caso `p<0` por
+  `cos/atan`), modulação de comprimento de canal pela aproximação de
+  depleção (com o limite de punch-through `xwb`), e a região de
+  sublimiar exponencial (`NFS`/`xn`). O andaime (escada de
+  polarização, limitação, diodos de corpo, cargas de depleção e
+  Meyer, companheiros, stamps, 17 estados, 22 posições) é idêntico
+  ao do MOS1. `TOX` default 1e-7; `MJSW` default 0.33; `CJ`
+  defaultado de `NSUB` continua fora de `czbd` (quirk de given-ness
+  do 3f5 mantido); `ueff` usa o `U0` cru do modelo, não o ajustado
+  por temperatura (quirk mantido). Validação: op/`.dc`/`.ac` de um
+  transistor isolado batem com o ngspice-47 a 1e-5; o tran do
+  mosamp2 é XFAIL documentado (dependência de caminho do modelo de
+  Meyer — ver `corpus/XFAIL`).
+
 - **`.ac`** (`ac.rs`, `engine.rs::ac` ← `ckt/acan.c`,
   `ni/niaciter.c`, `dev/*acld.c`): ponto de operação, um passe
   `MODEINITSMSIG` (o diodo guarda `capd` em `capCurrent`), e um
@@ -134,16 +153,32 @@ oráculo contra o ngspice.
    formas de onda divergiam na régua de comparação.
 5. **UIC não emite o ponto t=0** (ngspice; o 3f5 despeja o vetor
    zerado intocado).
-6. **NEWCONV**: o teste de corrente do diodo (`DIOconvTest`) só faz
-   efeito com o bypass de dispositivos, que o Dune não implementa; a
-   convergência fica com o `NIconvTest` + o flag de limitação do
-   `pnjlim`, como no 3f5 efetivo.
+6. **NEWCONV**: além do teste de nós do `NIconvTest`, o 3f5 chama
+   `CKTconvTest` → os testes de corrente por dispositivo
+   (`dioconv.c`, `bjtconv.c`, `mos1conv.c`, `mos2conv.c`) a cada
+   iteração candidata — o Dune implementa todos via
+   `Device::conv_test` (uma versão anterior desta nota dizia,
+   errado, que eles eram inertes sem bypass). São eles que forçam
+   as junções a assentar na escala de µV, não de mV; sem eles o
+   mosamp2 "convergia" com correntes frouxas.
 7. **Fim de varredura `.dc` com epsilon** (ngspice): o 3f5 compara o
    valor acumulado cru com o stop e perde o último ponto quando o
    arredondamento passa de raspão; o ngspice (e o Dune) usam
    `> stop + DBL_EPSILON·1e3`. Passo zero/não-finito é erro (o 3f5
    entraria em laço infinito). Varreduras hostis têm teto de memória
    (~50 M valores) com erro limpo.
+
+8. **Formas ngspice onde o 3f5 não fecha ou diverge do oráculo**
+   (tabela completa em `corpus/KNOWN_DIFFS.md`): `DEVqmeyer` com
+   `MAGIC_VDS` e a repartição gs/gd na inversão fraca; diodos de
+   corpo do MOS em 3 regiões com gmin dentro da corrente; junções
+   do BJT com gmin nos ramos de fuga e cauda polinomial abaixo de
+   −3·n·vt; *dynamic gmin stepping* de Gillespie como default do
+   `CKTop` (`gminsteps=1`; a escada do 3f5 vive em `gminsteps>1`);
+   `srcFact` escalando toda fonte no TRANOP. Exceção na outra
+   direção: o corte do MOS2 fica na fronteira `von` do 3f5 (o
+   `vbin` do ngspice produz gm negativo com corrente nula e só
+   converge com o dynamic gmin de lá; correntes idênticas).
 
 ## Pendências (fases seguintes)
 
@@ -153,3 +188,8 @@ oráculo contra o ngspice.
 - MOS níveis 2/3/6, JFET/MESFET, chaves, linhas T/O/U, fonte B
   (Fase 3).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.
+- Fallbacks restantes do op do ngspice: `gillespie_src` (rampa
+  adaptativa de fontes) e o *transient op* (acha o `.op` por um
+  pseudo-transiente — é o único que fecha um `.op` puro com BJT
+  `off` atrás de fonte só-transiente; o caso `.tran` equivalente
+  está coberto e regredido em `corpus/regress/offbjt.cir`).

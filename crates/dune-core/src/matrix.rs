@@ -157,6 +157,20 @@ impl LoadCtx<'_> {
     }
 }
 
+/// What a device's convergence test sees (`CKTconvTest` →
+/// `dev/*conv.c`, active under NEWCONV): the fresh solution
+/// (`CKTrhs`), the previous one (`CKTrhsOld`) and the state banks
+/// the last load wrote.
+pub(crate) struct ConvCtx<'a> {
+    /// New solution, var-indexed (`CKTrhs` after the solve).
+    pub rhs: &'a [f64],
+    /// Previous solution (`CKTrhsOld`).
+    pub sol: &'a [f64],
+    pub states: &'a crate::state::States,
+    pub reltol: f64,
+    pub abstol: f64,
+}
+
 /// The AC load environment (`CKTacLoad`): the complex matrix
 /// `G + jB` over the same sparsity pattern, split into parallel
 /// real/imaginary slot arrays, plus the complex RHS.

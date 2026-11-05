@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Bjt, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mutual, Resistor, Vccs,
-    Vcvs, Vsource,
+    Bjt, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mutual, Resistor,
+    Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -26,7 +26,11 @@ impl Circuit {
         // Diode, BJT and MOS models.
         let mut dmodels: HashMap<&str, DiodeModel> = HashMap::new();
         let mut qmodels: HashMap<&str, crate::bjt::BjtModel> = HashMap::new();
-        let mut mmodels: HashMap<&str, crate::mos1::Mos1Model> = HashMap::new();
+        enum MosModel {
+            M1(crate::mos1::Mos1Model),
+            M2(crate::mos2::Mos2Model),
+        }
+        let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
         for m in &nl.models {
             match m.mtype.as_str() {
                 "d" => match diode_model(m) {
@@ -48,7 +52,14 @@ impl Circuit {
                     if level == 1.0 {
                         match mos1_model(m) {
                             Ok(mm) => {
-                                mmodels.insert(m.name.as_str(), mm);
+                                mmodels.insert(m.name.as_str(), MosModel::M1(mm));
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                    } else if level == 2.0 {
+                        match mos2_model(m) {
+                            Ok(mm) => {
+                                mmodels.insert(m.name.as_str(), MosModel::M2(mm));
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
@@ -317,47 +328,73 @@ impl Circuit {
                         ));
                         continue;
                     };
-                    let mut spec = Mos1 {
-                        name,
-                        nodes: four(&el.nodes),
-                        model: mm.clone(),
-                        l: None,
-                        w: None,
-                        ad: None,
-                        as_: None,
-                        pd: 0.0,
-                        ps: 0.0,
-                        nrd: 1.0,
-                        nrs: 1.0,
-                        off: false,
-                        ic: (0.0, 0.0, 0.0),
-                        temp: None,
-                    };
+                    let mut inst = MosInst::new();
                     for p in params {
                         match (p.name.as_str(), &p.value) {
-                            ("l", ParamValue::Num(v)) => spec.l = Some(*v),
-                            ("w", ParamValue::Num(v)) => spec.w = Some(*v),
-                            ("ad", ParamValue::Num(v)) => spec.ad = Some(*v),
-                            ("as", ParamValue::Num(v)) => spec.as_ = Some(*v),
-                            ("pd", ParamValue::Num(v)) => spec.pd = *v,
-                            ("ps", ParamValue::Num(v)) => spec.ps = *v,
-                            ("nrd", ParamValue::Num(v)) => spec.nrd = *v,
-                            ("nrs", ParamValue::Num(v)) => spec.nrs = *v,
-                            ("off", ParamValue::Flag) => spec.off = true,
-                            ("temp", ParamValue::Num(v)) => spec.temp = Some(v + CTOK),
-                            ("ic", ParamValue::Num(v)) => spec.ic = (*v, 0.0, 0.0),
+                            ("l", ParamValue::Num(v)) => inst.l = Some(*v),
+                            ("w", ParamValue::Num(v)) => inst.w = Some(*v),
+                            ("ad", ParamValue::Num(v)) => inst.ad = Some(*v),
+                            ("as", ParamValue::Num(v)) => inst.as_ = Some(*v),
+                            ("pd", ParamValue::Num(v)) => inst.pd = *v,
+                            ("ps", ParamValue::Num(v)) => inst.ps = *v,
+                            ("nrd", ParamValue::Num(v)) => inst.nrd = *v,
+                            ("nrs", ParamValue::Num(v)) => inst.nrs = *v,
+                            ("off", ParamValue::Flag) => inst.off = true,
+                            ("temp", ParamValue::Num(v)) => inst.temp = Some(v + CTOK),
+                            ("ic", ParamValue::Num(v)) => inst.ic = (*v, 0.0, 0.0),
                             ("ic", ParamValue::NumList(v)) => {
-                                spec.ic = (
+                                inst.ic = (
                                     v.first().copied().unwrap_or(0.0),
                                     v.get(1).copied().unwrap_or(0.0),
                                     v.get(2).copied().unwrap_or(0.0),
                                 );
                             }
-                            _ => problems
-                                .push(format!("`{}`: unknown parameter ({})", spec.name, p.name)),
+                            _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
-                    add(&mut ckt, spec, &mut problems);
+                    let nodes = four(&el.nodes);
+                    match mm {
+                        MosModel::M1(m1) => add(
+                            &mut ckt,
+                            Mos1 {
+                                name,
+                                nodes,
+                                model: m1.clone(),
+                                l: inst.l,
+                                w: inst.w,
+                                ad: inst.ad,
+                                as_: inst.as_,
+                                pd: inst.pd,
+                                ps: inst.ps,
+                                nrd: inst.nrd,
+                                nrs: inst.nrs,
+                                off: inst.off,
+                                ic: inst.ic,
+                                temp: inst.temp,
+                            },
+                            &mut problems,
+                        ),
+                        MosModel::M2(m2) => add(
+                            &mut ckt,
+                            Mos2 {
+                                name,
+                                nodes,
+                                model: m2.clone(),
+                                l: inst.l,
+                                w: inst.w,
+                                ad: inst.ad,
+                                as_: inst.as_,
+                                pd: inst.pd,
+                                ps: inst.ps,
+                                nrd: inst.nrd,
+                                nrs: inst.nrs,
+                                off: inst.off,
+                                ic: inst.ic,
+                                temp: inst.temp,
+                            },
+                            &mut problems,
+                        ),
+                    }
                 }
                 other => {
                     problems.push(format!(
@@ -489,6 +526,92 @@ fn mos1_model(m: &ir::Model) -> Result<crate::mos1::Mos1Model, String> {
             "nsub" => mm.nsub = Some(v),
             "tpg" => mm.tpg = Some(v),
             "nss" => mm.nss = Some(v),
+            "kf" => mm.kf = v,
+            "af" => mm.af = v,
+            "tnom" => mm.tnom = Some(v + CTOK),
+            other => return Err(format!("unknown parameter ({other})")),
+        }
+    }
+    Ok(mm)
+}
+
+/// MOSFET instance parameters shared by every level
+/// (`l`/`w`/`ad`/`as` keep given-ness for the `.options` defaults;
+/// `nrd`/`nrs` default to 1).
+#[derive(Default)]
+struct MosInst {
+    l: Option<f64>,
+    w: Option<f64>,
+    ad: Option<f64>,
+    as_: Option<f64>,
+    pd: f64,
+    ps: f64,
+    nrd: f64,
+    nrs: f64,
+    off: bool,
+    ic: (f64, f64, f64),
+    temp: Option<f64>,
+}
+
+impl MosInst {
+    fn new() -> Self {
+        MosInst {
+            nrd: 1.0,
+            nrs: 1.0,
+            ..Default::default()
+        }
+    }
+}
+
+/// Map `.model x nmos/pmos(level=2 …)` parameters onto
+/// [`crate::mos2::Mos2Model`] (`mos2.c`).
+fn mos2_model(m: &ir::Model) -> Result<crate::mos2::Mos2Model, String> {
+    let mut mm = crate::mos2::Mos2Model::new(m.mtype == "nmos");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmos" || p.name == "pmos" => {
+                mm.nmos = p.name == "nmos";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "level" => {}
+            "vto" | "vt0" => mm.vto = Some(v),
+            "kp" => mm.kp = Some(v),
+            "gamma" => mm.gamma = Some(v),
+            "phi" => mm.phi = Some(v),
+            "lambda" => mm.lambda = v,
+            "rd" => mm.rd = Some(v),
+            "rs" => mm.rs = Some(v),
+            "cbd" => mm.cbd = Some(v),
+            "cbs" => mm.cbs = Some(v),
+            "is" => mm.is = v,
+            "pb" => mm.pb = v,
+            "cgso" => mm.cgso = v,
+            "cgdo" => mm.cgdo = v,
+            "cgbo" => mm.cgbo = v,
+            "rsh" => mm.rsh = Some(v),
+            "cj" => mm.cj = Some(v),
+            "mj" => mm.mj = v,
+            "cjsw" => mm.cjsw = Some(v),
+            "mjsw" => mm.mjsw = v,
+            "js" => mm.js = v,
+            "tox" => mm.tox = Some(v),
+            "ld" => mm.ld = v,
+            "u0" | "uo" => mm.u0 = Some(v),
+            "fc" => mm.fc = v,
+            "nsub" => mm.nsub = Some(v),
+            "tpg" => mm.tpg = Some(v),
+            "nss" => mm.nss = Some(v),
+            "delta" => mm.delta = v,
+            "uexp" => mm.uexp = v,
+            "ucrit" => mm.ucrit = v,
+            "vmax" => mm.vmax = v,
+            "xj" => mm.xj = v,
+            "neff" => mm.neff = v,
+            "nfs" => mm.nfs = v,
             "kf" => mm.kf = v,
             "af" => mm.af = v,
             "tnom" => mm.tnom = Some(v + CTOK),

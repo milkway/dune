@@ -418,6 +418,31 @@ impl BjtI {
 }
 
 impl crate::devices::Device for BjtI {
+    /// `BJTconvTest`: predicted vs computed collector and base
+    /// currents, evaluated at the previous solution (`CKTrhsOld`).
+    fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {
+        let typ = self.t.type_;
+        let st = self.st;
+        let vbe = typ * (ctx.sol[self.base_p] - ctx.sol[self.emit_p]);
+        let vbc = typ * (ctx.sol[self.base_p] - ctx.sol[self.col_p]);
+        let delvbe = vbe - ctx.states.get(0, st + VBE);
+        let delvbc = vbc - ctx.states.get(0, st + VBC);
+        let cc = ctx.states.get(0, st + CC);
+        let cb = ctx.states.get(0, st + CB);
+        let gm = ctx.states.get(0, st + GM);
+        let go = ctx.states.get(0, st + GO);
+        let gpi = ctx.states.get(0, st + GPI);
+        let gmu = ctx.states.get(0, st + GMU);
+        let cchat = cc + (gm + go) * delvbe - (go + gmu) * delvbc;
+        let cbhat = cb + gpi * delvbe + gmu * delvbc;
+        let tol = ctx.reltol * f64::max(cchat.abs(), cc.abs()) + ctx.abstol;
+        if (cchat - cc).abs() > tol {
+            return false;
+        }
+        let tol = ctx.reltol * f64::max(cbhat.abs(), cb.abs()) + ctx.abstol;
+        (cbhat - cb).abs() <= tol
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         let (c, b, e, s) = (self.col, self.base, self.emit, self.subst);
         let (cp, bp, ep) = (self.col_p, self.base_p, self.emit_p);
@@ -548,47 +573,68 @@ impl crate::devices::Device for BjtI {
             }
         }
 
-        // DC currents and conductances.
+        // DC currents and conductances, in the ngspice form: the
+        // pure junction keeps its exponential with a C³-continuous
+        // polynomial tail below −3·n·vt, and gmin rides on the
+        // leakage branches — the 3f5 put gmin inside gbe/gbc, where
+        // 1/βR amplifies it into gmu and the NEWCONV current test
+        // can never settle on an `off` device
+        // (`corpus/KNOWN_DIFFS.md`).
+        let e = crate::consts::E;
         let vtn = vt * t.nf;
-        let (cbe, gbe, cben, gben);
-        if vbe > -5.0 * vtn {
+        let (cbe, gbe, mut cben, mut gben);
+        if vbe >= -3.0 * vtn {
             let evbe = f64::exp(vbe / vtn);
-            cbe = csat * (evbe - 1.0) + ctx.gmin * vbe;
-            gbe = csat * evbe / vtn + ctx.gmin;
-            if c2 == 0.0 {
-                cben = 0.0;
-                gben = 0.0;
-            } else {
-                let evben = f64::exp(vbe / vte);
-                cben = c2 * (evben - 1.0);
-                gben = c2 * evben / vte;
-            }
+            cbe = csat * (evbe - 1.0);
+            gbe = csat * evbe / vtn;
         } else {
-            gbe = -csat / vbe + ctx.gmin;
-            cbe = gbe * vbe;
-            gben = -c2 / vbe;
-            cben = gben * vbe;
+            let arg = 3.0 * vtn / (vbe * e);
+            let arg = arg * arg * arg;
+            cbe = -csat * (1.0 + arg);
+            gbe = csat * 3.0 * arg / vbe;
         }
+        if c2 == 0.0 {
+            cben = 0.0;
+            gben = 0.0;
+        } else if vbe >= -3.0 * vte {
+            let evben = f64::exp(vbe / vte);
+            cben = c2 * (evben - 1.0);
+            gben = c2 * evben / vte;
+        } else {
+            let arg = 3.0 * vte / (vbe * e);
+            let arg = arg * arg * arg;
+            cben = -c2 * (1.0 + arg);
+            gben = c2 * 3.0 * arg / vbe;
+        }
+        gben += ctx.gmin;
+        cben += ctx.gmin * vbe;
         let vtn = vt * t.nr;
-        let (cbc, gbc, cbcn, gbcn);
-        if vbc > -5.0 * vtn {
+        let (cbc, gbc, mut cbcn, mut gbcn);
+        if vbc >= -3.0 * vtn {
             let evbc = f64::exp(vbc / vtn);
-            cbc = csat * (evbc - 1.0) + ctx.gmin * vbc;
-            gbc = csat * evbc / vtn + ctx.gmin;
-            if c4 == 0.0 {
-                cbcn = 0.0;
-                gbcn = 0.0;
-            } else {
-                let evbcn = f64::exp(vbc / vtc);
-                cbcn = c4 * (evbcn - 1.0);
-                gbcn = c4 * evbcn / vtc;
-            }
+            cbc = csat * (evbc - 1.0);
+            gbc = csat * evbc / vtn;
         } else {
-            gbc = -csat / vbc + ctx.gmin;
-            cbc = gbc * vbc;
-            gbcn = -c4 / vbc;
-            cbcn = gbcn * vbc;
+            let arg = 3.0 * vtn / (vbc * e);
+            let arg = arg * arg * arg;
+            cbc = -csat * (1.0 + arg);
+            gbc = csat * 3.0 * arg / vbc;
         }
+        if c4 == 0.0 {
+            cbcn = 0.0;
+            gbcn = 0.0;
+        } else if vbc >= -3.0 * vtc {
+            let evbcn = f64::exp(vbc / vtc);
+            cbcn = c4 * (evbcn - 1.0);
+            gbcn = c4 * evbcn / vtc;
+        } else {
+            let arg = 3.0 * vtc / (vbc * e);
+            let arg = arg * arg * arg;
+            cbcn = -c4 * (1.0 + arg);
+            gbcn = c4 * 3.0 * arg / vbc;
+        }
+        gbcn += ctx.gmin;
+        cbcn += ctx.gmin * vbc;
 
         // Base charge (Early + high injection).
         let q1 = 1.0 / (1.0 - t.inv_early_f * vbc - t.inv_early_r * vbe);

@@ -39,6 +39,21 @@ impl States {
         self.banks[..maxord + 2].rotate_right(1);
     }
 
+    /// Bank-0 helpers for ngspice's dynamic gmin stepping
+    /// (`cktop.c::dynamic_gmin` zeroes, saves and restores
+    /// `CKTstate0`).
+    pub fn zero0(&mut self) {
+        self.banks[0].fill(0.0);
+    }
+
+    pub fn snapshot0(&self) -> Vec<f64> {
+        self.banks[0].clone()
+    }
+
+    pub fn restore0(&mut self, saved: &[f64]) {
+        self.banks[0].copy_from_slice(saved);
+    }
+
     /// `bcopy(state0, state1, …)` after the transient operating
     /// point (`dctran.c`).
     pub fn copy01(&mut self) {

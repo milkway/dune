@@ -140,7 +140,7 @@ fn egfet(t: f64) -> f64 {
 /// instance defaults; `l`/`w`/`ad`/`as` fall back to the
 /// `.options defl/defw/defad/defas` values).
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Mos1Geom {
+pub(crate) struct MosGeom {
     pub l: f64,
     pub w: f64,
     pub ad: f64,
@@ -198,7 +198,7 @@ impl Mos1Temp {
     pub fn new(
         name: &str,
         m: &Mos1Model,
-        g: &Mos1Geom,
+        g: &MosGeom,
         temp: f64,
         default_tnom: f64,
     ) -> Result<Self, String> {
@@ -466,10 +466,15 @@ pub(crate) fn fetlim(vnew: f64, vold: f64, vto: f64) -> f64 {
     }
 }
 
-/// `DEVqmeyer` (`devsup.c`): Meyer gate capacitances. Returns half
-/// of the non-constant portion of (capgs, capgd, capgb) at the
-/// current bias; the caller averages with the previous timepoint and
-/// adds the constant overlap part.
+/// `DEVqmeyer` (ngspice `devsup.c`): Meyer gate capacitances.
+/// Returns half of the non-constant portion of (capgs, capgd,
+/// capgb) at the current bias; the caller averages with the
+/// previous timepoint and adds the constant overlap part.
+///
+/// This is the **ngspice** version, not the 3f5's: `vdsat` is
+/// clamped to `MAGIC_VDS` (25 mV) and the weak-inversion region
+/// splits the gate capacitance between source and drain with the
+/// saturation smoothing (`corpus/KNOWN_DIFFS.md`).
 pub(crate) fn qmeyer(
     vgs: f64,
     vgd: f64,
@@ -479,17 +484,28 @@ pub(crate) fn qmeyer(
     phi: f64,
     cox: f64,
 ) -> (f64, f64, f64) {
+    const MAGIC_VDS: f64 = 0.025;
     let vgst = vgs - von;
+    let vdsat = vdsat.max(MAGIC_VDS);
     if vgst <= -phi {
         (0.0, 0.0, cox / 2.0)
     } else if vgst <= -phi / 2.0 {
         (0.0, 0.0, -vgst * cox / (2.0 * phi))
     } else if vgst <= 0.0 {
-        (
-            vgst * cox / (1.5 * phi) + cox / 3.0,
-            0.0,
-            -vgst * cox / (2.0 * phi),
-        )
+        let capgb = -vgst * cox / (2.0 * phi);
+        let mut capgs = vgst * cox / (1.5 * phi) + cox / 3.0;
+        let vds = vgs - vgd;
+        let capgd;
+        if vds >= vdsat {
+            capgd = 0.0;
+        } else {
+            let vddif = 2.0 * vdsat - vds;
+            let vddif1 = vdsat - vds;
+            let vddif2 = vddif * vddif;
+            capgd = capgs * (1.0 - vdsat * vdsat / vddif2);
+            capgs *= 1.0 - vddif1 * vddif1 / vddif2;
+        }
+        (capgs, capgd, capgb)
     } else {
         let vds = vgs - vgd;
         if vdsat <= vds {
@@ -559,7 +575,7 @@ pub(crate) struct Mos1I {
     d_p: Var,
     s_p: Var,
     t: Mos1Temp,
-    geom: Mos1Geom,
+    geom: MosGeom,
     off: bool,
     ic_vds: f64,
     ic_vgs: f64,
@@ -577,6 +593,9 @@ pub(crate) struct Mos1I {
     gbs: f64,
     capbd: f64,
     capbs: f64,
+    cd: f64,
+    cbs: f64,
+    cbd: f64,
 }
 
 impl Mos1I {
@@ -585,7 +604,7 @@ impl Mos1I {
         nodes: [Var; 4],  // d g s b
         primes: [Var; 2], // d' s'
         t: Mos1Temp,
-        geom: Mos1Geom,
+        geom: MosGeom,
         off: bool,
         ic: (f64, f64, f64), // (vds, vgs, vbs)
         st: usize,
@@ -615,11 +634,45 @@ impl Mos1I {
             gbs: 0.0,
             capbd: 0.0,
             capbs: 0.0,
+            cd: 0.0,
+            cbs: 0.0,
+            cbd: 0.0,
         }
     }
 }
 
 impl crate::devices::Device for Mos1I {
+    /// `Mos1convTest`: predicted vs computed drain and bulk
+    /// currents, evaluated at the fresh solution (`CKTrhs`).
+    fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {
+        let typ = self.t.type_;
+        let st = self.st;
+        let vbs = typ * (ctx.rhs[self.bulk] - ctx.rhs[self.s_p]);
+        let vgs = typ * (ctx.rhs[self.gate] - ctx.rhs[self.s_p]);
+        let vds = typ * (ctx.rhs[self.d_p] - ctx.rhs[self.s_p]);
+        let vbd = vbs - vds;
+        let vgd = vgs - vds;
+        let vgdo = ctx.states.get(0, st + VGS) - ctx.states.get(0, st + VDS);
+        let delvbs = vbs - ctx.states.get(0, st + VBS);
+        let delvbd = vbd - ctx.states.get(0, st + VBD);
+        let delvgs = vgs - ctx.states.get(0, st + VGS);
+        let delvds = vds - ctx.states.get(0, st + VDS);
+        let delvgd = vgd - vgdo;
+        let cdhat = if self.mode >= 0.0 {
+            self.cd - self.gbd * delvbd + self.gmbs * delvbs + self.gm * delvgs + self.gds * delvds
+        } else {
+            self.cd - (self.gbd - self.gmbs) * delvbd - self.gm * delvgd + self.gds * delvds
+        };
+        let cbhat = self.cbs + self.cbd + self.gbd * delvbd + self.gbs * delvbs;
+        let tol = ctx.reltol * f64::max(cdhat.abs(), self.cd.abs()) + ctx.abstol;
+        if (cdhat - self.cd).abs() >= tol {
+            return false;
+        }
+        let cb = self.cbs + self.cbd;
+        let tol = ctx.reltol * f64::max(cbhat.abs(), cb.abs()) + ctx.abstol;
+        (cbhat - cb).abs() <= tol
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         let (d, g, s, b) = (self.drain, self.gate, self.source, self.bulk);
         let (dp, sp) = (self.d_p, self.s_p);
@@ -754,26 +807,26 @@ impl crate::devices::Device for Mos1I {
         let vgd = vgs - vds;
         let vgb = vgs - vbs;
 
-        // Bulk-source and bulk-drain diodes.
+        // Bulk-source and bulk-drain diodes, in the ngspice form:
+        // flat leakage below −3·vt, exponential (clamped) above,
+        // with gmin folded into the current (`corpus/KNOWN_DIFFS.md`).
         let (mut gbs, mut cbs);
-        if vbs <= 0.0 {
-            gbs = source_sat_cur / vt;
-            cbs = gbs * vbs;
-            gbs += ctx.gmin;
+        if vbs <= -3.0 * vt {
+            gbs = ctx.gmin;
+            cbs = gbs * vbs - source_sat_cur;
         } else {
             let evbs = f64::exp(f64::min(MAX_EXP_ARG, vbs / vt));
             gbs = source_sat_cur * evbs / vt + ctx.gmin;
-            cbs = source_sat_cur * (evbs - 1.0);
+            cbs = source_sat_cur * (evbs - 1.0) + ctx.gmin * vbs;
         }
         let (mut gbd, mut cbd);
-        if vbd <= 0.0 {
-            gbd = drain_sat_cur / vt;
-            cbd = gbd * vbd;
-            gbd += ctx.gmin;
+        if vbd <= -3.0 * vt {
+            gbd = ctx.gmin;
+            cbd = gbd * vbd - drain_sat_cur;
         } else {
             let evbd = f64::exp(f64::min(MAX_EXP_ARG, vbd / vt));
             gbd = drain_sat_cur * evbd / vt + ctx.gmin;
-            cbd = drain_sat_cur * (evbd - 1.0);
+            cbd = drain_sat_cur * (evbd - 1.0) + ctx.gmin * vbd;
         }
 
         // Normal (vds ≥ 0) or inverse mode.
@@ -995,8 +1048,11 @@ impl crate::devices::Device for Mos1I {
         }
 
         // Load the current vector.
-        let ceqbs = typ * (cbs - (gbs - ctx.gmin) * vbs);
-        let ceqbd = typ * (cbd - (gbd - ctx.gmin) * vbd);
+        // ngspice folds gmin into the junction current, so the
+        // Norton companion uses the full conductance (the 3f5
+        // subtracted gmin here).
+        let ceqbs = typ * (cbs - gbs * vbs);
+        let ceqbd = typ * (cbd - gbd * vbd);
         let (xnrm, xrev, cdreq);
         if mode >= 0.0 {
             xnrm = 1.0;
@@ -1007,7 +1063,10 @@ impl crate::devices::Device for Mos1I {
             xrev = 1.0;
             cdreq = -typ * (cdrain - gds * (-vds) - gm * vgd - gmbs * vbd);
         }
-        let _ = cd; // `MOS1cd` feeds the (compiled-out) NEWCONV test
+        // Saved for the convergence test (`mos1conv.c`).
+        self.cd = cd;
+        self.cbs = cbs;
+        self.cbd = cbd;
         ctx.rhs[self.gate] -= typ * (ceqgs + ceqgb + ceqgd);
         ctx.rhs[self.bulk] -= ceqbs + ceqbd - typ * ceqgb;
         ctx.rhs[self.d_p] += ceqbd - cdreq + typ * ceqgd;
@@ -1162,7 +1221,7 @@ mod tests {
         m.cgdo = 1e-6;
         m.cbd = Some(50e-12);
         m.cbs = Some(50e-12);
-        let g = Mos1Geom {
+        let g = MosGeom {
             l: 5e-6,
             w: 250e-6,
             ad: 0.0,

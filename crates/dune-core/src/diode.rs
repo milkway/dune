@@ -267,6 +267,17 @@ impl DiodeI {
 }
 
 impl crate::devices::Device for DiodeI {
+    /// `DIOconvTest`: predicted vs computed junction current,
+    /// evaluated at the previous solution (`CKTrhsOld`).
+    fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {
+        let vd = ctx.sol[self.pos_prime] - ctx.sol[self.neg];
+        let delvd = vd - ctx.states.get(0, self.st + VOLTAGE);
+        let cd = ctx.states.get(0, self.st + CURRENT);
+        let cdhat = cd + ctx.states.get(0, self.st + CONDUCT) * delvd;
+        let tol = ctx.reltol * f64::max(cdhat.abs(), cd.abs()) + ctx.abstol;
+        (cdhat - cd).abs() <= tol
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.slots = [
             mb.slot(self.pos, self.pos),

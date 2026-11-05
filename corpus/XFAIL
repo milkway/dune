@@ -3,3 +3,4 @@
 # past the cap does, and an unexpected PASS asks for removal.
 # Format: stem|plotname|max_margin|reason
 schmitt|Transient Analysis|5|regenerative edges: trap-ringing phase differs between engines beyond any pointwise ruler (D-0011); node voltages agree except inside the switching windows
+mosamp2|Transient Analysis|7|Meyer charge is step-path dependent and the step controller is bistable here: ngspice rides a 0.1-1ns LTE limit cycle for 2us while Dune cruises at TMAX; ngspice's own 0.5ns rerun differs from its default-step golden by 0.87x the allowance, and Dune at 0.5ns matches that rerun to 8mV (op/DC/AC match at 1e-5) - D-0011

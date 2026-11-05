@@ -26,7 +26,9 @@ pub struct Options {
     /// `ITL4`: transient timepoint iteration limit, default 10
     /// (`CKTtranMaxIter`).
     pub itl4: usize,
-    /// Gmin steps in `CKTop`, default 10 (`TSKnumGminSteps`).
+    /// Gmin steps in `CKTop`. 1 (the ngspice default) selects the
+    /// dynamic Gillespie stepping; n > 1 runs the 3f5 fixed ladder
+    /// with n steps (`corpus/KNOWN_DIFFS.md`).
     pub gminsteps: usize,
     /// Source steps in `CKTop`, default 10 (`TSKnumSrcSteps`).
     pub srcsteps: usize,
@@ -70,7 +72,7 @@ impl Default for Options {
             itl1: 100,
             itl2: 50,
             itl4: 10,
-            gminsteps: 10,
+            gminsteps: 1,
             srcsteps: 10,
             temp: REFTEMP,
             tnom: REFTEMP,

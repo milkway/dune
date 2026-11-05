@@ -179,6 +179,8 @@ impl Engine {
     }
 
     /// One `NIiter` call. `start` is the `INITF` state to begin in.
+    /// Returns the iteration count (the dynamic gmin stepping
+    /// adapts its factor on it).
     fn ni_iter(
         &mut self,
         opts: &Options,
@@ -186,13 +188,13 @@ impl Engine {
         maxiter: usize,
         diag_gmin: f64,
         srcfact: f64,
-    ) -> Result<(), Error> {
+    ) -> Result<usize, Error> {
         // The UIC transient operating point: one load, no solve
         // (`niiter.c` top).
         if self.kind == AnKind::TranOp && self.uic {
             std::mem::swap(&mut self.sol, &mut self.rhs);
             self.load_all(start, opts, srcfact);
-            return Ok(());
+            return Ok(0);
         }
 
         let mut mode = start;
@@ -235,7 +237,7 @@ impl Engine {
                     }
                     if !noncon {
                         std::mem::swap(&mut self.sol, &mut self.rhs);
-                        return Ok(());
+                        return Ok(iterno);
                     }
                 }
                 InitMode::Jct => mode = InitMode::Fix,
@@ -251,7 +253,8 @@ impl Engine {
         }
     }
 
-    /// `NIconvTest`.
+    /// `NIconvTest`: the node/branch deltas, then the per-device
+    /// current tests (`CKTconvTest`, active under NEWCONV).
     fn converged(&self, opts: &Options) -> bool {
         for i in 1..self.vars.len() {
             let new = self.rhs[i];
@@ -265,7 +268,14 @@ impl Engine {
                 return false;
             }
         }
-        true
+        let ctx = crate::matrix::ConvCtx {
+            rhs: &self.rhs,
+            sol: &self.sol,
+            states: &self.states,
+            reltol: opts.reltol,
+            abstol: opts.abstol,
+        };
+        self.devices.iter().all(|d| d.conv_test(&ctx))
     }
 
     fn map_singular(&self, e: LinalgError) -> Error {
@@ -279,11 +289,14 @@ impl Engine {
         Error::Singular(name)
     }
 
-    /// `CKTop`.
+    /// `CKTop`. Direct Newton, then gmin stepping — ngspice's
+    /// dynamic (Gillespie) algorithm when `gminsteps == 1` (the
+    /// ngspice default), the 3f5 fixed ladder when `gminsteps > 1`
+    /// — then source stepping.
     pub fn op(&mut self, opts: &Options) -> Result<(), Error> {
         let first = InitMode::Jct;
         let direct = if !opts.noopiter {
-            self.ni_iter(opts, first, opts.itl1, 0.0, 1.0)
+            self.ni_iter(opts, first, opts.itl1, 0.0, 1.0).map(|_| ())
         } else {
             Err(Error::IterLim)
         };
@@ -291,6 +304,13 @@ impl Engine {
             return Ok(());
         }
         let mut last = direct;
+
+        if opts.gminsteps == 1 {
+            last = self.dynamic_gmin(opts);
+            if last.is_ok() {
+                return Ok(());
+            }
+        }
 
         if opts.gminsteps > 1 {
             let mut diag_gmin = opts.gmin;
@@ -305,7 +325,7 @@ impl Engine {
                 diag_gmin /= 10.0;
                 mode = InitMode::Float;
             }
-            last = self.ni_iter(opts, mode, opts.itl1, 0.0, 1.0);
+            last = self.ni_iter(opts, mode, opts.itl1, 0.0, 1.0).map(|_| ());
             if last.is_ok() {
                 return Ok(());
             }
@@ -323,6 +343,70 @@ impl Engine {
         }
 
         last
+    }
+
+    /// ngspice's dynamic gmin stepping (`cktop.c::dynamic_gmin`,
+    /// Alan Gillespie): start from a zeroed solution with a large
+    /// diagonal gmin and shrink it adaptively — the factor grows
+    /// when Newton converges fast, shrinks on failure, and the
+    /// state rolls back to the last good step. The 3f5 has only the
+    /// fixed ladder; several classic decks (schmitt, mosamp2) need
+    /// this once the NEWCONV device tests are enforced
+    /// (`corpus/KNOWN_DIFFS.md`).
+    fn dynamic_gmin(&mut self, opts: &Options) -> Result<(), Error> {
+        /// `CKTgminFactor` (ngspice default).
+        const GMIN_FACTOR: f64 = 10.0;
+        self.sol.fill(0.0);
+        self.states.zero0();
+        let mut factor = GMIN_FACTOR;
+        let mut old_gmin = 1e-2;
+        let mut diag_gmin = old_gmin / factor;
+        let gtarget = opts.gmin; // gshunt defaults to 0
+        let mut saved_sol: Vec<f64> = vec![0.0; self.sol.len()];
+        let mut saved_states = self.states.snapshot0();
+        let mut mode = InitMode::Jct;
+        loop {
+            match self.ni_iter(opts, mode, opts.itl2, diag_gmin, 1.0) {
+                Ok(iters) => {
+                    mode = InitMode::Float;
+                    if diag_gmin <= gtarget {
+                        break;
+                    }
+                    saved_sol.copy_from_slice(&self.sol);
+                    saved_states = self.states.snapshot0();
+                    if iters <= opts.itl2 / 4 {
+                        factor *= factor.sqrt();
+                        if factor > GMIN_FACTOR {
+                            factor = GMIN_FACTOR;
+                        }
+                    }
+                    if iters > 3 * opts.itl2 / 4 {
+                        factor = factor.sqrt();
+                    }
+                    old_gmin = diag_gmin;
+                    if diag_gmin < factor * gtarget {
+                        diag_gmin = gtarget;
+                    } else {
+                        diag_gmin /= factor;
+                    }
+                }
+                // Any failure (the C only looks at the convergence
+                // flag): back off the factor and roll back.
+                Err(_) => {
+                    if factor < 1.00005 {
+                        return Err(Error::IterLim);
+                    }
+                    factor = factor.sqrt().sqrt();
+                    diag_gmin = old_gmin / factor;
+                    self.sol.copy_from_slice(&saved_sol);
+                    self.states.restore0(&saved_states);
+                }
+            }
+        }
+        // `CKTdiagGmin = CKTgshunt` (0), then the full-precision
+        // Newton at `iterlim`.
+        self.ni_iter(opts, InitMode::Float, opts.itl1, 0.0, 1.0)
+            .map(|_| ())
     }
 
     /// `DCtrCurv`: sweep one or two sources, the first innermost.

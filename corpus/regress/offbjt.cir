@@ -1,0 +1,15 @@
+off bjt behind an unscaled pulse source - NEWCONV trap regression
+* An `off` BJT whose base is driven by a transient-function source
+* (source stepping cannot scale it to zero) used to pin the device
+* at zero bias in INITFIX forever: with gmin inside gbe/gbc the
+* BJTconvTest current never settled (gmu = gmin/BR) and every CKTop
+* strategy looped. Fixed by the ngspice junction form (gmin on the
+* leakage branches), dynamic gmin stepping, and the ngspice TRANOP
+* source scaling that lets source stepping zero this pulse.
+vin b 0 pulse(-1.6 -1.2 10ns 400ns 400ns 100ns 10000ns)
+vc c 0 2
+re e 0 260
+q1 c b e qstd off
+.model qstd npn(is=1.0e-16 bf=50 br=0.1 rb=50 rc=10 va=50)
+.tran 50ns 1us
+.end

@@ -3,7 +3,9 @@
 //! / `*trunc.c` / `*acct.c` files named on each type.
 
 use crate::integ::TerrCtx;
-use crate::matrix::{AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
+use crate::matrix::{
+    AcCtx, AcceptCtx, AnKind, ConvCtx, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var,
+};
 use crate::srcfn::Wave;
 
 /// A device instance bound to matrix positions and state slots.
@@ -27,6 +29,12 @@ pub(crate) trait Device {
     fn accept(&mut self, _ctx: &mut AcceptCtx) {}
     /// Overwrite the DC value (`.dc` sweep). No-op elsewhere.
     fn set_dc(&mut self, _value: f64) {}
+    /// Device convergence test (`*conv.c`, NEWCONV): called once
+    /// the node voltages pass `NIconvTest`; returns false when the
+    /// device's current disagrees with its own linearization.
+    fn conv_test(&self, _ctx: &ConvCtx) -> bool {
+        true
+    }
 }
 
 /// `RESload` (`dev/res/resload.c`): conductance between two nodes.
@@ -346,18 +354,28 @@ impl BranchStamp {
 }
 
 /// Value of an independent source at this iteration (`VSRCload`,
-/// `ISRCload`): the DC value under DC modes when it was given,
-/// otherwise the transient function at `time` (0 under DC), else DC.
+/// `ISRCload`): the DC value under `.op`/`.dc` when it was given,
+/// otherwise the transient function at `time` (0 under DC modes),
+/// else DC. Under the transient operating point ngspice scales the
+/// final value — whatever produced it — by `srcFact`, so source
+/// stepping can zero transient-function sources too; the 3f5 left
+/// those unscaled and its stepping could never converge a tranop
+/// driven only by such sources (`corpus/KNOWN_DIFFS.md`).
 fn source_value(ctx: &LoadCtx, dc: Option<f64>, wave: &Option<Wave>) -> f64 {
-    if ctx.is_dc() && dc.is_some() {
+    if matches!(ctx.kind, AnKind::DcOp | AnKind::DcSweep) && dc.is_some() {
         return ctx.srcfact * dc.unwrap_or(0.0);
     }
-    match wave {
+    let v = match wave {
         Some(w) => {
             let time = if ctx.is_dc() { 0.0 } else { ctx.time };
             w.value(time, ctx.step, ctx.final_time)
         }
-        None => ctx.srcfact * dc.unwrap_or(0.0),
+        None => dc.unwrap_or(0.0),
+    };
+    if ctx.kind == AnKind::TranOp {
+        v * ctx.srcfact
+    } else {
+        v
     }
 }
 

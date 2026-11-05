@@ -149,6 +149,30 @@ pub struct Mos1 {
     pub temp: Option<f64>,
 }
 
+/// Like [`Mos1`], but with the level-2 (Grove-Frohman) model. The
+/// 3f5 names its prime nodes `m1#internal#drain`/`#internal#source`
+/// (`mos2set.c`).
+#[derive(Clone, Debug)]
+pub struct Mos2 {
+    pub name: String,
+    /// Drain, gate, source, bulk.
+    pub nodes: [String; 4],
+    pub model: crate::mos2::Mos2Model,
+    pub l: Option<f64>,
+    pub w: Option<f64>,
+    pub ad: Option<f64>,
+    pub as_: Option<f64>,
+    pub pd: f64,
+    pub ps: f64,
+    pub nrd: f64,
+    pub nrs: f64,
+    pub off: bool,
+    /// `IC=VDS,VGS,VBS`.
+    pub ic: (f64, f64, f64),
+    /// Instance temperature override, kelvin.
+    pub temp: Option<f64>,
+}
+
 /// `DXXXXXXX N+ N- MNAME <AREA> <OFF>` with its model inline.
 #[derive(Clone, Debug)]
 pub struct Diode {
@@ -168,6 +192,7 @@ pub struct Diode {
 pub enum Spec {
     Bjt(Box<Bjt>),
     Mos1(Box<Mos1>),
+    Mos2(Box<Mos2>),
     Resistor(Resistor),
     Capacitor(Capacitor),
     Inductor(Inductor),
@@ -204,11 +229,18 @@ impl From<Mos1> for Spec {
     }
 }
 
+impl From<Mos2> for Spec {
+    fn from(s: Mos2) -> Spec {
+        Spec::Mos2(Box::new(s))
+    }
+}
+
 impl Spec {
     fn name(&self) -> &str {
         match self {
             Spec::Bjt(s) => &s.name,
             Spec::Mos1(s) => &s.name,
+            Spec::Mos2(s) => &s.name,
             Spec::Resistor(s) => &s.name,
             Spec::Capacitor(s) => &s.name,
             Spec::Inductor(s) => &s.name,
@@ -345,6 +377,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Mos2(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
     }
 }
 
@@ -424,6 +460,7 @@ impl Circuit {
             state_base.push(match spec {
                 Spec::Bjt(_) => st.alloc(crate::bjt::BJT_NUM_STATES),
                 Spec::Mos1(_) => st.alloc(crate::mos1::MOS1_NUM_STATES),
+                Spec::Mos2(_) => st.alloc(crate::mos2::MOS2_NUM_STATES),
                 Spec::Capacitor(_) => st.alloc(2),
                 Spec::Inductor(s) => {
                     let flux = st.alloc(2);
@@ -436,6 +473,7 @@ impl Circuit {
             let node_names: &[String] = match spec {
                 Spec::Bjt(s) => &s.nodes,
                 Spec::Mos1(s) => &s.nodes,
+                Spec::Mos2(s) => &s.nodes,
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
                 Spec::Inductor(s) => &s.nodes,
@@ -496,6 +534,22 @@ impl Circuit {
                         node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
                     }
                 }
+                Spec::Mos2(s) => {
+                    if s.model.needs_prime(s.nrd) {
+                        node(
+                            &mut vars,
+                            &mut node_ids,
+                            &format!("{}#internal#drain", s.name),
+                        );
+                    }
+                    if s.model.needs_prime(s.nrs) {
+                        node(
+                            &mut vars,
+                            &mut node_ids,
+                            &format!("{}#internal#source", s.name),
+                        );
+                    }
+                }
                 _ => {}
             }
         }
@@ -553,7 +607,7 @@ impl Circuit {
                     } else {
                         so
                     };
-                    let geom = crate::mos1::Mos1Geom {
+                    let geom = crate::mos1::MosGeom {
                         l: s.l.unwrap_or(opts.defl),
                         w: s.w.unwrap_or(opts.defw),
                         ad: s.ad.unwrap_or(opts.defad),
@@ -568,6 +622,45 @@ impl Circuit {
                         .map_err(Error::Build)?;
                     notes.extend(mt.notes.iter().cloned());
                     devices.push(Box::new(crate::mos1::Mos1I::new(
+                        [d, gt, so, b],
+                        [dp, sp],
+                        mt,
+                        geom,
+                        s.off,
+                        s.ic,
+                        base,
+                    )));
+                }
+                Spec::Mos2(s) => {
+                    let d = get(&node_ids, &s.nodes[0]);
+                    let gt = get(&node_ids, &s.nodes[1]);
+                    let so = get(&node_ids, &s.nodes[2]);
+                    let b = get(&node_ids, &s.nodes[3]);
+                    let dp = if s.model.needs_prime(s.nrd) {
+                        node_ids[&format!("{}#internal#drain", s.name)]
+                    } else {
+                        d
+                    };
+                    let sp = if s.model.needs_prime(s.nrs) {
+                        node_ids[&format!("{}#internal#source", s.name)]
+                    } else {
+                        so
+                    };
+                    let geom = crate::mos1::MosGeom {
+                        l: s.l.unwrap_or(opts.defl),
+                        w: s.w.unwrap_or(opts.defw),
+                        ad: s.ad.unwrap_or(opts.defad),
+                        as_: s.as_.unwrap_or(opts.defas),
+                        pd: s.pd,
+                        ps: s.ps,
+                        nrd: s.nrd,
+                        nrs: s.nrs,
+                    };
+                    let temp = s.temp.unwrap_or(opts.temp);
+                    let mt = crate::mos2::Mos2Temp::new(&s.name, &s.model, &geom, temp, opts.tnom)
+                        .map_err(Error::Build)?;
+                    notes.extend(mt.notes.iter().cloned());
+                    devices.push(Box::new(crate::mos2::Mos2I::new(
                         [d, gt, so, b],
                         [dp, sp],
                         mt,
