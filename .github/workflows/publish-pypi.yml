@@ -19,9 +19,12 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest # manylinux x86_64
-          - os: macos-14 # arm64
-          - os: macos-13 # x86_64
           - os: windows-latest
+          # macOS wheels wait for runner entitlement: on this private
+          # repo GitHub cancels macos-14 instantly (10x minutes) and
+          # macos-13 never leaves the queue (runner being retired).
+          # Re-add arm64/x86_64 here once minutes allow; meanwhile the
+          # macOS arm64 wheel builds locally (python/dist).
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
