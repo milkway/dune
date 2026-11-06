@@ -1,0 +1,10 @@
+* netlist extracted by dune-pic
+M2 Vout Vin Vdd Vdd PMOD W=8u L=1u
+M1 Vout Vin 0 0 NMOD W=4u L=1u
+V1 Vin 0 PULSE(0 5 5n 1n 1n 20n 50n)
+V2 Vdd 0 DC 5
+C1 Vout 0 1p
+.model NMOD NMOS(LEVEL=1 VTO=0.7 KP=110u LAMBDA=0.04)
+.model PMOD PMOS(LEVEL=1 VTO=-0.7 KP=50u LAMBDA=0.05)
+.tran 0.1n 60n
+.end

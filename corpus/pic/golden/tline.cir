@@ -1,0 +1,7 @@
+* netlist extracted by dune-pic
+V1 n1 0 PULSE(0 1 0 10p 10p 20n 40n)
+R1 n1 Vin 50
+T1 Vin 0 Vend 0 Z0=50 TD=1n
+R2 Vend 0 150
+.tran 10p 5n
+.end

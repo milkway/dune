@@ -1,0 +1,22 @@
+.PS
+# Reflection on a mismatched line: a 1 V step from a matched 50 ohm
+# source into a 50 ohm, 1 ns line ending in 150 ohm (Gamma = 0.5).
+# The launched 0.5 V wave reaches the load at TD and doubles to
+# 0.75 V there; the reflection is back at the input at 2 TD.
+spice = 1
+Vin:  (1.4,1.5)
+Vend: (3.8,1.5)
+V1: vsource((0,1.5), (0,0), PULSE(0 1 0 10p 10p 20n 40n))
+R1: resistor(V1.P, Vin, 50)
+T1: tline(Vin, Vend, Z0=50 TD=1n)
+R2: resistor(Vend, (3.8,0), 150)
+line from T1.N1 to (T1.N1.x,0)
+line from T1.N2 to (T1.N2.x,0)
+line from V1.N to R2.N
+dot at (T1.N1.x,0); dot at (T1.N2.x,0)
+dot at Vin; dot at Vend
+"in" above at Vin + (0,0.05)
+"end" above at Vend + (0,0.05)
+ground((1.2,0))
+.tran 10p 5n
+.PE

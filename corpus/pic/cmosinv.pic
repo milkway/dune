@@ -1,0 +1,29 @@
+.PS
+# CMOS inverter (MOS1) driving 1 pF: a 0 -> 5 V input pulse flips the
+# output rail to rail; no static current in either state.
+spice = 1
+M2: pmos((2,2.1), PMOD W=8u L=1u)
+M1: nmos((2,0.9), NMOD W=4u L=1u)
+Vin:  (1.2,1.5)
+Vout: (M1.D.x,1.5)
+Vdd:  (M2.S.x,2.7)
+
+V1: vsource((0.3,1.5), (0.3,0), PULSE(0 5 5n 1n 1n 20n 50n))
+V2: vsource((6.2,2.7), (6.2,0), DC 5)
+C1: capacitor((4.2,1.5), (4.2,0), 1p)
+line from M2.D to M1.D
+line from M1.G to (Vin.x,M1.G.y) then to (Vin.x,M2.G.y) then to M2.G
+line from V1.P to Vin
+line from Vout to C1.P
+line from M2.S to Vdd then to V2.P
+line from M1.S to (M1.S.x,0)
+line from V1.N to V2.N
+dot at Vin; dot at Vout; dot at C1.P; dot at (M1.S.x,0); dot at C1.N
+"in" above at (0.75,1.55)
+line from C1.P to (4.8,1.5); circle rad 0.04 at (4.84,1.5)
+"out" above at (4.84,1.55)
+ground((1.2,0))
+.model NMOD NMOS(LEVEL=1 VTO=0.7 KP=110u LAMBDA=0.04)
+.model PMOD PMOS(LEVEL=1 VTO=-0.7 KP=50u LAMBDA=0.05)
+.tran 0.1n 60n
+.PE

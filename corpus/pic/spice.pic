@@ -19,6 +19,8 @@
 #   nmos/pmos (M)  D G S B    (B drawn tied to S; pmos has S on top)
 #   njfet/pjfet(J) D G S
 #   opamp (X)      Inp Inm Out (subcircuit pin order)
+#   tline (T),     P1 N1 P2 N2 (port 1 +/-, port 2 +/-: card order)
+#   ltraline (O)
 #
 # Reserved marker labels: `Gnd` (ground block), `At` (anchor of
 # centered elements; their value is the 2nd argument, not the 3rd). Pin
@@ -193,6 +195,45 @@ define opamp {
     Out: circle invis rad 0 at (gY_x,gY_y)
   ] with .At at $1
 }
+
+# --- transmission lines (T, O) -------------------------------------------
+# tline(P1, P2, params) / ltraline(P1, P2, model): the coax symbol (the
+# stadium of std `tline`) from P1 to P2 is the signal conductor; each
+# port's return conductor leaves the shell near its end and ends 0.4 in
+# to the right of the P1 -> P2 direction (below a left-to-right line).
+# Pins in card order: P1 N1 P2 N2 (`T1 P1 N1 P2 N2 Z0=50 TD=1n`,
+# `O1 P1 N1 P2 N2 LMOD`). The body is 0.8 in long, less on a short line.
+define __dn_tline {
+  dnax=$1.x; dnay=$1.y; dnbx=$2.x; dnby=$2.y
+  dndx=dnbx-dnax; dndy=dnby-dnay; dnl=sqrt(dndx*dndx+dndy*dndy)
+  dnux=dndx/dnl; dnuy=dndy/dnl; dnpx=0-dnuy; dnpy=dnux
+  dntb=0.8; if dnl < 1.2 then { dntb=dnl-0.4 }
+  dnt0=(dnl-dntb)/2; dnt1=dnt0+dntb; dnth=0.12; dnr=0.4; dnri=0.12
+  line from (dnax,dnay) to (dnax+dnux*dnt0,dnay+dnuy*dnt0)
+  spline from (dnax+dnux*dnt0+dnpx*dnth,dnay+dnuy*dnt0+dnpy*dnth) \
+    to (dnax+dnux*(dnt0-dnth*0.7)+dnpx*dnth,dnay+dnuy*(dnt0-dnth*0.7)+dnpy*dnth) \
+    to (dnax+dnux*(dnt0-dnth*0.7)-dnpx*dnth,dnay+dnuy*(dnt0-dnth*0.7)-dnpy*dnth) \
+    to (dnax+dnux*dnt0-dnpx*dnth,dnay+dnuy*dnt0-dnpy*dnth)
+  line from (dnax+dnux*dnt0+dnpx*dnth,dnay+dnuy*dnt0+dnpy*dnth) \
+    to (dnax+dnux*dnt1+dnpx*dnth,dnay+dnuy*dnt1+dnpy*dnth)
+  line from (dnax+dnux*dnt0-dnpx*dnth,dnay+dnuy*dnt0-dnpy*dnth) \
+    to (dnax+dnux*dnt1-dnpx*dnth,dnay+dnuy*dnt1-dnpy*dnth)
+  spline from (dnax+dnux*dnt1+dnpx*dnth,dnay+dnuy*dnt1+dnpy*dnth) \
+    to (dnax+dnux*(dnt1+dnth*0.7)+dnpx*dnth,dnay+dnuy*(dnt1+dnth*0.7)+dnpy*dnth) \
+    to (dnax+dnux*(dnt1+dnth*0.7)-dnpx*dnth,dnay+dnuy*(dnt1+dnth*0.7)-dnpy*dnth) \
+    to (dnax+dnux*dnt1-dnpx*dnth,dnay+dnuy*dnt1-dnpy*dnth)
+  line from (dnax+dnux*dnt1,dnay+dnuy*dnt1) to (dnbx,dnby)
+  line from (dnax+dnux*(dnt0+dnri)-dnpx*dnth,dnay+dnuy*(dnt0+dnri)-dnpy*dnth) \
+    to (dnax+dnux*(dnt0+dnri)-dnpx*dnr,dnay+dnuy*(dnt0+dnri)-dnpy*dnr)
+  line from (dnax+dnux*(dnt1-dnri)-dnpx*dnth,dnay+dnuy*(dnt1-dnri)-dnpy*dnth) \
+    to (dnax+dnux*(dnt1-dnri)-dnpx*dnr,dnay+dnuy*(dnt1-dnri)-dnpy*dnr)
+  P1: circle invis rad 0 at (dnax,dnay)
+  N1: circle invis rad 0 at (dnax+dnux*(dnt0+dnri)-dnpx*dnr,dnay+dnuy*(dnt0+dnri)-dnpy*dnr)
+  P2: circle invis rad 0 at (dnbx,dnby)
+  N2: circle invis rad 0 at (dnax+dnux*(dnt1-dnri)-dnpx*dnr,dnay+dnuy*(dnt1-dnri)-dnpy*dnr)
+}
+define tline    { [ __dn_val($1,$2,0.3,$3); __dn_tline($1,$2) ] with .P1 at $1 }
+define ltraline { [ __dn_val($1,$2,0.3,$3); __dn_tline($1,$2) ] with .P1 at $1 }
 
 # --- ground -------------------------------------------------------------------
 # ground(P): node 0 at P (symbol hangs below P).

@@ -1,0 +1,16 @@
+.PS
+# Series RLC band-pass, output across R1:
+# H = R/(R + j w L + 1/(j w C)); f0 = 1/(2 pi sqrt(L1 C1)) = 15.9 kHz,
+# |H(f0)| = 1, bandwidth R1/(2 pi L1) = 7.96 kHz (Q = 2).
+spice = 1
+Vin: (0,1.5); Vout: (3,1.5)
+V1: vsource(Vin, (0,0), AC 1)
+L1: inductor(Vin, (1.5,1.5), 1m)
+C1: capacitor(L1.N, Vout, 100n)
+R1: resistor(Vout, (3,0), 50)
+line from V1.N to R1.N
+ground((1.5,0))
+dot at Vout
+"out" above at Vout + (0,0.05)
+.ac dec 20 1k 1meg
+.PE

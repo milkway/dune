@@ -340,6 +340,38 @@ I1: isource((8,2),(8,0), 1m)
 }
 
 #[test]
+fn transmission_lines_emit_four_node_cards() {
+    // Left to right: returns below; top to bottom: returns to the
+    // left (right of the drawing direction, i.e. -x when going down).
+    let e = ex("A: (0,2); B: (2,2); C: (3,2); D: (3,0)
+T1: tline(A, B, Z0=50 TD=1n F=1meg)
+O1: ltraline(C, D, LMOD)
+Ra: T1.N1; Rb: T1.N2; Rc: O1.N1; Rd: O1.N2
+line from T1.N1 to (T1.N1.x,1); line from T1.N2 to (T1.N2.x,1)
+line from O1.N1 to (2.5,O1.N1.y); line from O1.N2 to (2.5,O1.N2.y)
+.model LMOD LTRA(R=0 L=250n C=100p LEN=1)
+.tran 10p 5n");
+    assert_eq!(
+        cards(&e),
+        ["T1 A Ra B Rb Z0=50 TD=1n F=1meg", "O1 C Rc D Rd LMOD"]
+    );
+    let parsed = dune_netlist::parse_str("tl.cir", &e.netlist);
+    assert!(parsed.is_clean(), "{:?}\n{}", parsed.diags, e.netlist);
+}
+
+#[test]
+fn transmission_line_return_pins_sit_right_of_the_direction() {
+    // Return pins 0.4 in to the right of P1 -> P2, 0.12 in inside the
+    // ends of the 0.8 in body: a 2 in line from (0,0) to (2,0) has them
+    // at x = 0.6 + 0.12 and 1.4 - 0.12, y = -0.4.
+    let e = ex("T1: tline((0,0),(2,0),Z0=50 TD=1n)
+Na: (0.72,-0.4); Nb: (1.28,-0.4)
+line from (0,0) to (0,-1); line from (2,0) to (2,-1)
+line from Na to (0.72,-1); line from Nb to (1.28,-1)");
+    assert_eq!(cards(&e), ["T1 n1 Na n2 Nb Z0=50 TD=1n"]);
+}
+
+#[test]
 fn opamp_pins_follow_subckt_order() {
     let e = ex("X1: opamp((2,1), OA)
 In: X1.Inp; Fb: X1.Inm; Out: X1.Out

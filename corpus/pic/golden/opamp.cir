@@ -1,0 +1,8 @@
+* netlist extracted by dune-pic
+X1 0 Vm Vout opamp_ideal
+V1 Vin 0 DC 0.5
+R1 Vin Vm 1k
+R2 Vm Vout 10k
+.include opamp_ideal.sub
+.dc V1 -1 1 0.25
+.end

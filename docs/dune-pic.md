@@ -17,7 +17,7 @@ na release 0.13.0.
    rpic (std `circuits: true`; `copy` negado). Exige `spice = 1` nos
    `vars`.
 3. Colhe blocos rotulados (label = refdes; 1ª letra = cartão, só
-   R C L V I D Q M J S W X), marcadores de pino invisíveis, blocos
+   R C L V I D Q M J S W X T O), marcadores de pino invisíveis, blocos
    `ground()` (nó 0), **places nomeados** (`Vout: (2.5,1.5)` —
    D-0004 §3 como desenhado; `Drawing.places`, só os da fonte do
    usuário), fios (todo vértice de polilinha é terminal) e `dot`s.
@@ -53,13 +53,19 @@ na release 0.13.0.
 - Pinos: 2-terminais `P`/`N` (P = 1º ponto e 1º nó: + de fonte,
   anodo, cauda da seta); Q `C/B/E`; J `D/G/S`; M `D/G/S/B` (B
   desenhado amarrado ao S); X `Inp/Inm/Out`; S `P/N/Cp/Cn`; W
-  `P/N` com valor `Vctl modelo`.
+  `P/N` com valor `Vctl modelo`; T/O `P1/N1/P2/N2` (porta 1 +/−,
+  porta 2 +/−, a ordem do cartão `T1 p1 n1 p2 n2 Z0=50 TD=1n`).
+- `tline(P1, P2, params)` / `ltraline(P1, P2, model)` são macros de
+  **2 pontos**: o estádio coaxial de P1 a P2 é o condutor de sinal;
+  os retornos N1/N2 saem da blindagem perto de cada extremidade e
+  terminam 0.4" à direita do sentido P1→P2 (abaixo, numa linha
+  esquerda→direita) — o usuário liga fios a `T1.N1`/`T1.N2`.
 - Labels pic exigem maiúscula (por isso não há `R1.a`);
   `Gnd`/`At` são reservados pelo prelude.
 - Macros do prelude: resistor, capacitor, inductor, diode, vsource,
   acsource, battery, isource, switch, cswitch, npn, pnp, nmos,
-  pmos, njfet, pjfet, opamp, ground. (O `node()` interino saiu —
-  nomes de nó são places.)
+  pmos, njfet, pjfet, opamp, tline, ltraline, ground. (O `node()`
+  interino saiu — nomes de nó são places.)
 - Valor desenhado na figura (acima do elemento horizontal, à
   esquerda do vertical) — é o que o extrator lê.
 
@@ -88,8 +94,12 @@ na release 0.13.0.
   (`corpus/pic/spice.pic`) — `cargo package` do dune-pic falharia;
   irrelevante enquanto não publicamos o crate.
 - Op-amp emite `X` mas o corpo `.subckt` não cabe em linhas `.`
-  (linhas de corpo não começam com `.`) — precisa de `.include`;
-  sem teste de simulação por ora.
+  (linhas de corpo não começam com `.`) — precisa de `.include`,
+  resolvido relativo à figura. Testado em `opamp.pic` +
+  `opamp_ideal.sub` (ganho fechado com A finito a 1e-5).
+- O `define tline` do prelude **sombreia** o `tline` do std
+  `circuits` do rpic (assinatura diferente) — deliberado: dentro de
+  uma figura `spice = 1` a versão SPICE é a que vale.
 - Place redefinido num laço funde as nets pelo nome (semântica de
   net label); um "cursor" rotulado móvel curto-circuitaria em
   silêncio.
@@ -100,11 +110,15 @@ na release 0.13.0.
 
 ## Corpus e validação
 
-`corpus/pic/{rc,rlc,rect,bjtamp}.pic` + goldens revisados à mão em
-`corpus/pic/golden/*.cir`; testes comparam o texto extraído, provam
-que parseia no `dune-netlist` e simulam no motor contra forma
-fechada (RC a 5 mV de 5(1−e^(−t/τ)); RLC a 1e-6 de
-1/(1−ω²LC+jωRC); retificador e amplificador por faixas). Previews
-visuais revisados (regra do CLAUDE.md). Fora do `--ci` do oráculo
-nesta leva (75 inalterado) — entrará quando as figuras ganharem
-goldens ngspice próprios.
+`corpus/pic/{rc,rlc,rect,bjtamp,opamp,tline,bandpass,cmosinv}.pic`
++ goldens revisados à mão em `corpus/pic/golden/*.cir`; testes
+comparam o texto extraído, provam que parseia no `dune-netlist` e
+simulam no motor contra forma fechada (RC a 5 mV de 5(1−e^(−t/τ));
+RLC a 1e-6 de 1/(1−ω²LC+jωRC); retificador e amplificador por
+faixas; op-amp inversor no ganho de A finito a 1e-5; tline com
+Γ=0.5 em 6 instantes; bandpass vs R/(R+j(ωL−1/ωC)) a 1e-6; CMOS
+rail-to-rail). O `ltraline` tem testes inline no `extract.rs`
+(cartão O + `.model` LTRA) e preview visual, sem figura de corpus
+própria. Previews visuais revisados (regra do
+CLAUDE.md). Fora do `--ci` do oráculo nesta leva (75 inalterado) —
+entrará quando as figuras ganharem goldens ngspice próprios.

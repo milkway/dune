@@ -1,0 +1,24 @@
+.PS
+# Inverting amplifier: gain -R2/R1 = -10 around an ideal op-amp
+# (corpus/pic/opamp_ideal.sub, pulled in by `.include` next to this file).
+spice = 1
+X1: opamp((3,1), opamp_ideal)
+Vin:  (0.3,1.175)
+Vm:   (1.8,1.175)
+Vout: (3.8,1)
+
+V1: vsource(Vin, (0.3,0), DC 0.5)
+R1: resistor(Vin, Vm, 1k)
+R2: resistor((1.8,2), (3.8,2), 10k)
+line from Vm to X1.Inm
+line from Vm to R2.P
+line from R2.N to Vout
+line from X1.Out to Vout then to (4.3,1); circle rad 0.04 at (4.34,1)
+"out" ljust at (4.4,1)
+line from X1.Inp to (X1.Inp.x,0)
+line from V1.N to (X1.Inp.x,0)
+dot at Vm; dot at Vout
+ground((1.4,0))
+.include opamp_ideal.sub
+.dc V1 -1 1 0.25
+.PE

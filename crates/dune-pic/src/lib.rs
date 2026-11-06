@@ -24,9 +24,11 @@
 //! Conventions (the contract between the prelude and this crate):
 //!
 //! * **refdes = block label**; its first letter picks the card type
-//!   (D-0004 §1), restricted to the D-0019 set `R C L V I D Q M J S W X`;
+//!   (D-0004 §1), restricted to the D-0019 set `R C L V I D Q M J S W X`
+//!   plus the transmission lines `T` (ideal) and `O` (LTRA);
 //! * **pins** are `circle invis rad 0` shapes labeled `P`/`N`,
-//!   `C`/`B`/`E`, `D`/`G`/`S`/`B`, `Inp`/`Inm`/`Out`, `Cp`/`Cn` that
+//!   `C`/`B`/`E`, `D`/`G`/`S`/`B`, `Inp`/`Inm`/`Out`, `Cp`/`Cn`,
+//!   `P1`/`N1`/`P2`/`N2` that
 //!   are direct children of the element block (D-0020 §c);
 //! * **value/model = the macro argument after the pin positions**
 //!   (D-0004 §2: the 3rd of a two-terminal, the 2nd of an element
@@ -79,7 +81,8 @@ const ANCHOR_MARKER: &str = "At";
 /// Every pin-marker label the prelude uses on elements, plus the
 /// `At` anchor of centered elements.
 const ELEMENT_MARKERS: &[&str] = &[
-    "P", "N", "Cp", "Cn", "C", "B", "E", "D", "G", "S", "Inp", "Inm", "Out", "At",
+    "P", "N", "Cp", "Cn", "C", "B", "E", "D", "G", "S", "Inp", "Inm", "Out", "P1", "N1", "P2",
+    "N2", "At",
 ];
 
 /// Options for [`extract`].
@@ -145,7 +148,7 @@ pub enum PicDiagKind {
     /// Two elements with the same refdes (SPICE names are
     /// case-insensitive).
     DuplicateRefdes,
-    /// A refdes whose first letter is outside the D-0019 set.
+    /// A refdes whose first letter is outside the supported set.
     UnknownElement,
     /// An element block without one of the pins its letter needs.
     MissingPin,
@@ -365,7 +368,8 @@ fn map_span(prelude_lines: u32, file: Option<&str>, line: u32, col: u32, end_col
     }
 }
 
-/// Pins of each D-0019 card letter, in card order.
+/// Pins of each supported card letter (D-0019 + `T`/`O`), in card
+/// order.
 fn pins_for(letter: char) -> Option<&'static [&'static str]> {
     Some(match letter {
         'R' | 'C' | 'L' | 'V' | 'I' | 'D' | 'W' => &["P", "N"],
@@ -374,6 +378,7 @@ fn pins_for(letter: char) -> Option<&'static [&'static str]> {
         'M' => &["D", "G", "S", "B"],
         'J' => &["D", "G", "S"],
         'X' => &["Inp", "Inm", "Out"],
+        'T' | 'O' => &["P1", "N1", "P2", "N2"],
         _ => return None,
     })
 }
@@ -915,7 +920,7 @@ impl<'a> Extractor<'a> {
                 PicDiagKind::UnknownElement,
                 format!(
                     "`{refdes}`: element letter `{letter}` is not supported \
-                     (R C L V I D Q M J S W X); skipped"
+                     (R C L V I D Q M J S W X T O); skipped"
                 ),
                 span,
             );

@@ -1,0 +1,7 @@
+* netlist extracted by dune-pic
+V1 Vin 0 AC 1
+L1 Vin n1 1m
+C1 n1 Vout 100n
+R1 Vout 0 50
+.ac dec 20 1k 1meg
+.end

@@ -1,0 +1,11 @@
+* opamp_ideal.sub: a minimal op-amp macromodel for the dune-pic figures.
+* A single-pole-free gain block with 741-datasheet typicals:
+* open-loop gain 200k, input resistance 2 Meg, output resistance 75.
+* (Not a 741 model: no pole, no slew, no output limiting.)
+* Pins in the order the prelude's opamp() emits them (D-0020):
+* non-inverting input, inverting input, output.
+.subckt opamp_ideal inp inm out
+rin inp inm 2meg
+e1 int 0 inp inm 200k
+rout int out 75
+.ends opamp_ideal
