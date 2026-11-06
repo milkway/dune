@@ -1,0 +1,3 @@
+# Built native module (maturin develop) and local lockfiles of tools.
+spice/_spice*.so
+spice/_spice*.pyd

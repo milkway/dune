@@ -1,0 +1,41 @@
+[package]
+name = "spice-py"
+description = "Python bindings of the Dune simulator: the `spice` package (PyO3 native module `spice._spice`)"
+version = "0.0.1"
+edition = "2024"
+# Same MSRV as the repo workspace (dune-raw uses let-chains, 1.88).
+rust-version = "1.88"
+license = "BSD-3-Clause"
+publish = false
+
+# Detached from the repo workspace: this crate is built by maturin
+# (`cd python && maturin develop`), carries its own Cargo.lock and
+# pulls PyO3/numpy, none of which the engine crates should see.
+[workspace]
+
+[lib]
+name = "_spice"
+crate-type = ["cdylib"]
+
+[dependencies]
+dune-core = { path = "../crates/dune-core" }
+dune-netlist = { path = "../crates/dune-netlist" }
+dune-raw = { path = "../crates/dune-raw" }
+num-complex = "0.4"
+# abi3-py310: one wheel per platform for CPython >= 3.10 (see
+# pyproject.toml for why 3.10 is the floor).
+pyo3 = { version = "0.30", features = ["abi3-py310"] }
+numpy = "0.30"
+
+# Mirrors the root workspace: faer's LU is unusably slow unoptimized
+# and its generics monomorphize into dune-core, so both are optimized
+# even in the debug build `maturin develop` makes by default.
+[profile.dev.package.faer]
+opt-level = 3
+[profile.dev.package.dune-core]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
