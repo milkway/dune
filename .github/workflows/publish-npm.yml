@@ -1,0 +1,48 @@
+name: publish-npm
+
+# Publishes @strategicprojects/dune-sim via npm Trusted Publishing
+# (OIDC): no stored token — npm's trusted publisher for this
+# repo/workflow authorizes the upload and signs provenance (the
+# dwg2geo pattern). Register it on npmjs under the package settings
+# (GitHub: milkway/dune, workflow publish-npm.yml) after the first
+# manual publish. Trigger from the Actions tab or a release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write # OIDC for npm Trusted Publishing + provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: npm >= 11.5.1 (required for OIDC publishing)
+        run: npm install -g npm@latest && npm --version
+      - name: Install wasm-bindgen (lockfile-pinned) and wasm-opt
+        run: |
+          VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | cut -d'"' -f2)
+          cargo install wasm-bindgen-cli --version "$VERSION" --locked
+          sudo apt-get update -qq && sudo apt-get install -y -qq binaryen
+      - name: Build the package
+        working-directory: crates/dune-wasm/npm
+        run: ./build.sh
+      - name: Smoke test
+        working-directory: crates/dune-wasm/npm
+        run: node test/smoke.mjs
+      - name: Publish
+        working-directory: crates/dune-wasm/npm
+        run: npm publish --access public

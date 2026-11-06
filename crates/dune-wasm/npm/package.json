@@ -27,12 +27,20 @@
     "build": "./build.sh",
     "test": "node test/smoke.mjs"
   },
-  "keywords": ["spice", "circuit", "simulator", "pic", "rpic", "schematic", "wasm"],
+  "keywords": [
+    "spice",
+    "circuit",
+    "simulator",
+    "pic",
+    "rpic",
+    "schematic",
+    "wasm"
+  ],
   "author": "André Leite <leite@de.ufpe.br>",
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",
-    "url": "https://github.com/milkway/dune.git",
+    "url": "git+https://github.com/milkway/dune.git",
     "directory": "crates/dune-wasm/npm"
   },
   "sideEffects": false
