@@ -668,6 +668,8 @@ impl Engine {
         let mut firsttime = true;
         let mut brk = true; // CKTbreak
         let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
+        let mut steps: usize = 0;
+        let step_budget = opts.tran_step_budget(p.tstop, max_step);
 
         'next_time: loop {
             // Accept the computed point: device hooks plant
@@ -734,6 +736,18 @@ impl Engine {
             self.states.rotate(self.maxord);
 
             loop {
+                // Dune's step budget (D-0022): every attempted
+                // timepoint counts, accepted or not. Neither C
+                // enforces ITL5, so a breakpoint cascade (ltra_3 on
+                // x86_64: the LTRA slope test re-planting `t+T` each
+                // step) would otherwise run for hours.
+                steps += 1;
+                if steps > step_budget {
+                    return Err(Error::StepLimit {
+                        steps: step_budget,
+                        time: self.time,
+                    });
+                }
                 let olddelta = delta;
                 self.time += delta;
                 self.delta_old[0] = delta;

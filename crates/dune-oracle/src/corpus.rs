@@ -56,7 +56,26 @@ pub struct Xfail {
     pub stem: String,
     pub plot: String,
     pub max_margin: f64,
+    /// `bistable`: the deck forks on last-ulp differences (platform
+    /// libm, SIMD LU), so either outcome is legitimate — a PASS is
+    /// reported but does not ask for the entry's removal (D-0022).
+    pub bistable: bool,
+    /// `accept-error=<text>`: a Dune run failing with an error that
+    /// contains `<text>` is the known outcome of the other branch
+    /// (e.g. the transient step budget), reported but not a CI
+    /// failure.
+    pub accept_error: Option<String>,
     pub reason: String,
+}
+
+impl Xfail {
+    /// Does `err` (a failed Dune run of this deck) match the entry's
+    /// accepted structured failure?
+    pub fn accepts_error(&self, err: &str) -> bool {
+        self.accept_error
+            .as_deref()
+            .is_some_and(|s| err.contains(s))
+    }
 }
 
 impl Corpus {
@@ -303,22 +322,48 @@ fn read_xfail_file(root: &Path) -> Result<Vec<Xfail>> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        let parts: Vec<&str> = line.splitn(4, '|').collect();
-        let [stem, plot, cap, reason] = parts.as_slice() else {
-            bail!("corpus/XFAIL: bad line `{line}`");
-        };
-        let max_margin: f64 = cap
-            .trim()
-            .parse()
-            .with_context(|| format!("corpus/XFAIL: bad margin in `{line}`"))?;
-        out.push(Xfail {
-            stem: stem.trim().to_string(),
-            plot: plot.trim().to_string(),
-            max_margin,
-            reason: reason.trim().to_string(),
-        });
+        out.push(parse_xfail_line(line)?);
     }
     Ok(out)
+}
+
+/// `stem|plot|cap|flags|reason`; `flags` is `-` or a comma-separated
+/// list of `bistable` and `accept-error=<text>` (the reason is free
+/// text and may itself contain `|`).
+fn parse_xfail_line(line: &str) -> Result<Xfail> {
+    let parts: Vec<&str> = line.splitn(5, '|').collect();
+    let [stem, plot, cap, flags, reason] = parts.as_slice() else {
+        bail!("corpus/XFAIL: bad line `{line}` (want stem|plot|cap|flags|reason)");
+    };
+    let max_margin: f64 = cap
+        .trim()
+        .parse()
+        .with_context(|| format!("corpus/XFAIL: bad margin in `{line}`"))?;
+    let mut bistable = false;
+    let mut accept_error = None;
+    let flags = flags.trim();
+    if flags != "-" {
+        for flag in flags.split(',').map(str::trim) {
+            if flag == "bistable" {
+                bistable = true;
+            } else if let Some(text) = flag.strip_prefix("accept-error=") {
+                if text.trim().is_empty() {
+                    bail!("corpus/XFAIL: empty accept-error in `{line}`");
+                }
+                accept_error = Some(text.trim().to_string());
+            } else {
+                bail!("corpus/XFAIL: unknown flag `{flag}` in `{line}`");
+            }
+        }
+    }
+    Ok(Xfail {
+        stem: stem.trim().to_string(),
+        plot: plot.trim().to_string(),
+        max_margin,
+        bistable,
+        accept_error,
+        reason: reason.trim().to_string(),
+    })
 }
 
 fn read_skip_file(root: &Path) -> Result<std::collections::HashMap<String, String>> {
@@ -379,5 +424,37 @@ mod tests {
         // level-6 and level-1 cards do not gate the deck.
         assert_eq!(m, vec![2]);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn xfail_plain_entry() {
+        let x = parse_xfail_line("schmitt|Transient Analysis|5|-|edges").unwrap();
+        assert_eq!(x.stem, "schmitt");
+        assert_eq!(x.plot, "Transient Analysis");
+        assert_eq!(x.max_margin, 5.0);
+        assert!(!x.bistable);
+        assert!(x.accept_error.is_none());
+        assert_eq!(x.reason, "edges");
+    }
+
+    #[test]
+    fn xfail_flags() {
+        let x = parse_xfail_line(
+            "ltra_3|Transient Analysis|35|bistable, accept-error=internal steps|a|b",
+        )
+        .unwrap();
+        assert!(x.bistable);
+        assert_eq!(x.accept_error.as_deref(), Some("internal steps"));
+        assert_eq!(x.reason, "a|b");
+        assert!(x.accepts_error("transient exceeded 2000000 internal steps at t = 1e-8"));
+        assert!(!x.accepts_error("timestep too small"));
+    }
+
+    #[test]
+    fn xfail_rejects_bad_lines() {
+        assert!(parse_xfail_line("a|b|5|reason only").is_err());
+        assert!(parse_xfail_line("a|b|x|-|r").is_err());
+        assert!(parse_xfail_line("a|b|5|flaky|r").is_err());
+        assert!(parse_xfail_line("a|b|5|accept-error=|r").is_err());
     }
 }

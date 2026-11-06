@@ -29,6 +29,13 @@ pub enum Error {
     #[error("timestep too small at t = {time:.6e}")]
     Timestep { time: f64 },
 
+    /// The transient attempted more internal timepoints than
+    /// [`Options::max_tran_steps`](crate::Options::max_tran_steps)
+    /// allows — Dune's guard against runaway breakpoint cascades
+    /// (D-0022); neither the 3f5 nor ngspice enforces `ITL5`.
+    #[error("transient exceeded {steps} internal steps at t = {time:.6e}")]
+    StepLimit { steps: usize, time: f64 },
+
     /// An output selection named a vector the solution does not have.
     #[error("no such vector `{0}`")]
     UnknownVector(String),

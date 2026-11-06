@@ -70,3 +70,4 @@ uma divergência por tolerância larga (D-0006).
 | `.sp donoise`: flicker | n/a | descartado (caminho gain-only do NevalSrc não registra; medido: saída idêntica com e sem KF) | idem | `sp.rs::noise` |
 | `.sens` com porta RF | n/a | aborta ("node allocation in DEVsetup() during sensitivity analysis" — reproduzido) | **roda** (z0 vivo, pwr/freq/phase inertes) | divergência de um oráculo que crasha |
 | Inversão de matriz do `.sp` | n/a | adjugada/determinante (custo fatorial) | Gauss–Jordan com pivoteio parcial (singular → NaN nos dois) | n portas grandes |
+| ITL5 / fuga do transiente | parseia ITL5 e ignora (`cktsopt.c: case OPT_ITL5: break;`) | idem — uma cascata de breakpoints do LTRA roda horas | orçamento próprio de passos (D-0022): `max(10 000, 50·⌈TSTOP/TMAX⌉)` tentativas → `Error::StepLimit`; override `Options.max_tran_steps` | princípio 4; linux/amd64 `--ci` de horas → 137 s; `engine.rs` |

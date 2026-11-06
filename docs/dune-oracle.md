@@ -106,3 +106,12 @@ decks do corpus batem a ~1e-9..1e-6.
 - Sem timeout no subprocesso ngspice (os exemplos rodam em < 1 s; vira
   necessidade quando o corpus ganhar circuitos grandes).
 - `--gen-golden` sobrescreve sem perguntar — o git é a rede de proteção.
+
+## XFAIL de 5 campos (D-0022)
+
+`stem|plot|cap|flags|reason`; `flags` = `-` ou lista com:
+`bistable` (deck bifurca por ulps — PASS e FAIL ≤ cap são ambos
+esperados; PASS não pede remoção) e `accept-error=TEXT` (falha
+estruturada contendo TEXT é o desfecho do outro ramo; reportada,
+não falha o CI). O sweep de corpus do pacote R lê este arquivo e
+aplica a mesma política.

@@ -1,7 +1,19 @@
 # Known-marginal comparisons: run and reported every time, but an
 # expected failure within its margin cap does not fail CI; breaking
 # past the cap does, and an unexpected PASS asks for removal.
-# Format: stem|plotname|max_margin|reason
-schmitt|Transient Analysis|5|regenerative edges: trap-ringing phase differs between engines beyond any pointwise ruler (D-0011); node voltages agree except inside the switching windows
-mosamp2|Transient Analysis|7|Meyer charge is step-path dependent and the step controller is bistable here: ngspice rides a 0.1-1ns LTE limit cycle for 2us while Dune cruises at TMAX; ngspice's own 0.5ns rerun differs from its default-step golden by 0.87x the allowance, and Dune at 0.5ns matches that rerun to 8mV (op/DC/AC match at 1e-5) - D-0011
-ltra_3|Transient Analysis|35|trap ringing in the dioload diode string (x3.1-x3.4: rs + diffusion charge, no cjo): ngspice's golden rings period-2 for whole intervals while Dune's Newton gives up mid-ring at 8.49ns and the order-1 restart damps it; ngspice's own TMAX=0.01ns rerun differs from its default-step golden by 26.9x the allowance on v(x3.2). Without the x3.* vectors the deck passes at 0.42 (line currents worst), and at TMAX=0.01ns Dune's LTRA matches ngspice's to 1.2e-3 V on v(5)
+# Format: stem|plotname|max_margin|flags|reason
+#   flags: `-`, or a comma-separated list of
+#     bistable            the deck forks on last-ulp differences
+#                         (platform libm, SIMD LU, …), so PASS and a
+#                         FAIL within the cap are both expected
+#                         outcomes: a PASS does not ask for removal
+#                         (D-0022)
+#     accept-error=TEXT   a Dune run that fails with an error message
+#                         containing TEXT is the known outcome of the
+#                         other branch (e.g. the transient step budget,
+#                         "internal steps"); reported, not a CI failure
+#   The reason is free text (may contain `|`).
+schmitt|Transient Analysis|5|-|regenerative edges: trap-ringing phase differs between engines beyond any pointwise ruler (D-0011); node voltages agree except inside the switching windows
+mosamp2|Transient Analysis|7|-|Meyer charge is step-path dependent and the step controller is bistable here: ngspice rides a 0.1-1ns LTE limit cycle for 2us while Dune cruises at TMAX; ngspice's own 0.5ns rerun differs from its default-step golden by 0.87x the allowance, and Dune at 0.5ns matches that rerun to 8mV (op/DC/AC match at 1e-5) - D-0011
+ltra_1|Transient Analysis|6|bistable|the dioload diode string either rings or not depending on last-ulp differences (libm, faer SIMD LU): arm64 PASSes at 0.061, x86_64 rings and lands at 4.7 (worst v(3)) - D-0022
+ltra_3|Transient Analysis|35|bistable,accept-error=internal steps|trap ringing in the dioload diode string (x3.1-x3.4: rs + diffusion charge, no cjo): ngspice's golden rings period-2 for whole intervals while Dune's Newton gives up mid-ring at 8.49ns and the order-1 restart damps it; ngspice's own TMAX=0.01ns rerun differs from its default-step golden by 26.9x the allowance on v(x3.2). Without the x3.* vectors the deck passes at 0.42 (line currents worst), and at TMAX=0.01ns Dune's LTRA matches ngspice's to 1.2e-3 V on v(5). Bistable across platforms (D-0022): on x86_64 the ring plus ltraacct.c's slope-breakpoint rule self-sustains a breakpoint cascade (22k breakpoints by 12.75ns, 1e-15s steps, O(n) convolution each) that only Dune's transient step budget stops

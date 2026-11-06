@@ -42,6 +42,20 @@ use crate::disto::DistoSetupCtx;
 use crate::integ::TerrCtx;
 use crate::matrix::{AcCtx, AcceptCtx, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 
+// Every transcendental in this file goes through the pure-Rust `libm`
+// crate (fdlibm lineage — what `f64::exp` already lowers to on wasm32),
+// not `f64::exp`/`cos`/…, which call the platform C library (Apple's
+// libm and glibc disagree in the last ulp). The line's own kernels
+// (`e^{−βt}·I0/I1`, erfc) then compute the same bits on every target;
+// `sqrt` and the arithmetic are IEEE-exact already. This does NOT make
+// the ringing decks (ltra_1/ltra_3) platform-independent: their
+// trajectory forks on ulps from anywhere (diode/BJT `exp`, the LU), and
+// once the dioload string rings period-2, `accept`'s slope test plants
+// a breakpoint at `t+T` on nearly every step, which forces tiny steps
+// at `t+T`, which ring and plant more — a cascade faithful to
+// ltraacct.c that never ends inside the output guard.
+use libm::{atan, cos, exp, sin};
+
 /// How the delayed port values `v(t−T)`, `i(t−T)` are interpolated
 /// from the accepted timepoints (`LININTERP`/`QUADINTERP`/
 /// `MIXEDINTERP`).
@@ -311,7 +325,7 @@ impl LtraParams {
                 p.td = (l * c).sqrt() * length;
                 p.alpha = 0.5 * (r / l);
                 p.beta = p.alpha;
-                p.attenuation = (-p.beta * p.td).exp();
+                p.attenuation = exp(-p.beta * p.td);
                 if p.alpha > 0.0 {
                     p.int_h1dash = -1.0;
                     p.int_h2 = 1.0 - p.attenuation;
@@ -334,8 +348,8 @@ impl LtraParams {
             LtraCase::Rg => {
                 // `LTRAload` under MODEDC.
                 let x = length * (r * g).sqrt();
-                let em = (-x).exp();
-                let ep = x.exp(); // "LTRA warning: may overflow!"
+                let em = exp(-x);
+                let ep = exp(x); // "LTRA warning: may overflow!"
                 p.cosh_lroot_gr = 0.5 * (ep + em);
                 p.r_rs_lr_gr_or_g = if g <= 1.0e-10 {
                     // hack!
@@ -481,7 +495,7 @@ fn bess_i0(x: f64) -> f64 {
                     + y * (1.2067492 + y * (0.2659732 + y * (0.360768e-1 + y * 0.45813e-2)))))
     } else {
         let y = 3.75 / ax;
-        (ax.exp() / ax.sqrt())
+        (exp(ax) / ax.sqrt())
             * (0.39894228
                 + y * (0.1328592e-1
                     + y * (0.225319e-2
@@ -508,7 +522,7 @@ fn bess_i1(x: f64) -> f64 {
         let a = 0.39894228
             + y * (-0.3988024e-1
                 + y * (-0.362018e-2 + y * (0.163801e-2 + y * (-0.1031555e-1 + y * a))));
-        a * (ax.exp() / ax.sqrt())
+        a * (exp(ax) / ax.sqrt())
     };
     if x < 0.0 { -ans } else { ans }
 }
@@ -528,7 +542,7 @@ fn bess_i1_x_over_x(x: f64) -> f64 {
         let a = 0.39894228
             + y * (-0.3988024e-1
                 + y * (-0.362018e-2 + y * (0.163801e-2 + y * (-0.1031555e-1 + y * a))));
-        a * (ax.exp() / (ax * ax.sqrt()))
+        a * (exp(ax) / (ax * ax.sqrt()))
     }
 }
 
@@ -547,7 +561,7 @@ fn rlc_h2(time: f64, t: f64, alpha: f64, beta: f64) -> f64 {
         0.0
     };
     let exparg = -beta * time;
-    alpha * alpha * t * exparg.exp() * bess_i1_x_over_x(besselarg)
+    alpha * alpha * t * exp(exparg) * bess_i1_x_over_x(besselarg)
 }
 
 /// `LTRAstraightLineCheck`: do the three points lie acceptably close
@@ -645,7 +659,7 @@ fn rlc_coeffs(
     };
 
     let alphasq_t = alpha * alpha * t;
-    let expbeta_t = (-beta * t).exp();
+    let expbeta_t = exp(-beta * t);
 
     let (mut h2lovalue1, mut h2hivalue1, mut h2dummy1, mut h2relval) = (0.0, 0.0, 0.0, 0.0);
     let (mut h3hivalue1, mut h3dummy1, mut h3relval) = (0.0, 0.0, 0.0);
@@ -662,7 +676,7 @@ fn rlc_coeffs(
         } else {
             0.0
         };
-        let expterm = (-beta * hilimit1).exp();
+        let expterm = exp(-beta * hilimit1);
         let bessi1overxterm = bess_i1_x_over_x(besselarg);
         h2hivalue1 = if alpha == 0.0 || hilimit1 < t {
             0.0
@@ -696,7 +710,7 @@ fn rlc_coeffs(
     let mut hilimit1 = curtime - timelist[timeindex];
     let mut delta1 = hilimit1 - lolimit1;
     let mut exparg = -beta * hilimit1;
-    let mut expterm = exparg.exp();
+    let mut expterm = exp(exparg);
 
     let h1twice = |hilimit1: f64, exparg: f64, expterm: f64| -> f64 {
         // LTRArlcH1dashTwiceIntFunc(hilimit1, beta), inlined.
@@ -724,7 +738,7 @@ fn rlc_coeffs(
             hilimit1 = curtime - timelist[i - 1];
             delta1 = timelist[i] - timelist[i - 1];
             exparg = -beta * hilimit1;
-            expterm = exparg.exp();
+            expterm = exp(exparg);
         }
 
         if doh1 {
@@ -801,7 +815,8 @@ fn rlc_coeffs(
     co.aux_index = auxindex;
 }
 
-/// `erfc`, the C library's (fdlibm lineage, via `libm`).
+/// `erfc`, the C library's (fdlibm lineage, via `libm` like every
+/// transcendental here — see the note at the top of the file).
 fn erfc(x: f64) -> f64 {
     libm::erfc(x)
 }
@@ -839,7 +854,7 @@ fn rc_coeffs(
     } else {
         erfc(temp.sqrt())
     };
-    let mut temp3 = (-temp).exp();
+    let mut temp3 = exp(-temp);
     let temp4 = rclsqr.sqrt();
     let temp5 = cbyr.sqrt();
 
@@ -891,7 +906,7 @@ fn rc_coeffs(
             } else {
                 erfc(temp.sqrt())
             };
-            temp3 = (-temp).exp();
+            temp3 = exp(-temp);
         }
 
         if doh2 {
@@ -1488,14 +1503,14 @@ impl Device for LtraI {
         let (y0_r, y0_i, lambda_r, lambda_i) = match p.case {
             LtraCase::Lc => (p.admit, 0.0, 0.0, p.td * w),
             LtraCase::Rlc => {
-                let theta = 0.5 * (p.resist / (w * p.induct)).atan();
+                let theta = 0.5 * atan(p.resist / (w * p.induct));
                 let zmag = (p.resist * p.resist + w * w * p.induct * p.induct).sqrt();
                 let mag = (w * p.capac / zmag).sqrt();
-                let y0_r = mag * theta.cos();
-                let y0_i = mag * theta.sin();
+                let y0_r = mag * cos(theta);
+                let y0_i = mag * sin(theta);
                 let theta = std::f64::consts::FRAC_PI_2 - theta;
                 let mag = mag * zmag;
-                (y0_r, y0_i, mag * theta.cos(), mag * theta.sin())
+                (y0_r, y0_i, mag * cos(theta), mag * sin(theta))
             }
             LtraCase::Rc => {
                 let y = (0.5 * w * p.cbyr).sqrt();
@@ -1523,8 +1538,8 @@ impl Device for LtraI {
         };
         let exparg_r = -lambda_r * p.length;
         let exparg_i = -lambda_i * p.length;
-        let explambda_r = exparg_r.exp() * exparg_i.cos();
-        let explambda_i = exparg_r.exp() * exparg_i.sin();
+        let explambda_r = exp(exparg_r) * cos(exparg_i);
+        let explambda_i = exp(exparg_r) * sin(exparg_i);
         let y0exp_r = y0_r * explambda_r - y0_i * explambda_i;
         let y0exp_i = y0_r * explambda_i + y0_i * explambda_r;
 

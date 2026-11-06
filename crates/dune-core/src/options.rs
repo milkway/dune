@@ -60,6 +60,22 @@ pub struct Options {
     /// (`CKTdefaultMosAD/AS`, 0).
     pub defad: f64,
     pub defas: f64,
+    /// Dune's transient step budget (not a SPICE option; no `.options`
+    /// card sets it): the most internal timepoints — accepted or
+    /// rejected — one `.tran` may attempt before it stops with
+    /// [`Error::StepLimit`](crate::Error::StepLimit). The 3f5 and
+    /// ngspice-47 both parse `ITL5` ("total transient iteration
+    /// limit") and ignore it (`cktsopt.c`: `case OPT_ITL5: break;`),
+    /// so neither bounds a run whose breakpoints cascade (D-0022).
+    ///
+    /// `None` (default): automatic, scaled to the deck —
+    /// `max(TRAN_STEP_FLOOR, TRAN_STEPS_PER_TMAX · ⌈TSTOP/TMAX⌉)`
+    /// with the effective TMAX, i.e. 10 000 steps or 50 per maximum
+    /// step span, whichever is more (the corpus peaks at 13 per span,
+    /// ltra_2; a fixed budget cannot work because a cascading LTRA
+    /// deck costs O(n²) in its history length — D-0022). `Some(n)`:
+    /// at most `n` (`Some(usize::MAX)` is unlimited).
+    pub max_tran_steps: Option<usize>,
 }
 
 impl Default for Options {
@@ -88,11 +104,38 @@ impl Default for Options {
             defw: 1e-4,
             defad: 0.0,
             defas: 0.0,
+            max_tran_steps: None,
         }
     }
 }
 
+/// Floor of the automatic transient step budget
+/// ([`Options::max_tran_steps`] `= None`).
+pub const TRAN_STEP_FLOOR: usize = 10_000;
+
+/// Internal timepoints allowed per TMAX span of `[0, TSTOP]` by the
+/// automatic transient step budget (3.8× the corpus maximum of
+/// 13.0, `ltra_2`).
+pub const TRAN_STEPS_PER_TMAX: usize = 50;
+
 impl Options {
+    /// The step budget of a `.tran` running to `tstop` with effective
+    /// maximum step `max_step` (see [`Options::max_tran_steps`]).
+    pub fn tran_step_budget(&self, tstop: f64, max_step: f64) -> usize {
+        match self.max_tran_steps {
+            Some(n) => n,
+            None => {
+                let spans = (tstop / max_step).ceil();
+                let auto = if spans.is_finite() && spans >= 0.0 {
+                    (spans as usize).saturating_mul(TRAN_STEPS_PER_TMAX)
+                } else {
+                    usize::MAX
+                };
+                auto.max(TRAN_STEP_FLOOR)
+            }
+        }
+    }
+
     /// Apply `.options` parameters from the IR. Unknown or
     /// not-yet-implemented options produce a warning, never an error
     /// (the 3f5 front end also lets unknown variables through).

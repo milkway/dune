@@ -516,6 +516,16 @@ diodo com RS, E, F, G, H, I) com números do ngspice-47 dentro das
 tolerâncias SPICE; os decks `.op`/`.dc` de `corpus/basic/` passam no
 oráculo contra o ngspice.
 
+- **Orçamento de passos do `.tran`** (D-0022): nem o 3f5 nem o
+  ngspice impõem o ITL5 que ambos parseiam (`cktsopt.c`:
+  `case OPT_ITL5: break;`) — uma cascata de breakpoints do LTRA
+  roda horas lá. O Dune conta toda tentativa de ponto (aceita ou
+  rejeitada) contra `max(10 000, 50·⌈TSTOP/TMAX⌉)` (override:
+  `Options.max_tran_steps`; corpus pica em 13 passos/vão) e falha
+  com `Error::StepLimit`. Decks biestáveis no oráculo: flags
+  `bistable`/`accept-error=` do `corpus/XFAIL` (formato de 5
+  campos, ver docs/dune-oracle.md).
+
 ## Diferenças deliberadas
 
 1. **Solver denso** (`linalg/backend/faer_dense.rs`): LU com pivoteio

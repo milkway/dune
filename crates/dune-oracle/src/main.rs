@@ -110,10 +110,7 @@ fn ci() -> Result<bool> {
                     let report = compare_rawfiles(&golden, &candidate, &tol);
                     all_ok &= print_report(&c.stem, "dune", &report, &corpus.xfails);
                 }
-                Err(e) => {
-                    println!("{:<14} dune failed: {e}", c.stem);
-                    all_ok = false;
-                }
+                Err(e) => all_ok &= print_dune_failure(&c.stem, &e, &corpus.xfails),
             }
         } else {
             via_self += 1;
@@ -154,10 +151,7 @@ fn run_circuits(args: &[String]) -> Result<bool> {
                     let report = compare_rawfiles(&golden, &candidate, &tol);
                     all_ok &= print_report(&c.stem, "dune", &report, &corpus.xfails);
                 }
-                Err(e) => {
-                    println!("{:<14} dune failed: {e}", c.stem);
-                    all_ok = false;
-                }
+                Err(e) => all_ok &= print_dune_failure(&c.stem, &e, &corpus.xfails),
             }
         } else {
             if !version_checked {
@@ -285,6 +279,30 @@ fn print_skip(name: &str, reason: &str) {
     println!("{name:<14} SKIP: {reason}");
 }
 
+/// Report a failed Dune run; returns whether it is acceptable — only
+/// when a `corpus/XFAIL` entry for the deck names the failure in its
+/// `accept-error=` flag (the other branch of a bistable deck, e.g.
+/// the transient step budget; D-0022).
+fn print_dune_failure(name: &str, err: &str, xfails: &[corpus::Xfail]) -> bool {
+    println!("{name:<14} dune failed: {err}");
+    match xfails
+        .iter()
+        .find(|x| x.stem == name && x.accepts_error(err))
+    {
+        Some(x) => {
+            println!(
+                "{:<14}   xfail: accepted failure ({}) of a bistable deck: {}",
+                "",
+                x.accept_error.as_deref().unwrap_or_default(),
+                x.reason
+            );
+            println!("{name:<14} XFAIL (accepted error)");
+            true
+        }
+        None => false,
+    }
+}
+
 /// Print one row per compared plot; returns whether everything passed.
 /// `margin` is the worst `|a-b| / (floor + reltol*max(|a|,|b|))` ratio:
 /// `<= 1.0` is within tolerance.
@@ -319,6 +337,15 @@ fn print_report(name: &str, cand: &str, report: &Report, xfails: &[corpus::Xfail
         match (&xfail, verdict) {
             (Some(x), "XFAIL") => {
                 println!("{:<14}   xfail: {} (cap {})", "", x.reason, x.max_margin);
+            }
+            // A bistable deck passes on one branch of its fork and
+            // fails within the cap on the other (D-0022): both are
+            // expected, so a PASS does not ask for removal.
+            (Some(x), "PASS") if x.bistable => {
+                println!(
+                    "{:<14}   note: bistable entry in corpus/XFAIL, passing on this branch",
+                    ""
+                );
             }
             (Some(_), "PASS") => {
                 println!(

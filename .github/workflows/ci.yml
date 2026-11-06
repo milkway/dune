@@ -16,6 +16,7 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -40,6 +41,7 @@ jobs:
 
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -51,6 +53,7 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -71,12 +74,30 @@ jobs:
           python -m pip install maturin
           maturin build --release -o dist
           python -m pip install dist/*.whl polars numpy pandas pytest
+      # Test the INSTALLED wheel, from a directory that cannot shadow it.
+      # Run from python/, the source package spice/ (which has no
+      # compiled _spice: only `maturin develop` puts one there) wins the
+      # import twice over — `python -m` puts the cwd on sys.path, and
+      # pytest's default prepend import mode puts python/ there to import
+      # spice/*.py (a package) for --doctest-modules — and collection
+      # dies with "cannot import name '_spice' from partially initialized
+      # module 'spice'". So: plain `pytest` (no cwd on sys.path) from
+      # $RUNNER_TEMP, the pyproject passed with -c (rootdir = python/,
+      # addopts --doctest-modules kept), tests/ by path (no __init__.py,
+      # so only tests/ itself is prepended) and the doctests collected
+      # from the installed package via --pyargs. Explicit arguments
+      # replace `testpaths`, whose "spice" would mean the source tree.
       - name: Test
-        working-directory: python
-        run: python -m pytest -q
+        env:
+          PY: ${{ github.workspace }}/python
+        run: |
+          cd "$RUNNER_TEMP"
+          python -I -c 'import spice; print(spice.__file__); assert "site-packages" in spice.__file__'
+          pytest -q -p no:cacheprovider -c "$PY/pyproject.toml" "$PY/tests" --pyargs spice
 
   r:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       DUNE_ROOT: ${{ github.workspace }}
       _R_CHECK_CRAN_INCOMING_REMOTE_: "false"
@@ -94,10 +115,18 @@ jobs:
       - uses: r-lib/actions/setup-r@v2
         with:
           use-public-rspm: true
+      # The package-library cache (keyed on the resolved lockfile) is
+      # normally saved only when the job succeeds; the first runs never
+      # did (a hung test got them cancelled), so every run restarted
+      # cold. "always" saves it on failure/cancel too. P3M already
+      # serves binaries (use-public-rspm), so a cold install is ~3 min
+      # of downloads; system requirements (pandoc, cmake, …) still come
+      # from apt on every run — uncached by design of the action.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           working-directory: r
           extra-packages: any::rcmdcheck
+          cache: always
       - uses: r-lib/actions/check-r-package@v2
         with:
           working-directory: r
