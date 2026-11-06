@@ -1,0 +1,22 @@
+TRA ideal line: matched delay, mismatched reflections, F/NL delay form
+* Coverage: no corpus deck has a T card. Line t1 (Z0=50, TD=10ns) is
+* driven through 50 ohms and terminated in 50 ohms: the edge reappears
+* at node 3 one delay later, at half amplitude. t2 (Z0=75) feeds t3
+* (Z0=50, TD from F/NL: 0.5/100MEG = 5ns) into 200 ohms || 2pF, so the
+* 75/50 and 50/200 junctions bounce the wave back and forth (the
+* capacitor gives the LTE control something to cut steps on). The
+* triangles on v2 reverse their slope (a PULSE with PW=0 would take
+* PW=TSTOP instead), which is what plants TRAaccept's delayed
+* breakpoints and arms TRAtrunc.
+v1 1 0 pulse(0 2 1ns 1ns 1ns 15ns 60ns)
+rs1 1 2 50
+t1 2 0 3 0 z0=50 td=10ns
+rl1 3 0 50
+v2 4 0 pwl(0 0 2ns 0 5ns 1 8ns 0 30ns 0 33ns -0.5 36ns 0)
+rs2 4 5 50
+t2 5 0 6 0 z0=75 td=3ns
+t3 6 0 7 0 z0=50 f=100meg nl=0.5
+rl3 7 0 200
+cl3 7 0 2p
+.tran 0.1ns 80ns
+.end

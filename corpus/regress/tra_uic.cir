@@ -1,0 +1,17 @@
+TRA ideal line: charged lines discharging under UIC
+* Coverage: the MODEUIC branch of TRAload's MODEINITTRAN seed, which
+* takes the line's own IC= values instead of the operating point.
+* t1 starts charged to 1 V at both ends with no current (IC=V1,I1,V2,I2)
+* and discharges into a matched 50 ohms at port 1: a 0.5 V step that
+* lasts 2*TD, the textbook charged-line pulse generator. t2 uses the
+* keyword forms (ZO=, V1=, I2=): it starts at 0.5 V on port 1 with 2 mA
+* entering port 2, between mismatched 25 and 150 ohm ends, so the
+* reflections ring down over several round trips.
+r1 1 0 50
+t1 1 0 2 0 z0=50 td=5ns ic=1,0,1,0
+r2 2 0 1meg
+r3 3 0 25
+t2 3 0 4 0 zo=75 td=2ns v1=0.5 i2=2ma
+r4 4 0 150
+.tran 0.1ns 40ns uic
+.end

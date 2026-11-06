@@ -1,0 +1,22 @@
+TRA ideal line: open and shorted stubs in .ac, DC form in .op
+* Coverage: TRAacLoad and the MODEDC stamps of TRAload. A 50-ohm line
+* (TD=1ns) carries the source to a 50-ohm load; an open stub t2
+* (quarter wave at 250MHz: TD=1ns) hangs at its far end, a shorted
+* stub t3 (Z0=100, NL=0.25 at F=125MHz -> TD=2ns) at the source end,
+* so the sweep shows the notches and resonances of both. The sweep
+* spans whole decades: ngspice-47 stretches a DEC step so the last
+* point lands on FSTOP, the 3f5 does not. In .op the
+* line is the 3f5 DC form: v1 = v2, i1 = -i2 (up to the (1-GMIN)
+* factor), so the DC divider reads through the lines and the shorted
+* stub t3 carries a real DC current into rsh; rb closes t2's far end.
+vin 1 0 dc 1 ac 1
+rs 1 2 50
+t1 2 0 3 0 z0=50 td=1ns
+rl 3 0 50
+t2 3 0 4 0 z0=50 td=1ns
+t3 2 0 5 0 z0=100 f=125meg nl=0.25
+rsh 5 0 1
+rb 4 0 1k
+.ac dec 50 10meg 1g
+.op
+.end

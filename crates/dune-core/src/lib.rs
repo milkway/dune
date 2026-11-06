@@ -44,6 +44,7 @@ mod srcfn;
 mod state;
 mod switch;
 mod tf;
+mod tra;
 mod tran;
 
 pub use ac::{Ac, AcSweep};
@@ -52,7 +53,7 @@ pub use bsim1::Bsim1Model;
 pub use bsim2::Bsim2Model;
 pub use circuit::{
     Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes, Mos1,
-    Mos2, Mos3, Mos6, Mutual, Resistor, Spec, SwitchI, SwitchV, Vccs, Vcvs, Vsource,
+    Mos2, Mos3, Mos6, Mutual, Resistor, Spec, SwitchI, SwitchV, Tra, Vccs, Vcvs, Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;

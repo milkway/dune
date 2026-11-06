@@ -9,7 +9,7 @@ use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
     Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes,
-    Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Vccs, Vcvs, Vsource,
+    Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Tra, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -736,6 +736,10 @@ impl Circuit {
                         &mut problems,
                     );
                 }
+                ir::Device::TlineIdeal { params } => match tra_spec(&name, &el.nodes, params) {
+                    Ok(t) => add(&mut ckt, t, &mut problems),
+                    Err(e) => problems.push(e),
+                },
                 other => {
                     problems.push(format!(
                         "`{name}`: {} is not implemented yet (Phase {})",
@@ -758,6 +762,43 @@ impl Circuit {
         }
         Ok((ckt, notes))
     }
+}
+
+/// `T` card parameters (`TRApTable` in `dev/tra/tra.c`): `Z0`/`ZO`,
+/// `TD`, `F`, `NL`, `V1`, `I1`, `V2`, `I2` and the `IC=` vector,
+/// whose short forms fill from the front (`TRAparam`'s fall-through
+/// switch). `REL`/`ABS` are output-only there, so not accepted.
+fn tra_spec(name: &str, nodes: &[String], params: &[ir::Param]) -> Result<Tra, String> {
+    let mut z0 = None;
+    let mut t = Tra {
+        name: name.to_string(),
+        nodes: four(nodes),
+        z0: 0.0,
+        td: None,
+        f: None,
+        nl: None,
+        ic: [0.0; 4],
+    };
+    for p in params {
+        match (p.name.as_str(), &p.value) {
+            ("z0" | "zo", ParamValue::Num(v)) => z0 = Some(*v),
+            ("td", ParamValue::Num(v)) => t.td = Some(*v),
+            ("f", ParamValue::Num(v)) => t.f = Some(*v),
+            ("nl", ParamValue::Num(v)) => t.nl = Some(*v),
+            ("v1", ParamValue::Num(v)) => t.ic[0] = *v,
+            ("i1", ParamValue::Num(v)) => t.ic[1] = *v,
+            ("v2", ParamValue::Num(v)) => t.ic[2] = *v,
+            ("i2", ParamValue::Num(v)) => t.ic[3] = *v,
+            ("ic", ParamValue::Num(v)) => t.ic[0] = *v,
+            ("ic", ParamValue::NumList(v)) if (1..=4).contains(&v.len()) => {
+                t.ic[..v.len()].copy_from_slice(v);
+            }
+            _ => return Err(format!("`{name}`: unknown parameter ({})", p.name)),
+        }
+    }
+    // `TRAsetup`: "transmission line z0 must be given".
+    t.z0 = z0.ok_or_else(|| format!("`{name}`: transmission line z0 must be given"))?;
+    Ok(t)
 }
 
 /// `.model x ltra(...)` → [`crate::ltra::LtraModel`]: the ngspice

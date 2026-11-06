@@ -297,6 +297,10 @@ pub(crate) struct AcceptCtx<'a> {
     pub brk: bool,
     pub step: f64,
     pub final_time: f64,
+    /// `CKTdeltaOld`: `[0]` is the step just accepted.
+    pub delta_old: &'a [f64; 8],
+    /// `CKTminBreak`.
+    pub min_break: f64,
     pub requests: &'a mut Vec<f64>,
 }
 

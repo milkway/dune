@@ -504,6 +504,8 @@ impl Engine {
         for i in 0..self.breaks.len() {
             if self.breaks[i] > time {
                 if self.breaks[i] - time <= self.min_break {
+                    // "very close together - take earlier point"
+                    self.breaks[i] = time;
                     return Ok(());
                 }
                 if i > 0 && time - self.breaks[i - 1] <= self.min_break {
@@ -564,6 +566,8 @@ impl Engine {
             brk,
             step: self.step,
             final_time: self.final_time,
+            delta_old: &self.delta_old,
+            min_break: self.min_break,
             requests: &mut requests,
         };
         for d in &mut self.devices {
@@ -653,10 +657,15 @@ impl Engine {
                     0.1 * f64::min(save_delta, self.breaks[1] - self.breaks[0]),
                 );
                 if firsttime {
+                    // ngspice (not the 3f5): "set a breakpoint to
+                    // reduce ringing of current in devices" under UIC.
+                    if p.uic {
+                        self.set_break(self.step)?;
+                    }
                     delta /= 10.0;
                 }
                 delta = f64::max(delta, 2.0 * delmin);
-            } else if self.time + delta >= self.breaks[0] {
+            } else if self.time + delta > self.breaks[0] {
                 save_delta = delta;
                 delta = self.breaks[0] - self.time;
                 brk = true;

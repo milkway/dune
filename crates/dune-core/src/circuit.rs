@@ -327,6 +327,31 @@ pub struct Ltra {
     pub model: crate::ltra::LtraModel,
 }
 
+/// `TXXXXXXX N1 N2 N3 N4 Z0=VALUE <TD=VALUE | F=FREQ <NL=NRMLEN>>
+/// <IC=V1,I1,V2,I2>`: an ideal (lossless) transmission line between
+/// port 1 (`N1`, `N2`) and port 2 (`N3`, `N4`) (`dev/tra/`). Four
+/// extra unknowns, named like `TRAsetup`'s `CKTmkVolt` calls:
+/// `<name>#i1`, `<name>#i2` (port currents into `N1`/`N3`) and
+/// `<name>#int1`, `<name>#int2` (the nodes between each port's `Z0`
+/// and its delayed source).
+#[derive(Clone, Debug)]
+pub struct Tra {
+    pub name: String,
+    /// Port 1 +/−, port 2 +/−.
+    pub nodes: [String; 4],
+    /// `Z0` (or `ZO`), ohms; required.
+    pub z0: f64,
+    /// `TD`, seconds. When absent the delay is `NL/F`.
+    pub td: Option<f64>,
+    /// `F`: the frequency `NL` refers to (default 1 GHz).
+    pub f: Option<f64>,
+    /// `NL`: normalized electrical length at `F` (default 0.25).
+    pub nl: Option<f64>,
+    /// `IC=V1,I1,V2,I2` (also `V1=`, `I1=`, `V2=`, `I2=`): port
+    /// voltages and currents used under `.tran … UIC`.
+    pub ic: [f64; 4],
+}
+
 /// `SXXXXXXX N+ N- NC+ NC- MODEL <ON|OFF>`: voltage-controlled
 /// switch with its model inline (`dev/sw/`).
 #[derive(Clone, Debug)]
@@ -376,6 +401,7 @@ pub enum Spec {
     Jfet(Box<Jfet>),
     Mes(Box<Mes>),
     Ltra(Box<Ltra>),
+    Tra(Box<Tra>),
     SwitchV(SwitchV),
     SwitchI(SwitchI),
 }
@@ -452,6 +478,12 @@ impl From<Ltra> for Spec {
     }
 }
 
+impl From<Tra> for Spec {
+    fn from(s: Tra) -> Spec {
+        Spec::Tra(Box::new(s))
+    }
+}
+
 impl Spec {
     pub(crate) fn name(&self) -> &str {
         match self {
@@ -476,6 +508,7 @@ impl Spec {
             Spec::Jfet(s) => &s.name,
             Spec::Mes(s) => &s.name,
             Spec::Ltra(s) => &s.name,
+            Spec::Tra(s) => &s.name,
             Spec::SwitchV(s) => &s.name,
             Spec::SwitchI(s) => &s.name,
         }
@@ -635,6 +668,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Tra(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
         Spec::SwitchV(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -782,6 +819,7 @@ impl Circuit {
                 Spec::Jfet(s) => &s.nodes,
                 Spec::Mes(s) => &s.nodes,
                 Spec::Ltra(s) => &s.nodes,
+                Spec::Tra(s) => &s.nodes,
                 Spec::SwitchV(s) => &s.nodes,
                 Spec::SwitchI(s) => &s.nodes,
             };
@@ -811,6 +849,13 @@ impl Circuit {
                 Spec::Ltra(s) => {
                     node(&mut vars, &mut node_ids, &format!("{}#i1", s.name));
                     node(&mut vars, &mut node_ids, &format!("{}#i2", s.name));
+                }
+                // `TRAsetup`: both branch equations, then both
+                // internal nodes, all with `CKTmkVolt`.
+                Spec::Tra(s) => {
+                    for suffix in ["i1", "i2", "int1", "int2"] {
+                        node(&mut vars, &mut node_ids, &format!("{}#{suffix}", s.name));
+                    }
                 }
                 // `DIOsetup`: internal node past RS, named
                 // `<name>#internal` like `CKTmkVolt` does.
@@ -1369,6 +1414,23 @@ impl Circuit {
                             .map_err(Error::Build)?;
                     notes.extend(p.notes.iter().cloned());
                     devices.push(Box::new(crate::ltra::LtraI::new(p, n, br)));
+                }
+                Spec::Tra(s) => {
+                    let n = [
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[1]),
+                        get(&node_ids, &s.nodes[2]),
+                        get(&node_ids, &s.nodes[3]),
+                    ];
+                    let v = |suffix: &str| get(&node_ids, &format!("{}#{suffix}", s.name));
+                    let p = crate::tra::TraParams::new(&s.name, s.z0, s.td, s.f, s.nl, s.ic)
+                        .map_err(Error::Build)?;
+                    devices.push(Box::new(crate::tra::TraI::new(
+                        p,
+                        n,
+                        [v("i1"), v("i2")],
+                        [v("int1"), v("int2")],
+                    )));
                 }
                 Spec::SwitchV(s) => {
                     let m = &s.model;
