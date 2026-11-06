@@ -62,6 +62,9 @@ pub(crate) struct Engine {
     // Breakpoint table (always ≥ 2 entries, sorted).
     breaks: Vec<f64>,
     min_break: f64,
+    /// A device load fault from the last `load_all` (see
+    /// [`LoadCtx::fault`]).
+    fault: Option<&'static str>,
 }
 
 impl Engine {
@@ -114,6 +117,7 @@ impl Engine {
             method: Method::Trapezoidal,
             breaks: vec![0.0, 0.0],
             min_break: 0.0,
+            fault: None,
         }
     }
 
@@ -155,6 +159,7 @@ impl Engine {
             method: self.method,
             pred_xfact,
             delta: self.delta,
+            fault: None,
         };
         for d in &mut self.devices {
             d.load(&mut ctx);
@@ -163,6 +168,7 @@ impl Engine {
             d.load_late(&mut ctx);
         }
         let noncon = ctx.noncon;
+        self.fault = ctx.fault;
 
         // Nodesets hold during INITJCT/INITFIX of DC solutions;
         // `.ic` nodes hold throughout the transient operating point
@@ -218,6 +224,9 @@ impl Engine {
 
         loop {
             let mut noncon = self.load_all(mode, opts, srcfact);
+            if let Some(f) = self.fault.take() {
+                return Err(Error::Build(f.into()));
+            }
 
             self.solver
                 .factor(&self.values[1..], diag_gmin)
@@ -517,6 +526,8 @@ impl Engine {
         let mut timetemp = f64::MAX;
         let t = TerrCtx {
             states: &self.states,
+            sol: &self.sol,
+            time: self.time,
             delta_old: &self.delta_old,
             order: self.order,
             method: self.method,
@@ -533,10 +544,14 @@ impl Engine {
     }
 
     /// `CKTaccept`: device hooks, then merge breakpoint requests.
-    fn accept(&mut self, brk: bool) -> Result<(), Error> {
+    fn accept(&mut self, brk: bool, first: bool, opts: &Options) -> Result<(), Error> {
         let mut requests = Vec::new();
         let mut ctx = AcceptCtx {
             time: self.time,
+            first,
+            sol: &self.sol,
+            reltol: opts.reltol,
+            abstol: opts.abstol,
             brk,
             step: self.step,
             final_time: self.final_time,
@@ -598,7 +613,7 @@ impl Engine {
         'next_time: loop {
             // Accept the computed point: device hooks plant
             // breakpoints, stale ones retire.
-            self.accept(brk)?;
+            self.accept(brk, firsttime, opts)?;
             if self.time > self.breaks[0] {
                 self.clr_break();
             }
@@ -636,6 +651,16 @@ impl Engine {
                 save_delta = delta;
                 delta = self.breaks[0] - self.time;
                 brk = true;
+            } else if self.breaks[0] - self.time < 1.9 * delta {
+                // ngspice (not the 3f5): when the step would stop
+                // short of the next breakpoint by less than 0.9 of
+                // itself, it splits the approach into two equal
+                // steps instead of leaving a sliver. Measured on
+                // ngspice-47 (boundary between 1.899 and 1.901 step
+                // lengths); without it every pulse edge and LTRA
+                // delay breakpoint is approached on a different grid
+                // (corpus/KNOWN_DIFFS.md).
+                delta = 0.5 * (self.breaks[0] - self.time);
             }
 
             for i in (0..=5).rev() {

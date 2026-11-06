@@ -18,7 +18,7 @@ use crate::corpus::Circuit as CorpusCircuit;
 pub fn supported(c: &CorpusCircuit) -> bool {
     const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac", ".pz", ".noise", ".disto"];
     const DEVICES: &[char] = &[
-        'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'm', 'x',
+        'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'm', 'o', 'x',
     ];
     // MOS levels implemented so far.
     const MOS_LEVELS: &[u32] = &[1, 2, 4, 5, 6];

@@ -28,13 +28,14 @@ impl Circuit {
 
         // Mirror what ngspice saves for `.op`: every non-ground,
         // non-internal node as `v(name)` and every branch current as
-        // `i(name)` (internal `#` nodes are solved but not output).
+        // `i(name)` (device-internal nodes are solved but not output,
+        // see `saved_node`).
         let mut variables = Vec::new();
         let mut columns = Vec::new();
         for i in 1..engine.vars.len() {
             let name = &engine.vars.names[i];
             match engine.vars.kinds[i] {
-                VarKind::Node if !name.contains('#') => {
+                VarKind::Node if crate::circuit::saved_node(name) => {
                     variables.push((format!("v({name})"), VarType::Voltage));
                     columns.push(vec![engine.sol[i]]);
                 }

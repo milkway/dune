@@ -54,7 +54,7 @@ impl Circuit {
         for i in 1..engine.vars.len() {
             let name = &engine.vars.names[i];
             match engine.vars.kinds[i] {
-                VarKind::Node if !name.contains('#') => {
+                VarKind::Node if crate::circuit::saved_node(name) => {
                     variables.push((format!("v({name})"), VarType::Voltage));
                     columns.push(rows.iter().map(|(_, sol)| sol[i]).collect());
                 }

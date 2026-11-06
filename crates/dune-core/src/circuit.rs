@@ -259,6 +259,18 @@ pub struct Diode {
     pub ic: Option<f64>,
 }
 
+/// `OXXXXXXX N1 N2 N3 N4 MNAME`: a lossy transmission line (LTRA)
+/// between port 1 (`N1`, `N2`) and port 2 (`N3`, `N4`), with its
+/// model inline. The two port currents are extra unknowns named
+/// `<name>#i1`/`<name>#i2` (`LTRAsetup`'s `CKTmkVolt` calls).
+#[derive(Clone, Debug)]
+pub struct Ltra {
+    pub name: String,
+    /// Port 1 +/−, port 2 +/−.
+    pub nodes: [String; 4],
+    pub model: crate::ltra::LtraModel,
+}
+
 #[derive(Clone, Debug)]
 pub enum Spec {
     Bjt(Box<Bjt>),
@@ -278,6 +290,7 @@ pub enum Spec {
     Cccs(Cccs),
     Ccvs(Ccvs),
     Diode(Diode),
+    Ltra(Box<Ltra>),
 }
 
 macro_rules! impl_into_spec {
@@ -327,6 +340,12 @@ impl From<Bsim2> for Spec {
     }
 }
 
+impl From<Ltra> for Spec {
+    fn from(s: Ltra) -> Spec {
+        Spec::Ltra(Box::new(s))
+    }
+}
+
 impl Spec {
     fn name(&self) -> &str {
         match self {
@@ -347,6 +366,7 @@ impl Spec {
             Spec::Cccs(s) => &s.name,
             Spec::Ccvs(s) => &s.name,
             Spec::Diode(s) => &s.name,
+            Spec::Ltra(s) => &s.name,
         }
     }
 }
@@ -488,6 +508,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Ltra(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
     }
 }
 
@@ -497,6 +521,23 @@ fn normalize(spec: &mut Spec) {
 pub(crate) struct Vars {
     pub names: Vec<String>,
     pub kinds: Vec<VarKind>,
+}
+
+/// Whether a node unknown is written to the output plots. ngspice's
+/// default save list (`outitf.c`, `beginPlot`) drops the device-
+/// internal nodes by suffix — `#internal`, `#source`, `#drain`,
+/// `#collector`, `#emitter`, `#base` — and keeps every other node,
+/// including the LTRA port-current equations `o1#i1`/`o1#i2`.
+pub(crate) fn saved_node(name: &str) -> bool {
+    const HIDDEN: [&str; 6] = [
+        "#internal",
+        "#source",
+        "#drain",
+        "#collector",
+        "#emitter",
+        "#base",
+    ];
+    !HIDDEN.iter().any(|h| name.contains(h))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -601,6 +642,7 @@ impl Circuit {
                 Spec::Cccs(s) => &s.nodes,
                 Spec::Ccvs(s) => &s.nodes,
                 Spec::Diode(s) => &s.nodes,
+                Spec::Ltra(s) => &s.nodes,
             };
             for n in node_names {
                 node(&mut vars, &mut node_ids, n);
@@ -621,6 +663,13 @@ impl Circuit {
                 Spec::Ccvs(s) => {
                     let br = vars.push(s.name.clone(), VarKind::Branch);
                     branches.insert(s.name.clone(), br);
+                }
+                // `LTRAsetup`: the two port-current equations, made
+                // with `CKTmkVolt` — voltage-typed unknowns for the
+                // convergence test and the rawfile (`v(o1#i1)`).
+                Spec::Ltra(s) => {
+                    node(&mut vars, &mut node_ids, &format!("{}#i1", s.name));
+                    node(&mut vars, &mut node_ids, &format!("{}#i2", s.name));
                 }
                 // `DIOsetup`: internal node past RS, named
                 // `<name>#internal` like `CKTmkVolt` does.
@@ -1064,6 +1113,23 @@ impl Circuit {
                         s.ic.unwrap_or(0.0),
                         base,
                     )));
+                }
+                Spec::Ltra(s) => {
+                    let n = [
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[1]),
+                        get(&node_ids, &s.nodes[2]),
+                        get(&node_ids, &s.nodes[3]),
+                    ];
+                    let br = [
+                        get(&node_ids, &format!("{}#i1", s.name)),
+                        get(&node_ids, &format!("{}#i2", s.name)),
+                    ];
+                    let p =
+                        crate::ltra::LtraParams::new(&s.name, &s.model, opts.reltol, opts.abstol)
+                            .map_err(Error::Build)?;
+                    notes.extend(p.notes.iter().cloned());
+                    devices.push(Box::new(crate::ltra::LtraI::new(p, n, br)));
                 }
             }
         }

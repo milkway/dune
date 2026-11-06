@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6,
-    Mutual, Resistor, Vccs, Vcvs, Vsource,
+    Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Ltra, Mos1, Mos2,
+    Mos6, Mutual, Resistor, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -38,8 +38,15 @@ impl Circuit {
         // element uses them: decks routinely carry alternative model
         // cards for levels they never instantiate (mos6inv.cir).
         let mut mos_unsupported: HashMap<&str, String> = HashMap::new();
+        let mut omodels: HashMap<&str, crate::ltra::LtraModel> = HashMap::new();
         for m in &nl.models {
             match m.mtype.as_str() {
+                "ltra" => match ltra_model(m, &mut notes) {
+                    Ok(lm) => {
+                        omodels.insert(m.name.as_str(), lm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
                 "d" => match diode_model(m, &mut notes) {
                     Ok(dm) => {
                         dmodels.insert(m.name.as_str(), dm);
@@ -500,6 +507,23 @@ impl Circuit {
                         ),
                     }
                 }
+                ir::Device::TlineLossy { model } => {
+                    let Some(lm) = omodels.get(model.as_str()) else {
+                        problems.push(format!(
+                            "`{name}`: unable to find definition of model `{model}`"
+                        ));
+                        continue;
+                    };
+                    add(
+                        &mut ckt,
+                        Ltra {
+                            name,
+                            nodes: four(&el.nodes),
+                            model: lm.clone(),
+                        },
+                        &mut problems,
+                    );
+                }
                 other => {
                     problems.push(format!(
                         "`{name}`: {} is not implemented yet (Phase {})",
@@ -522,6 +546,50 @@ impl Circuit {
         }
         Ok((ckt, notes))
     }
+}
+
+/// `.model x ltra(...)` → [`crate::ltra::LtraModel`]: the ngspice
+/// input table (`ltra.c`), which is the 3f5's plus `REL`/`ABS` as
+/// inputs. Flags take no value (a value given anyway is ignored, as
+/// `LTRAmParam` ignores it); `fullcontrol`, `halfcontrol`, `print`,
+/// `noprint`, `choprel`, … are `#ifdef notdef` in the table and so
+/// unrecognized.
+fn ltra_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::ltra::LtraModel, String> {
+    use crate::ltra::LtraInterp;
+    let mut lm = crate::ltra::LtraModel::default();
+    for p in &m.params {
+        let num = match p.value {
+            ParamValue::Num(v) => Some(v),
+            _ => None,
+        };
+        let need = || num.ok_or_else(|| format!("parameter {} needs a numeric value", p.name));
+        match p.name.as_str() {
+            "ltra" => {}
+            "r" => lm.r = Some(need()?),
+            "l" => lm.l = Some(need()?),
+            "g" => lm.g = Some(need()?),
+            "c" => lm.c = Some(need()?),
+            "len" => lm.len = Some(need()?),
+            "rel" => lm.rel = Some(need()?),
+            "abs" => lm.abs = Some(need()?),
+            "compactrel" => lm.compactrel = need()?,
+            "compactabs" => lm.compactabs = need()?,
+            // `nocontrol` is the default (and only reachable) mode.
+            "nocontrol" => {}
+            "steplimit" => lm.steplimit = true,
+            "nosteplimit" => lm.steplimit = false,
+            "lininterp" => lm.interp = Some(LtraInterp::Linear),
+            "quadinterp" => lm.interp = Some(LtraInterp::Quadratic),
+            "mixedinterp" => lm.interp = Some(LtraInterp::Mixed),
+            "truncnr" => lm.truncnr = true,
+            "truncdontcut" => lm.truncdontcut = true,
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(lm)
 }
 
 /// `.model x npn/pnp(...)` → [`crate::bjt::BjtModel`], 3f5 names

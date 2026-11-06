@@ -81,6 +81,7 @@ dependencies = [
  "dune-netlist",
  "dune-raw",
  "faer",
+ "libm",
  "num-complex",
  "thiserror 2.0.21",
 ]

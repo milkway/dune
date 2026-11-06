@@ -79,7 +79,7 @@ pub(crate) fn ac_columns(
     for i in 1..vars.len() {
         let name = &vars.names[i];
         match vars.kinds[i] {
-            VarKind::Node if !name.contains('#') => {
+            VarKind::Node if crate::circuit::saved_node(name) => {
                 variables.push((format!("v({name})"), VarType::Voltage));
                 columns.push(rows.iter().map(|(_, sol)| sol[i]).collect());
             }

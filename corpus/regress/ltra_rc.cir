@@ -1,0 +1,10 @@
+LTRA RC line (L=0): the erfc-kernel convolution case
+* Coverage: no corpus deck reaches LTRArcCoeffsSetup; this and
+* ltra_rg.cir pin the RC and RG regimes against ngspice-47.
+v1 1 0 pulse(0 4 1ns 1ns 1ns 20ns 40ns)
+rs 1 2 10
+o1 2 0 3 0 lline
+rl 3 0 100
+.model lline ltra rel=1 r=0.2 l=0 c=3.65e-12 len=24
+.tran 0.1ns 60ns
+.end

@@ -23,6 +23,7 @@ mod elaborate;
 mod engine;
 mod error;
 mod integ;
+mod ltra;
 mod matrix;
 mod mos1;
 mod mos2;
@@ -42,7 +43,7 @@ pub use bjt::BjtModel;
 pub use bsim1::Bsim1Model;
 pub use bsim2::Bsim2Model;
 pub use circuit::{
-    Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Mos1, Mos2, Mos6,
+    Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Ltra, Mos1, Mos2, Mos6,
     Mutual, Resistor, Spec, Vccs, Vcvs, Vsource,
 };
 pub use dc::{Dc, DcSweep};
@@ -50,6 +51,7 @@ pub use diode::DiodeModel;
 pub use disto::Disto;
 pub use error::Error;
 pub use integ::Method;
+pub use ltra::{LtraInterp, LtraModel};
 pub use mos1::Mos1Model;
 pub use mos2::Mos2Model;
 pub use mos6::Mos6Model;

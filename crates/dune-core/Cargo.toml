@@ -17,6 +17,7 @@ thiserror.workspace = true
 num-complex.workspace = true
 dune-netlist.workspace = true
 dune-raw.workspace = true
+libm.workspace = true
 faer = { version = "0.24", optional = true, default-features = false, features = [
     "std",
     "linalg",

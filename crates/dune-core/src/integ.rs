@@ -133,6 +133,10 @@ pub(crate) fn integrate(
 /// Inputs `CKTterr` needs from the circuit.
 pub(crate) struct TerrCtx<'a> {
     pub states: &'a States,
+    /// The just-converged solution (`CKTrhsOld`) and `CKTtime`, for
+    /// devices that estimate from their own history (`LTRAtrunc`).
+    pub sol: &'a [f64],
+    pub time: f64,
     pub delta_old: &'a [f64; 8],
     pub order: usize,
     pub method: Method,

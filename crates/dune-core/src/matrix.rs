@@ -129,6 +129,10 @@ pub(crate) struct LoadCtx<'a> {
     pub pred_xfact: f64,
     /// `CKTdelta` (0 outside transient).
     pub delta: f64,
+    /// Set by a device whose load cannot proceed (the C's `E_INTERN`
+    /// returns from `DEVload`); the Newton call then fails, which the
+    /// transient loop treats like non-convergence.
+    pub fault: Option<&'static str>,
 }
 
 /// The `INITF` state the Newton loop drives (`MODEINITJCT`,
@@ -272,6 +276,13 @@ impl AcCtx<'_> {
 /// `CKTsetBreak` port.
 pub(crate) struct AcceptCtx<'a> {
     pub time: f64,
+    /// `MODEINITTRAN`: the accept of the transient operating point.
+    pub first: bool,
+    /// The accepted solution (`CKTrhsOld`), var-indexed.
+    pub sol: &'a [f64],
+    /// `CKTreltol`, `CKTabstol`.
+    pub reltol: f64,
+    pub abstol: f64,
     /// `CKTbreak`: this timepoint sits on a breakpoint.
     pub brk: bool,
     pub step: f64,
