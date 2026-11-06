@@ -1,0 +1,103 @@
+---
+title: "Getting started with spice"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with spice}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+has_ggplot2 <- requireNamespace("ggplot2", quietly = TRUE)
+```
+
+spice runs SPICE3 netlists on Dune, a circuit simulator derived from
+Berkeley SPICE3f5, and hands the results back as tidy data. This
+vignette runs one deck end to end: a second-order RLC low-pass driven
+by a voltage step, with a transient and an AC analysis.
+
+```{r setup}
+library(spice)
+```
+
+## A deck
+
+A deck is ordinary SPICE3 input. The first line is the title; the
+analysis cards (`.tran`, `.ac`, ...) say what to compute. Here it is
+given as text; `spice_run()` equally accepts the path of a `.cir` file.
+
+```{r deck}
+deck <- "RLC low-pass
+vin in 0 pulse(0 1 0 1u) ac 1
+r1 in mid 50
+l1 mid out 1m
+c1 out 0 1u
+.tran 2u 1m
+.ac dec 50 100 100k
+.end"
+```
+
+## Running it
+
+```{r run}
+res <- spice_run(deck)
+res
+```
+
+Each analysis produces a plot, named as SPICE3 names it in a rawfile.
+Simulator options can be overridden from R, with the names and units of
+the `.options` card:
+
+```{r options}
+tight <- spice_run(deck, options = list(reltol = 1e-5, method = "gear"))
+```
+
+## Tidy results
+
+`spice_tidy()` (or `tibble::as_tibble()` of one plot) returns the long
+format: one row per point and variable, with the plot's scale repeated
+on every row.
+
+```{r tidy}
+tran <- spice_tidy(res, plots = "Transient Analysis")
+tran
+```
+
+The AC plot is complex, so it has `re` and `im` columns instead of
+`value`; derive whatever you need from them.
+
+```{r ac}
+ac <- spice_tidy(res, plots = "AC Analysis")
+ac$db <- 20 * log10(Mod(complex(real = ac$re, imaginary = ac$im)))
+ac[ac$variable == "v(out)", c("scale", "db")]
+```
+
+## Plotting the transient
+
+```{r plot, eval = has_ggplot2, fig.width = 6.5, fig.height = 3.5}
+library(ggplot2)
+volts <- tran[tran$type == "voltage", ]
+ggplot(volts, aes(scale * 1e3, value, colour = variable)) +
+  geom_line() +
+  labs(x = "time (ms)", y = "voltage (V)", colour = NULL,
+       title = "Step response of the RLC low-pass")
+```
+
+For a quick look, `autoplot()` draws any plot with a scale:
+
+```{r autoplot, eval = has_ggplot2, fig.width = 6.5, fig.height = 3.5}
+autoplot(spice_plots(res)[["AC Analysis"]])
+```
+
+## Exchanging rawfiles
+
+Results write to and read from SPICE3 rawfiles, the format ngspice
+reads and writes with `-r`:
+
+```{r raw}
+f <- tempfile(fileext = ".raw")
+spice_write_raw(res, f)
+back <- spice_read_raw(f)
+identical(spice_tidy(back), spice_tidy(res))
+```

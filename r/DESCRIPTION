@@ -1,0 +1,33 @@
+Package: spice
+Title: Circuit Simulation with a 'SPICE3f5'-Derived Engine
+Version: 0.0.0.9000
+Authors@R: c(
+    person("André", "Leite", email = "leite@de.ufpe.br", role = c("aut", "cre")),
+    person("The Regents of the University of California", role = "cph",
+           comment = "'SPICE3f5', from which the simulation engine is derived")
+  )
+Description: Runs 'SPICE3' circuit netlists (operating point, DC sweep,
+    transient, small-signal AC, pole-zero, noise, distortion, transfer
+    function and sensitivity analyses) on 'Dune', a circuit simulator
+    written in 'Rust' and derived from Berkeley 'SPICE3f5', validated
+    against 'ngspice'. Results come back as long tibbles ready for
+    plotting, and plots can be read from and written to 'SPICE3'
+    rawfiles for exchange with other simulators.
+License: BSD_3_clause + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 8.0.0
+SystemRequirements: Cargo (Rust's package manager), rustc >= 1.88
+Depends:
+    R (>= 4.2)
+Imports:
+    cli,
+    rlang (>= 1.1.0),
+    tibble
+Suggests:
+    ggplot2,
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+Config/testthat/edition: 3

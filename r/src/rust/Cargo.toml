@@ -1,0 +1,39 @@
+[package]
+name = "spice"
+description = "R bindings (savvy) of the Dune simulator for the `spice` R package"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "BSD-3-Clause"
+publish = false
+
+# Detached from the repository workspace: R CMD build/check copy this
+# crate on its own, and the root workspace must not pick it up.
+[workspace]
+
+[lib]
+crate-type = ["staticlib", "lib"]
+
+[dependencies]
+savvy = "0.11"
+num-complex = "0.4"
+# The engine. Relative to src/rust inside the dune repository; the
+# package's `configure` rewrites these paths from DUNE_ROOT when the
+# package is built from a tarball outside the repository (vendoring
+# for a real CRAN submission is a later task).
+dune-core = { path = "../../../crates/dune-core" }
+dune-netlist = { path = "../../../crates/dune-netlist" }
+dune-raw = { path = "../../../crates/dune-raw" }
+
+[profile.release]
+# A panic is a bug, but it must never take the R session down: with
+# `unwind`, savvy turns a panic into an ordinary R error
+# (fase4-api.md: "pânico nunca cruza a borda").
+panic = "unwind"
+
+# faer's LU is unusably slow unoptimized (see the root Cargo.toml);
+# keep `devtools::load_all()` (dev profile) usable.
+[profile.dev.package.faer]
+opt-level = 3
+[profile.dev.package.dune-core]
+opt-level = 3
