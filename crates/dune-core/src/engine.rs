@@ -23,6 +23,34 @@ use num_complex::Complex64;
 /// Memory guard for sweep/transient outputs: `points × vars` of f64.
 const MAX_OUTPUT_VALUES: usize = 50_000_000;
 
+/// Refuse a frequency sweep whose PLANNED point count already blows
+/// [`MAX_OUTPUT_VALUES`], before any work. The per-iteration checks
+/// inside the loops stay (they also cover unplanned growth), but a
+/// hostile card (`.ac lin 1e30 1 2`) must cost nothing — on wasm an
+/// out-of-memory or minutes-long refusal cannot be interrupted.
+pub(crate) fn sweep_budget(
+    step_type: AcStepType,
+    n: usize,
+    fstart: f64,
+    fstop: f64,
+    nvars: usize,
+    what: &str,
+) -> Result<(), Error> {
+    let intervals = match step_type {
+        AcStepType::Linear => 1.0,
+        AcStepType::Decade => (fstop / fstart).log10().abs().ceil() + 1.0,
+        AcStepType::Octave => (fstop / fstart).log2().abs().ceil() + 1.0,
+    };
+    let planned = n as f64 * intervals * nvars as f64;
+    if planned.is_finite() && planned <= MAX_OUTPUT_VALUES as f64 {
+        Ok(())
+    } else {
+        Err(Error::Build(format!(
+            "{what} sweep produces too many points; refusing"
+        )))
+    }
+}
+
 pub(crate) struct Engine {
     pub vars: Vars,
     devices: Vec<Box<dyn Device>>,
@@ -440,6 +468,18 @@ impl Engine {
         sweeps: &[SweepRef],
     ) -> Result<Vec<(f64, Vec<f64>)>, Error> {
         assert!(!sweeps.is_empty() && sweeps.len() <= 2);
+        // Refuse before the first solve when the planned grid alone
+        // blows the output cap (each point is a full Newton solve).
+        let planned: f64 = sweeps
+            .iter()
+            .map(|s| ((s.stop - s.start) / s.step).abs() + 1.0)
+            .product::<f64>()
+            * self.vars.len() as f64;
+        if !(planned.is_finite() && planned <= MAX_OUTPUT_VALUES as f64) {
+            return Err(Error::Build(
+                "dc sweep produces too many points; refusing".into(),
+            ));
+        }
         self.set_kind(AnKind::DcSweep, false);
         let sign = |x: f64| if x >= 0.0 { 1.0 } else { -1.0 };
 
@@ -595,6 +635,12 @@ impl Engine {
             Method::Trapezoidal => 2,
             Method::Gear => opts.maxord.clamp(1, 6),
         };
+        let planned = ((p.tstop - p.tstart) / p.tstep + 2.0) * self.vars.len() as f64;
+        if !(planned.is_finite() && planned <= MAX_OUTPUT_VALUES as f64) {
+            return Err(Error::Build(
+                "transient produces too many points; refusing".into(),
+            ));
+        }
         self.step = p.tstep;
         self.final_time = p.tstop;
         self.time = 0.0;
@@ -793,6 +839,8 @@ impl Engine {
             }
         };
 
+        sweep_budget(step_type, n, fstart, fstop, self.vars.len(), "ac")?;
+
         // DC operating point, then the small-signal storage pass.
         self.set_kind(AnKind::DcOp, false);
         self.op(opts)?;
@@ -972,6 +1020,14 @@ impl Engine {
         // `DnumSteps` is an int; a zero step count would make the
         // decade multiplier infinite and the loop endless.
         let n = num_steps.max(1) as f64;
+        sweep_budget(
+            step_type,
+            num_steps.max(1),
+            fstart,
+            fstop,
+            self.vars.len(),
+            "disto",
+        )?;
         let (freq_delta, freq_tol) = match step_type {
             AcStepType::Decade => {
                 let d = f64::exp(f64::ln(10.0) / n);

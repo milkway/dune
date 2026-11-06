@@ -153,6 +153,7 @@ impl Circuit {
         let stps_sm = pts_per_summary.unwrap_or(0);
 
         // Operating point, then the small-signal pass.
+        crate::engine::sweep_budget(step_type, n, fstart, fstop, engine.vars.len(), "noise")?;
         engine.set_kind(AnKind::DcOp, false);
         engine.op(opts)?;
         engine.load_all_public(InitMode::Smsig, opts);
@@ -208,7 +209,7 @@ impl Circuit {
             let ln_freq = f64::ln(f64::max(freq, N_MINLOG));
             let ln_last_freq = f64::ln(f64::max(lst_freq, N_MINLOG));
             let del_ln_freq = ln_freq - ln_last_freq;
-            let prt_summary = stps_sm != 0 && step % stps_sm == 0;
+            let prt_summary = stps_sm != 0 && step.is_multiple_of(stps_sm);
 
             let mut out_ndens = 0.0f64;
             let mut row: Vec<f64> = Vec::new();
