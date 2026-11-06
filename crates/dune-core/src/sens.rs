@@ -62,26 +62,34 @@ pub struct Sens {
 }
 
 /// `scan` (ngspice `cktsens.c`): glob match with `*` and `?`.
+///
+/// Iterative two-pointer form, linear in `filter.len() + name.len()`:
+/// on a mismatch it retries from the last `*`, one name byte later.
+/// The C recurses per `*`, which a hostile card (`a*a*a*a*…` against
+/// a long name) turns exponential — a deck must never hang (CLAUDE.md
+/// princípio 4). Same accepted language.
 fn glob(filter: &[u8], name: &[u8]) -> bool {
     let (mut f, mut n) = (0, 0);
-    while f < filter.len() && n < name.len() {
-        if filter[f] == b'*' {
-            if f + 1 == filter.len() {
-                return true; // terminal '*' matches all
-            }
-            while n < name.len() && !glob(&filter[f + 1..], &name[n..]) {
-                n += 1;
-            }
-            return n < name.len();
-        }
-        if filter[f] == name[n] || filter[f] == b'?' {
+    let mut star: Option<(usize, usize)> = None; // (filter pos after '*', name pos it matched)
+    while n < name.len() {
+        if f < filter.len() && (filter[f] == name[n] || filter[f] == b'?') {
             f += 1;
             n += 1;
+        } else if f < filter.len() && filter[f] == b'*' {
+            star = Some((f + 1, n));
+            f += 1;
+        } else if let Some((sf, sn)) = star {
+            f = sf;
+            n = sn + 1;
+            star = Some((sf, sn + 1));
         } else {
             return false;
         }
     }
-    n == name.len() && (f == filter.len() || (filter[f] == b'*' && f + 1 == filter.len()))
+    while f < filter.len() && filter[f] == b'*' {
+        f += 1;
+    }
+    f == filter.len()
 }
 
 /// Position of a device type in ngspice's `DEVices[]` (`dev.c`),
@@ -263,6 +271,21 @@ mod tests {
         assert!(glob(b"r*_m", b"r12_m"));
         assert!(!glob(b"r*_m", b"r12_scale"));
         assert!(!glob(b"r1", b"r1_m"));
+        assert!(glob(b"a*b*c", b"axxbyyc"));
+        assert!(glob(b"**", b"x"));
+        assert!(glob(b"a**b", b"ab"));
+        // Hostile pattern: the recursive form is exponential here;
+        // the iterative one must answer instantly.
+        let name = [b'a'; 4096];
+        let mut hostile = Vec::new();
+        for _ in 0..64 {
+            hostile.extend_from_slice(b"a*");
+        }
+        hostile.push(b'b');
+        assert!(!glob(&hostile, &name));
+        hostile.pop();
+        hostile.push(b'a');
+        assert!(glob(&hostile, &name));
     }
 
     #[test]
