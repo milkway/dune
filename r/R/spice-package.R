@@ -12,7 +12,10 @@
 #'   at the results, one long tibble row per point and variable;
 #' * [spice_read_raw()] and [spice_write_raw()] to exchange SPICE3
 #'   rawfiles with ngspice and other tools;
-#' * `ggplot2::autoplot()` for a quick look (when ggplot2 is installed).
+#' * `ggplot2::autoplot()` for a quick look (when ggplot2 is installed);
+#' * a `spice` knitr engine: a ```` ```{spice} ```` chunk in R Markdown or
+#'   Quarto holds a deck and leaves its result in a variable for the R
+#'   chunks that follow (see [spice_knitr]).
 #'
 #' @keywords internal
 #' @useDynLib spice, .registration = TRUE

@@ -19,7 +19,10 @@ The main entry points are:
 at the results, one long tibble row per point and variable;
 \item \code{\link[=spice_read_raw]{spice_read_raw()}} and \code{\link[=spice_write_raw]{spice_write_raw()}} to exchange SPICE3
 rawfiles with ngspice and other tools;
-\item \code{ggplot2::autoplot()} for a quick look (when ggplot2 is installed).
+\item \code{ggplot2::autoplot()} for a quick look (when ggplot2 is installed);
+\item a \code{spice} knitr engine: a \verb{```\{spice\}} chunk in R Markdown or
+Quarto holds a deck and leaves its result in a variable for the R
+chunks that follow (see \link{spice_knitr}).
 }
 }
 \author{

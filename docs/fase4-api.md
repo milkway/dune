@@ -205,6 +205,24 @@ versionado (teste compara; `DUNE_FFI_BLESS=1` regenera); compila
 como C99 e C++11 `-pedantic -Werror`. Smoke test em C no
 `cargo test` (unix, com `cc`).
 
+### Notebooks (2026-11-06)
+
+- **knitr (R):** engine **`spice`** (supersede o nome `dune` do
+  PLAN §2.6, por D-0014) registrado no `.onLoad` só se o knitr
+  carregar; chunk ```{spice} = netlist; opções `spice.output`
+  ("tidy" default | "raw" — `spice.output` e não `output`, que o
+  Quarto já usa), `spice.var` (default = label do chunk; FALSE
+  desliga), `spice.options`/`spice.includes`; erro com span para o
+  knit (ou imprime com `error=TRUE`). `?spice_knitr`.
+- **Jupyter (Python):** `Plot._repr_svg_()` — preview SVG
+  640×360 autocontido, fundo transparente legível em claro/escuro,
+  ticks com prefixos SI, x log em frequência >1 década, paleta Tol
+  6 cores (7–8 tracejados, teto 8 + "(+N more)"), um eixo y (tipos
+  diferentes anotados na legenda, não desenhados), decimação
+  min/max ~400 pts, complexo = |valor|; sem escala → tabela HTML.
+  `Result._repr_html_()` = tabela compacta + notes/diagnostics.
+  Revisão visual feita (previews em .claude/scratch/previews/).
+
 ### Divergências deliberadas entre os espelhos (nota exigida pelo
 CLAUDE.md §Pacotes)
 

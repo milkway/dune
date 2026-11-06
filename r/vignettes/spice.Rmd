@@ -90,6 +90,38 @@ For a quick look, `autoplot()` draws any plot with a scale:
 autoplot(spice_plots(res)[["AC Analysis"]])
 ```
 
+## Decks as chunks
+
+Loading spice also gives knitr a `spice` engine. In R Markdown or
+Quarto, a ```` ```{spice} ```` chunk holds a deck: the engine runs it,
+prints the head of its tidy table, and leaves the result in a variable
+named after the chunk label, ready for the R chunks below it (see
+`?spice_knitr` for the chunk options).
+
+````markdown
+`r ''````{spice divider}
+divider
+v1 1 0 dc 0
+r1 1 2 1k
+r2 2 0 3k
+.dc v1 0 10 1
+.end
+```
+````
+
+```{spice divider}
+divider
+v1 1 0 dc 0
+r1 1 2 1k
+r2 2 0 3k
+.dc v1 0 10 1
+.end
+```
+
+```{r divider-plot, eval = has_ggplot2, fig.width = 6.5, fig.height = 3}
+autoplot(spice_plots(divider)[[1]])
+```
+
 ## Exchanging rawfiles
 
 Results write to and read from SPICE3 rawfiles, the format ngspice

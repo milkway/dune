@@ -10,6 +10,7 @@ import numpy.typing as npt
 import polars as pl
 
 from ._errors import Diagnostic
+from ._repr import has_preview, plot_html, plot_svg, result_html
 
 if TYPE_CHECKING:
     import pandas  # type: ignore[import-untyped,unused-ignore]
@@ -178,6 +179,37 @@ class Plot:
     def __len__(self) -> int:
         return self.npoints
 
+    def _repr_svg_(self) -> str | None:
+        """A small SVG line preview of the plot, for Jupyter.
+
+        Every non-scale vector of the same type as the first one (the
+        voltages of a ``.tran``, say) is drawn against the scale, one
+        colored line each, with a legend; vectors of other types are not
+        drawn (one y axis) and are counted in a legend note, as are the
+        traces past the first 8. Complex plots draw the magnitude
+        ``|value|`` on a linear axis (no dB, no phase). The x axis is
+        logarithmic when the scale is a frequency spanning more than a
+        decade. Each trace is decimated to about 400 points (min/max per
+        bucket, so peaks stay). The background is transparent and the
+        text a mid gray, legible on light and dark themes.
+
+        Returns ``None`` -- and the notebook shows :meth:`_repr_html_`
+        instead -- for a plot without a scale (operating point, ``.tf``,
+        ``.pz``, DC ``.sens``, integrated noise) or with fewer than two
+        points.
+        """
+        return plot_svg(self)
+
+    def _repr_html_(self) -> str | None:
+        """An HTML table of the vectors (value, or range), for Jupyter.
+
+        Only for plots :meth:`_repr_svg_` does not draw; ``None`` otherwise,
+        so a notebook shows the preview rather than the table.
+        """
+        if has_preview(self):
+            return None
+        return plot_html(self)
+
     def __repr__(self) -> str:
         kind = "complex" if self._complex else "real"
         return (
@@ -247,6 +279,10 @@ class Result(Sequence[Plot]):
 
     def __iter__(self) -> Iterator[Plot]:
         return iter(self._plots)
+
+    def _repr_html_(self) -> str:
+        """An HTML summary for Jupyter: one table row per plot, then notes and diagnostics."""
+        return result_html(self)
 
     def __repr__(self) -> str:
         names = ", ".join(repr(p.plotname) for p in self._plots)
