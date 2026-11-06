@@ -1,0 +1,27 @@
+One-PNP common-emitter amplifier: harmonics in .disto
+* Coverage: the type factors of bjtdset.c (second-order coefficients
+* carry BJTtype, third-order ones do not) on a PNP mirror of
+* bjtdisto2.cir, through the 2nd and 3rd harmonics. CJS is 0 here:
+* ngspice-47 defaults a PNP's substrate to LATERAL (cap on the base),
+* the 3f5 and Dune put it on the collector (corpus/KNOWN_DIFFS.md).
+* Norton-equivalent supplies, as in bjtdisto2.cir.
+icc 5 0 12
+rcc 5 0 1
+iin 0 1 0 distof1 2.5u
+rs 1 0 1k
+cin 1 3 10u
+rb1 5 3 82k
+rb2 3 0 15k
+rc 5 4 4.7k
+re 6 0 1k
+ce 6 0 100u
+q1 4 3 6 7 qmod
+isub 0 7 2
+rsub 7 0 1
+.model qmod pnp is=1e-15 bf=150 nf=1.01 vaf=60 ikf=20m ise=2e-14 ne=1.6
++ br=3 nr=1.02 var=20 ikr=5m isc=1e-14 nc=1.8
++ rb=150 irb=0.2m rbm=30 re=2 rc=15
++ cje=2p vje=0.8 mje=0.35 tf=0.4n xtf=2 vtf=4 itf=30m ptf=25
++ cjc=1.5p vjc=0.6 mjc=0.4 xcjc=0.6 tr=5n
+.disto dec 10 1e3 1e9
+.end

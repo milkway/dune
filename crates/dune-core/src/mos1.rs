@@ -11,7 +11,11 @@
 
 use crate::consts::{BOLTZ, CHARGE, KOVERQ, REFTEMP, ROOT2};
 use crate::diode::pnjlim;
+use crate::disto::{DistoCtx, DistoSetupCtx};
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
+use crate::mosdisto::{
+    DrainDerivs, MosDistoCoeffs, MosJunctions, bulk_diode, mos_disto_load, setup_tail,
+};
 
 /// `MAX_EXP_ARG` (`hw_ieee.h`): largest argument handed to `exp`.
 const MAX_EXP_ARG: f64 = 709.0;
@@ -640,6 +644,8 @@ pub(crate) struct Mos1I {
     cd: f64,
     cbs: f64,
     cbd: f64,
+    /// `.disto` Taylor coefficients (`MOS1dSetup`).
+    dist: MosDistoCoeffs,
 }
 
 impl Mos1I {
@@ -681,6 +687,7 @@ impl Mos1I {
             cd: 0.0,
             cbs: 0.0,
             cbd: 0.0,
+            dist: MosDistoCoeffs::default(),
         }
     }
 }
@@ -1236,6 +1243,152 @@ impl crate::devices::Device for Mos1I {
         ctx.add_g(self.s[SP_S], -gspr);
         ctx.add_g(self.s[SP_B], -gbs - (xnrm - xrev) * gmbs);
         ctx.add_g(self.s[SP_DP], -gds - xrev * (gm + gmbs));
+    }
+
+    /// `MOS1dSetup` (`dev/mos1/mos1dset.c`): the Shichman–Hodges
+    /// drain current's derivatives up to third order written out by
+    /// region (cutoff, saturation, linear), with the body effect
+    /// through `von(vbs)`; then the shared diode/capacitance/type
+    /// bookkeeping (`mosdisto.rs`).
+    #[allow(clippy::too_many_lines)]
+    fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        let t = &self.t;
+        let g = &self.geom;
+        let typ = t.type_;
+        let vt = t.vt;
+        let sol = ctx.sol;
+        let gmin = ctx.gmin;
+        let eff_l = g.l - 2.0 * t.lat_diff;
+        let (drain_sat_cur, source_sat_cur) =
+            if t.t_sat_cur_dens == 0.0 || g.ad == 0.0 || g.as_ == 0.0 {
+                (t.t_sat_cur, t.t_sat_cur)
+            } else {
+                (t.t_sat_cur_dens * g.ad, t.t_sat_cur_dens * g.as_)
+            };
+        let beta = t.t_transconductance * g.w / eff_l;
+        let oxide_cap = t.oxide_cap_factor * eff_l * g.w;
+
+        let vbs = typ * (sol[self.bulk] - sol[self.s_p]);
+        let vgs = typ * (sol[self.gate] - sol[self.s_p]);
+        let vds = typ * (sol[self.d_p] - sol[self.s_p]);
+        let vbd = vbs - vds;
+        let vgd = vgs - vds;
+
+        let gbs = bulk_diode(vbs, source_sat_cur, vt, gmin, typ);
+        let gbd = bulk_diode(vbd, drain_sat_cur, vt, gmin, typ);
+        let mode = if vds >= 0.0 { 1.0 } else { -1.0 };
+
+        let lvbs = if mode == 1.0 { vbs } else { vbd };
+        let (sarg, dvondvbs, d2vondvbs2, d3vondvbs3);
+        if lvbs <= 0.0 {
+            sarg = f64::sqrt(t.t_phi - lvbs);
+            if -t.gamma != 0.0 {
+                let d1 = -t.gamma * 0.5 / sarg;
+                let d2 = -d1 * 0.5 / (sarg * sarg);
+                dvondvbs = d1;
+                d2vondvbs2 = d2;
+                d3vondvbs3 = 1.5 * d2 / (sarg * sarg);
+            } else {
+                (dvondvbs, d2vondvbs2, d3vondvbs3) = (0.0, 0.0, 0.0);
+            }
+        } else {
+            let s0 = f64::sqrt(t.t_phi);
+            let d1 = if t.gamma != 0.0 {
+                -t.gamma / (s0 + s0)
+            } else {
+                0.0
+            };
+            (d2vondvbs2, d3vondvbs3) = (0.0, 0.0);
+            sarg = f64::max(0.0, s0 - lvbs / (s0 + s0));
+            dvondvbs = if sarg <= 0.0 { 0.0 } else { d1 };
+        }
+        let von = t.t_vbi * typ + t.gamma * sarg;
+        let vgst = (if mode == 1.0 { vgs } else { vgd }) - von;
+        let vdsat = f64::max(vgst, 0.0);
+        let lambda = t.lambda;
+        let mut dd = DrainDerivs::default();
+        if vgst > 0.0 {
+            let betap = beta * (1.0 + lambda * (vds * mode));
+            if vgst <= vds * mode {
+                // Saturation: cdrain = betap·vgst²/2.
+                let gm = betap * vgst;
+                let gmds = vgst * lambda * beta;
+                let gmb = -betap * dvondvbs;
+                dd = DrainDerivs {
+                    gm2: betap,
+                    gds2: 0.0,
+                    gb2: -(gm * d2vondvbs2 - betap * dvondvbs * dvondvbs),
+                    gmds,
+                    gbds: -gmds * dvondvbs,
+                    gmb,
+                    gm3: 0.0,
+                    gb3: -(gmb * d2vondvbs2 + gm * d3vondvbs3
+                        - betap * 2.0 * dvondvbs * d2vondvbs2),
+                    gds3: 0.0,
+                    gm2ds: beta * lambda,
+                    gm2b: 0.0,
+                    gmb2: -betap * d2vondvbs2,
+                    gb2ds: -(gmds * d2vondvbs2 - dvondvbs * dvondvbs * beta * lambda),
+                    gmds2: 0.0,
+                    gbds2: 0.0,
+                    gmbds: -beta * lambda * dvondvbs,
+                };
+            } else {
+                // Linear: cdrain = betap·vds·(vgst − vds/2).
+                let gm = betap * (vds * mode);
+                let gmds = beta * lambda * vds * mode + betap;
+                let gmds2 = 2.0 * lambda * beta;
+                dd = DrainDerivs {
+                    gm2: 0.0,
+                    gb2: -(gm * d2vondvbs2),
+                    gds2: 2.0 * beta * lambda * (vgst - vds * mode) - betap,
+                    gmds,
+                    gbds: -gmds * dvondvbs,
+                    gmb: 0.0,
+                    gm3: 0.0,
+                    gb3: -gm * d3vondvbs3,
+                    gds3: -beta * lambda * 3.,
+                    gm2ds: 0.0,
+                    gm2b: 0.0,
+                    gmb2: 0.0,
+                    gmds2,
+                    gb2ds: -(gmds * d2vondvbs2),
+                    gbds2: -gmds2 * dvondvbs,
+                    gmbds: 0.0,
+                };
+            }
+        }
+
+        let junctions = MosJunctions {
+            cbs: t.cbs,
+            cbssw: t.cbssw,
+            f3s: t.f3s,
+            cbd: t.cbd,
+            cbdsw: t.cbdsw,
+            f3d: t.f3d,
+            dep_cap: t.t_dep_cap,
+            bulk_pot: t.t_bulk_pot,
+            mj: t.mj,
+            mjsw: t.mjsw,
+        };
+        self.dist = setup_tail(
+            typ,
+            mode,
+            (vbs, vbd, vds),
+            (vgst, vdsat),
+            t.t_phi,
+            oxide_cap,
+            &junctions,
+            &dd,
+            gbs,
+            gbd,
+        );
+        Ok(())
+    }
+
+    /// `MOS1disto` (`dev/mos1/mos1dist.c`).
+    fn disto_load(&self, ctx: &mut DistoCtx) {
+        mos_disto_load(&self.dist, (self.gate, self.bulk, self.d_p, self.s_p), ctx);
     }
 }
 

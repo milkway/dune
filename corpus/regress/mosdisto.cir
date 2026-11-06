@@ -1,0 +1,20 @@
+MOS1 common-source stage: harmonics in .disto
+* Coverage: mos1dset.c's closed-form drain-current derivatives in
+* saturation with body effect (dvon/dvbs to third order) and channel-
+* length modulation, the bulk junction diodes, the bottom/sidewall
+* depletion and Meyer gate-capacitance coefficients, and the shared
+* mos1dist.c load, through the 2nd and 3rd harmonics against
+* ngspice-47.
+vdd 5 0 5
+vin 1 0 0 distof1 0.02
+vbias 2 1 1.3
+rg 2 3 10k
+m1 4 3 0 6 nmod l=2u w=20u ad=40p as=40p pd=24u ps=24u
+rd 5 4 10k
+cl 4 0 0.2p
+vbb 6 0 -1
+.model nmod nmos level=1 vto=0.8 kp=50u gamma=0.5 phi=0.65 lambda=0.03
++ tox=20n cj=0.3m mj=0.45 cjsw=0.5n mjsw=0.33 pb=0.8 cgso=0.2n cgdo=0.2n cgbo=0.1n
++ is=1e-15 rd=20 rs=20
+.disto dec 10 1e3 1e10
+.end

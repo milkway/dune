@@ -1,0 +1,22 @@
+MOS2 common-source stage: intermodulation in .disto
+* Coverage: mos2dset.c's Dderivs chain through the Grove-Frohman
+* current - narrow-channel factor (DELTA), the XJ short-channel
+* correction of gamma, and the NSUB channel-length modulation from
+* XD (LAMBDA=0) - plus the shared MOS load, through f1+f2, f1-f2 and
+* 2f1-f2. GAMMA=0 keeps
+* the deck off the two places where mos2dset.c reads storage it never
+* wrote (d_dumarg with GAMMA>0, d_xlamda with LAMBDA>0 or no NSUB);
+* see the rustdoc of Mos2I::disto_coeffs.
+vdd 5 0 5
+vin 1 0 0 distof1 0.02 distof2 0.02
+vbias 2 1 1.6
+rg 2 3 10k
+m1 4 3 0 6 nmod l=3u w=30u ad=60p as=60p pd=34u ps=34u
+rd 5 4 10k
+cl 4 0 0.2p
+vbb 6 0 -1
+.model nmod nmos level=2 vto=0.8 kp=40u gamma=0 phi=0.65 nsub=2e15 xj=0.4u
++ delta=0.5 tox=40n cj=0.3m mj=0.45 cjsw=0.5n mjsw=0.33 pb=0.8
++ cgso=0.2n cgdo=0.2n cgbo=0.1n is=1e-15 rd=20 rs=20
+.disto dec 10 1e3 1e10 0.9
+.end

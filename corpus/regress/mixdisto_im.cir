@@ -1,0 +1,21 @@
+Simple mixer circuit - diffpair fed by modulated Iee (intermodulation)
+* Derived from spice3f5/examples/mixdisto.cir (in corpus/SKIP: the
+* upstream .disto lines are comments). This is its second setup,
+* uncommented: v2 moves to DISTOF2 and F2OVERF1 = 0.9, giving the IM
+* products f1+f2, f1-f2 and 2f1-f2 (the DFnF12/DFn2F12 multi-variable
+* loads of dloadfns.c). The output is v(6).
+v1 1 0  0v ac 1.0 distof1 0.001
+v2 7 0 0v ac 1.0 distof2 0.001
+.disto dec 20 1.0e3 1.0e8 0.9
+
+q1 3 1 4 2 mod1
+q2 6 0 4 2 mod1
+rc1 5 3 10k
+rc2 5 6 10k
+vcc 5 0 10v
+qee 4 7 8 2 mod1
+re 8 2 9K
+vee 2 0 -10v
+
+.model mod1 npn is=1e-16 bf=100 cjs=2.0e-12 tf=0.3e-9 cje=3.0e-12 cjc=2.0e-12  vaf=50
+.end

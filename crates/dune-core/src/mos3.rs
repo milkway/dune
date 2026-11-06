@@ -21,9 +21,15 @@
 //! and the `f3/f4` junction coefficients (`junction_coeffs`).
 
 use crate::consts::{BOLTZ, CHARGE, KOVERQ, REFTEMP, ROOT2};
+use crate::dderivs::Dderivs;
 use crate::diode::pnjlim;
+use crate::disto::{DistoCtx, DistoSetupCtx};
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 use crate::mos1::{MosGeom, fetlim, limvds, qmeyer};
+use crate::mosdisto::{
+    DrainDerivs, MosDistoCoeffs, MosJunctions, bulk_diode as disto_bulk_diode, mos_disto_load,
+    setup_tail,
+};
 
 /// Epsilon of silicon (`mos3temp.c`: `EPSSIL`).
 const EPSSIL: f64 = 11.7 * 8.854214871e-12;
@@ -571,6 +577,8 @@ pub(crate) struct Mos3I {
     cd: f64,
     cbs: f64,
     cbd: f64,
+    /// `.disto` Taylor coefficients (`MOS3dSetup`).
+    dist: MosDistoCoeffs,
 }
 
 impl Mos3I {
@@ -612,6 +620,7 @@ impl Mos3I {
             cd: 0.0,
             cbs: 0.0,
             cbd: 0.0,
+            dist: MosDistoCoeffs::default(),
         }
     }
 }
@@ -941,6 +950,340 @@ pub(crate) fn moseq3(
         gmbs,
         von,
         vdsat,
+    }
+}
+
+impl Mos3I {
+    /// `MOS3dSetup` (`dev/mos3/mos3dset.c`): the 3f5 semi-empirical
+    /// drain current re-evaluated with the `Dderivs` algebra (p = vgs,
+    /// q = vbs, r = vds, mode-normalized) — the setup's own equations,
+    /// which ngspice-47 carries unchanged apart from the effective
+    /// width (equal to `W` here, Dune has no `WD`/`XW`), not the
+    /// smoothed alansfixes current the load uses. Kept as the C has
+    /// it: the narrow-width term of `qbonco` *multiplies* by `W` in
+    /// the derivative chain while the value divides, and `fbody`
+    /// takes the derivatives of `fbodys` alone.
+    #[allow(unused_assignments, clippy::too_many_lines)]
+    fn disto_coeffs(&self, sol: &[f64], gmin: f64) -> MosDistoCoeffs {
+        let t = &self.t;
+        let g = &self.geom;
+        let typ = t.type_;
+        let vt = t.vt;
+        let eff_l = g.l - 2.0 * t.lat_diff;
+        let (drain_sat_cur, source_sat_cur) =
+            if t.t_sat_cur_dens == 0.0 || g.ad == 0.0 || g.as_ == 0.0 {
+                (t.t_sat_cur, t.t_sat_cur)
+            } else {
+                (t.t_sat_cur_dens * g.ad, t.t_sat_cur_dens * g.as_)
+            };
+        let mut beta = t.t_transconductance * g.w / eff_l;
+        let oxide_cap = t.oxide_cap_factor * eff_l * g.w;
+
+        let vbs = typ * (sol[self.bulk] - sol[self.s_p]);
+        let vgs = typ * (sol[self.gate] - sol[self.s_p]);
+        let vds = typ * (sol[self.d_p] - sol[self.s_p]);
+        let vbd = vbs - vds;
+        let vgd = vgs - vds;
+
+        let gbs = disto_bulk_diode(vbs, source_sat_cur, vt, gmin, typ);
+        let gbd = disto_bulk_diode(vbd, drain_sat_cur, vt, gmin, typ);
+        let mode = if vds >= 0.0 { 1.0 } else { -1.0 };
+
+        let (lvgs, lvds, lvbs) = if mode == 1.0 {
+            (vgs, vds, vbs)
+        } else {
+            (vgd, -vds, vbd)
+        };
+
+        let d_p = Dderivs::var_p();
+        let d_q = Dderivs::var_q();
+        let d_r = Dderivs::var_r();
+        let d_zero = Dderivs::default();
+        let mut d_cdrain = d_zero;
+        let mut vdsat = 0.0;
+        let mut von;
+
+        'eval: {
+            let mut d_vdsat;
+            let oneoverxl = 1.0 / eff_l;
+            let eta = t.eta * 8.15e-22 / (t.oxide_cap_factor * eff_l * eff_l * eff_l);
+
+            // Square-root term.
+            let (phibs, sqphbs, d_phibs, d_sqphbs);
+            if lvbs <= 0.0 {
+                phibs = t.t_phi - lvbs;
+                let mut d = Dderivs { value: lvbs, ..d_q }.times(-1.0);
+                d.value += t.t_phi;
+                d_phibs = d;
+                sqphbs = f64::sqrt(phibs);
+                d_sqphbs = d_phibs.sqrt();
+            } else {
+                let sqphis = f64::sqrt(t.t_phi);
+                sqphbs = sqphis / (1.0 + lvbs / (t.t_phi + t.t_phi));
+                let mut d = Dderivs { value: lvbs, ..d_q }.times(1.0 / (t.t_phi + t.t_phi));
+                d.value += 1.0;
+                d_sqphbs = d.inv().times(sqphis);
+                phibs = sqphbs * sqphbs;
+                d_phibs = d_sqphbs.mult(&d_sqphbs);
+            }
+
+            // Short-channel effect factor.
+            const COEFF0: f64 = 0.0631353e0;
+            const COEFF1: f64 = 0.8013292e0;
+            const COEFF2: f64 = -0.01110777e0;
+            let (fshort, d_fshort);
+            if t.xj != 0.0 && t.coeff_dep_lay_width != 0.0 {
+                let wps = t.coeff_dep_lay_width * sqphbs;
+                let d_wps = d_sqphbs.times(t.coeff_dep_lay_width);
+                let oneoverxj = 1.0 / t.xj;
+                let xjonxl = t.xj * oneoverxl;
+                let djonxj = t.lat_diff * oneoverxj;
+                let wponxj = wps * oneoverxj;
+                let d_wponxj = d_wps.times(oneoverxj);
+                let wconxj = COEFF0 + COEFF1 * wponxj + COEFF2 * wponxj * wponxj;
+                let mut d_wconxj = d_wponxj.times(COEFF2);
+                d_wconxj.value += COEFF1;
+                let mut d_wconxj = d_wconxj.mult(&d_wponxj);
+                d_wconxj.value += COEFF0;
+                let arga = wconxj + djonxj;
+                let mut d_arga = d_wconxj;
+                d_arga.value += djonxj;
+                let argc = wponxj / (1.0 + wponxj);
+                let mut d_argc = d_wponxj;
+                d_argc.value += 1.0;
+                let d_argc = d_argc.inv().mult(&d_wponxj);
+                let argb = f64::sqrt(1.0 - argc * argc);
+                let mut d_argb = d_argc.mult(&d_argc).times(-1.0);
+                d_argb.value += 1.0;
+                let d_argb = d_argb.sqrt();
+                fshort = 1.0 - xjonxl * (arga * argb - djonxj);
+                let mut d = d_arga.mult(&d_argb);
+                d.value -= djonxj;
+                let mut d = d.times(-xjonxl);
+                d.value += 1.0;
+                d_fshort = d;
+            } else {
+                fshort = 1.0;
+                d_fshort = Dderivs::constant(1.0);
+            }
+
+            // Body effect.
+            let gammas = t.gamma * fshort;
+            let d_gammas = d_fshort.times(t.gamma);
+            let fbodys = 0.5 * gammas / (sqphbs + sqphbs);
+            let d_fbodys = d_gammas.div(&d_sqphbs).times(0.25);
+            let fbody = fbodys + t.narrow_factor / g.w;
+            let mut d_fbody = d_fbodys;
+            d_fbody.value += fbody - fbodys;
+            let onfbdy = 1.0 / (1.0 + fbody);
+            let mut d_onfbdy = d_fbody;
+            d_onfbdy.value += 1.0;
+            let d_onfbdy = d_onfbdy.inv();
+            let qbonco = gammas * sqphbs + t.narrow_factor * phibs / g.w;
+            let d_dummy = d_phibs.times(t.narrow_factor * g.w);
+            let d_qbonco = d_gammas.mult(&d_sqphbs).plus(&d_dummy);
+
+            // Static feedback, threshold voltage.
+            let vbix = t.t_vbi * typ - eta * lvds;
+            let d_vbix = Dderivs {
+                value: vbix,
+                d1_r: -eta,
+                ..d_r
+            };
+            let vth = vbix + qbonco;
+            let d_vth = d_vbix.plus(&d_qbonco);
+            von = vth;
+            let mut d_von = d_vth;
+            let mut xn = 0.0;
+            let mut d_xn = d_zero;
+            if t.nfs != 0.0 {
+                let csonco = CHARGE * t.nfs * 1e4 * eff_l * g.w / oxide_cap;
+                let cdonco = 0.5 * qbonco / phibs;
+                let d_cdonco = d_qbonco.div(&d_phibs).times(0.5);
+                xn = 1.0 + csonco + cdonco;
+                d_xn = d_cdonco;
+                d_xn.value += 1.0 + csonco;
+                von = vth + vt * xn;
+                d_von = d_xn.times(vt).plus(&d_vth);
+            } else if lvgs <= von {
+                // Cutoff.
+                d_cdrain = d_zero;
+                break 'eval;
+            }
+
+            // Device is on.
+            let vgsx = f64::max(lvgs, von);
+            let d_vgsx = if lvgs >= von {
+                Dderivs { value: lvgs, ..d_p }
+            } else {
+                d_von
+            };
+            // Mobility modulation by gate voltage.
+            let onfg = 1.0 + t.theta * (vgsx - vth);
+            let mut d_onfg = d_vth.times(-1.0).plus(&d_vgsx).times(t.theta);
+            d_onfg.value += 1.0;
+            let fgate = 1.0 / onfg;
+            let d_fgate = d_onfg.inv();
+            let us = t.t_surf_mob * 1e-4 * fgate;
+            let d_us = d_fgate.times(t.t_surf_mob * 1e-4);
+            // Saturation voltage.
+            vdsat = (vgsx - vth) * onfbdy;
+            d_vdsat = d_vth.times(-1.0).plus(&d_vgsx).mult(&d_onfbdy);
+            let (mut onvdsc, mut d_onvdsc) = (0.0, d_zero);
+            if t.vmax > 0.0 {
+                let vdsc = eff_l * t.vmax / us;
+                let d_vdsc = d_us.inv().times(eff_l * t.vmax);
+                onvdsc = 1.0 / vdsc;
+                d_onvdsc = d_vdsc.inv();
+                let arga = (vgsx - vth) * onfbdy;
+                let d_arga = d_vdsat;
+                let argb = f64::sqrt(arga * arga + vdsc * vdsc);
+                let d_argb = d_vdsc.mult(&d_vdsc).plus(&d_arga.mult(&d_arga)).sqrt();
+                vdsat = arga + vdsc - argb;
+                d_vdsat = d_argb.times(-1.0).plus(&d_vdsc).plus(&d_arga);
+            }
+
+            // Current factors in the linear region.
+            let vdsx = f64::min(lvds, vdsat);
+            let d_vdsx = if lvds < vdsat {
+                Dderivs { value: lvds, ..d_r }
+            } else {
+                d_vdsat
+            };
+            if vdsx == 0.0 {
+                // `line900`: the special case vds = 0 (`Beta` is
+                // updated before the derivative is scaled by it, as
+                // in the main path).
+                beta *= fgate;
+                let d_beta = d_fgate.times(beta);
+                d_cdrain = d_zero;
+                let mut d_gds = d_vth.times(-1.0).plus(&d_vgsx).mult(&d_beta);
+                if t.nfs != 0.0 && lvgs < von {
+                    let mut d_dummy = d_von.times(-1.0);
+                    d_dummy.value += lvgs;
+                    d_dummy.d1_p += 1.0;
+                    let d_dummy = d_dummy.div(&d_xn).times(1.0 / vt).exp();
+                    d_gds = d_gds.mult(&d_dummy);
+                }
+                d_cdrain.d1_r = d_gds.value;
+                d_cdrain.d2_r2 = d_gds.d1_r;
+                d_cdrain.d3_r3 = d_gds.d2_r2;
+                break 'eval;
+            }
+            let cdo = vgsx - vth - 0.5 * (1.0 + fbody) * vdsx;
+            let mut d_cdo = d_fbody;
+            d_cdo.value += 1.0;
+            let d_cdo = d_cdo
+                .mult(&d_vdsx)
+                .times(0.5)
+                .plus(&d_vth)
+                .times(-1.0)
+                .plus(&d_vgsx);
+            // Normalized drain current, then without velocity
+            // saturation. The C updates `Beta = Beta·fgate` *before*
+            // `TimesDeriv(&d_Beta, &d_fgate, Beta)`, so the
+            // derivative chain carries `fgate²` — one extra factor
+            // of `1/(1+THETA·(vgsx−vth))` in every drain-current
+            // coefficient (kept; measured against the oracle).
+            let cdnorm = cdo * vdsx;
+            let d_cdnorm = d_cdo.mult(&d_vdsx);
+            beta *= fgate;
+            let d_beta = d_fgate.times(beta);
+            let mut cdrain = beta * cdnorm;
+            d_cdrain = d_beta.mult(&d_cdnorm);
+            let (mut fdrain, mut d_fdrain) = (0.0, d_zero);
+            if t.vmax != 0.0 {
+                fdrain = 1.0 / (1.0 + vdsx * onvdsc);
+                let mut f = d_vdsx.mult(&d_onvdsc);
+                f.value += 1.0;
+                d_fdrain = f.inv();
+                cdrain *= fdrain;
+                d_cdrain = d_cdrain.mult(&d_fdrain);
+            }
+
+            // Channel-length modulation (`line510`/`line520`).
+            if lvds > vdsat && !(t.vmax != 0.0 && t.alpha == 0.0) {
+                let (mut delxl, mut d_delxl);
+                if t.vmax == 0.0 {
+                    delxl = f64::sqrt(t.kappa * (lvds - vdsat) * t.alpha);
+                    let mut d = d_vdsat.times(-1.0);
+                    d.value += lvds;
+                    d.d1_r += 1.0;
+                    d_delxl = d.times(t.kappa * t.alpha).sqrt();
+                } else {
+                    let cdsat = cdrain;
+                    let d_cdsat = d_cdrain;
+                    let mut gdsat = cdsat * (1.0 - fdrain) * onvdsc;
+                    let mut d_dummy = d_fdrain.times(-1.0);
+                    d_dummy.value += 1.0;
+                    let mut d_gdsat = d_cdsat.mult(&d_dummy).mult(&d_onvdsc);
+                    gdsat = f64::max(1.0e-12, gdsat);
+                    if gdsat == 1.0e-12 {
+                        d_gdsat = Dderivs::constant(gdsat);
+                    }
+                    let emax = cdsat * oneoverxl / gdsat;
+                    let d_emax = d_cdsat.div(&d_gdsat).times(oneoverxl);
+                    let arga = 0.5 * emax * t.alpha;
+                    let d_arga = d_emax.times(0.5 * t.alpha);
+                    let argc = t.kappa * t.alpha;
+                    let argb = f64::sqrt(arga * arga + argc * (lvds - vdsat));
+                    let mut d_dummy = d_vdsat.times(-1.0);
+                    d_dummy.value += lvds;
+                    d_dummy.d1_r += 1.0;
+                    let d_argb = d_dummy.times(argc).plus(&d_arga.mult(&d_arga)).sqrt();
+                    delxl = argb - arga;
+                    d_delxl = d_argb.plus(&d_arga.times(-1.0));
+                }
+                // Punch-through approximation.
+                if delxl > 0.5 * eff_l {
+                    delxl = eff_l - (eff_l * eff_l / delxl * 0.25);
+                    d_delxl = d_delxl.inv().times(-eff_l * eff_l * 0.25);
+                    d_delxl.value += eff_l;
+                }
+                let _ = delxl;
+                let d_dlonxl = d_delxl.times(oneoverxl);
+                let mut d_xlfact = d_dlonxl.times(-1.0);
+                d_xlfact.value += 1.0;
+                d_cdrain = d_cdrain.mult(&d_xlfact.inv());
+            }
+
+            // `line700`: weak inversion.
+            if lvgs < von {
+                let d_onxn = d_xn.inv();
+                let d_ondvt = d_onxn.times(1.0 / vt);
+                let mut d_wfact = d_von.times(-1.0);
+                d_wfact.value += lvgs;
+                d_wfact.d1_p += 1.0;
+                let d_wfact = d_wfact.mult(&d_ondvt).exp();
+                d_cdrain = d_cdrain.mult(&d_wfact);
+            }
+            let _ = (xn, cdrain, us);
+        }
+
+        let junctions = MosJunctions {
+            cbs: t.cbs,
+            cbssw: t.cbssw,
+            f3s: t.f3s,
+            cbd: t.cbd,
+            cbdsw: t.cbdsw,
+            f3d: t.f3d,
+            dep_cap: t.t_dep_cap,
+            bulk_pot: t.t_bulk_pot,
+            mj: t.mj,
+            mjsw: t.mjsw,
+        };
+        setup_tail(
+            typ,
+            mode,
+            (vbs, vbd, vds),
+            (lvgs - von, vdsat),
+            t.t_phi,
+            oxide_cap,
+            &junctions,
+            &DrainDerivs::from_dderivs(&d_cdrain),
+            gbs,
+            gbd,
+        )
     }
 }
 
@@ -1369,6 +1712,17 @@ impl crate::devices::Device for Mos3I {
             cox: self.t.oxide_cap_factor,
         };
         crate::mos1::mos_noise(ctx, &n)
+    }
+
+    /// `MOS3dSetup`: see [`Mos3I::disto_coeffs`].
+    fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        self.dist = self.disto_coeffs(ctx.sol, ctx.gmin);
+        Ok(())
+    }
+
+    /// `MOS3disto` (`dev/mos3/mos3dist.c`, the MOS1 file renamed).
+    fn disto_load(&self, ctx: &mut DistoCtx) {
+        mos_disto_load(&self.dist, (self.gate, self.bulk, self.d_p, self.s_p), ctx);
     }
 
     /// `MOS3acLoad` (same stamps as MOS1's).

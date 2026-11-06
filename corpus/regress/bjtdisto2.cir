@@ -1,0 +1,35 @@
+One-BJT common-emitter amplifier: intermodulation in .disto
+* Coverage: every Gummel-Poon nonlinearity bjtdset.c expands - the
+* junction and leakage currents (ISE/ISC), Early (VAF/VAR), roll-off
+* (IKF/IKR, the qb square root), the bias-dependent base resistance
+* with IRB (the tan(z) chain and its power-series inversion), the
+* transit time with XTF/VTF/ITF, excess phase (PTF: the delayed-vbe
+* rotation of every kernel), the B-C capacitance split by XCJC (qbx
+* on the external base) and the substrate capacitance - through the
+* IM products f1+f2, f1-f2, 2f1-f2 against ngspice-47.
+* Supply, input and substrate are Norton equivalents (a current
+* source across a resistor) so every compared vector is a node
+* voltage: the residual vs the golden is a uniform ~5e-5 relative
+* (ngspice's physical constants move vt by 2.8e-5, and the
+* coefficients go as Ic/vt^n), which a branch current crossing zero
+* in one component would turn into a pointwise failure of the ruler.
+icc 0 5 12
+rcc 5 0 1
+iin 0 1 0 distof1 2.5u distof2 2.5u
+rs 1 0 1k
+cin 1 3 10u
+rb1 5 3 82k
+rb2 3 0 15k
+rc 5 4 4.7k
+re 6 0 1k
+ce 6 0 100u
+q1 4 3 6 7 qmod
+isub 7 0 2
+rsub 7 0 1
+.model qmod npn is=1e-15 bf=150 nf=1.01 vaf=60 ikf=20m ise=2e-14 ne=1.6
++ br=3 nr=1.02 var=20 ikr=5m isc=1e-14 nc=1.8
++ rb=150 irb=0.2m rbm=30 re=2 rc=15
++ cje=2p vje=0.8 mje=0.35 tf=0.4n xtf=2 vtf=4 itf=30m ptf=25
++ cjc=1.5p vjc=0.6 mjc=0.4 xcjc=0.6 tr=5n cjs=1p vjs=0.7 mjs=0.4
+.disto dec 10 1e3 1e9 0.9
+.end

@@ -245,7 +245,28 @@ resultados espelhando o rawfile).
   (`DEVdisto == NULL`); BJT/MOS/BSIM ainda não (erro estruturado).
   Fontes estampam por **atribuição** (não soma), VSRC no ramo, ISRC
   nos nós com a polaridade do ngspice (flip de ordem ímpar medido —
-  `corpus/KNOWN_DIFFS.md`). Valida: `diodisto` PASS nos 3 plots IM;
+  `corpus/KNOWN_DIFFS.md`). **Dispositivos** (2026-11-06): diodo,
+  BJT NPN/PNP (`bjtdset.c`/`bjtdisto.c` — rotação de fase em
+  excesso via `omega1/omega2` no `DistoCtx`, termos cruzados
+  vbe/vbc pelos `DFn*/DFi*` multivariáveis) e MOS1/2/3
+  (`mos*dset.c`/`mos*dist.c` — um arquivo com prefixo trocado;
+  partes comuns em `mosdisto.rs`). A álgebra de derivadas
+  (`Dderivs`, as 13 operações de `dev/disto/*.c`) vive em
+  `dderivs.rs`, cada regra testada contra diferenças finitas —
+  as 13 fórmulas do C são exatas. Quirks do C mantidos (e
+  compartilhados pelo ngspice): o `fgate` extra do MOS3
+  (`mos3dset.c:518`, pego porque o mos3disto falhava 4% sem ele),
+  as leituras indefinidas do MOS2 dSetup lidas como zero
+  (medido), vbc do nó externo no BJT, kernels vbb/vsc não
+  conjugados no F1MF2, `ufact=0` abaixo do campo crítico no MOS2
+  — detalhes no KNOWN_DIFFS. JFET/MES/BSIM1 têm código de
+  distorção no C mas seguem não portados (erro estruturado);
+  MOS6/BSIM2 não têm no C. Sondas: `mixdisto_hd`/`mixdisto_im`
+  (derivadas do mixdisto do corpus, antes em SKIP), `bjtdisto2`
+  (NPN IM, fontes Norton — cruzamento de zero do Im de corrente
+  não tem régua), `bjtdisto3` (PNP harmônicos, CJS=0 pela
+  divergência de substrato), `mosdisto`, `mos2disto`,
+  `mos3disto` (PMOS IM). Valida: `diodisto` PASS nos 3 plots IM;
   o resíduo de 1.7e-4/3.7e-4 relativo contra o golden é o Newton do
   ngspice parando ~3e-6 V antes do exato + as constantes físicas —
   com tolerâncias apertadas e as constantes do ngspice, o porte
@@ -484,9 +505,10 @@ oráculo contra o ngspice.
   silenciosos, deck `.noise` com BSIM divergiria do oráculo);
   `NLEV`/`GDSNOI`; temp/dtemp de instância no `NevalSrc` (os
   térmicos usam a temperatura do circuito); `.pz` dos semicondutores restantes (BJT/
-  MOS têm `pzLoad` no C, aqui ainda não); `.disto` de BJT/MOS/BSIM
-  (`bjtdisto.c`/`mos*dist.c` no C); `.dc` varrendo TEMP e parâmetro
-  de modelo; `keepopinfo` (plot "AC Operating Point").
+  MOS têm `pzLoad` no C, aqui ainda não); `.disto` de JFET/MES/BSIM1
+  (`jfetdset.c`/`mesdset.c`/`b1dset.c` no C, não portados —
+  MOS6/BSIM2 não têm no C); `.dc` varrendo TEMP e parâmetro de
+  modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - Linhas T/U, fonte B (Fase 3); JFET nível 2 (Parker–Skellern) e
   MES 2/5/6 (MESA/HFET) são ngspice, fora do contrato 3f5.

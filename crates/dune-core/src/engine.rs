@@ -1040,6 +1040,7 @@ impl Engine {
                     r2h1m2: &empty,
                     i2h1m2: &empty,
                 },
+                (omega1, omega2),
             )?;
 
             let mut results: Vec<(Vec<f64>, Vec<f64>)> = Vec::new();
@@ -1060,6 +1061,7 @@ impl Engine {
                         r2h1m2: &empty,
                         i2h1m2: &empty,
                     },
+                    (omega1, omega2),
                 )?;
                 results.push((r2h11, i2h11));
                 results.push(h3);
@@ -1090,6 +1092,7 @@ impl Engine {
                         r2h1m2: &empty,
                         i2h1m2: &empty,
                     },
+                    (omega1, omega2),
                 )?;
                 // H2(f1, −f2) at ω1−ω2 (`D_F1MF2`).
                 let (r2h1m2, i2h1m2) = self.disto_kernel(
@@ -1107,6 +1110,7 @@ impl Engine {
                         r2h1m2: &empty,
                         i2h1m2: &empty,
                     },
+                    (omega1, omega2),
                 )?;
                 // H3(f1, f1, −f2) at 2ω1−ω2 (`D_2F1MF2`).
                 let h3 = self.disto_kernel(
@@ -1124,6 +1128,7 @@ impl Engine {
                         r2h1m2: &r2h1m2,
                         i2h1m2: &i2h1m2,
                     },
+                    (omega1, omega2),
                 )?;
                 results.push(h12);
                 results.push((r2h1m2, i2h1m2));
@@ -1236,6 +1241,7 @@ impl Engine {
         g: &mut [f64],
         b: &mut [f64],
         h: DistoKernels,
+        (omega1, omega2): (f64, f64),
     ) -> Result<(Vec<f64>, Vec<f64>), Error> {
         self.disto_factor(omega, g, b)?;
         let nvars = self.vars.len();
@@ -1245,6 +1251,8 @@ impl Engine {
             let mut ctx = DistoCtx {
                 mode,
                 omega,
+                omega1,
+                omega2,
                 h,
                 rhs_re: &mut re,
                 rhs_im: &mut im,

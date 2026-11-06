@@ -7,7 +7,9 @@
 //! approximation in transient.
 
 use crate::consts::{BOLTZ, CHARGE, KOVERQ, REFTEMP, ROOT2};
+use crate::dderivs::Dderivs;
 use crate::diode::pnjlim;
+use crate::disto::{DfCoeffs, DistoCtx, DistoMode, DistoSetupCtx, Kern, d1_term, df_term, jomega};
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 
 /// `.model … npn(…)/pnp(…)` parameters, 3f5 names and defaults
@@ -364,6 +366,101 @@ pub(crate) struct BjtI {
     ic_vce: f64,
     st: usize,
     s: [Slot; 23],
+    d: BjtDistoCoeffs,
+}
+
+/// Taylor coefficients of the BJT nonlinearities at the operating
+/// point (`bjtdset.c`, the `here->ic_x2 …` fields): the collector
+/// current in (vbe, vbc, delayed vbe), the base current and the
+/// B-E charge in (vbe, vbc), the base-resistance current in (vbe,
+/// vbc, vbb), and the one-variable depletion charges.
+#[derive(Clone, Copy, Debug, Default)]
+struct BjtDistoCoeffs {
+    ic: DfCoeffs,
+    ib: DfCoeffs,
+    ibb: DfCoeffs,
+    qbe: DfCoeffs,
+    capbc2: f64,
+    capbc3: f64,
+    capbx2: f64,
+    capbx3: f64,
+    capsc2: f64,
+    capsc3: f64,
+}
+
+/// Second-order Taylor coefficients get the device type (`0.5·type·
+/// d2_p2`, `type·d2_pq`), third-order ones do not (`d3_p3/6`,
+/// `0.5·d3_p2q`, `d3_pqr`) — `bjtdset.c`'s store block, shared by
+/// the MOS setups (`mos*dset.c`).
+pub(crate) fn taylor_coeffs(d: &Dderivs, typ: f64) -> DfCoeffs {
+    DfCoeffs {
+        cxx: 0.5 * typ * d.d2_p2,
+        cyy: 0.5 * typ * d.d2_q2,
+        czz: 0.5 * typ * d.d2_r2,
+        cxy: typ * d.d2_pq,
+        cyz: typ * d.d2_qr,
+        cxz: typ * d.d2_pr,
+        cxxx: d.d3_p3 / 6.,
+        cyyy: d.d3_q3 / 6.,
+        czzz: d.d3_r3 / 6.,
+        cxxy: 0.5 * d.d3_p2q,
+        cxxz: 0.5 * d.d3_p2r,
+        cxyy: 0.5 * d.d3_pq2,
+        cyyz: 0.5 * d.d3_q2r,
+        cxzz: 0.5 * d.d3_pr2,
+        cyzz: 0.5 * d.d3_qr2,
+        cxyz: d.d3_pqr,
+    }
+}
+
+/// Keep only the (x, y) coefficients — the C stores no `z` terms for
+/// `ib` and `qbe` and passes `0.0` in their place.
+fn xy_only(c: DfCoeffs) -> DfCoeffs {
+    DfCoeffs {
+        cxx: c.cxx,
+        cyy: c.cyy,
+        cxy: c.cxy,
+        cxxx: c.cxxx,
+        cyyy: c.cyyy,
+        cxxy: c.cxxy,
+        cxyy: c.cxyy,
+        ..DfCoeffs::default()
+    }
+}
+
+/// `x·e^{−jθ}` for a kernel pair (`r·cosθ + i·sinθ`, `i·cosθ −
+/// r·sinθ`): `bjtdisto.c`'s excess-phase delay.
+fn delay(r: f64, i: f64, theta: f64) -> (f64, f64) {
+    (
+        r * theta.cos() + i * theta.sin(),
+        i * theta.cos() - r * theta.sin(),
+    )
+}
+
+/// The delayed-vbe kernels (`z` of the collector current): every
+/// kernel of `x` rotated by its own frequency times `td` — ω1 for
+/// H1(f1), ±ω2 for H1(±f2), 2ω1 for H2(f1,f1), ω1−ω2 for H2(f1,−f2).
+fn delayed(mode: DistoMode, x: &Kern, td: f64, omega1: f64, omega2: f64) -> Kern {
+    let mut z = *x;
+    (z.r1h1, z.i1h1) = delay(x.r1h1, x.i1h1, omega1 * td);
+    match mode {
+        DistoMode::TwoF1 => {}
+        DistoMode::ThrF1 => {
+            (z.r2h11, z.i2h11) = delay(x.r2h11, x.i2h11, 2.0 * omega1 * td);
+        }
+        DistoMode::F1pF2 => {
+            (z.r1h2, z.i1h2) = delay(x.r1h2, x.i1h2, omega2 * td);
+        }
+        DistoMode::F1mF2 => {
+            (z.r1h2, z.i1h2) = delay(x.r1h2, x.i1h2, -omega2 * td);
+        }
+        DistoMode::TwoF1mF2 => {
+            (z.r1h2, z.i1h2) = delay(x.r1h2, x.i1h2, -omega2 * td);
+            (z.r2h11, z.i2h11) = delay(x.r2h11, x.i2h11, 2.0 * omega1 * td);
+            (z.h2f1f2, z.ih2f1f2) = delay(x.h2f1f2, x.ih2f1f2, (omega1 - omega2) * td);
+        }
+    }
+    z
 }
 
 // Slot order (matches `bjtsetup.c`'s TSTALLOC list).
@@ -417,6 +514,7 @@ impl BjtI {
             ic_vce: ic.1,
             st,
             s: [TRASH; 23],
+            d: BjtDistoCoeffs::default(),
         }
     }
 }
@@ -1022,5 +1120,408 @@ impl crate::devices::Device for BjtI {
         ctx.add_b(self.s[SUBST_COLP], -xccs);
         ctx.add_b(self.s[BASE_COLP], -xcbx);
         ctx.add_b(self.s[COLP_BASE], -xcbx);
+    }
+
+    /// `BJTdSetup` (`dev/bjt/bjtdset.c`): Taylor coefficients of the
+    /// Gummel–Poon nonlinearities at the operating point in
+    /// `CKTrhsOld`, carried through the model equations with the
+    /// `Dderivs` algebra (p = vbe, q = vbc, r = delayed vbe for the
+    /// collector current; r = vbb for the base-resistance current).
+    /// Kept as the C has them: `vbc` is taken from the *external*
+    /// base node (like `vbx`), the bias-dependent `rbb` multiplies
+    /// an `ib` variable whose value is 0 (so `vbb = rbb·ib` loses
+    /// its `ib·∂rbb` term), and `qbe` gets no `tf` charge unless
+    /// `vbe > 0`.
+    #[allow(clippy::too_many_lines)]
+    fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        let t = &self.t;
+        let sol = ctx.sol;
+        let gmin = ctx.gmin;
+        let typ = t.type_;
+        let area = self.area;
+        let vt = t.vt;
+
+        let d_p = Dderivs::var_p();
+        let d_r = Dderivs::var_r();
+        let zero = Dderivs::default();
+
+        let csat = t.t_sat_cur * area;
+        let rbpr = t.min_base_resist / area;
+        let rbpi = t.base_resist / area - rbpr;
+        let oik = t.inv_roll_f / area;
+        let c2 = t.t_be_leak * area;
+        let vte = t.ne * vt;
+        let oikr = t.inv_roll_r / area;
+        let c4 = t.t_bc_leak * area;
+        let vtc = t.nc * vt;
+        let xjrb = t.irb * area;
+
+        let vbe = typ * (sol[self.base_p] - sol[self.emit_p]);
+        let vbc = typ * (sol[self.base] - sol[self.col_p]);
+        let vbx = typ * (sol[self.base] - sol[self.col_p]);
+        let vsc = typ * (sol[self.subst] - sol[self.col_p]);
+        let vbb = typ * (sol[self.base] - sol[self.base_p]);
+
+        // Junction currents and their derivatives (derivatives, not
+        // Taylor coefficients: no 1/2!, 1/3!).
+        let vtn = vt * t.nf;
+        let (cbe, gbe, gbe2, gbe3, cben, gben, gben2, gben3);
+        if vbe > -5.0 * vtn {
+            let evbe = f64::exp(vbe / vtn);
+            cbe = csat * (evbe - 1.0) + gmin * vbe;
+            gbe = csat * evbe / vtn + gmin;
+            gbe2 = csat * evbe / vtn / vtn;
+            gbe3 = gbe2 / vtn;
+            if c2 == 0.0 {
+                cben = 0.0;
+                (gben, gben2, gben3) = (0.0, 0.0, 0.0);
+            } else {
+                let evben = f64::exp(vbe / vte);
+                cben = c2 * (evben - 1.0);
+                gben = c2 * evben / vte;
+                gben2 = gben / vte;
+                gben3 = gben2 / vte;
+            }
+        } else {
+            gbe = -csat / vbe + gmin;
+            (gbe2, gbe3, gben2, gben3) = (0.0, 0.0, 0.0, 0.0);
+            cbe = gbe * vbe;
+            gben = -c2 / vbe;
+            cben = gben * vbe;
+        }
+        let vtn = vt * t.nr;
+        let (cbc, gbc, gbc2, gbc3, cbcn, gbcn, gbcn2, gbcn3);
+        if vbc > -5.0 * vtn {
+            let evbc = f64::exp(vbc / vtn);
+            cbc = csat * (evbc - 1.0) + gmin * vbc;
+            gbc = csat * evbc / vtn + gmin;
+            gbc2 = csat * evbc / vtn / vtn;
+            gbc3 = gbc2 / vtn;
+            if c4 == 0.0 {
+                cbcn = 0.0;
+                (gbcn, gbcn2, gbcn3) = (0.0, 0.0, 0.0);
+            } else {
+                let evbcn = f64::exp(vbc / vtc);
+                cbcn = c4 * (evbcn - 1.0);
+                gbcn = c4 * evbcn / vtc;
+                gbcn2 = gbcn / vtc;
+                gbcn3 = gbcn2 / vtc;
+            }
+        } else {
+            gbc = -csat / vbc + gmin;
+            (gbc2, gbc3) = (0.0, 0.0);
+            cbc = gbc * vbc;
+            gbcn = -c4 / vbc;
+            (gbcn2, gbcn3) = (0.0, 0.0);
+            cbcn = gbcn * vbc;
+        }
+
+        // Base charge: q1 in (vbe, vbc), then qb with roll-off.
+        let d_dummy = Dderivs {
+            value: 1.0 - t.inv_early_f * vbc - t.inv_early_r * vbe,
+            d1_p: -t.inv_early_r,
+            d1_q: -t.inv_early_f,
+            ..zero
+        };
+        let d_q1 = d_dummy.inv();
+        let d_qb = if oik == 0.0 && oikr == 0.0 {
+            d_q1
+        } else {
+            let q2 = oik * cbe + oikr * cbc;
+            let d_q2 = Dderivs {
+                value: q2,
+                d1_p: oik * gbe,
+                d1_q: oikr * gbc,
+                d2_p2: oik * gbe2,
+                d2_q2: oikr * gbc2,
+                d3_p3: oik * gbe3,
+                d3_q3: oikr * gbc3,
+                ..zero
+            };
+            let arg = f64::max(0.0, 1.0 + 4.0 * q2);
+            let d_arg = if arg == 0.0 {
+                zero
+            } else {
+                let mut a = d_q2.times(4.0);
+                a.value += 1.0;
+                a
+            };
+            let d_sqarg = if arg != 0.0 {
+                d_arg.sqrt()
+            } else {
+                Dderivs::constant(1.0)
+            };
+            let mut d_dummy = d_sqarg;
+            d_dummy.value += 1.0;
+            d_q1.mult(&d_dummy).times(0.5)
+        };
+
+        // ic = (cbe(vbed) − cbc(vbc))/qb(vbe, vbc) − cbc/BR − cbcn.
+        let d_dummy = Dderivs {
+            value: cbe - cbc,
+            d1_r: gbe,
+            d2_r2: gbe2,
+            d3_r3: gbe3,
+            d1_q: -gbc,
+            d2_q2: -gbc2,
+            d3_q3: -gbc3,
+            ..zero
+        };
+        let mut d_ic = d_dummy.div(&d_qb);
+        d_ic.value -= cbc / t.t_beta_r + cbcn;
+        d_ic.d1_q -= gbc / t.t_beta_r + gbcn;
+        d_ic.d2_q2 -= gbc2 / t.t_beta_r + gbcn2;
+        d_ic.d3_q3 -= gbc3 / t.t_beta_r + gbcn3;
+
+        // Base spread resistance: irb = f(vbe, vbc, vbb).
+        let mut cb = 0.0;
+        let d_ibb = if !(rbpr == 0.0 && rbpi == 0.0) {
+            cb = cbe / t.t_beta_f + cben + cbc / t.t_beta_r + cbcn;
+            if cb != 0.0 {
+                if xjrb != 0.0 && rbpi != 0.0 {
+                    // p = ib from here on (q, r unused).
+                    let d_dummy = Dderivs {
+                        value: f64::max(cb / xjrb, 1e-9),
+                        d1_p: 1.0 / xjrb,
+                        ..zero
+                    };
+                    let d_dummy = d_dummy.sqrt().times(2.4317);
+                    let mut d_dummy2 = Dderivs {
+                        value: 1.0 + 14.59025 * f64::max(cb / xjrb, 1e-9),
+                        d1_p: 14.59025 / xjrb,
+                        ..zero
+                    }
+                    .sqrt();
+                    d_dummy2.value -= 1.0;
+                    let d_z = d_dummy2.div(&d_dummy);
+                    let d_tanz = d_z.tan();
+                    let d_dummy = d_z.times(-1.0).plus(&d_tanz);
+                    let d_dummy2 = d_tanz.mult(&d_tanz).mult(&d_z);
+                    let mut d_rbb = d_dummy.div(&d_dummy2).times(3.0 * rbpi);
+                    d_rbb.value += rbpr;
+                    let d_vbb = d_rbb.mult(&d_p);
+                    // Power-series inversion to the conductance
+                    // derivatives (left at 0 when `d1_p` is 0, where
+                    // the C only prints a warning).
+                    let (mut gbb1, mut gbb2, mut gbb3) = (0.0, 0.0, 0.0);
+                    if d_vbb.d1_p != 0.0 {
+                        gbb1 = 1.0 / d_vbb.d1_p;
+                        gbb2 = -(d_vbb.d2_p2 * 0.5) * gbb1 * gbb1;
+                        gbb3 = gbb1
+                            * gbb1
+                            * gbb1
+                            * gbb1
+                            * (-(d_vbb.d3_p3 / 6.0)
+                                + 2.0 * (d_vbb.d2_p2 * 0.5) * (d_vbb.d2_p2 * 0.5) * gbb1);
+                    }
+                    Dderivs {
+                        value: cb,
+                        d1_r: gbb1,
+                        d2_r2: 2.0 * gbb2,
+                        d3_r3: 6.0 * gbb3,
+                        ..zero
+                    }
+                } else {
+                    // rbb = rbpr + rbpi/qb; ibb = vbb/rbb.
+                    let mut d_rbb = zero;
+                    if rbpi != 0.0 {
+                        d_rbb = d_qb.inv().times(rbpi);
+                    }
+                    d_rbb.value += rbpr;
+                    let d_ibb = Dderivs { value: vbb, ..d_r };
+                    d_ibb.div(&d_rbb)
+                }
+            } else {
+                let mut d_ibb = d_r;
+                if rbpr != 0.0 {
+                    d_ibb.d1_r = 1.0 / rbpr;
+                }
+                d_ibb
+            }
+        } else {
+            zero
+        };
+
+        // ib = cbe/BF + cben + cbc/BR + cbcn.
+        let d_ib = Dderivs {
+            value: cb,
+            d1_p: gbe / t.t_beta_f + gben,
+            d2_p2: gbe2 / t.t_beta_f + gben2,
+            d3_p3: gbe3 / t.t_beta_f + gben3,
+            d1_q: gbc / t.t_beta_r + gbcn,
+            d2_q2: gbc2 / t.t_beta_r + gbcn2,
+            d3_q3: gbc3 / t.t_beta_r + gbcn3,
+            ..zero
+        };
+
+        // Charge storage.
+        let tf = t.tf;
+        let czbe = t.t_be_cap * area;
+        let pe = t.t_be_pot;
+        let xme = t.mje;
+        let cdis = t.xcjc;
+        let ctot = t.t_bc_cap * area;
+        let czbc = ctot * cdis;
+        let czbx = ctot - czbc;
+        let pc = t.t_bc_pot;
+        let xmc = t.mjc;
+        let fcpe = t.t_dep_cap;
+        let czcs = t.cjs * area;
+        let ps = t.vjs;
+        let xms = t.mjs;
+        let xtf = t.xtf;
+        let ovtf = t.tt_vbc_factor;
+        let xjtf = t.itf * area;
+        let mut d_qbe = if tf != 0.0 && vbe > 0.0 {
+            let d_cbe = Dderivs {
+                value: cbe,
+                d1_p: gbe,
+                d2_p2: gbe2,
+                d3_p3: gbe3,
+                ..zero
+            };
+            let d_tff = if xtf != 0.0 {
+                let d_dummy = if ovtf != 0.0 {
+                    Dderivs {
+                        value: vbc * ovtf,
+                        d1_q: ovtf,
+                        ..zero
+                    }
+                    .exp()
+                } else {
+                    Dderivs::constant(1.0)
+                };
+                let d_dummy2 = if xjtf != 0.0 {
+                    let mut den = d_cbe;
+                    den.value += xjtf;
+                    let r = d_cbe.div(&den);
+                    r.mult(&r)
+                } else {
+                    Dderivs::constant(1.0)
+                };
+                let mut d_tff = d_dummy.mult(&d_dummy2).times(tf * xtf);
+                d_tff.value += tf;
+                d_tff
+            } else {
+                Dderivs::constant(tf)
+            };
+            // qbe = tff/qb·cbe.
+            d_tff.div(&d_qb).mult(&d_cbe)
+        } else {
+            zero
+        };
+        let (lcapbe1, lcapbe2, lcapbe3);
+        if vbe < fcpe {
+            let arg = 1.0 - vbe / pe;
+            let sarg = f64::exp(-xme * f64::ln(arg));
+            lcapbe1 = czbe * sarg;
+            lcapbe2 = 0.5 * czbe * xme * sarg / (arg * pe);
+            lcapbe3 = czbe * xme * (xme + 1.0) * sarg / (arg * arg * pe * pe * 6.0);
+        } else {
+            let czbef2 = czbe / t.f2;
+            lcapbe1 = czbef2 * (t.f3 + xme * vbe / pe);
+            lcapbe2 = 0.5 * xme * czbef2 / pe;
+            lcapbe3 = 0.0;
+        }
+        d_qbe.d1_p += lcapbe1;
+        d_qbe.d2_p2 += lcapbe2 * 2.;
+        d_qbe.d3_p3 += lcapbe3 * 6.;
+
+        let fcpc = t.t_f4;
+        let dep = |v: f64, cz: f64| {
+            if v < fcpc {
+                let arg = 1.0 - v / pc;
+                let sarg = f64::exp(-xmc * f64::ln(arg));
+                (
+                    0.5 * cz * xmc * sarg / (arg * pc),
+                    cz * xmc * (xmc + 1.0) * sarg / (arg * arg * pc * pc * 6.0),
+                )
+            } else {
+                let czf2 = cz / t.f6;
+                (0.5 * xmc * czf2 / pc, 0.0)
+            }
+        };
+        let (capbc2, capbc3) = dep(vbc, czbc);
+        let (capbx2, capbx3) = dep(vbx, czbx);
+        let (capsc2, capsc3) = if vsc < 0.0 {
+            let arg = 1.0 - vsc / ps;
+            let sarg = f64::exp(-xms * f64::ln(arg));
+            (
+                0.5 * czcs * xms * sarg / (arg * ps),
+                czcs * xms * (xms + 1.0) * sarg / (arg * arg * ps * ps * 6.0),
+            )
+        } else {
+            (czcs * 0.5 * xms / ps, 0.0)
+        };
+
+        self.d = BjtDistoCoeffs {
+            ic: taylor_coeffs(&d_ic, typ),
+            ib: xy_only(taylor_coeffs(&d_ib, typ)),
+            ibb: taylor_coeffs(&d_ibb, typ),
+            qbe: xy_only(taylor_coeffs(&d_qbe, typ)),
+            capbc2,
+            capbc3,
+            capbx2,
+            capbx3,
+            capsc2,
+            capsc3,
+        };
+        Ok(())
+    }
+
+    /// `BJTdisto` (`dev/bjt/bjtdisto.c`), the load modes: x = vbe,
+    /// y = vbc (both on the internal nodes), z = vbe delayed by the
+    /// excess phase `td` for `ic`, z = vbb for `irb`, then the
+    /// depletion charges of B-X (z + y, as the C reuses its `z`),
+    /// B'-C' and S-C'. The C's conjugation slips are kept: in
+    /// `D_F1MF2` the vbb and vsc kernels of H1(−f2) are *not*
+    /// conjugated (`D_2F1MF2` conjugates them).
+    fn disto_load(&self, ctx: &mut DistoCtx) {
+        let d = &self.d;
+        let t = &self.t;
+        let mode = ctx.mode;
+        let omega = ctx.omega;
+        let td = t.excess_phase_factor;
+        let (b, bp, cp, ep, s) = (self.base, self.base_p, self.col_p, self.emit_p, self.subst);
+        let none = Kern::default();
+
+        let kx = ctx.h.kern(mode, bp, ep);
+        let ky = ctx.h.kern(mode, bp, cp);
+        let mut kz = if td != 0.0 {
+            delayed(mode, &kx, td, ctx.omega1, ctx.omega2)
+        } else {
+            kx
+        };
+
+        let ic = df_term(mode, &d.ic, &kx, &ky, &kz);
+        ctx.stamp(cp, ep, ic);
+        let ib = df_term(mode, &d.ib, &kx, &ky, &none);
+        ctx.stamp(bp, ep, ib);
+
+        if !(t.min_base_resist == 0.0 && t.base_resist == t.min_base_resist) {
+            kz = ctx.h.kern(mode, b, bp);
+            if mode == DistoMode::F1mF2 {
+                kz.i1h2 = -kz.i1h2;
+            }
+            let ibb = df_term(mode, &d.ibb, &kx, &ky, &kz);
+            ctx.stamp(b, bp, ibb);
+        }
+
+        let qbe = jomega(omega, df_term(mode, &d.qbe, &kx, &ky, &none));
+        ctx.stamp(bp, ep, qbe);
+
+        let kbx = kz.add(&ky);
+        let qbx = jomega(omega, d1_term(mode, d.capbx2, d.capbx3, &kbx));
+        ctx.stamp(b, cp, qbx);
+
+        let qbc = jomega(omega, d1_term(mode, d.capbc2, d.capbc3, &ky));
+        ctx.stamp(bp, cp, qbc);
+
+        let mut ksc = ctx.h.kern(mode, s, cp);
+        if mode == DistoMode::F1mF2 {
+            ksc.i1h2 = -ksc.i1h2;
+        }
+        let qsc = jomega(omega, d1_term(mode, d.capsc2, d.capsc3, &ksc));
+        ctx.stamp(s, cp, qsc);
     }
 }

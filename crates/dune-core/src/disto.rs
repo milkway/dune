@@ -98,6 +98,11 @@ pub(crate) struct DistoKernels<'a> {
 pub(crate) struct DistoCtx<'a> {
     pub mode: DistoMode,
     pub omega: f64,
+    /// `job->Domega1`: 2π·f1 at this point (the BJT's excess-phase
+    /// delay rotates the kernels by it).
+    pub omega1: f64,
+    /// `job->Domega2`: 2π·f2 (0 without `F2OVERF1`).
+    pub omega2: f64,
     pub h: DistoKernels<'a>,
     pub rhs_re: &'a mut [f64],
     pub rhs_im: &'a mut [f64],
@@ -107,6 +112,327 @@ impl DistoKernels<'_> {
     /// Branch value `x = v(a) − v(b)` of a kernel pair.
     pub(crate) fn branch(re: &[f64], im: &[f64], a: Var, b: Var) -> (f64, f64) {
         (re[a] - re[b], im[a] - im[b])
+    }
+
+    /// The kernels of branch `v(a) − v(b)` that the devices' `disto`
+    /// routines read in `mode` (`r1h1x = r1H1[a] − r1H1[b]` …), in
+    /// the `DpassStr` layout: `h2` is H1(f2) for `D_F1PF2` and the
+    /// conjugate H1(−f2) for `D_F1MF2`/`D_2F1MF2` (the C's
+    /// `i1hm2x = −(…)`); `h11` is H2(f1,f1) for `D_THRF1`/`D_2F1MF2`;
+    /// `h12` is H2(f1,−f2) for `D_2F1MF2`. Kernels a mode does not
+    /// read stay zero.
+    pub(crate) fn kern(&self, mode: DistoMode, a: Var, b: Var) -> Kern {
+        let mut k = Kern::default();
+        (k.r1h1, k.i1h1) = Self::branch(self.r1h1, self.i1h1, a, b);
+        match mode {
+            DistoMode::TwoF1 => {}
+            DistoMode::ThrF1 => {
+                (k.r2h11, k.i2h11) = Self::branch(self.r2h11, self.i2h11, a, b);
+            }
+            DistoMode::F1pF2 => {
+                (k.r1h2, k.i1h2) = Self::branch(self.r1h2, self.i1h2, a, b);
+            }
+            DistoMode::F1mF2 => {
+                let (r, i) = Self::branch(self.r1h2, self.i1h2, a, b);
+                (k.r1h2, k.i1h2) = (r, -i);
+            }
+            DistoMode::TwoF1mF2 => {
+                let (r, i) = Self::branch(self.r1h2, self.i1h2, a, b);
+                (k.r1h2, k.i1h2) = (r, -i);
+                (k.r2h11, k.i2h11) = Self::branch(self.r2h11, self.i2h11, a, b);
+                (k.h2f1f2, k.ih2f1f2) = Self::branch(self.r2h1m2, self.i2h1m2, a, b);
+            }
+        }
+        k
+    }
+}
+
+/// The lower-order kernels of one controlling variable, named as in
+/// `DpassStr` (`r1h1x`, `i1h1x`, `r1h2x`, …, `h2f1f2x`, `ih2f1f2x`)
+/// without the variable suffix. What `h2`/`h11`/`h12` hold depends
+/// on the mode (see [`DistoKernels::kern`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Kern {
+    pub r1h1: f64,
+    pub i1h1: f64,
+    pub r1h2: f64,
+    pub i1h2: f64,
+    pub r2h11: f64,
+    pub i2h11: f64,
+    pub h2f1f2: f64,
+    pub ih2f1f2: f64,
+}
+
+impl Kern {
+    /// Field-wise sum (the C's `r1h1z = r1h1z + r1h1y` …).
+    pub(crate) fn add(&self, o: &Kern) -> Kern {
+        Kern {
+            r1h1: self.r1h1 + o.r1h1,
+            i1h1: self.i1h1 + o.i1h1,
+            r1h2: self.r1h2 + o.r1h2,
+            i1h2: self.i1h2 + o.i1h2,
+            r2h11: self.r2h11 + o.r2h11,
+            i2h11: self.i2h11 + o.i2h11,
+            h2f1f2: self.h2f1f2 + o.h2f1f2,
+            ih2f1f2: self.ih2f1f2 + o.ih2f1f2,
+        }
+    }
+
+    /// Field-wise difference (the MOS loads' `r1h1x − r1h1z` …).
+    pub(crate) fn sub(&self, o: &Kern) -> Kern {
+        Kern {
+            r1h1: self.r1h1 - o.r1h1,
+            i1h1: self.i1h1 - o.i1h1,
+            r1h2: self.r1h2 - o.r1h2,
+            i1h2: self.i1h2 - o.i1h2,
+            r2h11: self.r2h11 - o.r2h11,
+            i2h11: self.i2h11 - o.i2h11,
+            h2f1f2: self.h2f1f2 - o.h2f1f2,
+            ih2f1f2: self.ih2f1f2 - o.ih2f1f2,
+        }
+    }
+}
+
+/// The 16 Taylor coefficients of a three-variable nonlinearity, as
+/// the first half of `DpassStr` (`cxx` … `cxyz`; second order
+/// `cxx, cyy, czz, cxy, cyz, cxz`, third order `cxxx … cxyz`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct DfCoeffs {
+    pub cxx: f64,
+    pub cyy: f64,
+    pub czz: f64,
+    pub cxy: f64,
+    pub cyz: f64,
+    pub cxz: f64,
+    pub cxxx: f64,
+    pub cyyy: f64,
+    pub czzz: f64,
+    pub cxxy: f64,
+    pub cxxz: f64,
+    pub cxyy: f64,
+    pub cyyz: f64,
+    pub cxzz: f64,
+    pub cyzz: f64,
+    pub cxyz: f64,
+}
+
+/// `DFn2F1`.
+pub(crate) fn dfn2f1(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    s2v2f1(c.cxx, x.r1h1, x.i1h1, x.r1h1, x.i1h1)
+        + s2v2f1(c.cyy, y.r1h1, y.i1h1, y.r1h1, y.i1h1)
+        + s2v2f1(c.czz, z.r1h1, z.i1h1, z.r1h1, z.i1h1)
+        + s2v2f1(c.cxy, x.r1h1, x.i1h1, y.r1h1, y.i1h1)
+        + s2v2f1(c.cyz, y.r1h1, y.i1h1, z.r1h1, z.i1h1)
+        + s2v2f1(c.cxz, x.r1h1, x.i1h1, z.r1h1, z.i1h1)
+}
+
+/// `DFi2F1`.
+pub(crate) fn dfi2f1(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    s2i2f1(c.cxx, x.r1h1, x.i1h1, x.r1h1, x.i1h1)
+        + s2i2f1(c.cyy, y.r1h1, y.i1h1, y.r1h1, y.i1h1)
+        + s2i2f1(c.czz, z.r1h1, z.i1h1, z.r1h1, z.i1h1)
+        + s2i2f1(c.cxy, x.r1h1, x.i1h1, y.r1h1, y.i1h1)
+        + s2i2f1(c.cyz, y.r1h1, y.i1h1, z.r1h1, z.i1h1)
+        + s2i2f1(c.cxz, x.r1h1, x.i1h1, z.r1h1, z.i1h1)
+}
+
+/// `S2v3F1`/`S2i3F1` of variables `a`, `b`.
+fn s23(cab: f64, a: &Kern, b: &Kern, imag: bool) -> f64 {
+    let f = if imag { s2i3f1 } else { s2v3f1 };
+    f(
+        cab, a.r1h1, a.i1h1, b.r1h1, b.i1h1, a.r2h11, a.i2h11, b.r2h11, b.i2h11,
+    )
+}
+
+/// `S3v3F1`/`S3i3F1` of variables `a`, `b`, `c`.
+fn s33(cabc: f64, a: &Kern, b: &Kern, c: &Kern, imag: bool) -> f64 {
+    let f = if imag { s3i3f1 } else { s3v3f1 };
+    f(cabc, a.r1h1, a.i1h1, b.r1h1, b.i1h1, c.r1h1, c.i1h1)
+}
+
+/// `DFn3F1` (`imag = false`) / `DFi3F1` (`imag = true`), the C's
+/// partial sums kept in order.
+fn df3f1(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern, imag: bool) -> f64 {
+    if !imag {
+        let mut temp = s23(c.cxx, x, x, false) + s23(c.cyy, y, y, false) + s23(c.czz, z, z, false);
+        temp += s23(c.cxy, x, y, false)
+            + s23(c.cyz, y, z, false)
+            + s23(c.cxz, x, z, false)
+            + s33(c.cxxx, x, x, x, false);
+        temp += s33(c.cyyy, y, y, y, false)
+            + s33(c.czzz, z, z, z, false)
+            + s33(c.cxxy, x, x, y, false)
+            + s33(c.cxxz, x, x, z, false)
+            + s33(c.cxyy, x, y, y, false);
+        temp += s33(c.cyyz, y, y, z, false)
+            + s33(c.cxzz, x, z, z, false)
+            + s33(c.cyzz, y, z, z, false)
+            + s33(c.cxyz, x, y, z, false);
+        temp
+    } else {
+        let mut temp = s23(c.cxx, x, x, true)
+            + s23(c.cyy, y, y, true)
+            + s23(c.czz, z, z, true)
+            + s23(c.cxy, x, y, true);
+        temp += s23(c.cyz, y, z, true)
+            + s23(c.cxz, x, z, true)
+            + s33(c.cxxx, x, x, x, true)
+            + s33(c.cyyy, y, y, y, true);
+        temp += s33(c.czzz, z, z, z, true)
+            + s33(c.cxxy, x, x, y, true)
+            + s33(c.cxxz, x, x, z, true)
+            + s33(c.cxyy, x, y, y, true);
+        temp += s33(c.cyyz, y, y, z, true)
+            + s33(c.cxzz, x, z, z, true)
+            + s33(c.cyzz, y, z, z, true)
+            + s33(c.cxyz, x, y, z, true);
+        temp
+    }
+}
+
+/// `DFn3F1`.
+pub(crate) fn dfn3f1(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    df3f1(c, x, y, z, false)
+}
+
+/// `DFi3F1`.
+pub(crate) fn dfi3f1(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    df3f1(c, x, y, z, true)
+}
+
+/// `S2vF12`/`S2iF12` of variables `a`, `b`.
+fn s2f12(cab: f64, a: &Kern, b: &Kern, imag: bool) -> f64 {
+    let f = if imag { s2if12 } else { s2vf12 };
+    f(
+        cab, a.r1h1, a.i1h1, b.r1h1, b.i1h1, a.r1h2, a.i1h2, b.r1h2, b.i1h2,
+    )
+}
+
+/// `DFnF12` (`imag = false`) / `DFiF12`, halved like the C.
+fn dff12(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern, imag: bool) -> f64 {
+    let mut temp = s2f12(c.cxx, x, x, imag) + s2f12(c.cyy, y, y, imag) + s2f12(c.czz, z, z, imag);
+    temp += s2f12(c.cxy, x, y, imag) + s2f12(c.cyz, y, z, imag) + s2f12(c.cxz, x, z, imag);
+    0.5 * temp
+}
+
+/// `DFnF12`.
+pub(crate) fn dfnf12(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    dff12(c, x, y, z, false)
+}
+
+/// `DFiF12`.
+pub(crate) fn dfif12(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    dff12(c, x, y, z, true)
+}
+
+/// `S2v2F12`/`S2i2F12` of variables `a`, `b`.
+fn s22f12(cab: f64, a: &Kern, b: &Kern, imag: bool) -> f64 {
+    let f = if imag { s2i2f12 } else { s2v2f12 };
+    f(
+        cab, a.r1h1, a.i1h1, b.r1h1, b.i1h1, a.r1h2, a.i1h2, b.r1h2, b.i1h2, a.r2h11, a.i2h11,
+        b.r2h11, b.i2h11, a.h2f1f2, a.ih2f1f2, b.h2f1f2, b.ih2f1f2,
+    )
+}
+
+/// `S3v2F12`/`S3i2F12` of variables `a`, `b`, `c`.
+fn s32f12(cabc: f64, a: &Kern, b: &Kern, c: &Kern, imag: bool) -> f64 {
+    let f = if imag { s3i2f12 } else { s3v2f12 };
+    f(
+        cabc, a.r1h1, a.i1h1, b.r1h1, b.i1h1, c.r1h1, c.i1h1, a.r1h2, a.i1h2, b.r1h2, b.i1h2,
+        c.r1h2, c.i1h2,
+    )
+}
+
+/// `DFn2F12` (`imag = false`) / `DFi2F12` (the C's `DpassStr`
+/// functions), the partial sums in the C's order, divided by 3.
+fn df2f12(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern, imag: bool) -> f64 {
+    let i = imag;
+    let mut temp = s22f12(c.cxx, x, x, i);
+    temp += s22f12(c.cyy, y, y, i);
+    temp += s22f12(c.czz, z, z, i);
+    temp += s22f12(c.cxy, x, y, i);
+    temp += s22f12(c.cyz, y, z, i);
+    temp += s22f12(c.cxz, x, z, i);
+    if !imag {
+        temp += s32f12(c.cxxx, x, x, x, i) + s32f12(c.cyyy, y, y, y, i);
+        temp += s32f12(c.czzz, z, z, z, i) + s32f12(c.cxxy, x, x, y, i);
+        temp += s32f12(c.cxxz, x, x, z, i) + s32f12(c.cxyy, x, y, y, i);
+        temp += s32f12(c.cyyz, y, y, z, i) + s32f12(c.cxzz, x, z, z, i);
+        temp += s32f12(c.cyzz, y, z, z, i) + s32f12(c.cxyz, x, y, z, i);
+    } else {
+        temp += s32f12(c.cxxx, x, x, x, i);
+        temp += s32f12(c.cyyy, y, y, y, i) + s32f12(c.czzz, z, z, z, i);
+        temp += s32f12(c.cxxy, x, x, y, i) + s32f12(c.cxxz, x, x, z, i);
+        temp += s32f12(c.cxyy, x, y, y, i) + s32f12(c.cyyz, y, y, z, i);
+        temp += s32f12(c.cxzz, x, z, z, i);
+        temp += s32f12(c.cyzz, y, z, z, i) + s32f12(c.cxyz, x, y, z, i);
+    }
+    temp / 3.
+}
+
+/// `DFn2F12`.
+pub(crate) fn dfn2f12(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    df2f12(c, x, y, z, false)
+}
+
+/// `DFi2F12`.
+pub(crate) fn dfi2f12(c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> f64 {
+    df2f12(c, x, y, z, true)
+}
+
+/// The `(temp, itemp)` a device's `disto` routine computes for a
+/// three-variable memoryless nonlinearity in `mode`: `DFn2F1`/
+/// `DFi2F1`, `DFn3F1`/`DFi3F1`, `DFnF12`/`DFiF12` (both IM
+/// second-order modes — the caller's kernels already hold H1(f2) or
+/// its conjugate) or `DFn2F12`/`DFi2F12`.
+pub(crate) fn df_term(mode: DistoMode, c: &DfCoeffs, x: &Kern, y: &Kern, z: &Kern) -> (f64, f64) {
+    match mode {
+        DistoMode::TwoF1 => (dfn2f1(c, x, y, z), dfi2f1(c, x, y, z)),
+        DistoMode::ThrF1 => (dfn3f1(c, x, y, z), dfi3f1(c, x, y, z)),
+        DistoMode::F1pF2 | DistoMode::F1mF2 => (dfnf12(c, x, y, z), dfif12(c, x, y, z)),
+        DistoMode::TwoF1mF2 => (dfn2f12(c, x, y, z), dfi2f12(c, x, y, z)),
+    }
+}
+
+/// The one-variable counterpart of [`df_term`]: `D1n2F1`/`D1i2F1`,
+/// `D1n3F1`/`D1i3F1`, `D1nF12`/`D1iF12`, `D1n2F12`/`D1i2F12` with
+/// second- and third-order coefficients `cxx`, `cxxx`.
+pub(crate) fn d1_term(mode: DistoMode, cxx: f64, cxxx: f64, x: &Kern) -> (f64, f64) {
+    match mode {
+        DistoMode::TwoF1 => (d1n2f1(cxx, x.r1h1, x.i1h1), d1i2f1(cxx, x.r1h1, x.i1h1)),
+        DistoMode::ThrF1 => (
+            d1n3f1(cxx, cxxx, x.r1h1, x.i1h1, x.r2h11, x.i2h11),
+            d1i3f1(cxx, cxxx, x.r1h1, x.i1h1, x.r2h11, x.i2h11),
+        ),
+        DistoMode::F1pF2 | DistoMode::F1mF2 => (
+            d1nf12(cxx, x.r1h1, x.i1h1, x.r1h2, x.i1h2),
+            d1if12(cxx, x.r1h1, x.i1h1, x.r1h2, x.i1h2),
+        ),
+        DistoMode::TwoF1mF2 => (
+            d1n2f12(
+                cxx, cxxx, x.r1h1, x.i1h1, x.r1h2, x.i1h2, x.r2h11, x.i2h11, x.h2f1f2, x.ih2f1f2,
+            ),
+            d1i2f12(
+                cxx, cxxx, x.r1h1, x.i1h1, x.r1h2, x.i1h2, x.r2h11, x.i2h11, x.h2f1f2, x.ih2f1f2,
+            ),
+        ),
+    }
+}
+
+/// A charge term's current: `jω` times the charge's `(temp, itemp)`
+/// — the C's `temp = −ω·D…i(…)`, `itemp = ω·D…n(…)`.
+pub(crate) fn jomega(omega: f64, (n, i): (f64, f64)) -> (f64, f64) {
+    (-omega * i, omega * n)
+}
+
+impl DistoCtx<'_> {
+    /// Stamp a nonlinear branch current flowing from `p` to `n`
+    /// (`CKTrhs[p] −= temp; CKTrhs[n] += temp`, same for `CKTirhs`).
+    pub(crate) fn stamp(&mut self, p: Var, n: Var, (temp, itemp): (f64, f64)) {
+        self.rhs_re[p] -= temp;
+        self.rhs_im[p] -= itemp;
+        self.rhs_re[n] += temp;
+        self.rhs_im[n] += itemp;
     }
 }
 
@@ -519,6 +845,103 @@ mod tests {
             1.7, args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, args.9,
             args.10, args.11,
         );
+        assert!(close(re, want.re) && close(im, want.im));
+    }
+
+    fn kern(h1: Complex64, h2: Complex64, h11: Complex64, h12: Complex64) -> Kern {
+        Kern {
+            r1h1: h1.re,
+            i1h1: h1.im,
+            r1h2: h2.re,
+            i1h2: h2.im,
+            r2h11: h11.re,
+            i2h11: h11.im,
+            h2f1f2: h12.re,
+            ih2f1f2: h12.im,
+        }
+    }
+
+    /// The three-variable load functions (`DFn*`/`DFi*`) are the
+    /// parts of the multinomial expansions of `Σ c_ab·a·b +
+    /// Σ c_abc·a·b·c` over the kernels: `2F1` = Σ c_ab x_a x_b,
+    /// `3F1` = Σ c_ab (x_a h_b + x_b h_a) + Σ c_abc x_a x_b x_c,
+    /// `F12` = ½ Σ c_ab (x_a u_b + x_b u_a), `2F12` = ⅓ [Σ c_ab
+    /// (2(x_a w_b + x_b w_a) + u_a h_b + u_b h_a) + Σ c_abc (x_a x_b
+    /// u_c + x_a x_c u_b + x_c x_b u_a)] with u the f2 kernel, h =
+    /// H2(f1,f1), w = H2(f1,−f2) — each coefficient checked alone.
+    #[test]
+    fn df_loads_are_three_variable_multinomials() {
+        let x = [c(0.8, -0.3), c(-0.2, 0.65), c(0.45, 0.1)];
+        let u = [c(0.3, 0.2), c(-0.6, -0.15), c(0.05, 0.9)];
+        let h = [c(1.1, 0.4), c(-0.7, 0.25), c(0.2, -0.8)];
+        let w = [c(-0.4, 0.3), c(0.9, 0.1), c(-0.25, -0.55)];
+        let k: Vec<Kern> = (0..3).map(|i| kern(x[i], u[i], h[i], w[i])).collect();
+
+        // (coefficient setter, index tuple)
+        type Set = fn(&mut DfCoeffs, f64);
+        let second: [(Set, usize, usize); 6] = [
+            (|c, v| c.cxx = v, 0, 0),
+            (|c, v| c.cyy = v, 1, 1),
+            (|c, v| c.czz = v, 2, 2),
+            (|c, v| c.cxy = v, 0, 1),
+            (|c, v| c.cyz = v, 1, 2),
+            (|c, v| c.cxz = v, 0, 2),
+        ];
+        let third: [(Set, usize, usize, usize); 10] = [
+            (|c, v| c.cxxx = v, 0, 0, 0),
+            (|c, v| c.cyyy = v, 1, 1, 1),
+            (|c, v| c.czzz = v, 2, 2, 2),
+            (|c, v| c.cxxy = v, 0, 0, 1),
+            (|c, v| c.cxxz = v, 0, 0, 2),
+            (|c, v| c.cxyy = v, 0, 1, 1),
+            (|c, v| c.cyyz = v, 1, 1, 2),
+            (|c, v| c.cxzz = v, 0, 2, 2),
+            (|c, v| c.cyzz = v, 1, 2, 2),
+            (|c, v| c.cxyz = v, 0, 1, 2),
+        ];
+        let cv = 0.73;
+        let check = |mode: DistoMode, co: &DfCoeffs, want: Complex64| {
+            let (n, i) = df_term(mode, co, &k[0], &k[1], &k[2]);
+            assert!(
+                close(n, want.re) && close(i, want.im),
+                "{mode:?}: ({n}, {i}) vs {want}"
+            );
+        };
+        for (set, a, b) in second {
+            let mut co = DfCoeffs::default();
+            set(&mut co, cv);
+            check(DistoMode::TwoF1, &co, cv * x[a] * x[b]);
+            check(DistoMode::ThrF1, &co, cv * (x[a] * h[b] + x[b] * h[a]));
+            check(
+                DistoMode::F1pF2,
+                &co,
+                0.5 * cv * (x[a] * u[b] + x[b] * u[a]),
+            );
+            let v = cv * (2.0 * (x[a] * w[b] + x[b] * w[a]) + u[a] * h[b] + u[b] * h[a]) / 3.0;
+            check(DistoMode::TwoF1mF2, &co, v);
+        }
+        for (set, a, b, d) in third {
+            let mut co = DfCoeffs::default();
+            set(&mut co, cv);
+            check(DistoMode::TwoF1, &co, c(0.0, 0.0));
+            check(DistoMode::ThrF1, &co, cv * x[a] * x[b] * x[d]);
+            check(DistoMode::F1mF2, &co, c(0.0, 0.0));
+            let v = cv * (x[a] * x[b] * u[d] + x[a] * x[d] * u[b] + x[d] * x[b] * u[a]) / 3.0;
+            check(DistoMode::TwoF1mF2, &co, v);
+        }
+    }
+
+    /// The one-variable dispatcher is the `D1*` family, and `jω×`
+    /// is a complex multiplication by `jω`.
+    #[test]
+    fn d1_term_and_jomega() {
+        let k = kern(c(0.8, -0.3), c(0.3, 0.2), c(1.1, 0.4), c(-0.4, 0.3));
+        let (n, i) = d1_term(DistoMode::ThrF1, 0.37, -1.9, &k);
+        assert_eq!(n, d1n3f1(0.37, -1.9, k.r1h1, k.i1h1, k.r2h11, k.i2h11));
+        assert_eq!(i, d1i3f1(0.37, -1.9, k.r1h1, k.i1h1, k.r2h11, k.i2h11));
+        let z = c(0.3, -0.7);
+        let (re, im) = jomega(2.5, (z.re, z.im));
+        let want = c(0.0, 2.5) * z;
         assert!(close(re, want.re) && close(im, want.im));
     }
 

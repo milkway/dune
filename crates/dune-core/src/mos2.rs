@@ -11,9 +11,14 @@
 //! MOS1's, which is why this file mirrors `mos1.rs` there.
 
 use crate::consts::{BOLTZ, CHARGE, KOVERQ, REFTEMP, ROOT2};
+use crate::dderivs::Dderivs;
 use crate::diode::pnjlim;
+use crate::disto::{DistoCtx, DistoSetupCtx};
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 use crate::mos1::{MosGeom, fetlim, limvds, qmeyer};
+use crate::mosdisto::{
+    DrainDerivs, MosDistoCoeffs, MosJunctions, bulk_diode, mos_disto_load, setup_tail,
+};
 
 /// Epsilon of silicon (`mos2load.c`: `EPSSIL`).
 const EPSSIL: f64 = 11.7 * 8.854214871e-12;
@@ -518,6 +523,8 @@ pub(crate) struct Mos2I {
     cd: f64,
     cbs: f64,
     cbd: f64,
+    /// `.disto` Taylor coefficients (`MOS2dSetup`).
+    dist: MosDistoCoeffs,
 }
 
 impl Mos2I {
@@ -559,6 +566,7 @@ impl Mos2I {
             cd: 0.0,
             cbs: 0.0,
             cbd: 0.0,
+            dist: MosDistoCoeffs::default(),
         }
     }
 
@@ -1033,6 +1041,667 @@ impl Mos2I {
     }
 }
 
+impl Mos2I {
+    /// `MOS2dSetup` (`dev/mos2/mos2dset.c`): the Grove–Frohman drain
+    /// current re-evaluated with the `Dderivs` algebra (p = vgs,
+    /// q = vbs, r = vds of the mode-normalized device), then the
+    /// shared diode/capacitance/type bookkeeping. A literal port,
+    /// slips included, since ngspice-47 carries the same file: the
+    /// mobility factor is 0 (not 1) below the critical field, so the
+    /// drain current contributes nothing there; `argv` doubles
+    /// `vgsx` instead of subtracting `vbin`; the linear-region gds
+    /// loses its `lvgs`; the second Baum root adds `tmp`; the
+    /// channel-length factor's seed has value `lvds` with slope −1.
+    /// Where the C reads storage it never wrote (UB in both
+    /// simulators) Dune reads zero, which is what the ngspice-47
+    /// oracle does — measured: `d_xlamda` (any `LAMBDA > 0`, or no
+    /// `NSUB`) and `d_dumarg` (`GAMMA > 0`) both reproduce the
+    /// golden bit for bit as zero; the same rule covers `d_p0` when
+    /// `p ≥ 0`, `d_dbargs`/`d_dbargd` without `XJ` and `d_cdrain`
+    /// at the start of every instance (ngspice zeroes it once per
+    /// call). `sphi` is set before its use in the `vds < vbs` branch
+    /// (ngspice's HT 050523 fix), and the Baum root arrays are sized
+    /// for every root (the C's `d_a4[3]`/`d_x4[3]` overrun).
+    // A literal port keeps the C's dead stores.
+    #[allow(
+        unused_assignments,
+        clippy::too_many_lines,
+        clippy::cognitive_complexity
+    )]
+    fn disto_coeffs(&self, sol: &[f64], gmin: f64) -> MosDistoCoeffs {
+        let t = &self.t;
+        let g = &self.geom;
+        let typ = t.type_;
+        let vt = t.vt;
+        let eff_l = g.l - 2.0 * t.lat_diff;
+        let (drain_sat_cur, source_sat_cur) =
+            if t.t_sat_cur_dens == 0.0 || g.ad == 0.0 || g.as_ == 0.0 {
+                (t.t_sat_cur, t.t_sat_cur)
+            } else {
+                (t.t_sat_cur_dens * g.ad, t.t_sat_cur_dens * g.as_)
+            };
+        let beta = t.t_transconductance * g.w / eff_l;
+        let oxide_cap = t.oxide_cap_factor * eff_l * g.w;
+
+        let vbs = typ * (sol[self.bulk] - sol[self.s_p]);
+        let vgs = typ * (sol[self.gate] - sol[self.s_p]);
+        let vds = typ * (sol[self.d_p] - sol[self.s_p]);
+        let vbd = vbs - vds;
+        let vgd = vgs - vds;
+
+        let gbs = bulk_diode(vbs, source_sat_cur, vt, gmin, typ);
+        let gbd = bulk_diode(vbd, drain_sat_cur, vt, gmin, typ);
+        let mode = if vds >= 0.0 { 1.0 } else { -1.0 };
+
+        let d_p = Dderivs::var_p();
+        let d_q = Dderivs::var_q();
+        let d_r = Dderivs::var_r();
+        let d_zero = Dderivs::default();
+        let mut d_cdrain = Dderivs::default();
+
+        let lvbs = if mode == 1.0 { vbs } else { vbd };
+        let lvds = mode * vds;
+        let lvgs = if mode == 1.0 { vgs } else { vgd };
+        let phi_min_vbs = t.t_phi - lvbs;
+        let mut xlamda = t.lambda;
+        // Never written on most paths (see above).
+        let mut d_xlamda = d_zero;
+        let mut vdsat = 0.0;
+        let mut von;
+        let vgst;
+        let mut sphi = 0.0;
+        let mut sphi3 = 0.0;
+        let mut doneval = false;
+
+        let d_phi_min_vbs = Dderivs {
+            value: phi_min_vbs,
+            d1_q: -1.0,
+            ..d_zero
+        };
+
+        // The C's `goto`s, as a labelled block: `break 'eval` is
+        // `goto line1050`; falling off the end is `doneval`.
+        'eval: {
+            let (sarg, d_sarg, dsrgdb, d_dsrgdb);
+            if lvbs <= 0.0 {
+                sarg = f64::sqrt(phi_min_vbs);
+                d_sarg = d_phi_min_vbs.sqrt();
+                dsrgdb = -0.5 / sarg;
+                d_dsrgdb = d_sarg.inv().times(-0.5);
+            } else {
+                sphi = f64::sqrt(t.t_phi);
+                sphi3 = t.t_phi * sphi;
+                sarg = sphi / (1.0 + 0.5 * lvbs / t.t_phi);
+                let mut s = Dderivs { value: lvbs, ..d_q }.times(0.5 / t.t_phi);
+                s.value += 1.0;
+                d_sarg = s.inv().times(sphi);
+                dsrgdb = -0.5 * sarg * sarg / sphi3;
+                d_dsrgdb = d_sarg.mult(&d_sarg).times(-0.5 / sphi3);
+            }
+            let (mut barg, mut d_barg, dbrgdb, d_dbrgdb);
+            if lvds - lvbs >= 0.0 {
+                barg = f64::sqrt(phi_min_vbs + lvds);
+                let mut b = d_phi_min_vbs;
+                b.value += lvds;
+                b.d1_r += 1.0;
+                d_barg = b.sqrt();
+                dbrgdb = -0.5 / barg;
+                d_dbrgdb = d_barg.inv().times(-0.5);
+            } else {
+                sphi = f64::sqrt(t.t_phi);
+                sphi3 = t.t_phi * sphi;
+                barg = sphi / (1.0 + 0.5 * (lvbs - lvds) / t.t_phi);
+                let mut b = Dderivs {
+                    value: lvbs - lvds,
+                    ..d_q
+                };
+                b.d1_r -= 1.0;
+                let mut b = b.times(0.5 / t.t_phi);
+                b.value += 1.0;
+                d_barg = b.inv().times(sphi);
+                dbrgdb = -0.5 * barg * barg / sphi3;
+                d_dbrgdb = d_barg.mult(&d_barg).times(-0.5 / sphi3);
+            }
+
+            // Threshold voltage: narrow-channel effect.
+            let factor = 0.125 * t.delta * 2.0 * std::f64::consts::PI * EPSSIL / oxide_cap * eff_l;
+            let eta = 1.0 + factor;
+            let vbin = t.t_vbi * typ + factor * phi_min_vbs;
+            let mut d_vbin = d_phi_min_vbs.times(factor);
+            d_vbin.value += t.t_vbi * typ;
+
+            let (gamasd, d_gamasd, dgddvb, d_dgddvb);
+            if t.gamma > 0.0 || t.nsub > 0.0 {
+                let xwd = t.xd * barg;
+                let xws = t.xd * sarg;
+                let d_xwd = d_barg.times(t.xd);
+                let d_xws = d_sarg.times(t.xd);
+                let mut argss = 0.0;
+                let mut argsd = 0.0;
+                let mut d_argss = d_zero;
+                let mut d_argsd = d_zero;
+                let (mut args, mut argd) = (0.0, 0.0);
+                let (mut d_args, mut d_argd) = (d_zero, d_zero);
+                if t.xj > 0.0 {
+                    let tmp = 2.0 / t.xj;
+                    let argxs = 1.0 + xws * tmp;
+                    let mut d_argxs = d_xws.times(tmp);
+                    d_argxs.value += 1.0;
+                    let argxd = 1.0 + xwd * tmp;
+                    let mut d_argxd = d_xwd.times(tmp);
+                    d_argxd.value += 1.0;
+                    args = f64::sqrt(argxs);
+                    d_args = d_argxs.sqrt();
+                    argd = f64::sqrt(argxd);
+                    d_argd = d_argxd.sqrt();
+                    let tmp = 0.5 * t.xj / eff_l;
+                    argss = tmp * (args - 1.0);
+                    d_argss = d_args.times(tmp);
+                    d_argss.value -= tmp;
+                    argsd = tmp * (argd - 1.0);
+                    d_argsd = d_argd.times(tmp);
+                    d_argsd.value -= tmp;
+                }
+                gamasd = t.gamma * (1.0 - argss - argsd);
+                let mut gs = d_argss.plus(&d_argsd);
+                gs.value -= 1.0;
+                d_gamasd = gs.times(-t.gamma);
+                let dbxwd = t.xd * dbrgdb;
+                let dbxws = t.xd * dsrgdb;
+                let d_dbxwd = d_dbrgdb.times(t.xd);
+                let d_dbxws = d_dsrgdb.times(t.xd);
+                let (mut dbargs, mut dbargd) = (0.0, 0.0);
+                let (mut d_dbargs, mut d_dbargd) = (d_zero, d_zero);
+                if t.xj > 0.0 {
+                    let tmp = 0.5 / eff_l;
+                    dbargs = tmp * dbxws / args;
+                    dbargd = tmp * dbxwd / argd;
+                    d_dbargs = d_dbxws.div(&d_args).times(tmp);
+                    d_dbargd = d_dbxwd.div(&d_argd).times(tmp);
+                }
+                dgddvb = -t.gamma * (dbargs + dbargd);
+                d_dgddvb = d_dbargs.plus(&d_dbargd).times(-t.gamma);
+            } else {
+                gamasd = t.gamma;
+                d_gamasd = Dderivs::constant(t.gamma);
+                dgddvb = 0.0;
+                d_dgddvb = d_zero;
+            }
+            von = vbin + gamasd * sarg;
+            let mut d_von = d_gamasd.mult(&d_sarg).plus(&d_vbin);
+            let mut d_vdsat = d_zero;
+            let mut d_argg = d_zero;
+            let mut d_vgst;
+            if t.nfs != 0.0 && oxide_cap != 0.0 {
+                let cfs = CHARGE * t.nfs * 1e4;
+                let cdonco = -(gamasd * dsrgdb + dgddvb * sarg) + factor;
+                let d_dummy = d_dgddvb.mult(&d_sarg);
+                let mut d_cdonco = d_gamasd.mult(&d_dsrgdb).plus(&d_dummy).times(-1.0);
+                d_cdonco.value += factor;
+                let xn = 1.0 + cfs / oxide_cap * g.w * eff_l + cdonco;
+                let d_xn = Dderivs {
+                    value: xn,
+                    ..d_cdonco
+                };
+                let tmp = vt * xn;
+                let d_tmp = d_xn.times(vt);
+                von += tmp;
+                d_von = d_von.plus(&d_tmp);
+                d_argg = d_tmp.inv();
+                vgst = lvgs - von;
+                d_vgst = d_von.times(-1.0).plus(&d_p);
+                d_vgst.value += lvgs;
+            } else {
+                vgst = lvgs - von;
+                d_vgst = d_von.times(-1.0).plus(&d_p);
+                d_vgst.value += lvgs;
+                if lvgs <= von {
+                    // Cutoff.
+                    break 'eval;
+                }
+            }
+
+            let sarg3 = sarg * sarg * sarg;
+            let d_sarg3 = d_sarg.cube();
+            let sbiarg = f64::sqrt(t.t_bulk_pot);
+            let mut gammad;
+            let mut d_gammad;
+            let mut body = barg * barg * barg - sarg3;
+            let mut d_body = d_sarg3.times(-1.0).plus(&d_barg.cube());
+            let _ = body;
+
+            // Effective mobility (`line400`/`line410`).
+            let (ufact, d_ufact, ueff, d_ueff);
+            let tmp = t.ucrit * 100.0 * EPSSIL / t.oxide_cap_factor;
+            if oxide_cap > 0.0 && vgst > tmp {
+                let udenom = vgst;
+                let d_udenom = d_vgst;
+                ufact = f64::exp(t.uexp * f64::ln(tmp / udenom));
+                let d_dummy = d_udenom.inv().times(tmp);
+                d_ufact = d_dummy.pow(t.uexp);
+                ueff = t.u0 * 1e-4 * ufact;
+                d_ueff = d_ufact.times(t.u0 * 1e-4);
+            } else {
+                ufact = 0.0;
+                d_ufact = d_zero;
+                ueff = t.u0 * 1e-4;
+                d_ueff = Dderivs::constant(ueff);
+            }
+            let _ = ufact;
+
+            // Saturation voltage (Grove–Frohman), `line500`.
+            let mut vgsx = lvgs;
+            let mut d_vgsx = Dderivs { value: lvgs, ..d_p };
+            gammad = gamasd / eta;
+            d_gammad = d_gamasd.times(1.0 / eta);
+            if t.nfs != 0.0 && oxide_cap != 0.0 {
+                vgsx = f64::max(lvgs, von);
+                d_vgsx = if lvgs > von {
+                    Dderivs { value: lvgs, ..d_p }
+                } else {
+                    d_von
+                };
+            }
+            if gammad > 0.0 {
+                let gammd2 = gammad * gammad;
+                let d_gammd2 = d_gammad.mult(&d_gammad);
+                let argv = (vgsx - vbin) / eta + phi_min_vbs;
+                let d_argv = d_vgsx.plus(&d_vgsx).times(1.0 / eta).plus(&d_phi_min_vbs);
+                if argv <= 0.0 {
+                    vdsat = 0.0;
+                    d_vdsat = d_zero;
+                } else {
+                    let mut d_arg = d_argv.div(&d_gammd2).times(4.0);
+                    d_arg.value += 1.0;
+                    let _ = (d_arg.sqrt(), gammd2);
+                    // `d_dumarg`: its computation is commented out
+                    // in the C (read as zero, see above).
+                    let d_dumarg = d_zero;
+                    let d_dummy = d_dumarg.times(-1.0).plus(&d_gammd2).times(0.5);
+                    let v = d_phi_min_vbs.times(-1.0).plus(&d_argv);
+                    d_vdsat = d_dummy.plus(&v);
+                    vdsat = f64::max(vdsat, 0.0);
+                }
+            } else {
+                vdsat = (vgsx - vbin) / eta;
+                d_vdsat = d_vbin.times(-1.0).plus(&d_vgsx).times(1.0 / eta);
+                vdsat = f64::max(vdsat, 0.0);
+            }
+            if t.vmax > 0.0 {
+                // Baum's scattering-velocity saturation.
+                let gammd2 = gammad * gammad;
+                let d_gammd2 = d_gammad.mult(&d_gammad);
+                let v1 = (vgsx - vbin) / eta + phi_min_vbs;
+                let d_v1 = d_vbin
+                    .times(-1.0)
+                    .plus(&d_vgsx)
+                    .times(1.0 / eta)
+                    .plus(&d_phi_min_vbs);
+                let v2 = phi_min_vbs;
+                let d_v2 = d_phi_min_vbs;
+                let xv = t.vmax * eff_l / ueff;
+                let d_xv = d_ueff.inv().times(t.vmax * eff_l);
+                let a1 = gammad / 0.75;
+                let d_a1 = d_gammad.times(4.0 / 3.0);
+                let b1 = -2.0 * (v1 + xv);
+                let d_b1 = d_v1.plus(&d_xv).times(-2.0);
+                let c1 = -2.0 * gammad * xv;
+                let d_c1 = d_gammad.mult(&d_xv).times(-2.0);
+                let d1 = 2.0 * v1 * (v2 + xv) - v2 * v2 - 4.0 / 3.0 * gammad * sarg3;
+                let mut d_d1 = d_gammad.mult(&d_sarg3).times(4.0 / 3.0);
+                d_d1 = d_d1.plus(&d_v2.mult(&d_v2)).times(-1.0);
+                d_d1 = d_d1.plus(&d_v2.plus(&d_xv).mult(&d_v1).times(2.0));
+                let a = -b1;
+                let d_a = d_b1.times(-1.0);
+                let b = a1 * c1 - 4.0 * d1;
+                let d_b = d_d1.times(-4.0).plus(&d_a1.mult(&d_c1));
+                let c = -d1 * (a1 * a1 - 4.0 * b1) - c1 * c1;
+                let d_dummy = d_b1.times(-4.0).plus(&d_a1.mult(&d_a1));
+                let d_c = d_dummy.mult(&d_d1).plus(&d_c1.mult(&d_c1)).times(-1.0);
+                let r = -a * a / 3.0 + b;
+                let d_arr = d_a.mult(&d_a).times(-1.0 / 3.0).plus(&d_b);
+                let s = 2.0 * a * a * a / 27.0 - a * b / 3.0 + c;
+                let d_s = d_a
+                    .cube()
+                    .times(2.0 / 27.0)
+                    .plus(&d_c)
+                    .plus(&d_a.mult(&d_b).times(-1.0 / 3.0));
+                let r3 = r * r * r;
+                let d_r3 = d_arr.cube();
+                let s2 = s * s;
+                let d_s2 = d_s.mult(&d_s);
+                let p = s2 / 4.0 + r3 / 27.0;
+                let d_pee = d_s2.times(0.25).plus(&d_r3.times(1.0 / 27.0));
+                let p0 = p.abs();
+                let d_p0 = if p < 0.0 { d_pee.times(-1.0) } else { d_zero };
+                let p2 = f64::sqrt(p0);
+                let d_p2 = d_p0.sqrt();
+                let (y3, d_y3);
+                if p < 0.0 {
+                    let ro = f64::exp(f64::ln(f64::sqrt(s2 / 4.0 + p0)) / 3.0);
+                    let d_ro = d_s2.times(0.25).plus(&d_p0).pow(1.0 / 6.0);
+                    let fi = f64::atan(-2.0 * p2 / s);
+                    let d_fi = d_p2.div(&d_s).times(-2.0).atan();
+                    y3 = 2.0 * ro * f64::cos(fi / 3.0) - a / 3.0;
+                    let d_dummy = d_fi.times(1.0 / 3.0).cos();
+                    d_y3 = d_ro.mult(&d_dummy).times(2.0).plus(&d_a.times(-1.0 / 3.0));
+                } else {
+                    let mut p3 = -s / 2.0 + p2;
+                    let mut d_p3 = d_s.times(-0.5).plus(&d_p2);
+                    p3 = f64::exp(f64::ln(p3.abs()) / 3.0);
+                    if p3 < 0.0 {
+                        d_p3 = d_p3.times(-1.0);
+                    }
+                    d_p3 = d_p3.pow(1.0 / 3.0);
+                    let mut p4 = -s / 2.0 - p2;
+                    let mut d_p4 = d_s.times(0.5).plus(&d_p2);
+                    if p4 < 0.0 {
+                        d_p4 = d_p4.times(-1.0);
+                    }
+                    p4 = f64::exp(f64::ln(p4.abs()) / 3.0);
+                    d_p4 = d_p4.pow(1.0 / 3.0);
+                    y3 = p3 + p4 - a / 3.0;
+                    d_y3 = d_a.times(-1.0 / 3.0).plus(&d_p4).plus(&d_p3);
+                }
+                let a3 = f64::sqrt(a1 * a1 / 4.0 - b1 + y3);
+                let d_a3 = d_a1
+                    .mult(&d_a1)
+                    .times(0.25)
+                    .plus(&d_y3)
+                    .plus(&d_b1.times(-1.0))
+                    .sqrt();
+                let b3 = f64::sqrt(y3 * y3 / 4.0 - d1);
+                let d_b3 = d_y3.mult(&d_y3).times(0.25).plus(&d_d1.times(-1.0)).sqrt();
+                let mut x4 = [0.0; 8];
+                let mut d_x4 = [d_zero; 8];
+                let mut iknt = 0;
+                for i in 0..4 {
+                    let a4 = a1 / 2.0 + SIG1[i] * a3;
+                    let d_a4 = d_a1.times(0.5).plus(&d_a3.times(SIG1[i]));
+                    let b4 = y3 / 2.0 + SIG2[i] * b3;
+                    let d_b4 = d_y3.times(0.5).plus(&d_b3.times(SIG2[i]));
+                    let delta4 = a4 * a4 / 4.0 - b4;
+                    let d_delta4 = d_a4.mult(&d_a4).times(0.25).plus(&d_b4.times(-1.0));
+                    if delta4 < 0.0 {
+                        continue;
+                    }
+                    let tmp = f64::sqrt(delta4);
+                    let d_tmp = d_delta4.sqrt();
+                    x4[iknt] = -a4 / 2.0 + tmp;
+                    d_x4[iknt] = d_a4.times(-0.5).plus(&d_tmp);
+                    iknt += 1;
+                    x4[iknt] = -a4 / 2.0 - tmp;
+                    d_x4[iknt] = d_a4.times(-0.5).plus(&d_tmp);
+                    iknt += 1;
+                }
+                let mut jknt = 0;
+                let mut xvalid = 0.0;
+                let mut d_xvalid = d_zero;
+                for j in 0..iknt {
+                    if x4[j] <= 0.0 {
+                        continue;
+                    }
+                    let x = x4[j];
+                    let poly4 = x * x * x * x + a1 * x * x * x + b1 * x * x + c1 * x + d1;
+                    if poly4.abs() > 1.0e-6 {
+                        continue;
+                    }
+                    jknt += 1;
+                    if jknt <= 1 {
+                        xvalid = x;
+                        d_xvalid = d_x4[j];
+                    }
+                    if x > xvalid {
+                        continue;
+                    }
+                    xvalid = x;
+                    d_xvalid = d_x4[j];
+                }
+                if jknt > 0 {
+                    vdsat = xvalid * xvalid - phi_min_vbs;
+                    d_vdsat = d_xvalid.mult(&d_xvalid).plus(&d_phi_min_vbs.times(-1.0));
+                }
+                let _ = (gammd2, d_gammd2, v2);
+            }
+
+            // Effective channel length.
+            let (mut bsarg, mut bodys) = (0.0, 0.0);
+            let (mut d_bsarg, mut d_bodys) = (d_zero, d_zero);
+            if lvds != 0.0 {
+                gammad = gamasd;
+                d_gammad = d_gamasd;
+                if lvbs - vdsat <= 0.0 {
+                    bsarg = f64::sqrt(vdsat + phi_min_vbs);
+                    d_bsarg = d_vdsat.plus(&d_phi_min_vbs).sqrt();
+                } else {
+                    bsarg = sphi / (1.0 + 0.5 * (lvbs - vdsat) / t.t_phi);
+                    let mut b = d_vdsat.times(-1.0);
+                    b.value += lvbs;
+                    b.d1_r += 1.0;
+                    let mut b = b.times(0.5 / t.t_phi);
+                    b.value += 1.0;
+                    d_bsarg = b.inv().times(sphi);
+                }
+                bodys = bsarg * bsarg * bsarg - sarg3;
+                d_bodys = d_bsarg.cube().plus(&d_sarg3.times(-1.0));
+                if t.vmax <= 0.0 {
+                    if t.nsub != 0.0 && xlamda <= 0.0 {
+                        let argv = (lvds - vdsat) / 4.0;
+                        let mut a = d_vdsat.times(-1.0);
+                        a.value += lvds;
+                        a.d1_r += 1.0;
+                        let d_argv = a.times(0.25);
+                        let sargv = f64::sqrt(1.0 + argv * argv);
+                        let mut sv = d_argv.mult(&d_argv);
+                        sv.value += 1.0;
+                        let d_sargv = sv.sqrt();
+                        let arg = f64::sqrt(argv + sargv);
+                        let d_arg = d_sargv.plus(&d_argv).sqrt();
+                        let xlfact = t.xd / (eff_l * lvds);
+                        let d_xlfact = Dderivs { value: lvds, ..d_r }.inv().times(t.xd / eff_l);
+                        xlamda = xlfact * arg;
+                        d_xlamda = d_xlfact.mult(&d_arg);
+                    }
+                } else {
+                    let xdv = t.xd / f64::sqrt(t.neff);
+                    let xlv = t.vmax * xdv / (2.0 * ueff);
+                    let d_xlv = d_ueff.inv().times(t.vmax * xdv * 0.5);
+                    if t.nsub != 0.0 && xlamda <= 0.0 {
+                        let mut argv = lvds - vdsat;
+                        let mut d_argv = d_vdsat.times(-1.0);
+                        d_argv.value += lvds;
+                        d_argv.d1_r += 1.0;
+                        if argv < 0.0 {
+                            d_argv = d_zero;
+                        }
+                        argv = f64::max(argv, 0.0);
+                        let xls = f64::sqrt(xlv * xlv + argv);
+                        let d_xls = d_xlv.mult(&d_xlv).plus(&d_argv).sqrt();
+                        let xlfact = xdv / (eff_l * lvds);
+                        let mut xf = d_r;
+                        xf.value += lvds;
+                        let d_xlfact = xf.inv().times(xdv / eff_l);
+                        xlamda = xlfact * (xls - xlv);
+                        d_xlamda = d_xlv.times(-1.0).plus(&d_xls).mult(&d_xlfact);
+                    }
+                }
+            }
+
+            // `line610`: limit channel shortening at punch-through.
+            let mut xwb = t.xd * sbiarg;
+            let xld = eff_l - xwb;
+            let mut clfact = 1.0 - xlamda * lvds;
+            let mut d_clfact = Dderivs {
+                value: lvds,
+                d1_r: -1.0,
+                ..d_r
+            }
+            .mult(&d_xlamda);
+            d_clfact.value += 1.0;
+            let mut xleff = eff_l * clfact;
+            let deltal = xlamda * lvds * eff_l;
+            let d_delta1 = Dderivs {
+                value: eff_l * lvds,
+                d1_r: eff_l,
+                ..d_r
+            }
+            .mult(&d_xlamda);
+            if t.nsub == 0.0 {
+                xwb = 0.25e-6;
+            }
+            if xleff < xwb {
+                xleff = xwb / (1.0 + (deltal - xld) / xwb);
+                let mut xl = d_delta1;
+                xl.value -= xld;
+                let mut xl = xl.times(1.0 / xwb);
+                xl.value += 1.0;
+                let d_xleff = xl.inv().times(xwb);
+                clfact = xleff / eff_l;
+                d_clfact = d_xleff.times(1.0 / eff_l);
+            }
+            let _ = clfact;
+
+            // Effective beta.
+            let d_beta1 = d_ufact.div(&d_clfact).times(beta);
+            gammad = gamasd;
+            d_gammad = d_gamasd;
+            let _ = gammad;
+
+            if lvds <= 1.0e-10 {
+                if lvgs <= von {
+                    if t.nfs == 0.0 || oxide_cap == 0.0 {
+                        d_cdrain.d1_q = 0.0;
+                        d_cdrain.d2_q2 = 0.0;
+                        d_cdrain.d3_q3 = 0.0;
+                        break 'eval;
+                    }
+                    let d_dummy = d_gammad
+                        .mult(&d_sarg)
+                        .plus(&d_vbin)
+                        .times(-1.0)
+                        .plus(&d_von);
+                    let mut d_mos2gds = d_beta1.mult(&d_dummy);
+                    let mut d_dummy = d_von.times(-1.0).plus(&d_p);
+                    d_dummy.value += lvgs;
+                    let d_dummy = d_dummy.mult(&d_argg).exp();
+                    d_mos2gds = d_mos2gds.mult(&d_dummy);
+                    d_cdrain.d1_r = d_mos2gds.value;
+                    d_cdrain.d2_r2 = d_mos2gds.d1_r;
+                    d_cdrain.d3_r3 = d_mos2gds.d2_r2;
+                    break 'eval;
+                }
+                let d_mos2gds = d_gammad
+                    .mult(&d_sarg)
+                    .plus(&d_vbin)
+                    .times(-1.0)
+                    .mult(&d_beta1);
+                d_cdrain.d1_r = d_mos2gds.value;
+                d_cdrain.d2_r2 = d_mos2gds.d1_r;
+                d_cdrain.d3_r3 = d_mos2gds.d2_r2;
+                break 'eval;
+            }
+
+            if lvgs <= von {
+                // Subthreshold.
+                if vdsat <= 0.0 {
+                    d_cdrain.d1_r = 0.0;
+                    d_cdrain.d2_r2 = 0.0;
+                    d_cdrain.d3_r3 = 0.0;
+                    break 'eval;
+                }
+                let d_vdson = if vdsat <= lvds {
+                    d_vdsat
+                } else {
+                    Dderivs { value: lvds, ..d_r }
+                };
+                if lvds > vdsat {
+                    barg = bsarg;
+                    d_barg = d_bsarg;
+                    body = bodys;
+                    d_body = d_bodys;
+                }
+                let _ = (barg, d_barg, body);
+                let d_cdson = d_gammad.mult(&d_body).times(-1.0 / 1.5);
+                let d_dummy = d_vdson
+                    .times(0.5 * eta)
+                    .plus(&d_vbin)
+                    .times(-1.0)
+                    .plus(&d_von)
+                    .mult(&d_vdson)
+                    .plus(&d_cdson);
+                let d_cdson = d_dummy.mult(&d_beta1);
+                let mut d_expg = d_von.times(-1.0);
+                d_expg.value += lvgs;
+                d_expg.d1_p += 1.0;
+                let d_expg = d_expg.mult(&d_argg).exp();
+                d_cdrain = d_cdson.mult(&d_expg);
+                break 'eval;
+            }
+
+            // `line900`.
+            if lvds <= vdsat {
+                // Linear region.
+                let mut c = Dderivs {
+                    value: eta * lvds * 0.5,
+                    d1_r: 0.5 * eta,
+                    ..d_r
+                }
+                .plus(&d_vbin)
+                .times(-1.0);
+                c.value += lvgs;
+                c.d1_p += 1.0;
+                let c = c.mult(&Dderivs { value: lvds, ..d_r });
+                let d_dummy = d_gammad.mult(&d_body).times(-1.0 / 1.5);
+                d_cdrain = c.plus(&d_dummy).mult(&d_beta1);
+            } else {
+                // Saturation region.
+                let mut c = d_vdsat.times(0.5 * eta).plus(&d_vbin).times(-1.0);
+                c.value += lvgs;
+                c.d1_p += 1.0;
+                let c = c.mult(&d_vdsat);
+                let d_dummy = d_gammad.mult(&d_bodys).times(-1.0 / 1.5);
+                d_cdrain = c.plus(&d_dummy).mult(&d_beta1);
+            }
+            // `goto doneval`: skip the `line1050` zeroing.
+            doneval = true;
+        }
+        if !doneval {
+            // `line1050`: everything but the vds terms is zeroed.
+            d_cdrain = Dderivs {
+                d1_r: d_cdrain.d1_r,
+                d2_r2: d_cdrain.d2_r2,
+                d3_r3: d_cdrain.d3_r3,
+                ..d_zero
+            };
+        }
+        let _ = von;
+        let junctions = MosJunctions {
+            cbs: t.cbs,
+            cbssw: t.cbssw,
+            f3s: t.f3s,
+            cbd: t.cbd,
+            cbdsw: t.cbdsw,
+            f3d: t.f3d,
+            dep_cap: t.t_dep_cap,
+            bulk_pot: t.t_bulk_pot,
+            mj: t.mj,
+            mjsw: t.mjsw,
+        };
+        setup_tail(
+            typ,
+            mode,
+            (vbs, vbd, vds),
+            (vgst, vdsat),
+            t.t_phi,
+            oxide_cap,
+            &junctions,
+            &DrainDerivs::from_dderivs(&d_cdrain),
+            gbs,
+            gbd,
+        )
+    }
+}
+
 impl crate::devices::Device for Mos2I {
     /// `Mos2convTest`: predicted vs computed drain and bulk
     /// currents, evaluated at the fresh solution (`CKTrhs`).
@@ -1456,6 +2125,17 @@ impl crate::devices::Device for Mos2I {
             cox: self.t.oxide_cap_factor,
         };
         crate::mos1::mos_noise(ctx, &n)
+    }
+
+    /// `MOS2dSetup`: see [`Mos2I::disto_coeffs`].
+    fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        self.dist = self.disto_coeffs(ctx.sol, ctx.gmin);
+        Ok(())
+    }
+
+    /// `MOS2disto` (`dev/mos2/mos2dist.c`, the MOS1 file renamed).
+    fn disto_load(&self, ctx: &mut DistoCtx) {
+        mos_disto_load(&self.dist, (self.gate, self.bulk, self.d_p, self.s_p), ctx);
     }
 
     /// `MOS2acLoad` (same stamps as MOS1's).

@@ -1,0 +1,20 @@
+MOS3 PMOS common-source stage: intermodulation in .disto
+* Coverage: mos3dset.c's Dderivs chain through the semi-empirical
+* current - short-channel factor (XJ, the depletion-width polynomial),
+* narrow width (DELTA), static feedback (ETA), mobility modulation
+* (THETA, including the C's Beta-before-TimesDeriv order that leaves
+* an extra fgate in every coefficient) and channel-length modulation
+* (KAPPA) - on a PMOS, through f1+f2, f1-f2 and 2f1-f2.
+vdd 5 0 -5
+vin 1 0 0 distof1 0.02 distof2 0.02
+vbias 2 1 -1.6
+rg 2 3 10k
+m1 4 3 0 6 nmod l=2u w=20u ad=40p as=40p pd=24u ps=24u
+rd 5 4 10k
+cl 4 0 0.2p
+vbb 6 0 1
+.model nmod pmos level=3 vto=-0.8 kp=50u gamma=0.5 phi=0.65 nsub=1e16 xj=0.3u
++ theta=0.05 eta=0.5 kappa=0.4 delta=0.3 tox=20n cj=0.3m mj=0.45 cjsw=0.5n mjsw=0.33 pb=0.8
++ cgso=0.2n cgdo=0.2n cgbo=0.1n is=1e-15 rd=20 rs=20
+.disto dec 10 1e3 1e10 0.9
+.end
