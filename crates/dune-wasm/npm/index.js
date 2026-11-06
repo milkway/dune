@@ -41,13 +41,13 @@ export function simulate(netlist, opts) {
   return wasm.simulate(netlist, opts);
 }
 
-/** Extract the deck of a `spice = 1` pic figure: `{ netlist, diagnostics, map }`. */
 /** The pic prelude; render SVG from `prelude() + "\n" + src` so overlay ids match. */
 export function prelude() {
   ensure();
   return wasm.prelude();
 }
 
+/** Extract the deck of a `spice = 1` pic figure: `{ netlist, diagnostics, map }`. */
 export function extractPic(src, opts) {
   ensure();
   return wasm.extract_pic(src, opts);

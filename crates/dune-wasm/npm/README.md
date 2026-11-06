@@ -67,3 +67,10 @@ cd crates/dune-wasm/npm && npm test
 ```
 
 License: BSD-3-Clause.
+
+## rpic version note
+
+The embedded pic prelude relies on troff-style `.`-line passthrough,
+available in rpic ≥ 0.13. An embedder rendering `prelude() + source`
+with an older rpic must blank the `.`-directive lines itself (keeping
+line count) before compiling.
