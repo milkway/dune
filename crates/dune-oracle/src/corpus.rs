@@ -191,10 +191,11 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
         // `.model` cards continue over `+` lines; `LEVEL` may sit on
         // any of them (mosmem.cir does exactly that).
         if first == '+' {
-            if in_mos_model && !in_control {
-                if let (Some(l), Some(slot)) = (scan_level(line), mos_models.last_mut()) {
-                    slot.1 = l;
-                }
+            if in_mos_model
+                && !in_control
+                && let (Some(l), Some(slot)) = (scan_level(line), mos_models.last_mut())
+            {
+                slot.1 = l;
             }
             continue;
         }

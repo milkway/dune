@@ -165,13 +165,13 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                         // Upstream decks carry mismatched names here
                         // (ltra_3.cir has `.ends lump` for `.subckt
                         // rlclump`), so this cannot be fatal.
-                        if let Some(n) = named {
-                            if n != def.name {
-                                all_diags.push(Diagnostic::warning(
-                                    format!(".ends {n} closes .subckt {}", def.name),
-                                    span,
-                                ));
-                            }
+                        if let Some(n) = named
+                            && n != def.name
+                        {
+                            all_diags.push(Diagnostic::warning(
+                                format!(".ends {n} closes .subckt {}", def.name),
+                                span,
+                            ));
                         }
                         let parent = match stack.last_mut() {
                             Some(outer) => &mut outer.scope,

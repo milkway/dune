@@ -183,12 +183,12 @@ impl LtraParams {
             ("rel", m.rel),
             ("abs", m.abs),
         ] {
-            if let Some(v) = v {
-                if !v.is_finite() {
-                    return Err(format!(
-                        "`{name}`: lossy line parameter {key} is not finite"
-                    ));
-                }
+            if let Some(v) = v
+                && !v.is_finite()
+            {
+                return Err(format!(
+                    "`{name}`: lossy line parameter {key} is not finite"
+                ));
             }
         }
         let resist = match m.r {

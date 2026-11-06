@@ -548,15 +548,15 @@ impl Circuit {
         if self.specs.iter().any(|s| s.name() == name) {
             return Err(Error::Build(format!("device `{name}` already defined")));
         }
-        if let Spec::Resistor(r) = &spec {
-            if r.value == 0.0 || !r.value.is_finite() {
-                // spice.txt §3.1.1: "may be positive or negative but
-                // not zero".
-                return Err(Error::Build(format!(
-                    "resistor `{}` cannot have zero resistance",
-                    r.name
-                )));
-            }
+        if let Spec::Resistor(r) = &spec
+            && (r.value == 0.0 || !r.value.is_finite())
+        {
+            // spice.txt §3.1.1: "may be positive or negative but
+            // not zero".
+            return Err(Error::Build(format!(
+                "resistor `{}` cannot have zero resistance",
+                r.name
+            )));
         }
         self.specs.push(spec);
         Ok(())

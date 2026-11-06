@@ -62,14 +62,13 @@ pub fn print_columns(
     let mut first_block = true;
     while !remaining.is_empty() || first_block {
         let mut block: Vec<&OutColumn> = Vec::new();
-        if let Some(scale) = &sel.scale {
-            if remaining
+        if let Some(scale) = &sel.scale
+            && remaining
                 .first()
                 .map(|c| c.label != scale.label)
                 .unwrap_or(true)
-            {
-                block.push(scale);
-            }
+        {
+            block.push(scale);
         }
         let mut ll = 8;
         while let Some(col) = remaining.first() {

@@ -127,11 +127,10 @@ impl Expander<'_> {
             }
             _ => {}
         }
-        // (no let-chains: MSRV 1.85)
-        if let Some(m) = device_model_mut(&mut out.device) {
-            if let Some(renamed) = model_map.get(m.as_str()) {
-                *m = renamed.clone();
-            }
+        if let Some(m) = device_model_mut(&mut out.device)
+            && let Some(renamed) = model_map.get(m.as_str())
+        {
+            *m = renamed.clone();
         }
         self.elements.push(out);
     }
