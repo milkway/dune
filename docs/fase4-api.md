@@ -187,6 +187,24 @@ scale_name, scale, variable, type, value | re/im`),
 Convenção: **string única sem newline é caminho**; vetor de
 caracteres ou texto com newlines é o deck.
 
+### C (`crates/dune-ffi`, 2026-11-06)
+
+`dune_simulate(text)`, `dune_simulate_with_includes(text, names,
+texts, n)`, `dune_simulate_file(path)` → `DuneResult*` opaco (nunca
+NULL); `dune_result_free` é a única desalocação. Acessores
+`dune_result_{ok, error_kind, error_message, note_count, note,
+diagnostic_*, plot_count}` e `dune_plot_{name, title,
+variable_count, variable_name, variable_type, npoints, is_complex,
+scale_index, column_real, column_complex}`. Colunas zero-cópia
+emprestadas do resultado; complexo = pares `re,im` intercalados
+(`out_len` em doubles = 2×npoints; layout de `double _Complex`).
+`DuneErrorKind` NONE|INPUT|IO|PARSE|ELABORATE|ANALYSIS|INTERNAL.
+Tolerante a NULL e índice inválido; pânico → INTERNAL via
+catch_unwind. Header `include/dune.h` por cbindgen 0.29.4,
+versionado (teste compara; `DUNE_FFI_BLESS=1` regenera); compila
+como C99 e C++11 `-pedantic -Werror`. Smoke test em C no
+`cargo test` (unix, com `cc`).
+
 ### Divergências deliberadas entre os espelhos (nota exigida pelo
 CLAUDE.md §Pacotes)
 
@@ -197,12 +215,15 @@ CLAUDE.md §Pacotes)
 - **Forma tabular**: polars wide no Python (idioma de colunas),
   tibble longo no R (idioma ggplot/tidyverse) — mesma informação.
 - **Kinds de erro**: R acrescenta `input`/`io`/`raw` (coisas que no
-  Python viram `TypeError`/`FileNotFoundError` nativos).
+  Python viram `TypeError`/`FileNotFoundError` nativos); a C ABI usa
+  os kinds do Python + `input`/`io` (sem exceções nativas) e separa
+  texto/arquivo em funções distintas, então a ambiguidade
+  string-caminho de R/Python não existe nela.
 
 ### Pendências da Fase 4
 
-- `dune-ffi` (C ABI, cbindgen) — ainda não iniciado.
-- CI para python/ e r/ (jobs no ci.yml).
+- CI: o smoke test C do dune-ffi precisa de `cc` no runner
+  (ubuntu-latest tem; Windows pula).
 - Vendoring CRAN (crates por path + registry) e Makevars.win real.
 - Placeholder `spice` no PyPI (wheel 0.0.1 pronto; publicação é do
   usuário).

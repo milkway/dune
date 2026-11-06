@@ -7,6 +7,7 @@ members = [
     "crates/dune-cli",
     "crates/dune-oracle",
     "crates/dune-wasm",
+    "crates/dune-ffi",
 ]
 
 [workspace.package]

@@ -1,0 +1,24 @@
+[package]
+name = "dune-ffi"
+description = "Stable C ABI of the Dune simulator: run a deck, read plots through an opaque DuneResult"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# cdylib/staticlib: what C (and any host with a C FFI) links;
+# rlib: the Rust unit and integration tests call the same symbols.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+dune-netlist.workspace = true
+dune-core.workspace = true
+
+[dev-dependencies]
+# Regenerates include/dune.h in tests/header.rs and diffs it against
+# the committed copy; pinned so the header text is reproducible.
+cbindgen = { version = "=0.29.4", default-features = false }
+tempfile.workspace = true
+# Layout check of the zero-copy complex columns (src/tests.rs).
+num-complex.workspace = true
