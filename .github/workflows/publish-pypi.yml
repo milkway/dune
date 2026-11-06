@@ -14,17 +14,19 @@ permissions:
 
 jobs:
   wheels:
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest # manylinux x86_64
           - os: windows-latest
-          # macOS wheels wait for runner entitlement: on this private
-          # repo GitHub cancels macos-14 instantly (10x minutes) and
-          # macos-13 never leaves the queue (runner being retired).
-          # Re-add arm64/x86_64 here once minutes allow; meanwhile the
-          # macOS arm64 wheel builds locally (python/dist).
+          # macOS bills 10x but only runs on releases/dispatch
+          # (~US$1-2 per release, user-approved 2026-11-06).
+          # macos-13 is retired (hung in queue); the Intel image is
+          # macos-15-intel.
+          - os: macos-14 # arm64
+          - os: macos-15-intel # x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -59,3 +61,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist
+          # Re-dispatching after a partial publish (e.g. adding the
+          # macOS wheels to an existing version) must not fail on the
+          # files already uploaded.
+          skip-existing: true
