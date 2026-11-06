@@ -162,6 +162,9 @@ pub(crate) struct Mos2Temp {
     pub vt: f64,
     // Model copies the load needs.
     pub lat_diff: f64,
+    /// `KF`/`AF`: flicker-noise coefficient and exponent.
+    pub kf: f64,
+    pub af: f64,
     pub cgso: f64,
     pub cgdo: f64,
     pub cgbo: f64,
@@ -391,6 +394,8 @@ impl Mos2Temp {
             type_: typ,
             vt,
             lat_diff: m.ld,
+            kf: m.kf,
+            af: m.af,
             cgso: m.cgso,
             cgdo: m.cgdo,
             cgbo: m.cgbo,
@@ -1427,6 +1432,30 @@ impl crate::devices::Device for Mos2I {
         crate::integ::terr(self.st + QGS, t, time_step);
         crate::integ::terr(self.st + QGD, t, time_step);
         crate::integ::terr(self.st + QGB, t, time_step);
+    }
+
+    /// `MOS2noise` (ngspice-47, default `NLEV`): see
+    /// [`crate::mos1::mos_noise`].
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(crate::mos1::MOS_NOISE_SUFFIXES)
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        let n = crate::mos1::MosNoise {
+            drain: self.drain,
+            source: self.source,
+            d_p: self.d_p,
+            s_p: self.s_p,
+            gdpr: self.t.drain_conductance,
+            gspr: self.t.source_conductance,
+            gm: self.gm,
+            kf: self.t.kf,
+            af: self.t.af,
+            w: self.geom.w,
+            eff_l: self.geom.l - 2.0 * self.t.lat_diff,
+            cox: self.t.oxide_cap_factor,
+        };
+        crate::mos1::mos_noise(ctx, &n)
     }
 
     /// `MOS2acLoad` (same stamps as MOS1's).

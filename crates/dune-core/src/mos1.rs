@@ -16,6 +16,45 @@ use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH
 /// `MAX_EXP_ARG` (`hw_ieee.h`): largest argument handed to `exp`.
 const MAX_EXP_ARG: f64 = 709.0;
 
+/// Name suffixes of the MOSFET noise generators
+/// (`MOS{1,2,3}nNames`): drain and source series resistances,
+/// channel thermal noise, flicker, total.
+pub(crate) const MOS_NOISE_SUFFIXES: &[&str] = &["_rd", "_rs", "_id", "_1overf", ""];
+
+/// The terminals and operating-point values a MOSFET noise
+/// evaluation reads.
+pub(crate) struct MosNoise {
+    pub drain: Var,
+    pub source: Var,
+    pub d_p: Var,
+    pub s_p: Var,
+    pub gdpr: f64,
+    pub gspr: f64,
+    pub gm: f64,
+    pub kf: f64,
+    pub af: f64,
+    /// Channel width and effective length (`W`, `L − 2·LD`).
+    pub w: f64,
+    pub eff_l: f64,
+    /// Oxide capacitance per area used by the flicker term.
+    pub cox: f64,
+}
+
+/// `MOS1noise`/`MOS2noise`/`MOS3noise` (ngspice-47) at their
+/// default `NLEV = 2`: thermal noise of RD and RS, channel thermal
+/// noise `4kT·(2/3)|gm|` (`nlev < 3`), and the flicker density
+/// `KF·gm²/(f^AF·W·Leff·Cox)`. The 3f5 used
+/// `KF·|Id|^AF/(f·W·Leff·Cox²)` instead (ngspice keeps that form
+/// only under `ngbehavior=spice3`); the goldens hold ngspice's.
+pub(crate) fn mos_noise(ctx: &crate::matrix::NoiseCtx, n: &MosNoise) -> Vec<f64> {
+    let rd = ctx.thermal(n.d_p, n.drain, n.gdpr);
+    let rs = ctx.thermal(n.s_p, n.source, n.gspr);
+    let id = ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * n.gm.abs());
+    let flicker = ctx.gain2(n.d_p, n.s_p) * n.kf * n.gm * n.gm
+        / (ctx.freq.powf(n.af) * n.w * n.eff_l * n.cox);
+    vec![rd, rs, id, flicker, rd + rs + id + flicker]
+}
+
 /// `.model … nmos(level=1 …)/pmos(level=1 …)` parameters, 3f5 names
 /// and defaults (`mos1.c` keyword table; defaults from `mos1set.c`).
 /// `Option` marks parameters whose *given-ness* changes the
@@ -158,6 +197,9 @@ pub(crate) struct Mos1Temp {
     pub vt: f64,
     // Model copies the load needs.
     pub lat_diff: f64,
+    /// `KF`/`AF`: flicker-noise coefficient and exponent.
+    pub kf: f64,
+    pub af: f64,
     pub cgso: f64,
     pub cgdo: f64,
     pub cgbo: f64,
@@ -377,6 +419,8 @@ impl Mos1Temp {
             type_: typ,
             vt,
             lat_diff: m.ld,
+            kf: m.kf,
+            af: m.af,
             cgso: m.cgso,
             cgdo: m.cgdo,
             cgbo: m.cgbo,
@@ -1103,6 +1147,36 @@ impl crate::devices::Device for Mos1I {
         crate::integ::terr(self.st + QGS, t, time_step);
         crate::integ::terr(self.st + QGD, t, time_step);
         crate::integ::terr(self.st + QGB, t, time_step);
+    }
+
+    /// `MOS1noise` (ngspice-47, default `NLEV`): see
+    /// [`mos_noise`].
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(MOS_NOISE_SUFFIXES)
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        let n = MosNoise {
+            drain: self.drain,
+            source: self.source,
+            d_p: self.d_p,
+            s_p: self.s_p,
+            gdpr: self.t.drain_conductance,
+            gspr: self.t.source_conductance,
+            gm: self.gm,
+            kf: self.t.kf,
+            af: self.t.af,
+            w: self.geom.w,
+            eff_l: self.geom.l - 2.0 * self.t.lat_diff,
+            cox: if self.t.oxide_cap_factor == 0.0 {
+                // `mos1noi.c`: a level-1 model without TOX assumes
+                // tox = 1e-7 m for the flicker term.
+                3.9 * 8.854214871e-12 / 1e-7
+            } else {
+                self.t.oxide_cap_factor
+            },
+        };
+        mos_noise(ctx, &n)
     }
 
     /// `MOS1acLoad`.

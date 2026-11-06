@@ -1,0 +1,28 @@
+JFET, MESFET and switch noise in one cascade
+* Coverage: jfetnoi.c (ngspice-47, default NLEV=2) and mesnoise.c - RD
+* and RS thermal, channel thermal 4kT*(2/3)|gm|, KF*|Id|^AF/f flicker -
+* and the single thermal generator of a closed S switch (swnoise.c,
+* vector onoise_s1) in series with the MESFET load. The JFET stage
+* drives the MESFET gate through a coupling capacitor; the MESFET gate
+* is biased through 100k from its own source.
+vdd 1 0 dc 15
+vin 2 0 dc 0 ac 1
+j1 3 2 4 jn 2
+rd1 1 3 4.7k
+rs1 4 0 100
+cs1 4 0 10u
+c12 3 6 1u
+rg2 6 7 100k
+vg2 7 0 dc -0.5
+z1 8 6 0 zn
+s1 9 8 10 0 sw1
+rl2 11 9 1k
+vdd2 11 0 dc 5
+vctl 10 0 dc 5
+.model jn njf vto=-2 beta=1.3e-3 lambda=0.01 rd=20 rs=15 cgs=3p cgd=1.5p
++ kf=1e-17 af=1.1
+.model zn nmf vto=-1.8 beta=3e-3 b=0.3 alpha=2.5 lambda=0.05 rd=5 rs=5
++ cgs=1p cgd=0.2p kf=1e-16 af=1
+.model sw1 sw vt=2.5 vh=0.1 ron=50 roff=1e6
+.noise v(8) vin dec 10 10 1g 1
+.end

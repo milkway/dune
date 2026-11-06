@@ -197,8 +197,18 @@ resultados espelhando o rawfile).
   (`NevalSrc`: térmico `4kT·g`, shot `2q|I|`, flicker
   `kf·|I|^af/f`). Gerações por dispositivo via
   `Device::noise_suffixes/noise_dens`: R (térmico + 1/f + total,
-  nomes ngspice `_thermal`/`_1overf`) e BJT (rc/rb/re térmicos com
-  `gx` do estado, shot em Ic/Ib, flicker em Ib, total). Integração
+  nomes ngspice `_thermal`/`_1overf`), BJT (rc/rb/re térmicos com
+  `gx` do estado, shot em Ic/Ib, flicker em Ib, total), diodo (7
+  vetores do ngspice — os 3 `*sw` sempre nomeados, zero sem RSW),
+  MOS1/2/3 (térmico de canal 8kT·gm/3, flicker **NLEV=2 do
+  ngspice** `KF·gm²/(f^AF·W·Leff·Cox)` — o 3f5 usava Id^AF/Cox²;
+  fallback tox=1e-7 sem TOX; `NLEV`/`GDSNOI` não portados),
+  JFET/MESFET (`fet3_noise` compartilhado) e chave S/W (um gerador
+  térmico, integrado como no `swnoise.c` — dispositivo de gerador
+  único integra o próprio total). BSIM1/2 ficam silenciosos (o 3f5
+  não tem ruído deles; `b1noi.c`/`b2noi.c` são ngspice — deck
+  `.noise` com BSIM divergiria do oráculo); MOS6 não tem em
+  nenhum dos dois. Integração
   espectral por segmento log-log (`Nintegrate`, limiares
   `N_INTFTHRESH`/`N_INTUSELOG`), somatórios por fonte e por
   circuito, sumários a cada `pts_per_summary` pontos. A saída segue
@@ -348,8 +358,8 @@ resultados espelhando o rawfile).
   spice.txt documenta 1e-4 errado). Nós primos `#source`/`#drain`
   (source primeiro, ordem do C). `LEVEL≠1` (Parker–Skellern, MESA,
   HFET do ngspice) difere como os níveis MOS: só erra se
-  instanciado. Sem ruído (`jfetnoi.c`/`mesnoise.c`), `.pz` ou
-  `.disto`. Sondas: `regress/jfet_iv` (famílias I-V NJF/PJF/quente,
+  instanciado. Ruído via `fet3_noise` (pinado por `regress/fetnoise`); sem
+  `.pz` ou `.disto`. Sondas: `regress/jfet_iv` (famílias I-V NJF/PJF/quente,
   margem 0.27 — constantes físicas ×v/vt no diodo de porta),
   `jfet_amp` (op/ac/tran), `mes_iv`, `mes_amp` (carga de Statz com
   porta direta além de `vmax`), todas PASS.
@@ -470,17 +480,18 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- Ruído dos demais dispositivos (diodo/MOS/JFET/MESFET têm
-  `*noise.c` no C — o `.noise` hoje os trata como silenciosos; R
-  sem fNcoef → flicker 0); `.pz` dos semicondutores restantes (BJT/
+- Ruído de BSIM1/2 (`b1noi.c`/`b2noi.c`, só ngspice — hoje
+  silenciosos, deck `.noise` com BSIM divergiria do oráculo);
+  `NLEV`/`GDSNOI`; temp/dtemp de instância no `NevalSrc` (os
+  térmicos usam a temperatura do circuito); `.pz` dos semicondutores restantes (BJT/
   MOS têm `pzLoad` no C, aqui ainda não); `.disto` de BJT/MOS/BSIM
   (`bjtdisto.c`/`mos*dist.c` no C); `.dc` varrendo TEMP e parâmetro
   de modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - Linhas T/U, fonte B (Fase 3); JFET nível 2 (Parker–Skellern) e
   MES 2/5/6 (MESA/HFET) são ngspice, fora do contrato 3f5.
-- Ruído/pz das chaves sem golden (só testes unitários); um deck de
-  `.noise` com chave pinaria nomes e saída.
+- Pz das chaves sem golden (só testes unitários); o ruído está
+  pinado por `regress/fetnoise` (`onoise_s1`).
 - LTRA: `trytocompact` (compactação do histórico) e o controle LTE
   (`LTRAlteCalculate` — inalcançável sem `fullcontrol`).
 - Controlador de passo: cruzamento de `vds=0` num breakpoint com nó

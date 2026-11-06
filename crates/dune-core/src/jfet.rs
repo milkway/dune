@@ -108,6 +108,9 @@ pub(crate) struct JfetTemp {
     pub vcrit: f64,
     pub drain_conduct: f64,
     pub source_conduct: f64,
+    /// `KF`/`AF`: flicker-noise coefficient and exponent.
+    pub kf: f64,
+    pub af: f64,
     pub notes: Vec<String>,
 }
 
@@ -177,6 +180,8 @@ impl JfetTemp {
             vcrit,
             drain_conduct: conduct(m.rd),
             source_conduct: conduct(m.rs),
+            kf: m.kf,
+            af: m.af,
             notes,
         }
     }
@@ -577,6 +582,35 @@ pub(crate) fn fet3_ac(ctx: &mut AcCtx, n: &Fet3Nodes, st: usize, gdpr: f64, gspr
     ctx.add_g(n.s[SP_DP], -gds);
 }
 
+/// Name suffixes of the JFET/MESFET noise generators
+/// (`JFETnNames`, `MESnNames`).
+pub(crate) const FET3_NOISE_SUFFIXES: &[&str] = &["_rd", "_rs", "_id", "_1overf", ""];
+
+/// `JFETnoise` (ngspice-47, default `NLEV = 2`) / `MESnoise`:
+/// thermal noise of RD and RS, channel thermal noise
+/// `4kT·(2/3)|gm|`, flicker `KF·|Id|^AF/f` on the drain current of
+/// `state0`, and the total. `gdpr`/`gspr` already carry the area.
+pub(crate) fn fet3_noise(
+    ctx: &crate::matrix::NoiseCtx,
+    n: &Fet3Nodes,
+    st: usize,
+    gdpr: f64,
+    gspr: f64,
+    kf: f64,
+    af: f64,
+) -> Vec<f64> {
+    const N_MINLOG: f64 = 1e-38;
+    let rd = ctx.thermal(n.d_p, n.drain, gdpr);
+    let rs = ctx.thermal(n.s_p, n.source, gspr);
+    let gm = ctx.states.get(0, st + GM);
+    let id = ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * gm.abs());
+    let cd = ctx.states.get(0, st + CD);
+    let flicker =
+        ctx.gain2(n.d_p, n.s_p) * kf * f64::exp(af * f64::ln(f64::max(cd.abs(), N_MINLOG)))
+            / ctx.freq;
+    vec![rd, rs, id, flicker, rd + rs + id + flicker]
+}
+
 /// A JFET instance (`JFETinstance`).
 pub(crate) struct JfetI {
     n: Fet3Nodes,
@@ -690,6 +724,17 @@ impl crate::devices::Device for JfetI {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
         fet3_ac(ctx, &self.n, self.st, gdpr, gspr);
+    }
+
+    /// `JFETnoise`: see [`fet3_noise`].
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(FET3_NOISE_SUFFIXES)
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        let gdpr = self.t.drain_conduct * self.area;
+        let gspr = self.t.source_conduct * self.area;
+        fet3_noise(ctx, &self.n, self.st, gdpr, gspr, self.t.kf, self.t.af)
     }
 }
 

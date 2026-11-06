@@ -230,8 +230,13 @@ impl Circuit {
                         in_noiz_dev[k].fill(0.0);
                     }
                 } else {
+                    // Each generator integrates on its own; the total
+                    // entry only accumulates them. A one-generator
+                    // device (the switch, `swnoise.c`) has its total
+                    // as the only entry and integrates that.
+                    let single = nsrc == 1;
                     for i in 0..nsrc {
-                        if i != nsrc - 1 {
+                        if single || i != nsrc - 1 {
                             let t_out = nintegrate(
                                 dens[i],
                                 ln_dens[i],
@@ -253,7 +258,10 @@ impl Circuit {
                             ln_lst_dens[k][i] = ln_dens[i];
                             out_noiz += t_out;
                             in_noise += t_in;
-                            if stps_sm != 0 {
+                            if single {
+                                out_noiz_dev[k][0] += t_out;
+                                in_noiz_dev[k][0] += t_in;
+                            } else if stps_sm != 0 {
                                 out_noiz_dev[k][i] += t_out;
                                 out_noiz_dev[k][nsrc - 1] += t_out;
                                 in_noiz_dev[k][i] += t_in;

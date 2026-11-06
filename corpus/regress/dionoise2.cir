@@ -1,0 +1,17 @@
+Diode noise: RS thermal, junction shot and flicker in .noise
+* Coverage: dionoise.c in its ngspice-47 form - the RS thermal source
+* between the anode and its internal node, shot noise of the junction
+* current, KF*|Id|^AF/f flicker, and the three sidewall vectors
+* (_rsw/_idsw/_1overfsw) ngspice always names, zero without RSW. d2
+* has area 2 (RS conductance and current both scale) and sits in the
+* signal path to the output, so its generators see a nontrivial
+* transfer; d1 shunts the input node. TT and CJO shape the band.
+vin 1 0 dc 0 ac 1
+rin 1 2 10k
+ib 0 2 dc 200u
+d1 2 0 dn
+d2 2 3 dn 2
+rl 3 0 2k
+.model dn d is=1e-14 rs=25 n=1.2 tt=5n cjo=2p kf=1e-14 af=1.2
+.noise v(3) vin dec 10 1 1g 1
+.end

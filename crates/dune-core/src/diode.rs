@@ -589,6 +589,29 @@ impl crate::devices::Device for DiodeI {
         self.t.brkdwn = t.brkdwn;
     }
 
+    /// `DIOnoise` (ngspice): thermal on RS, shot on the junction
+    /// current, flicker `KF·|Id/m|^AF/f·m`, then ngspice's three
+    /// sidewall generators — identically zero here (no `RSW` model,
+    /// the vectors exist in the golden all the same) — and the total.
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(&["_rs", "_id", "_1overf", "_rsw", "_idsw", "_1overfsw", ""])
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        const N_MINLOG: f64 = 1e-38;
+        let cd = ctx.states.get(0, self.st + CURRENT);
+        let m = self.sens.m;
+        let rs = ctx.thermal(self.pos_prime, self.pos, self.t.gspr);
+        let id = ctx.shot(self.pos_prime, self.neg, cd);
+        let model = &self.sens.model;
+        let flicker = ctx.gain2(self.pos_prime, self.neg)
+            * model.kf
+            * f64::exp(model.af * f64::ln(f64::max((cd / m).abs(), N_MINLOG)))
+            / ctx.freq
+            * m;
+        vec![rs, id, flicker, 0.0, 0.0, 0.0, rs + id + flicker]
+    }
+
     /// `DIOacLoad`: `gd` from the operating point plus `jω·capd`.
     fn load_ac(&mut self, ctx: &mut crate::matrix::AcCtx) {
         let gspr = self.t.gspr;

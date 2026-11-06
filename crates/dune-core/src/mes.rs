@@ -339,6 +339,17 @@ impl crate::devices::Device for MesI {
         let gspr = self.t.source_conduct * self.area;
         fet3_ac(ctx, &self.n, self.st, gdpr, gspr);
     }
+
+    /// `MESnoise`: see [`crate::jfet::fet3_noise`].
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(crate::jfet::FET3_NOISE_SUFFIXES)
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        let gdpr = self.t.drain_conduct * self.area;
+        let gspr = self.t.source_conduct * self.area;
+        crate::jfet::fet3_noise(ctx, &self.n, self.st, gdpr, gspr, self.t.m.kf, self.t.m.af)
+    }
 }
 
 #[cfg(test)]
