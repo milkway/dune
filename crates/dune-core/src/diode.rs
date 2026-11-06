@@ -327,9 +327,21 @@ impl crate::devices::Device for DiodeI {
             InitMode::Jct if self.off => 0.0,
             InitMode::Jct => self.t.vcrit,
             InitMode::Fix if self.off => 0.0,
-            InitMode::Pred => ctx.pred(st + VOLTAGE),
             _ => {
-                let mut vd = ctx.sol[self.pos_prime] - ctx.sol[self.neg];
+                let mut vd = if ctx.mode == InitMode::Pred {
+                    // `dioload.c` (`#ifndef PREDICTOR`): carry the
+                    // last timepoint's operating point into state0
+                    // and extrapolate — and the extrapolation is then
+                    // *limited* like any other iterate, against that
+                    // carried voltage.
+                    for o in [VOLTAGE, CURRENT, CONDUCT] {
+                        let v = ctx.states.get(1, st + o);
+                        ctx.states.set(0, st + o, v);
+                    }
+                    ctx.pred(st + VOLTAGE)
+                } else {
+                    ctx.sol[self.pos_prime] - ctx.sol[self.neg]
+                };
                 // Per-iteration junction limiting (`DEVpnjlim`, with
                 // the separate breakdown-region branch).
                 let vd_old = ctx.states.get(0, st + VOLTAGE);
@@ -640,7 +652,13 @@ impl crate::devices::Device for DiodeI {
     }
 }
 
-/// `DEVpnjlim` (`dev/devsup.c`).
+/// `DEVpnjlim` (`dev/devsup.c`), in its ngspice form: the 3f5 only
+/// limits forward steps above `vcrit`; ngspice also clamps negative
+/// iterates at `−vold − 1` (coming from forward bias) or `2·vold − 1`
+/// (already reversed), setting `check` likewise. Measured against
+/// ngspice-47: it is what keeps the ltra_1/ltra_3 BJT driver and
+/// diode load converging at TMAX steps, and it tightens mosmem,
+/// rca3040 and bjtnoise.
 pub(crate) fn pnjlim(vnew: f64, vold: f64, vt: f64, vcrit: f64, check: &mut bool) -> f64 {
     if vnew > vcrit && (vnew - vold).abs() > vt + vt {
         *check = true;
@@ -653,6 +671,22 @@ pub(crate) fn pnjlim(vnew: f64, vold: f64, vt: f64, vcrit: f64, check: &mut bool
             }
         } else {
             vt * f64::ln(vnew / vt)
+        }
+    } else if vnew < 0.0 {
+        // ngspice's `DEVpnjlim` (not the 3f5's): reverse swings are
+        // limited too — to `−vold − 1` from forward bias, to
+        // `2·vold − 1` from reverse (corpus/KNOWN_DIFFS.md).
+        let arg = if vold > 0.0 {
+            -vold - 1.0
+        } else {
+            2.0 * vold - 1.0
+        };
+        if vnew < arg {
+            *check = true;
+            arg
+        } else {
+            *check = false;
+            vnew
         }
     } else {
         *check = false;
@@ -678,6 +712,16 @@ mod tests {
         let v = pnjlim(5.0, 0.0, vt, vcrit, &mut check);
         assert!(check);
         assert!((v - vt * (5.0f64 / vt).ln()).abs() < 1e-15);
+        // ngspice's reverse limits.
+        let v = pnjlim(-3.0, 0.5, vt, vcrit, &mut check);
+        assert!(check);
+        assert_eq!(v, -1.5);
+        let v = pnjlim(-3.0, -0.5, vt, vcrit, &mut check);
+        assert!(check);
+        assert_eq!(v, -2.0);
+        let v = pnjlim(-1.0, -0.5, vt, vcrit, &mut check);
+        assert!(!check);
+        assert_eq!(v, -1.0);
     }
 
     #[test]
