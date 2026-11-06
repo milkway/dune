@@ -113,6 +113,12 @@ Sffm}(Vec<f64>)` (argumentos posicionais do cartão),
 
 ## Pontos levantados na revisão (para decisão)
 
+0. **`Circuit::run(&ir::Analysis, &Options)`**: o despacho
+   cartão-de-análise → chamada está triplicado (dune-cli,
+   dune-oracle, dune-wasm) e R/Python fariam a 4ª e a 5ª cópias.
+   Proposta: um método único no core devolvendo
+   `(Vec<Solution>, Vec<String>)`; os quatro consumidores o usam.
+
 1. **`noise` destoa**: recebe `output: &str, output_ref: Option<&str>`
    onde `tf`/`sens` usam `&OutputVar`. Proposta: unificar em
    `&OutputVar` antes de congelar (quebra pequena, só interna).
@@ -137,8 +143,20 @@ Sffm}(Vec<f64>)` (argumentos posicionais do cartão),
   cruza a borda.
 - `Solution` é a unidade de troca (JSON no wasm; tibble longo no R;
   polars no Python — mesma informação, idioma de cada casa).
-- Schema JSON do `dune-wasm`: espelho campo a campo do `Plot` do
-  `dune-raw` (anexado quando o crate fechar).
+- Schema JSON do `dune-wasm` (fechado 2026-11-06): a única exportação
+  JS é `simulate(netlist: string, opts?) -> object`; `opts` aceita só
+  `{ includes: { "<path>": "<texto>" } }` (navegador não tem FS).
+  Retorno `RawfileJson = { plots: [PlotJson], notes: [string],
+  diagnostics: [DiagnosticJson] }`; `PlotJson` espelha o `Plot` do
+  `dune-raw` campo a campo (`title, date, plotname, flags, commands,
+  options, dimensions, variables[{name,type}], npoints, columns`) com
+  complexos como pares `[re, im]` e NaN/±inf como `null`. Erros são
+  `Error` JS com `.kind` (`options|parse|elaborate|analysis`) e
+  `.diagnostics` (spans). Quem embute (Studio) deve chamar de um Web
+  Worker terminável (loop/OOM em wasm não se interrompe de dentro).
+  Medidas: 1.48 MB (`wasm-opt -Oz`: 1.23 MB; gzip: 425 KB); ~2×
+  o tempo nativo (rca3040 full 13 ms vs 7 ms); LTRA 3–7× (libm de
+  software).
 
 ## Correções feitas nesta revisão
 
