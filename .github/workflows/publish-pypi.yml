@@ -23,9 +23,10 @@ jobs:
           - os: windows-latest
           # macOS bills 10x but only runs on releases/dispatch
           # (~US$1-2 per release, user-approved 2026-11-06).
-          # macos-13 is retired (hung in queue); the Intel image is
-          # macos-15-intel.
-          - os: macos-14 # arm64
+          # macos-13 is retired and macos-14 is in brownout (the job
+          # is cancelled the second it starts, 0 steps); the current
+          # images are macos-15 (arm64) and macos-15-intel.
+          - os: macos-15 # arm64
           - os: macos-15-intel # x86_64
     runs-on: ${{ matrix.os }}
     steps:
