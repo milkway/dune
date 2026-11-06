@@ -9,17 +9,16 @@
 //! ```text
 //! .PS
 //! spice = 1
-//! In: (0,1); Top: (2,1); Bot: (0,0)
-//! V1: vsource(In, Bot, DC 5)
-//! R1: resistor(In, Top, 1k)
-//! C1: capacitor(Top, (2,0), 1u)
-//! line from C1.N to Bot; ground(Bot)
-//! Out: node(Top)
+//! In: (0,1); Out: (2,1)
+//! V1: vsource(In, (0,0), DC 5)
+//! R1: resistor(In, Out, 1k)
+//! C1: capacitor(Out, (2,0), 1u)
+//! line from C1.N to V1.N; ground(V1.N)
 //! .tran 10u 5m
 //! .PE
 //! ```
 //!
-//! extracts to `V1 n1 0 DC 5`, `R1 n1 Out 1k`, `C1 Out 0 1u`,
+//! extracts to `V1 In 0 DC 5`, `R1 In Out 1k`, `C1 Out 0 1u`,
 //! `.tran 10u 5m`, `.end`.
 //!
 //! Conventions (the contract between the prelude and this crate):
@@ -29,20 +28,26 @@
 //! * **pins** are `circle invis rad 0` shapes labeled `P`/`N`,
 //!   `C`/`B`/`E`, `D`/`G`/`S`/`B`, `Inp`/`Inm`/`Out`, `Cp`/`Cn` that
 //!   are direct children of the element block (D-0020 §c);
-//! * **value/model = the first text shape inside the element block**
-//!   (the prelude draws the macro's value argument there, D-0020 §d),
-//!   copied verbatim into the card. pic normalizes numbers it lexes as
-//!   floats (`1e-9` → `0.000000001`); SPICE reads both the same;
-//! * **wires** are the visible `line`/`arrow` paths outside element,
-//!   ground and node blocks; **dots** are explicit junctions;
-//!   connectivity rules are in [`connect`];
-//! * **nets**: a `ground(P)` block makes node `0`; a `Name: node(P)`
-//!   block names its net `Name` (interim W2, see [`compat`]) — nets
-//!   that share a name are one SPICE node; the rest are `n1, n2, …` in
-//!   order of first appearance (lowest shape index);
-//! * **directives**: `.` lines (and their `+` continuations) pass
-//!   through to the netlist in source order (interim W1, see
-//!   [`compat`]); a user `.end` is dropped and one is appended.
+//! * **value/model = the macro argument after the pin positions**
+//!   (D-0004 §2: the 3rd of a two-terminal, the 2nd of an element
+//!   centered on an `At` anchor), read verbatim from the call in the
+//!   user's source (`1e-9` stays `1e-9`). The prelude also draws it
+//!   (the first text shape in the block); that drawing is presentation,
+//!   read only as a fallback when the block has no usable call (an
+//!   inline block, or a wrapper macro whose arguments are not the
+//!   element's) and, normalized by pic, to check that the call's
+//!   argument really is the element's value;
+//! * **wires** are the visible `line`/`arrow` paths outside element
+//!   and ground blocks; **dots** are explicit junctions; connectivity
+//!   rules are in [`connect`];
+//! * **nets** (D-0004 §3): a `ground(P)` block makes node `0`; a named
+//!   place (`Vout: (2,1)`, `Vin: R1.P`) that coincides with a net
+//!   names it — places that share a label are one SPICE node; the rest
+//!   are `n1, n2, …` in order of first appearance (lowest shape index);
+//! * **directives** (D-0004 §4): column-1 `.` lines (rpic's
+//!   `Drawing.passthrough`, the troff rule), with their column-1 `+`
+//!   continuations, pass through to the netlist in source order; a user
+//!   `.end` is dropped and one is appended.
 //!
 //! The figure must set `spice = 1` (D-0004 §5) or extraction refuses.
 
@@ -68,9 +73,9 @@ pub const DEFAULT_SNAP: f64 = 1e-3;
 
 /// Marker label of the prelude's `ground(P)` block.
 const GROUND_MARKER: &str = "Gnd";
-/// Marker label of the prelude's `node(P)` block (interim W2; when
-/// rpic-core exposes `Drawing.places`, labeled places replace it).
-const NODE_MARKER: &str = "Node";
+/// Marker label of the anchor of centered elements, whose value is the
+/// 2nd macro argument instead of the 3rd.
+const ANCHOR_MARKER: &str = "At";
 /// Every pin-marker label the prelude uses on elements, plus the
 /// `At` anchor of centered elements.
 const ELEMENT_MARKERS: &[&str] = &[
@@ -208,8 +213,8 @@ impl ElementOverlay {
     }
 }
 
-/// One net's drawn shapes: its wires and dots, and the ground/node
-/// blocks on it.
+/// One net's drawn shapes: its wires and dots, and the ground blocks
+/// on it (named places draw nothing).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NetOverlay {
     pub name: String,
@@ -273,14 +278,16 @@ pub fn extract(src: &str, opts: &ExtractOptions) -> Result<Extraction, PicError>
 /// A compiled figure.
 struct Compiled {
     drawing: Drawing,
-    directives: Vec<compat::Directive>,
+    /// The user's directives in source order: each passthrough line
+    /// with its `+` continuations, one per line.
+    directives: Vec<String>,
     /// Lines the prelude occupies ahead of the user source.
     prelude_lines: u32,
 }
 
 fn compile(src: &str, opts: &ExtractOptions) -> Result<Compiled, PicError> {
     let prelude = opts.prelude.unwrap_or(PRELUDE);
-    let (user, directives) = compat::strip_directives(src);
+    let (user, continuations) = compat::split_continuations(src);
     let mut full = String::with_capacity(prelude.len() + user.len() + 1);
     full.push_str(prelude);
     if !prelude.ends_with('\n') {
@@ -309,6 +316,24 @@ fn compile(src: &str, opts: &ExtractOptions) -> Result<Compiled, PicError> {
             span,
         }
     })?;
+    // Directives: the user's passthrough lines (a prelude has none of
+    // its own to contribute), each followed by its `+` lines.
+    let directives = drawing
+        .passthrough
+        .iter()
+        .filter(|l| l.span.file.is_none() && l.span.line > prelude_lines)
+        .map(|l| {
+            let mut text = l.text.trim_end().to_string();
+            let line = l.span.line - prelude_lines;
+            if let Some(c) = continuations.iter().find(|c| c.head == line) {
+                for cl in &c.lines {
+                    text.push('\n');
+                    text.push_str(cl);
+                }
+            }
+            text
+        })
+        .collect();
     Ok(Compiled {
         drawing,
         directives,
@@ -358,7 +383,6 @@ enum BlockKind {
     Plain,
     Element,
     Ground,
-    Node,
 }
 
 /// What a terminal is.
@@ -370,8 +394,8 @@ enum Term {
         pin: usize,
     },
     Ground,
-    /// A `node()` block (index into `node_blocks`).
-    Node(usize),
+    /// A named place (index into the extractor's place list).
+    Place(usize),
     /// A vertex of a wire.
     Wire,
     Dot,
@@ -379,6 +403,8 @@ enum Term {
 
 struct Terminal {
     at: Pt,
+    /// The shape the terminal belongs to; [`NO_SHAPE`] for places,
+    /// which draw nothing (so they never decide net order).
     shape: usize,
     term: Term,
 }
@@ -390,18 +416,27 @@ struct Element {
     terms: Vec<usize>,
     value: String,
     block: usize,
+    /// The element's call site in the user source.
+    span: Option<PicSpan>,
+}
+
+/// [`Terminal::shape`] of a named place.
+const NO_SHAPE: usize = usize::MAX;
+
+/// A named place that takes part in net naming.
+struct Place {
+    label: String,
+    span: Option<PicSpan>,
 }
 
 struct Extractor<'a> {
     src: &'a str,
     d: &'a Drawing,
-    directives: &'a [compat::Directive],
+    directives: &'a [String],
     prelude_lines: u32,
     snap: f64,
     diags: Vec<PicDiagnostic>,
-    /// How many element blocks carried each label so far (W3 call-site
-    /// lookup of repeated labels).
-    occurrences: HashMap<String, usize>,
+    places: Vec<Place>,
 }
 
 impl<'a> Extractor<'a> {
@@ -413,7 +448,7 @@ impl<'a> Extractor<'a> {
             prelude_lines: c.prelude_lines,
             snap,
             diags: Vec::new(),
-            occurrences: HashMap::new(),
+            places: Vec::new(),
         }
     }
 
@@ -432,15 +467,19 @@ impl<'a> Extractor<'a> {
         });
     }
 
-    fn shape_span(&self, i: usize) -> Option<PicSpan> {
-        let s = self.d.shape_spans.get(i)?.as_ref()?;
-        Some(map_span(
+    fn span(&self, s: &rpic_core::Span) -> PicSpan {
+        map_span(
             self.prelude_lines,
             s.file.as_deref(),
             s.line,
             s.col,
             s.end_col,
-        ))
+        )
+    }
+
+    fn shape_span(&self, i: usize) -> Option<PicSpan> {
+        let s = self.d.shape_spans.get(i)?.as_ref()?;
+        Some(self.span(s))
     }
 
     /// The label and center of shape `i` if it is a labeled marker
@@ -487,8 +526,6 @@ impl<'a> Extractor<'a> {
                 let ms = self.markers_of(b);
                 if ms.iter().any(|m| m.1 == GROUND_MARKER) {
                     BlockKind::Ground
-                } else if ms.iter().any(|m| m.1 == NODE_MARKER) {
-                    BlockKind::Node
                 } else if ms.iter().any(|m| ELEMENT_MARKERS.contains(&m.1)) {
                     BlockKind::Element
                 } else {
@@ -496,9 +533,8 @@ impl<'a> Extractor<'a> {
                 }
             })
             .collect();
-        // A shape is internal when any enclosing block is special.
-        let internal = |i: usize| {
-            let mut b = d.shape_blocks.get(i).copied().flatten();
+        // Inside a special block (at any depth)?
+        let in_special = |mut b: Option<usize>| {
             while let Some(bi) = b {
                 if kinds[bi] != BlockKind::Plain {
                     return true;
@@ -507,12 +543,13 @@ impl<'a> Extractor<'a> {
             }
             false
         };
+        // A shape is internal when any enclosing block is special.
+        let internal = |i: usize| in_special(d.shape_blocks.get(i).copied().flatten());
 
         let mut terms: Vec<Terminal> = Vec::new();
         let mut elements: Vec<Element> = Vec::new();
-        let mut node_blocks: Vec<(usize, String)> = Vec::new(); // (block, name)
 
-        // 2. Elements, grounds and named nodes, in source order.
+        // 2. Elements and grounds, in source order.
         let mut order: Vec<usize> = (0..d.blocks.len()).collect();
         order.sort_by_key(|&b| d.blocks[b].shapes.0);
         let mut seen: HashMap<String, String> = HashMap::new();
@@ -531,34 +568,43 @@ impl<'a> Extractor<'a> {
                         }
                     }
                 }
-                BlockKind::Node => {
-                    let Some(name) = d.blocks[b].label.clone() else {
-                        let span = ms.first().and_then(|m| self.shape_span(m.0));
-                        self.diag(
-                            PicSeverity::Warning,
-                            PicDiagKind::NodeNameConflict,
-                            "node() without a label names nothing; write `Name: node(P)`".into(),
-                            span,
-                        );
-                        continue;
-                    };
-                    for &(i, l, p) in &ms {
-                        if l == NODE_MARKER {
-                            terms.push(Terminal {
-                                at: p,
-                                shape: i,
-                                term: Term::Node(node_blocks.len()),
-                            });
-                        }
-                    }
-                    node_blocks.push((b, name));
-                }
                 BlockKind::Element => {
                     if let Some(e) = self.element(b, &ms, &mut terms, &mut seen, elements.len()) {
                         elements.push(e);
                     }
                 }
             }
+        }
+
+        // Named places (D-0004 §3): the user's `Label: position`
+        // statements, not those of the prelude, the std library or the
+        // inside of an element.
+        for p in &d.places {
+            let span = p.span.as_ref().map(|s| self.span(s));
+            if span.as_ref().is_some_and(|s| s.file.is_some()) || in_special(p.block) {
+                continue;
+            }
+            if let Some(refdes) = seen.get(&p.label.to_ascii_lowercase()) {
+                self.diag(
+                    PicSeverity::Warning,
+                    PicDiagKind::NodeNameConflict,
+                    format!(
+                        "place `{}` has the name of element `{refdes}`; it names no net",
+                        p.label
+                    ),
+                    span,
+                );
+                continue;
+            }
+            terms.push(Terminal {
+                at: (p.at.x, p.at.y),
+                shape: NO_SHAPE,
+                term: Term::Place(self.places.len()),
+            });
+            self.places.push(Place {
+                label: p.label.clone(),
+                span,
+            });
         }
 
         // 3. Wires and dots.
@@ -602,11 +648,12 @@ impl<'a> Extractor<'a> {
         }
         let points: Vec<Pt> = terms.iter().map(|t| t.at).collect();
         join_geometry(&mut uf, &points, &segments, self.snap);
-        // Nets that share a node name are one node (net labels connect).
+        // Nets that share a place name are one node (net labels
+        // connect).
         let mut by_name: HashMap<String, usize> = HashMap::new();
         for (k, t) in terms.iter().enumerate() {
-            if let Term::Node(n) = t.term {
-                let key = node_blocks[n].1.to_ascii_lowercase();
+            if let Term::Place(n) = t.term {
+                let key = self.places[n].label.to_ascii_lowercase();
                 match by_name.get(&key) {
                     Some(&other) => uf.union(k, other),
                     None => {
@@ -624,9 +671,10 @@ impl<'a> Extractor<'a> {
         }
 
         // 6. Name nets.
-        let user_names: Vec<String> = node_blocks
+        let user_names: Vec<String> = self
+            .places
             .iter()
-            .map(|(_, n)| n.to_ascii_lowercase())
+            .map(|p| p.label.to_ascii_lowercase())
             .collect();
         let mut name_of: HashMap<usize, String> = HashMap::new();
         // Nets in order of first appearance.
@@ -638,18 +686,20 @@ impl<'a> Extractor<'a> {
         for &(_, r) in &net_order {
             let ks = &nets[&r];
             let grounded = ks.iter().any(|&k| matches!(terms[k].term, Term::Ground));
-            let mut names: Vec<(usize, &str)> = ks
+            // Place names in definition order.
+            let mut names: Vec<usize> = ks
                 .iter()
                 .filter_map(|&k| match terms[k].term {
-                    Term::Node(n) => Some((terms[k].shape, node_blocks[n].1.as_str())),
+                    Term::Place(n) => Some(n),
                     _ => None,
                 })
                 .collect();
-            names.sort();
-            let mut distinct: Vec<&str> = Vec::new();
-            for (_, n) in &names {
-                if !distinct.iter().any(|m| m.eq_ignore_ascii_case(n)) {
-                    distinct.push(n);
+            names.sort_unstable();
+            let mut distinct: Vec<String> = Vec::new();
+            for n in names {
+                let l = &self.places[n].label;
+                if !distinct.iter().any(|m| m.eq_ignore_ascii_case(l)) {
+                    distinct.push(l.clone());
                 }
             }
             if grounded {
@@ -658,14 +708,14 @@ impl<'a> Extractor<'a> {
                     self.diag(
                         PicSeverity::Warning,
                         PicDiagKind::NodeNameConflict,
-                        format!("node `{n}` is on the ground net; it is named `0`"),
+                        format!("place `{n}` is on the ground net; it is named `0`"),
                         span,
                     );
                 }
                 name_of.insert(r, "0".into());
-            } else if let Some(&first) = distinct.first() {
+            } else if let Some(first) = distinct.first() {
                 if distinct.len() > 1 {
-                    let span = self.label_span(distinct[1]);
+                    let span = self.label_span(&distinct[1]);
                     self.diag(
                         PicSeverity::Warning,
                         PicDiagKind::NodeNameConflict,
@@ -680,7 +730,7 @@ impl<'a> Extractor<'a> {
                         span,
                     );
                 }
-                name_of.insert(r, first.to_string());
+                name_of.insert(r, first.clone());
             }
         }
         let mut auto = 0usize;
@@ -717,14 +767,11 @@ impl<'a> Extractor<'a> {
                 let drawn = ks
                     .iter()
                     .copied()
-                    .find(|&k| matches!(terms[k].term, Term::Wire | Term::Dot | Term::Node(_)));
+                    .find(|&k| matches!(terms[k].term, Term::Wire | Term::Dot));
                 if let Some(k) = drawn {
                     let what = match name_of.get(&r) {
                         Some(n) => format!("net `{n}`"),
-                        None => match terms[k].term {
-                            Term::Node(n) => format!("node `{}`", node_blocks[n].1),
-                            _ => "wire".into(),
-                        },
+                        None => "wire".into(),
                     };
                     let span = self.shape_span(terms[k].shape).filter(|s| s.file.is_none());
                     self.diag(
@@ -733,6 +780,15 @@ impl<'a> Extractor<'a> {
                         format!("{what} connects to no element pin"),
                         span,
                     );
+                } else if let Some(n) = ks.iter().find_map(|&k| match terms[k].term {
+                    Term::Place(n) => Some(n),
+                    _ => None,
+                }) {
+                    // Only places: a label on empty space.
+                    let p = &self.places[n];
+                    let msg = format!("place `{}` names no net: no wire or pin is there", p.label);
+                    let span = p.span.clone();
+                    self.diag(PicSeverity::Warning, PicDiagKind::FloatingNet, msg, span);
                 }
                 continue;
             }
@@ -741,7 +797,7 @@ impl<'a> Extractor<'a> {
                     unreachable!()
                 };
                 let e = &elements[elem];
-                let span = compat::call_site(self.src, &e.refdes, 0);
+                let span = e.span.clone();
                 let net = name_of.get(&r).cloned().unwrap_or_default();
                 let msg = format!(
                     "pin {}.{} is dangling: net `{net}` reaches no other element pin",
@@ -772,25 +828,25 @@ impl<'a> Extractor<'a> {
             });
         }
         for dir in self.directives {
-            if dir.text.eq_ignore_ascii_case(".end") {
+            if dir.eq_ignore_ascii_case(".end") {
                 continue;
             }
-            netlist.push_str(&dir.text);
+            netlist.push_str(dir);
             netlist.push('\n');
         }
         netlist.push_str(".end\n");
 
-        // Overlay of nets: wires, dots and ground/node blocks.
+        // Overlay of nets: wires, dots and ground blocks.
         let mut net_shapes: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (k, t) in terms.iter().enumerate() {
             match t.term {
                 Term::Wire | Term::Dot => net_shapes.entry(roots[k]).or_default().push(t.shape),
-                Term::Ground | Term::Node(_) => {
+                Term::Ground => {
                     let b = d.shape_blocks[t.shape].expect("marker inside its block");
                     let (lo, hi) = d.blocks[b].shapes;
                     net_shapes.entry(roots[k]).or_default().extend(lo..hi);
                 }
-                Term::Pin { .. } => {}
+                Term::Pin { .. } | Term::Place(_) => {}
             }
         }
         let mut emitted: Vec<String> = Vec::new();
@@ -834,7 +890,7 @@ impl<'a> Extractor<'a> {
         index: usize,
     ) -> Option<Element> {
         let d = self.d;
-        let value = self.value_text(b);
+        let value = self.value(b, ms);
         let Some(refdes) = d.blocks[b].label.clone() else {
             let at = ms.first().map(|m| m.2).unwrap_or((0.0, 0.0));
             let msg = format!(
@@ -847,12 +903,11 @@ impl<'a> Extractor<'a> {
                     format!(", value `{value}`")
                 }
             );
-            self.diag(PicSeverity::Error, PicDiagKind::UnlabeledElement, msg, None);
+            let span = self.block_span(b);
+            self.diag(PicSeverity::Error, PicDiagKind::UnlabeledElement, msg, span);
             return None;
         };
-        let nth = self.occurrences.entry(refdes.clone()).or_insert(0);
-        let span = compat::call_site(self.src, &refdes, *nth);
-        *nth += 1;
+        let span = self.block_span(b);
         let letter = refdes.chars().next().unwrap_or(' ').to_ascii_uppercase();
         let Some(pins) = pins_for(letter) else {
             self.diag(
@@ -923,7 +978,7 @@ impl<'a> Extractor<'a> {
                 sev,
                 PicDiagKind::MissingValue,
                 format!("`{refdes}` has no value/model text; {what}"),
-                span,
+                span.clone(),
             );
         }
         Some(Element {
@@ -932,7 +987,68 @@ impl<'a> Extractor<'a> {
             terms: pin_terms,
             value,
             block: b,
+            span,
         })
+    }
+
+    /// Where block `b` was asked for: its outermost macro call (or its
+    /// inline `[`) — in the user's source for every element the figure
+    /// writes, even though its shapes point into the prelude.
+    fn block_span(&self, b: usize) -> Option<PicSpan> {
+        self.d.blocks[b].span.as_ref().map(|s| self.span(s))
+    }
+
+    /// The value/model of element block `b` (D-0004 §2): the macro
+    /// argument after the pin positions — index 1 for elements centered
+    /// on an `At` anchor, 2 otherwise — verbatim from the user's source.
+    ///
+    /// The call is trusted only when its argument is what the prelude
+    /// drew (both normalized by pic), which rules out a user wrapper
+    /// macro whose arguments are not the element's (`BlockInfo.call` is
+    /// the *outermost* call). Fallbacks, in order: rpic's normalized
+    /// argument (a call spanning lines, whose text cannot be re-read);
+    /// the drawn text (no call — an inline block — or a mismatch).
+    fn value(&self, b: usize, ms: &[(usize, &'a str, Pt)]) -> String {
+        let drawn = self.value_text(b);
+        let k = if ms.iter().any(|m| m.1 == ANCHOR_MARKER) {
+            1
+        } else {
+            2
+        };
+        let Some(call) = &self.d.blocks[b].call else {
+            return drawn;
+        };
+        let Some(arg) = call.args.get(k) else {
+            return drawn;
+        };
+        let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let spliced = unquote(arg);
+        if !drawn.is_empty() && words(spliced) != words(&drawn) {
+            return drawn;
+        }
+        match self.raw_args(b, &call.name) {
+            Some(raw) if raw.len() == call.args.len() => unquote(&raw[k]).trim().to_string(),
+            _ => spliced.trim().to_string(),
+        }
+    }
+
+    /// The arguments of block `b`'s call as written in the user source,
+    /// when the call sits on one line of it.
+    fn raw_args(&self, b: usize, name: &str) -> Option<Vec<String>> {
+        let s = self.d.blocks[b].span.as_ref()?;
+        if s.file.is_some() || s.line <= self.prelude_lines {
+            return None;
+        }
+        let line = self
+            .src
+            .lines()
+            .nth((s.line - self.prelude_lines - 1) as usize)?;
+        let text: String = line
+            .chars()
+            .skip(s.col.saturating_sub(1) as usize)
+            .take(s.end_col.saturating_sub(s.col) as usize)
+            .collect();
+        compat::raw_call_args(&text, name)
     }
 
     /// The first text shape inside block `b` (any depth), lines joined
@@ -948,7 +1064,21 @@ impl<'a> Extractor<'a> {
         String::new()
     }
 
+    /// Where the first place named `label` is defined.
     fn label_span(&self, label: &str) -> Option<PicSpan> {
-        compat::call_site(self.src, label, 0)
+        self.places
+            .iter()
+            .find(|p| p.label.eq_ignore_ascii_case(label))
+            .and_then(|p| p.span.clone())
+    }
+}
+
+/// A lone string argument splices as its content (pic's
+/// quote-at-use-site idiom), so `"DX"` is the value `DX`.
+fn unquote(arg: &str) -> &str {
+    let t = arg.trim();
+    match t.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        Some(inner) if !inner.contains('"') => inner,
+        _ => arg,
     }
 }

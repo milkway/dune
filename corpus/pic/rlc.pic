@@ -2,16 +2,14 @@
 # Series RLC driven by a 1 V AC source, output across C1:
 # f0 = 1/(2 pi sqrt(L1 C1)) = 1.59 kHz, Q = sqrt(L1/C1)/R1 = 5.
 spice = 1
-TL: (0,1.5); M: (1.5,1.5); TR: (3,1.5); BR: (3,0); BL: (0,0)
-V1: vsource(TL, BL, AC 1)
-R1: resistor(TL, M, 20)
-L1: inductor(M, TR, 10m)
-C1: capacitor(TR, BR, 1u)
-line from BL to BR
+Vin: (0,1.5); Vout: (3,1.5)
+V1: vsource(Vin, (0,0), AC 1)
+R1: resistor(Vin, (1.5,1.5), 20)
+L1: inductor(R1.N, Vout, 10m)
+C1: capacitor(Vout, (3,0), 1u)
+line from V1.N to C1.N
 ground((1.5,0))
-Vin: node(TL)
-Vout: node(TR)
-dot at TR
-"out" above at TR + (0,0.05)
+dot at Vout
+"out" above at Vout + (0,0.05)
 .ac dec 20 100 100k
 .PE

@@ -52,7 +52,7 @@ R1: resistor((0,1), (1,1), 1k)
 R2: resistor((1,1), (1,0), 1k)
 line from (0,0) to (1,0)
 ground((0.5,0))
-Mid: node((1,1))");
+Mid: (1,1)");
     assert!(e.diagnostics.is_empty(), "{:?}", e.diagnostics);
     assert_eq!(cards(&e), ["V1 n1 0 DC 10", "R1 n1 Mid 1k", "R2 Mid 0 1k"]);
     assert!(e.netlist.ends_with(".end\n"));
@@ -119,9 +119,9 @@ line from R3.N to (-1,0) then to (0,0)");
 #[test]
 fn same_name_on_two_nets_is_one_node() {
     let e = ex("V1: vsource((0,1),(0,0), 1)
-A: node((0,1))
+A: (0,1)
 R1: resistor((3,1),(3,0),1k)
-A: node((3,1))
+A: (3,1)
 ground((0,0)); ground((3,0))");
     assert_eq!(cards(&e), ["V1 A 0 1", "R1 A 0 1k"]);
     assert!(e.diagnostics.is_empty(), "{:?}", e.diagnostics);
@@ -134,8 +134,8 @@ fn node_name_conflicts() {
     let e = ex("V1: vsource((0,1),(0,0), 1)
 R1: resistor((0,1),(1,0),1k)
 line from (0,0) to (1,0)
-In: node((0,1)); Top: node((0,1))
-Zero: node((0,0)); ground((0,0))");
+In: (0,1); Top: (0,1)
+Zero: (0,0); ground((0,0))");
     assert_eq!(cards(&e), ["V1 In 0 1", "R1 In 0 1k"]);
     let k = kinds(&e);
     assert_eq!(
@@ -148,10 +148,10 @@ Zero: node((0,0)); ground((0,0))");
             .find(|d| d.message.contains(needle))
             .unwrap_or_else(|| panic!("{needle}: {:?}", e.diagnostics))
     };
-    find("node `Zero` is on the ground net");
-    // The losing name is located at its call site (line 6, column 18).
+    find("place `Zero` is on the ground net");
+    // The losing name is located at its place (line 6, column 12).
     let sp = find("`In`, `Top`").span.clone().unwrap();
-    assert_eq!((sp.line, sp.col), (6, 18));
+    assert_eq!((sp.file, sp.line, sp.col, sp.end_col), (None, 6, 12, 15));
 }
 
 #[test]
@@ -171,7 +171,8 @@ line from (2,2) to (3,2)");
     assert!(dangling.message.contains("R1.N"), "{}", dangling.message);
     assert_eq!(dangling.severity, PicSeverity::Warning);
     let sp = dangling.span.as_ref().unwrap();
-    assert_eq!((sp.file.as_deref(), sp.line, sp.col), (None, 4, 1));
+    // The element's call site (`resistor(…)` on R1's line).
+    assert_eq!((sp.file.as_deref(), sp.line, sp.col), (None, 4, 5));
     let floating = e
         .diagnostics
         .iter()
@@ -222,12 +223,20 @@ line from (1,1) to (0,0); ground((0,0))");
         .iter()
         .find(|d| d.kind == PicDiagKind::DuplicateRefdes)
         .unwrap();
-    // W3 finds the second `R1:` — the duplicate's own call site.
-    assert_eq!(dup.span.as_ref().unwrap().line, 5);
+    // BlockInfo.span: the duplicate's own call site in the user's
+    // figure — not the prelude `define` its shapes point into.
+    let sp = dup.span.as_ref().unwrap();
+    assert_eq!((sp.file.as_deref(), sp.line, sp.col), (None, 5, 5));
+    assert_eq!(sp.end_col, 5 + "resistor((0,1),(1,1),5)".len() as u32);
     assert_eq!(
         dup.to_string(),
-        "5:1: error: refdes `R1` already used by `R1`; skipped"
+        "5:5: error: refdes `R1` already used by `R1`; skipped"
     );
+    // Every element diagnostic is located in the user's source.
+    for d in &e.diagnostics {
+        let sp = d.span.as_ref().unwrap_or_else(|| panic!("{d}"));
+        assert_eq!(sp.file, None, "{d}");
+    }
 }
 
 #[test]
@@ -273,7 +282,7 @@ ground((0,0)); line from (0,0) to (0.002,0)
 /// which a figure cannot carry yet — see the pin-order test below).
 #[test]
 fn all_elements_extract_to_a_clean_deck() {
-    let e = ex("Vdd: node((0,3))
+    let e = ex("Vdd: (0,3)
 V1: vsource((0,3),(0,0), DC 5)
 line from (0,3) to (8,3); line from (0,0) to (8,0); ground((4.5,0))
 VC: battery((10,1.5),(10,0), 1)
@@ -333,7 +342,7 @@ I1: isource((8,2),(8,0), 1m)
 #[test]
 fn opamp_pins_follow_subckt_order() {
     let e = ex("X1: opamp((2,1), OA)
-In: node(X1.Inp); Fb: node(X1.Inm); Out: node(X1.Out)
+In: X1.Inp; Fb: X1.Inm; Out: X1.Out
 line from X1.Inp to (1,0.5); line from X1.Inm to (1,1.5); line from X1.Out to (3,1)");
     assert_eq!(cards(&e), ["X1 In Fb Out OA"]);
 }
@@ -391,5 +400,85 @@ fn custom_prelude_replaces_the_embedded_one() {
         },
     )
     .unwrap();
-    assert_eq!(cards(&e), ["R9 n1 0 2k"]);
+    // `A` and `B` are places, so they name nets (A loses to ground).
+    assert_eq!(cards(&e), ["R9 B 0 2k"]);
+    assert_eq!(
+        kinds(&e)[0],
+        PicDiagKind::NodeNameConflict,
+        "{:?}",
+        e.diagnostics
+    );
+}
+
+#[test]
+fn values_pass_through_raw() {
+    // pic would print these floats as 0.000000001 and 1500; the card
+    // carries them as written.
+    let e = ex(
+        "V1: vsource((0,1),(0,0), PULSE(0 1e-3 0 1e-9 1e-9 5e-6 1e-5))
+R1: resistor((0,1),(1,1), 1e-9)
+C1: capacitor((1,1),(1,0), 1.5e3)
+Q1: npn((3,1), \"QX\")
+line from Q1.C to (1,1); line from Q1.B to (0,1) + (0,-0.5) then to (0,1)
+line from Q1.E to (1,0)
+line from (0,0) to (1,0); ground((0,0))",
+    );
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    assert_eq!(
+        cards(&e),
+        [
+            "V1 n1 0 PULSE(0 1e-3 0 1e-9 1e-9 5e-6 1e-5)",
+            "R1 n1 n2 1e-9",
+            "C1 n2 0 1.5e3",
+            "Q1 n2 n1 0 QX",
+        ]
+    );
+}
+
+#[test]
+fn value_falls_back_to_the_drawing() {
+    // The outermost call is the wrapper `rr`, whose 3rd argument is not
+    // R7's value: the drawn text decides. A call split over lines
+    // cannot be re-read, so it keeps pic's normalized argument.
+    let e = ex("define rr { R7: resistor($2, $1, 10k) }
+rr((0,0), (1,0), 5)
+R8: resistor((1,0), \\
+  (2,0), 2.5e3)
+ground((0,0)); ground((2,0))");
+    assert_eq!(cards(&e), ["R7 n1 0 10k", "R8 n1 0 2500"]);
+}
+
+#[test]
+fn places_name_nets_they_touch() {
+    let e = ex("V1: vsource((0,1),(0,0), 1)
+line from (0,1) to (2,1)
+R1: resistor((2,1),(2,0),1k)
+line from (0,0) to (2,0); ground((0,0))
+Mid: (1,1)
+Nowhere: (5,5)
+R1: (2,1)");
+    // `Mid` sits on the wire's interior; `R1` is an element's name.
+    assert_eq!(cards(&e), ["V1 Mid 0 1", "R1 Mid 0 1k"]);
+    let msg = |kind| {
+        e.diagnostics
+            .iter()
+            .filter(|d| d.kind == kind)
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        msg(PicDiagKind::FloatingNet),
+        ["8:1: warning: place `Nowhere` names no net: no wire or pin is there"]
+    );
+    assert_eq!(
+        msg(PicDiagKind::NodeNameConflict),
+        ["9:1: warning: place `R1` has the name of element `R1`; it names no net"]
+    );
+}
+
+#[test]
+fn directives_are_column_one_lines() {
+    // An indented `.` line is pic, as in dpic: here, a syntax error.
+    let err = extract(".PS\nspice = 1\n  .op\n.PE\n", &Default::default()).unwrap_err();
+    assert!(matches!(err, PicError::Compile { .. }), "{err:?}");
 }

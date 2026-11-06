@@ -3,9 +3,11 @@
 # Wraps the geometry of rpic's std circuits.pic (loaded first, as the
 # `circuits` unit) in LABELED blocks with invisible pin markers, so
 # that `R1: resistor(A, B, 10k)` names the element (block label =
-# refdes) and exposes its pins (`R1.P`, `R1.N`). Every macro draws the
-# value/model argument as the FIRST text shape inside its block — that
-# text is what the extractor copies into the SPICE card, verbatim.
+# refdes) and exposes its pins (`R1.P`, `R1.N`). The extractor reads the
+# value/model from the call's own argument (verbatim); every macro also
+# draws it, as the FIRST text shape inside its block — the schematic
+# shows it, and the extractor falls back on it for a block that has no
+# usable call.
 #
 # Pins (D-0020; pic labels must start uppercase):
 #   two-terminals  P N        (P = first point = first SPICE node:
@@ -18,10 +20,11 @@
 #   njfet/pjfet(J) D G S
 #   opamp (X)      Inp Inm Out (subcircuit pin order)
 #
-# Reserved marker labels: `Gnd` (ground block), `Node` (named node,
-# interim W2 of D-0020), `At` (anchor of centered elements). Pin
+# Reserved marker labels: `Gnd` (ground block), `At` (anchor of
+# centered elements; their value is the 2nd argument, not the 3rd). Pin
 # markers are `circle invis rad 0`; the extractor recognizes exactly
-# that shape.
+# that shape. Net names are plain pic places (`Vout: (2,1)`), not
+# prelude macros.
 #
 # Idiom: a bare block re-places itself at Here, so every block ends
 # `] with .<pin> at $1` to stay where its geometry was drawn.
@@ -191,15 +194,12 @@ define opamp {
   ] with .At at $1
 }
 
-# --- ground and named nodes ----------------------------------------------
+# --- ground -------------------------------------------------------------------
 # ground(P): node 0 at P (symbol hangs below P).
 define ground { [ dnqx=$1.x; dnqy=$1.y; __ground((dnqx,dnqy)); Gnd: circle invis rad 0 at (dnqx,dnqy) ] with .Gnd at $1 }
-# Name: node(P) names the net through P (interim W2 of D-0020; replaced
-# by plain labeled places once rpic-core exposes them).
-define node { [ dnqx=$1.x; dnqy=$1.y; Node: circle invis rad 0 at (dnqx,dnqy) ] with .Node at $1 }
 
 # --- private copies of std geometry this prelude shadows -----------------
-# (verbatim from rpic-core 0.12.1 std/circuits.pic, BSD-2-Clause; a
+# (verbatim from rpic-core 0.12.1–0.13.0 std/circuits.pic, BSD-2-Clause; a
 # shadowing macro cannot call the std one under the same name.)
 define __dn_switch_geom {
   ssx=$1.x; ssy=$1.y; sex=$2.x; sey=$2.y

@@ -1,35 +1,49 @@
 # dune-pic — extrator de netlist de figuras rpic
 
-Fase 5 (PLAN §2.5; D-0003/D-0004/D-0019/D-0020). Depende de
-`rpic-core = "=0.12.1"` (crates.io, zero deps, wasm-friendly) — só
-API pública, como o D-0003 manda.
+Fase 5 (PLAN §2.5; D-0003/D-0004/D-0019/D-0020/D-0021). Depende de
+`rpic-core = "=0.13.0"` (crates.io, zero deps, wasm-friendly) — só
+API pública, como o D-0003 manda. Os três interinos do D-0020
+foram aposentados quando os PRs #414/#415/#416 do rpic-lang saíram
+na release 0.13.0.
 
 ## Pipeline
 
-1. **compat (interino)**: `strip_directives` apaga (preservando
-   contagem de linhas) toda linha cujo primeiro caractere não-branco
-   é `.` fora de `.PS/.PE`, guardando-as como diretivas com span
-   exato — espelho do `strip_backend_preamble` do rpic (W1 do
-   D-0020).
+1. **Diretivas**: vêm de `Drawing.passthrough` (linhas `.` de
+   **coluna 1**, regra do dpic real — indentado é erro de compile,
+   testado). O `compat` restante só blanka e re-anexa as
+   continuações `+` (o pic erra nelas) e fatia os argumentos crus
+   do call-site.
 2. Compila prelude (`corpus/pic/spice.pic`, embutido) + figura com o
    rpic (std `circuits: true`; `copy` negado). Exige `spice = 1` nos
    `vars`.
 3. Colhe blocos rotulados (label = refdes; 1ª letra = cartão, só
    R C L V I D Q M J S W X), marcadores de pino invisíveis, blocos
-   `ground()` (nó 0) e `Nome: node(P)` (nomes de nó — W2, interino),
-   fios (todo vértice de polilinha é terminal) e `dot`s.
+   `ground()` (nó 0), **places nomeados** (`Vout: (2.5,1.5)` —
+   D-0004 §3 como desenhado; `Drawing.places`, só os da fonte do
+   usuário), fios (todo vértice de polilinha é terminal) e `dot`s.
+   Um place vira terminal (snap/junção em T valem); place no vazio
+   → warning; label de place colidindo com refdes →
+   NodeNameConflict; place no terra → warning (places são nomes).
 4. **Conectividade**: union-find com `snap` (default 1e-3"), junção
    em T (terminal no interior de segmento conecta — regra nossa;
    cruzamento puro NÃO conecta, `dot` resolve), `node()` iguais
    unificam como net labels.
-5. **Nomes**: `0` do ground, depois `node()`, depois `n1, n2…` por
-   menor índice de shape (determinístico).
-6. **Emissão**: netlist SPICE3 textual (valor/modelo = primeiro
-   shape de texto do bloco, verbatim) + diretivas na ordem da fonte
+5. **Nomes**: `0` do ground, depois os places, depois `n1, n2…`
+   por menor índice de shape (determinístico).
+6. **Emissão**: netlist SPICE3 textual. **Valor/modelo** = o
+   argumento do call-site relido CRU da fonte do usuário no
+   `BlockInfo.span` (o `MacroCall.args` do 0.13 vem normalizado —
+   `1e-9` viraria `0.000000001`; ver D-0021) — com fallback para o
+   texto desenhado quando não há call de uma linha só ou um macro
+   embrulhador intercepta (guardado por comparação pós-normalização,
+   testado). O prelude segue desenhando o valor (apresentação).
+   Diretivas na ordem da fonte
    (+ continuações `+`; `.end` do usuário é deduplicado) — passa
    pelo `dune-netlist` normal. `OverlayMap` dá refdes→`sN..sM` e
    net→shapes para a sobreposição do Studio (Fase 6).
-7. **Diagnósticos** com span da figura: pino solto, net flutuante,
+7. **Diagnósticos** com o span do call-site do usuário
+   (`BlockInfo.span` — duplicata aponta a linha do usuário,
+   testado): pino solto, net flutuante,
    valor faltando (warning em V/I — SPICE trata como 0 — e erro no
    resto), refdes duplicado, letra desconhecida, sem `spice = 1`,
    conflito de nome de nó.
@@ -41,24 +55,22 @@ API pública, como o D-0003 manda.
   desenhado amarrado ao S); X `Inp/Inm/Out`; S `P/N/Cp/Cn`; W
   `P/N` com valor `Vctl modelo`.
 - Labels pic exigem maiúscula (por isso não há `R1.a`);
-  `Gnd`/`Node`/`At` são reservados pelo prelude.
+  `Gnd`/`At` são reservados pelo prelude.
 - Macros do prelude: resistor, capacitor, inductor, diode, vsource,
   acsource, battery, isource, switch, cswitch, npn, pnp, nmos,
-  pmos, njfet, pjfet, opamp, ground, node.
+  pmos, njfet, pjfet, opamp, ground. (O `node()` interino saiu —
+  nomes de nó são places.)
 - Valor desenhado na figura (acima do elemento horizontal, à
   esquerda do vertical) — é o que o extrator lê.
 
-## Interinos e o que troca com o rpic-core pós-PRs
+## O que restou do `compat` (pós-0.13)
 
-Tudo em `crates/dune-pic/src/compat.rs`, marcado:
-
-| Interino | Substituto (PRs do rpic-lang) |
-|---|---|
-| W1 `strip_directives` | `Drawing.passthrough` |
-| W2 `node()` (+ `NODE_MARKER`/`BlockKind::Node`) | `Drawing.places` |
-| W3 `call_site` (acha o call-site escaneando o n-ésimo `Label:`) | `BlockInfo.span` |
-
-Depois: bump do pin `=0.12.1` para a release com os PRs.
+- `split_continuations`: o pic erra em linhas `+` de coluna 1, então
+  elas são blankadas e re-anexadas à diretiva da linha de cima.
+  Sairia se o passthrough do rpic um dia englobasse continuações.
+- `raw_call_args`: fatia `name(…)` por vírgulas de topo (respeitando
+  colchetes/strings) para ler argumentos crus no span — sairia com
+  um campo raw-args no rpic (candidato a PR 4, ver D-0021).
 
 ## Ressalvas conhecidas
 
@@ -78,6 +90,11 @@ Depois: bump do pin `=0.12.1` para a release com os PRs.
 - Op-amp emite `X` mas o corpo `.subckt` não cabe em linhas `.`
   (linhas de corpo não começam com `.`) — precisa de `.include`;
   sem teste de simulação por ora.
+- Place redefinido num laço funde as nets pelo nome (semântica de
+  net label); um "cursor" rotulado móvel curto-circuitaria em
+  silêncio.
+- A releitura crua assume colunas em caracteres e confere a
+  contagem de argumentos contra a do rpic antes de usar.
 - O `snap` se aplica depois do auto-scale do rpic (`maxpswid`);
   prelude põe `margin = 0.1`.
 
