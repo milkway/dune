@@ -69,12 +69,14 @@ pub trait LinearSolver {
 
 /// The default backend for this build.
 pub fn default_solver() -> Box<dyn LinearSolver> {
-    #[cfg(feature = "faer")]
+    #[cfg(feature = "solver-faer")]
     {
         Box::new(backend::faer_dense::FaerDense::default())
     }
-    #[cfg(not(feature = "faer"))]
+    #[cfg(not(feature = "solver-faer"))]
     {
-        compile_error!("dune-core needs a linear solver backend (enable the `faer` feature)");
+        compile_error!(
+            "dune-core needs a linear solver backend (enable the `solver-faer` feature)"
+        );
     }
 }

@@ -7,10 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = ["faer"]
-# Dense LU backend over the `faer` crate (D-0005; the sparse
-# `xingo-sparse` backend and the faer-vs-xingo benchmark are Phase 3).
-faer = ["dep:faer"]
+default = ["solver-faer"]
+# Dense LU backend over the `faer` crate (D-0005 naming; D-0013 keeps
+# it the default). The sparse `solver-xingo` backend lives on the
+# `p3-sparse` branch until xingo is published (D-0013).
+solver-faer = ["dep:faer"]
 
 [dependencies]
 thiserror.workspace = true

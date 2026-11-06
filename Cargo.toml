@@ -26,3 +26,18 @@ libm = "0.2"
 dune-netlist = { path = "crates/dune-netlist" }
 dune-core = { path = "crates/dune-core" }
 dune-raw = { path = "crates/dune-raw" }
+
+# faer's LU is unusably slow unoptimized, and optimizing the faer
+# package alone does not help: its generic entry points monomorphize
+# into dune-core, so the hot code is compiled with dune-core's own
+# opt-level. Optimizing both takes the debug oracle run (CI's
+# `cargo run -p dune-oracle -- --ci`) from 12:51 to 5:41 on Apple
+# Silicon (measured 2026-11-06, 64 circuits). The remaining gap to
+# the ~10 s release run is the dev profile's own checking
+# (overflow-checks, debug_assertions), which is the point of running
+# the oracle in debug, so it stays; optimizing dune-raw/netlist/
+# oracle too was measured to change nothing (5:27) and is not done.
+[profile.dev.package.faer]
+opt-level = 3
+[profile.dev.package.dune-core]
+opt-level = 3
