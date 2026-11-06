@@ -229,12 +229,47 @@ pub(crate) fn evaluate(token: &str) -> Option<f64> {
     }
     // `pow`, not repeated multiplication, to land on the same
     // doubles the C does.
-    Some(sign * mantis * 10f64.powf(f64::from(expo1.saturating_add(expsgn * expo2))))
+    Some(sign * mantis * pow10(expo1.saturating_add(expsgn * expo2)))
+}
+
+/// `pow(10.0, k)` correctly rounded, on every target.
+///
+/// glibc's and Apple's `pow` return the correctly rounded power of
+/// ten for every integer `k` (checked on Apple Silicon for
+/// -400..=400), but the soft `libm` behind `f64::powf` on
+/// `wasm32-unknown-unknown` is off by an ulp for some (`10^-5`, so
+/// `4.00000E+000` read as 3.9999999999999996). Rust's decimal
+/// parser is correctly rounded everywhere, so it gives the C's
+/// doubles on all targets. Outside ±400 the result is 0 or inf
+/// either way.
+fn pow10(k: i32) -> f64 {
+    if (-400..=400).contains(&k) {
+        format!("1e{k}")
+            .parse()
+            .unwrap_or_else(|_| 10f64.powf(f64::from(k)))
+    } else {
+        10f64.powf(f64::from(k))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pow10_is_correctly_rounded() {
+        // Literals are correctly rounded by rustc; the soft libm on
+        // wasm32 missed these through `powf`.
+        assert_eq!(pow10(-5), 1e-5);
+        assert_eq!(pow10(-23), 1e-23);
+        assert_eq!(pow10(22), 1e22);
+        assert_eq!(pow10(308), 1e308);
+        assert_eq!(pow10(-323), 1e-323);
+        assert_eq!(evaluate("4.00000E+000"), Some(4.0));
+        assert_eq!(pow10(-1000), 0.0);
+        assert_eq!(pow10(1000), f64::INFINITY);
+        assert_eq!(pow10(i32::MIN), 0.0);
+    }
     use crate::deck::{Card, read_with_loader};
     use std::path::Path;
 
