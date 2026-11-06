@@ -162,3 +162,53 @@ Sffm}(Vec<f64>)` (argumentos posicionais do cartão),
 
 - `Bjt` não estava re-exportado (único dispositivo não construível
   programaticamente) — consertado em 9d036b1.
+
+## Pacotes entregues (2026-11-06)
+
+### Python (`python/`, commit 46e7abe)
+
+`spice.simulate(netlist, *, includes=None, options=None) -> Result`;
+`Result` (plots/notes/diagnostics, sequência), `Plot`
+(`variables`, `scale`, `column(name)` → numpy zero-cópia read-only,
+`df()` → polars **wide** com complexos em `re:`/`im:`,
+`df(pandas=True)`), `SpiceError` com `kind`
+parse|elaborate|analysis|internal. Convenção: **`str` é texto do
+deck, nunca caminho** (um `str` de uma linha que nomeia arquivo
+existente é rejeitado com dica de `pathlib.Path`).
+
+### R (`r/`, commit e694ae0)
+
+`spice_run(deck, includes, options)` → `spice_result`;
+`spice_plots()`, `spice_tidy()` → tibble **longo** (`plot, point,
+scale_name, scale, variable, type, value | re/im`),
+`spice_read_raw`/`spice_write_raw`, `print.*`, `as_tibble`,
+`autoplot`. Erros `cli_abort` com classe `spice_error_<kind>`.
+Convenção: **string única sem newline é caminho**; vetor de
+caracteres ou texto com newlines é o deck.
+
+### Divergências deliberadas entre os espelhos (nota exigida pelo
+CLAUDE.md §Pacotes)
+
+- **Deck como string**: Python = sempre texto (há `Path` no idioma);
+  R = uma linha sem newline é caminho (R não tem tipo de caminho e
+  `spice_run("rc.cir")` é o uso natural). Mesma semântica de
+  `includes` nos dois.
+- **Forma tabular**: polars wide no Python (idioma de colunas),
+  tibble longo no R (idioma ggplot/tidyverse) — mesma informação.
+- **Kinds de erro**: R acrescenta `input`/`io`/`raw` (coisas que no
+  Python viram `TypeError`/`FileNotFoundError` nativos).
+
+### Pendências da Fase 4
+
+- `dune-ffi` (C ABI, cbindgen) — ainda não iniciado.
+- CI para python/ e r/ (jobs no ci.yml).
+- Vendoring CRAN (crates por path + registry) e Makevars.win real.
+- Placeholder `spice` no PyPI (wheel 0.0.1 pronto; publicação é do
+  usuário).
+- LICENSE na raiz do repo — confirmar titulares (proposta do pacote
+  R: "André Leite and The Regents of the University of California",
+  BSD-3, pela origem 3f5).
+- Interrupção de simulação longa a partir de R/Python (sem check de
+  interrupt no engine) — candidata a hook no core.
+- Bug upstream do savvy 0.11 (`try_from_iter` vazio) contornado em
+  `r/src/rust/src/lib.rs`; reportar.
