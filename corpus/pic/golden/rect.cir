@@ -1,0 +1,8 @@
+* netlist extracted by dune-pic
+V1 n1 0 SIN(0 10 60)
+D1 n1 Vout DMOD
+C1 Vout 0 100u
+R1 Vout 0 1k
+.model DMOD D(IS=1e-14 RS=0.5)
+.tran 0.1m 50m
+.end

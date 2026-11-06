@@ -1,0 +1,18 @@
+.PS
+# Half-wave rectifier with a reservoir capacitor: 10 V 60 Hz sine,
+# load R1 || C1 (tau = 100 ms >> 16.7 ms period).
+spice = 1
+TL: (0,1.5); M: (1.75,1.5); TR: (3,1.5); BL: (0,0); MB: (1.75,0); BR: (3,0)
+V1: acsource(TL, BL, SIN(0 10 60))
+D1: diode(TL, M, DMOD)
+C1: capacitor(M, MB, 100u)
+R1: resistor(TR, BR, 1k)
+line from M to TR
+line from BL to BR
+ground((0.9,0))
+Vout: node(M)
+dot at M; dot at MB
+"out" above at M + (0,0.05)
+.model DMOD D(IS=1e-14 RS=0.5)
+.tran 0.1m 50m
+.PE

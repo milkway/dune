@@ -4,12 +4,14 @@
 //! 3f5; without it, `.print` cards render in the spice3 column
 //! format (`print.rs`). Every analysis card runs through
 //! `Circuit::run`, the dispatch the oracle and the wasm build share.
+//! `dune pic FIGURE.pic` extracts the netlist of an rpic figure
+//! (`dune-pic`); `dune pic --run` simulates it the same way.
 
 #![forbid(unsafe_code)]
 
 mod print;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use dune_core::{Circuit, Options, OutExpr, Solution};
@@ -17,12 +19,17 @@ use dune_netlist::Severity;
 use dune_netlist::ir::{Output, OutputKind};
 use dune_raw::{Format, Rawfile};
 
-const USAGE: &str = "usage: dune -b INPUT.cir [-r OUTPUT.raw]";
+const USAGE: &str =
+    "usage: dune -b INPUT.cir [-r OUTPUT.raw]\n       dune pic [--run] FIGURE.pic [-r OUTPUT.raw]";
 
 fn main() -> Result<()> {
+    let mut args = std::env::args().skip(1).peekable();
+    if args.peek().map(String::as_str) == Some("pic") {
+        args.next();
+        return pic_main(args);
+    }
     let mut input: Option<PathBuf> = None;
     let mut rawfile: Option<PathBuf> = None;
-    let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "-b" => {} // batch is the only mode there is, so far
@@ -41,9 +48,79 @@ fn main() -> Result<()> {
         bail!("no input file\n{USAGE}");
     };
 
-    // Parse; diagnostics go to stderr, errors are fatal like the
-    // 3f5's deck errors.
     let parsed = dune_netlist::parse_file(&input)?;
+    run_deck(&parsed, &input, rawfile.as_deref())
+}
+
+/// `dune pic FIGURE.pic` prints the netlist extracted from an rpic
+/// figure (diagnostics to stderr); `--run` simulates it like `-b`.
+fn pic_main(args: impl Iterator<Item = String>) -> Result<()> {
+    let mut input: Option<PathBuf> = None;
+    let mut rawfile: Option<PathBuf> = None;
+    let mut run = false;
+    let mut args = args;
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--run" => run = true,
+            "-r" => {
+                rawfile = Some(PathBuf::from(args.next().context("-r needs a file name")?));
+            }
+            flag if flag.starts_with('-') => bail!("unknown flag `{flag}`\n{USAGE}"),
+            _ => {
+                if input.replace(PathBuf::from(&a)).is_some() {
+                    bail!("more than one input file\n{USAGE}");
+                }
+            }
+        }
+    }
+    let Some(input) = input else {
+        bail!("no input figure\n{USAGE}");
+    };
+    if rawfile.is_some() && !run {
+        bail!("-r only makes sense with --run\n{USAGE}");
+    }
+    let src =
+        std::fs::read_to_string(&input).with_context(|| format!("reading {}", input.display()))?;
+    let ex =
+        dune_pic::extract(&src, &dune_pic::ExtractOptions::default()).map_err(|e| match &e {
+            dune_pic::PicError::Compile { span: Some(s), .. } => {
+                anyhow::anyhow!("{}:{s}: {e}", input.display())
+            }
+            _ => anyhow::anyhow!("{}: {e}", input.display()),
+        })?;
+    for d in &ex.diagnostics {
+        match &d.span {
+            Some(s) if s.file.is_none() => eprintln!("{}:{d}", input.display()),
+            _ => eprintln!("{}: {d}", input.display()),
+        }
+    }
+    if !ex.is_clean() {
+        if !run {
+            print!("{}", ex.netlist);
+        }
+        bail!("figure has errors");
+    }
+    if !run {
+        print!("{}", ex.netlist);
+        return Ok(());
+    }
+    // `.include` in a directive resolves next to the figure, as it
+    // would next to a deck.
+    let deck_name = input.with_extension("cir");
+    let parsed =
+        dune_netlist::parse_with_loader(&deck_name, ex.netlist, &mut dune_netlist::deck::FsLoader);
+    run_deck(&parsed, &input, rawfile.as_deref())
+}
+
+/// Simulate a parsed deck: every analysis card through `Circuit::run`,
+/// results to a rawfile (`-r`) or as `.print` columns.
+fn run_deck(
+    parsed: &dune_netlist::ParseOutcome,
+    input: &Path,
+    rawfile: Option<&Path>,
+) -> Result<()> {
+    // Diagnostics go to stderr, errors are fatal like the 3f5's deck
+    // errors.
     let mut fatal = false;
     for d in &parsed.diags {
         eprintln!("{}", d.render(&parsed.sources));
@@ -89,7 +166,7 @@ fn main() -> Result<()> {
                     .collect(),
                 warnings: Vec::new(),
             };
-            let mut f = std::fs::File::create(&path)
+            let mut f = std::fs::File::create(path)
                 .with_context(|| format!("creating {}", path.display()))?;
             // Binary is the 3f5's default rawfile format.
             raw.write(&mut f, Format::Binary)?;

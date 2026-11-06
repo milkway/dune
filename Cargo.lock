@@ -105,6 +105,7 @@ dependencies = [
  "anyhow",
  "dune-core",
  "dune-netlist",
+ "dune-pic",
  "dune-raw",
 ]
 
@@ -148,6 +149,17 @@ dependencies = [
  "dune-raw",
  "num-complex",
  "tempfile",
+]
+
+[[package]]
+name = "dune-pic"
+version = "0.1.0"
+dependencies = [
+ "dune-core",
+ "dune-netlist",
+ "num-complex",
+ "rpic-core",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -755,6 +767,12 @@ name = "reborrow"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
+
+[[package]]
+name = "rpic-core"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34610728e912cc5f4269d3abfda612481cd7eea010417144069d6dd9461881c5"
 
 [[package]]
 name = "rustix"

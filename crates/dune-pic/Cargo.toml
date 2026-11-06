@@ -1,0 +1,16 @@
+[package]
+name = "dune-pic"
+description = "SPICE netlist extraction from rpic (pic) schematic figures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rpic-core = "=0.12.1"
+thiserror.workspace = true
+
+[dev-dependencies]
+dune-netlist.workspace = true
+dune-core.workspace = true
+num-complex.workspace = true

@@ -30,6 +30,8 @@ jobs:
         run: cargo clippy -p dune-wasm --target wasm32-unknown-unknown -- -D warnings
       - name: Build dune-wasm (wasm32)
         run: cargo build -p dune-wasm --target wasm32-unknown-unknown --release
+      - name: Check dune-pic (wasm32)
+        run: cargo check -p dune-pic --target wasm32-unknown-unknown
 
   msrv:
     runs-on: ubuntu-latest

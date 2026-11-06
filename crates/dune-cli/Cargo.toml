@@ -15,3 +15,4 @@ anyhow.workspace = true
 dune-netlist.workspace = true
 dune-core.workspace = true
 dune-raw.workspace = true
+dune-pic.workspace = true

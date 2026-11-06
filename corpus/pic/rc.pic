@@ -1,0 +1,16 @@
+.PS
+# RC low-pass driven by a 0 -> 5 V step; tau = R1*C1 = 1 ms.
+spice = 1
+TL: (0,1.5); TR: (2.5,1.5); BL: (0,0); BR: (2.5,0)
+V1: vsource(TL, BL, PULSE(0 5 0 1u 1u 10m 20m))
+R1: resistor(TL, TR, 1k)
+C1: capacitor(TR, BR, 1u)
+line from BL to BR
+ground((1.25,0))
+Vin: node(TL)
+Vout: node(TR)
+dot at TL; dot at TR
+"in" above at TL + (0,0.05)
+"out" above at TR + (0,0.05)
+.tran 20u 5m
+.PE

@@ -8,6 +8,7 @@ members = [
     "crates/dune-oracle",
     "crates/dune-wasm",
     "crates/dune-ffi",
+    "crates/dune-pic",
 ]
 
 [workspace.package]
@@ -29,6 +30,7 @@ libm = "0.2"
 dune-netlist = { path = "crates/dune-netlist" }
 dune-core = { path = "crates/dune-core" }
 dune-raw = { path = "crates/dune-raw" }
+dune-pic = { path = "crates/dune-pic" }
 
 # faer's LU is unusably slow unoptimized, and optimizing the faer
 # package alone does not help: its generic entry points monomorphize

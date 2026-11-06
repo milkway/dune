@@ -1,0 +1,13 @@
+* netlist extracted by dune-pic
+Q1 Vout Vb n1 QN
+V2 Vin 0 SIN(0 10m 1k)
+C1 Vin Vb 10u
+R1 Vcc Vb 47k
+R2 Vb 0 10k
+R3 Vcc Vout 4.7k
+R4 n1 0 1k
+V1 Vcc 0 DC 12
+.model QN NPN(IS=1e-14 BF=100 VAF=100)
+.op
+.tran 10u 3m
+.end

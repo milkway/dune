@@ -1,0 +1,273 @@
+# spice.pic — the dune-pic prelude (D-0004, D-0019, D-0020).
+#
+# Wraps the geometry of rpic's std circuits.pic (loaded first, as the
+# `circuits` unit) in LABELED blocks with invisible pin markers, so
+# that `R1: resistor(A, B, 10k)` names the element (block label =
+# refdes) and exposes its pins (`R1.P`, `R1.N`). Every macro draws the
+# value/model argument as the FIRST text shape inside its block — that
+# text is what the extractor copies into the SPICE card, verbatim.
+#
+# Pins (D-0020; pic labels must start uppercase):
+#   two-terminals  P N        (P = first point = first SPICE node:
+#                              + of sources, anode of diodes, arrow
+#                              tail of current sources)
+#   switch (S)     P N Cp Cn  (Cp/Cn = controlling voltage +/-)
+#   cswitch (W)    P N
+#   npn/pnp (Q)    C B E
+#   nmos/pmos (M)  D G S B    (B drawn tied to S; pmos has S on top)
+#   njfet/pjfet(J) D G S
+#   opamp (X)      Inp Inm Out (subcircuit pin order)
+#
+# Reserved marker labels: `Gnd` (ground block), `Node` (named node,
+# interim W2 of D-0020), `At` (anchor of centered elements). Pin
+# markers are `circle invis rad 0`; the extractor recognizes exactly
+# that shape.
+#
+# Idiom: a bare block re-places itself at Here, so every block ends
+# `] with .<pin> at $1` to stay where its geometry was drawn.
+#
+# Scratch variables are global in pic; this prelude prefixes its own
+# with `dn`.
+
+# --- value label beside a two-terminal body ------------------------------
+# $1 from, $2 to, $3 offset from the axis (in), $4 the text. The label
+# goes ABOVE horizontal-ish elements and LEFT of vertical ones
+# (right-justified, so long values never cross the body), whatever the
+# drawing direction.
+define __dn_val {
+  dnax=$1.x; dnay=$1.y; dnbx=$2.x; dnby=$2.y
+  dndx=dnbx-dnax; dndy=dnby-dnay; dnl=sqrt(dndx*dndx+dndy*dndy)
+  dnpx=0-dndy/dnl; dnpy=dndx/dnl
+  if (dnpy < -0.001) || ((dnpy < 0.001) && (dnpx > 0)) then { dnpx=0-dnpx; dnpy=0-dnpy }
+  dnmx=(dnax+dnbx)/2+dnpx*$3; dnmy=(dnay+dnby)/2+dnpy*$3
+  if dnpx < -0.5 then {
+    "$4" rjust at (dnmx,dnmy)
+  } else {
+    "$4" at (dnmx,dnmy)
+  }
+}
+
+# --- two-terminal pin markers --------------------------------------------
+define __dn_pn {
+  dnqx=$1.x; dnqy=$1.y; dnrx=$2.x; dnry=$2.y
+  P: circle invis rad 0 at (dnqx,dnqy)
+  N: circle invis rad 0 at (dnrx,dnry)
+}
+
+# --- passives --------------------------------------------------------------
+define resistor  { [ __dn_val($1,$2,0.2,$3); __resistor($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
+define capacitor { [ __dn_val($1,$2,0.25,$3); __capacitor($1,$2); __dn_pn($1,$2) ] with .P at $1 }
+define inductor  { [ __dn_val($1,$2,0.25,$3); __inductor($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
+define diode     { [ __dn_val($1,$2,0.25,$3); __diode($1,$2);     __dn_pn($1,$2) ] with .P at $1 }
+
+# --- independent sources ---------------------------------------------------
+# vsource(P, N, value): circle with -/+; std voltage_source draws its +
+# toward its second point, so it gets the points swapped (+ toward P).
+define vsource  { [ __dn_val($1,$2,0.3,$3); voltage_source($2,$1); __dn_pn($1,$2) ] with .P at $1 }
+# acsource(P, N, value): circle with a sine.
+define acsource { [ __dn_val($1,$2,0.3,$3); ac_source($1,$2);      __dn_pn($1,$2) ] with .P at $1 }
+# battery(P, N, value): long (+) plate toward P.
+define battery  { [ __dn_val($1,$2,0.25,$3); __dn_battery($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
+# isource(P, N, value): arrow from P to N (SPICE: current flows from
+# n+ through the source into n-).
+define isource  { [ __dn_val($1,$2,0.3,$3); current_source($1,$2); __dn_pn($1,$2) ] with .P at $1 }
+
+# std `battery` is a flat statement macro under the same name; keep its
+# geometry reachable under a private name before shadowing it.
+define __dn_battery {
+  bsx=$1.x; bsy=$1.y; bex=$2.x; bey=$2.y
+  bdx=bex-bsx; bdy=bey-bsy; bL=sqrt(bdx*bdx+bdy*bdy)
+  bux=bdx/bL; buy=bdy/bL; bpx=0-buy; bpy=bux
+  bg=0.07; bM=bL/2; bP=0.16; bN=0.08
+  line from (bsx,bsy) to (bsx+bux*(bM-bg/2),bsy+buy*(bM-bg/2))
+  line from (bsx+bux*(bM-bg/2)+bpx*bP,bsy+buy*(bM-bg/2)+bpy*bP) \
+    to   (bsx+bux*(bM-bg/2)-bpx*bP,bsy+buy*(bM-bg/2)-bpy*bP)
+  line from (bsx+bux*(bM+bg/2)+bpx*bN,bsy+buy*(bM+bg/2)+bpy*bN) \
+    to   (bsx+bux*(bM+bg/2)-bpx*bN,bsy+buy*(bM+bg/2)-bpy*bN)
+  line from (bsx+bux*(bM+bg/2),bsy+buy*(bM+bg/2)) to (bex,bey)
+}
+
+# --- switches --------------------------------------------------------------
+# switch(P, N, model): voltage-controlled (S card). The control pins sit
+# left of the P -> N direction: Cp/Cn are small open terminals 0.45 in
+# off the contact, joined to the lever by a dashed link; the model text
+# goes on the opposite side. (The text comes after the geometry here;
+# the geometry has no text of its own, so it is still the first.)
+define __dn_switch {
+  dnax=$1.x; dnay=$1.y; dnbx=$2.x; dnby=$2.y
+  dndx=dnbx-dnax; dndy=dnby-dnay; dnl=sqrt(dndx*dndx+dndy*dndy)
+  dnux=dndx/dnl; dnuy=dndy/dnl; dnpx=0-dnuy; dnpy=dnux
+  dnmx=(dnax+dnbx)/2; dnmy=(dnay+dnby)/2
+  __dn_switch_geom($1,$2)
+}
+define switch {
+  [ __dn_switch($1,$2)
+    "$3" at (dnmx-dnpx*0.25,dnmy-dnpy*0.25)
+    __dn_pn($1,$2)
+    line dashed from (dnmx+dnpx*0.12,dnmy+dnpy*0.12) to (dnmx+dnpx*0.36,dnmy+dnpy*0.36)
+    line from (dnmx+dnpx*0.36-dnux*0.15,dnmy+dnpy*0.36-dnuy*0.15) \
+      to (dnmx+dnpx*0.36+dnux*0.15,dnmy+dnpy*0.36+dnuy*0.15)
+    circle rad 0.03 at (dnmx+dnpx*0.45-dnux*0.15,dnmy+dnpy*0.45-dnuy*0.15)
+    circle rad 0.03 at (dnmx+dnpx*0.45+dnux*0.15,dnmy+dnpy*0.45+dnuy*0.15)
+    Cp: circle invis rad 0 at (dnmx+dnpx*0.45-dnux*0.15,dnmy+dnpy*0.45-dnuy*0.15)
+    Cn: circle invis rad 0 at (dnmx+dnpx*0.45+dnux*0.15,dnmy+dnpy*0.45+dnuy*0.15)
+  ] with .P at $1
+}
+# cswitch(P, N, Vctl model): current-controlled (W card); the value text
+# names the controlling voltage source and the model.
+define cswitch { [ __dn_val($1,$2,0.3,$3); __dn_switch($1,$2); __dn_pn($1,$2) ] with .P at $1 }
+
+# --- transistors (centered at $1, std orientation) -----------------------
+# npn(C, model) / pnp(C, model): base left, collector up.
+define __dn_bjt {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$3" ljust at (dncx+0.36,dncy)
+    __bjt((dncx,dncy), 1, 1, $2)
+    B: circle invis rad 0 at (gBase_x,gBase_y)
+    C: circle invis rad 0 at (gColl_x,gColl_y)
+    E: circle invis rad 0 at (gEmit_x,gEmit_y)
+  ] with .At at $1
+}
+define npn { __dn_bjt($1, 0, $2) }
+define pnp { __dn_bjt($1, 1, $2) }
+
+# nmos(C, model): gate left, drain up, source down; pmos(C, model):
+# gate left, source up, drain down. The body (B) is drawn tied to the
+# source in both.
+define __dn_mos_pins {
+  D: circle invis rad 0 at (gDrain_x,gDrain_y)
+  G: circle invis rad 0 at (gGate_x,gGate_y)
+  S: circle invis rad 0 at (gSrc_x,gSrc_y)
+}
+define nmos {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$2" ljust at (dncx+0.26,dncy)
+    __dn_nmos_geom((dncx,dncy)); __dn_mos_pins
+    B: circle invis rad 0 at (gSrc_x,gSrc_y)
+  ] with .At at $1
+}
+define pmos {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$2" ljust at (dncx+0.26,dncy)
+    __dn_pmos_geom((dncx,dncy))
+    # std pmos ties the body to its TOP lead (named gDrain there): that
+    # lead is the source of the drawn symbol, as in a CMOS pull-up.
+    S: circle invis rad 0 at (gDrain_x,gDrain_y)
+    G: circle invis rad 0 at (gGate_x,gGate_y)
+    D: circle invis rad 0 at (gSrc_x,gSrc_y)
+    B: circle invis rad 0 at (gDrain_x,gDrain_y)
+  ] with .At at $1
+}
+# njfet(C, model) / pjfet(C, model): gate left, drain up.
+define njfet {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$2" ljust at (dncx+0.26,dncy)
+    __dn_njfet_geom((dncx,dncy)); __dn_mos_pins
+  ] with .At at $1
+}
+define pjfet {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$2" ljust at (dncx+0.26,dncy)
+    __dn_pjfet_geom((dncx,dncy)); __dn_mos_pins
+  ] with .At at $1
+}
+
+# --- op-amp as a subcircuit instance (X card) ----------------------------
+# opamp(C, subckt): inverting input on top; pins Inp Inm Out in the
+# order the X card lists them (`.subckt NAME inp inm out`).
+define opamp {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$2" at (dncx,dncy-0.5)
+    __opamp((dncx,dncy), 1)
+    Inp: circle invis rad 0 at (gIp_x,gIp_y)
+    Inm: circle invis rad 0 at (gIm_x,gIm_y)
+    Out: circle invis rad 0 at (gY_x,gY_y)
+  ] with .At at $1
+}
+
+# --- ground and named nodes ----------------------------------------------
+# ground(P): node 0 at P (symbol hangs below P).
+define ground { [ dnqx=$1.x; dnqy=$1.y; __ground((dnqx,dnqy)); Gnd: circle invis rad 0 at (dnqx,dnqy) ] with .Gnd at $1 }
+# Name: node(P) names the net through P (interim W2 of D-0020; replaced
+# by plain labeled places once rpic-core exposes them).
+define node { [ dnqx=$1.x; dnqy=$1.y; Node: circle invis rad 0 at (dnqx,dnqy) ] with .Node at $1 }
+
+# --- private copies of std geometry this prelude shadows -----------------
+# (verbatim from rpic-core 0.12.1 std/circuits.pic, BSD-2-Clause; a
+# shadowing macro cannot call the std one under the same name.)
+define __dn_switch_geom {
+  ssx=$1.x; ssy=$1.y; sex=$2.x; sey=$2.y
+  sdx=sex-ssx; sdy=sey-ssy; sL=sqrt(sdx*sdx+sdy*sdy)
+  sux=sdx/sL; suy=sdy/sL; spx=0-suy; spy=sux
+  sg=0.35; sm=sL/2
+  line from (ssx,ssy) to (ssx+sux*(sm-sg/2),ssy+suy*(sm-sg/2))
+  circle rad 0.025 fill 0 at (ssx+sux*(sm-sg/2),ssy+suy*(sm-sg/2))
+  line from (ssx+sux*(sm-sg/2),ssy+suy*(sm-sg/2)) \
+    to (ssx+sux*(sm+sg*0.15)+spx*0.2,ssy+suy*(sm+sg*0.15)+spy*0.2)
+  circle rad 0.025 fill 0 at (ssx+sux*(sm+sg/2),ssy+suy*(sm+sg/2))
+  line from (ssx+sux*(sm+sg/2),ssy+suy*(sm+sg/2)) to (sex,sey)
+}
+define __dn_nmos_geom {
+  mx=$1.x; my=$1.y
+  line from (mx-0.4,my) to (mx-0.2,my)
+  line from (mx-0.2,my-0.18) to (mx-0.2,my+0.18)
+  line from (mx-0.08,my+0.07) to (mx-0.08,my+0.18)
+  line from (mx-0.08,my-0.055) to (mx-0.08,my+0.055)
+  line from (mx-0.08,my-0.18) to (mx-0.08,my-0.07)
+  line from (mx-0.08,my+0.125) to (mx+0.16,my+0.125)
+  line from (mx+0.16,my+0.125) to (mx+0.16,my+0.36)
+  line from (mx-0.08,my-0.125) to (mx+0.16,my-0.125)
+  line from (mx+0.16,my-0.125) to (mx+0.16,my-0.36)
+  line from (mx+0.16,my-0.125) to (mx+0.16,my)
+  arrow from (mx+0.16,my) to (mx-0.08,my)
+  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
+}
+define __dn_pmos_geom {
+  mx=$1.x; my=$1.y
+  line from (mx-0.4,my) to (mx-0.2,my)
+  line from (mx-0.2,my-0.18) to (mx-0.2,my+0.18)
+  line from (mx-0.08,my+0.07) to (mx-0.08,my+0.18)
+  line from (mx-0.08,my-0.055) to (mx-0.08,my+0.055)
+  line from (mx-0.08,my-0.18) to (mx-0.08,my-0.07)
+  line from (mx-0.08,my+0.125) to (mx+0.16,my+0.125)
+  line from (mx+0.16,my+0.125) to (mx+0.16,my+0.36)
+  line from (mx-0.08,my-0.125) to (mx+0.16,my-0.125)
+  line from (mx+0.16,my-0.125) to (mx+0.16,my-0.36)
+  line from (mx+0.16,my+0.125) to (mx+0.16,my)
+  arrow from (mx-0.08,my) to (mx+0.16,my)
+  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
+}
+define __dn_njfet_geom {
+  mx=$1.x; my=$1.y
+  line from (mx-0.12,my-0.2) to (mx-0.12,my+0.2)
+  line from (mx-0.4,my) to (mx-0.24,my)
+  arrow from (mx-0.24,my) to (mx-0.12,my)
+  line from (mx-0.12,my+0.13) to (mx+0.16,my+0.13)
+  line from (mx+0.16,my+0.13) to (mx+0.16,my+0.36)
+  line from (mx-0.12,my-0.13) to (mx+0.16,my-0.13)
+  line from (mx+0.16,my-0.13) to (mx+0.16,my-0.36)
+  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
+}
+define __dn_pjfet_geom {
+  mx=$1.x; my=$1.y
+  line from (mx-0.12,my-0.2) to (mx-0.12,my+0.2)
+  line from (mx-0.4,my) to (mx-0.28,my)
+  arrow from (mx-0.12,my) to (mx-0.28,my)
+  line from (mx-0.12,my+0.13) to (mx+0.16,my+0.13)
+  line from (mx+0.16,my+0.13) to (mx+0.16,my+0.36)
+  line from (mx-0.12,my-0.13) to (mx+0.16,my-0.13)
+  line from (mx+0.16,my-0.13) to (mx+0.16,my-0.36)
+  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
+}
+
+# --- rendering ---------------------------------------------------------------
+# rpic estimates text extents, and value labels often sit on the outer
+# edge of a figure; a small canvas margin keeps them uncropped. A figure
+# can set its own `margin`.
+margin = 0.1
