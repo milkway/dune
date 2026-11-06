@@ -3,7 +3,10 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "spice"
+# Distribution name: `spice` is a release-less registration PyPI will
+# not free (D-0017), so the dist is spice3 — the module stays
+# `import spice` (dist and import names are independent).
+name = "spice3"
 # The version comes from Cargo.toml (single source; 0.0.1).
 dynamic = ["version"]
 description = "SPICE3f5-faithful circuit simulation (the Dune engine) for Python"

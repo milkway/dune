@@ -10,11 +10,11 @@ completo; aprovado, vira D-0015 no
 - **R:** pacote **`spice`** (CRAN livre em 2026-11-06; `SPICE` também,
   e o CRAN não aceita nomes que diferem só por caixa, então nada
   bloqueia).
-- **Python:** distribuição **`spice`** no PyPI (livre em 2026-11-06 —
-  verificado pela API JSON; `pyspice` é de terceiro, wrapper do
-  ngspice). Módulo `import spice`. **Reservar cedo**: o PyPI é por
-  ordem de chegada; publicar um 0.0.1 placeholder assim que o
-  `dune-py` compilar.
+- **Python:** distribuição **`spice3`** no PyPI (D-0017: `spice`
+  está registrado sem releases — o `simple/` index responde 200 e a
+  API JSON engana com 404; o PyPI não libera o nome). Módulo
+  **`import spice`** (dist ≠ módulo, padrão sklearn). PEP 541 pelo
+  nome `spice` corre em paralelo pela conta do usuário.
 - **Rust:** crates seguem `dune-*` (nome interno do motor; não se
   publica no crates.io por ora).
 - **Prefixo das funções R:** decidido — **`spice_*`** (prefixo =

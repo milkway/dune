@@ -1,4 +1,6 @@
-# spice
+# spice3
+
+`pip install spice3` → `import spice`.
 
 Circuit simulation for Python, powered by **Dune** — a Rust engine
 derived from Berkeley **SPICE3f5** and validated circuit-by-circuit
