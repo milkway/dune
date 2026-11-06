@@ -6,13 +6,15 @@ members = [
     "crates/dune-raw",
     "crates/dune-cli",
     "crates/dune-oracle",
+    "crates/dune-wasm",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# MSRV: edition 2024 requires 1.85; raise only with a note in the commit.
-rust-version = "1.85"
+# MSRV: 1.88 — dune-raw uses let-chains (stable 1.88); was declared
+# 1.85 but never true since then (the msrv CI job caught up 2026-11-06).
+rust-version = "1.88"
 license = "BSD-3-Clause"
 
 [workspace.dependencies]

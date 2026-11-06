@@ -16,6 +16,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --check
@@ -25,7 +26,10 @@ jobs:
         run: cargo test --workspace
       - name: Oracle golden check
         run: cargo run -p dune-oracle -- --ci
-      # Phase 4 will add: cargo build -p dune-wasm --target wasm32-unknown-unknown --release
+      - name: Clippy (wasm32)
+        run: cargo clippy -p dune-wasm --target wasm32-unknown-unknown -- -D warnings
+      - name: Build dune-wasm (wasm32)
+        run: cargo build -p dune-wasm --target wasm32-unknown-unknown --release
 
   msrv:
     runs-on: ubuntu-latest

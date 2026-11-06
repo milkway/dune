@@ -1,0 +1,27 @@
+[package]
+name = "dune-wasm"
+description = "WebAssembly build of the Dune simulator: simulate(netlist, opts) -> rawfile JSON"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# cdylib: the .wasm for the browser; rlib: native tests of the JSON path.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Route Rust panics to `console.error` (debug builds of the Studio).
+# Off by default: a panic is a bug either way, and the hook costs size.
+console-panic = ["dep:console_error_panic_hook"]
+
+[dependencies]
+dune-netlist.workspace = true
+dune-core.workspace = true
+dune-raw.workspace = true
+serde = { version = "1", default-features = false, features = ["std", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["std"] }
+wasm-bindgen = { version = "0.2", default-features = false, features = ["std"] }
+js-sys = { version = "0.3", default-features = false, features = ["std"] }
+console_error_panic_hook = { version = "0.1", optional = true }
