@@ -1,17 +1,23 @@
 //! Analysis results in the shape of a rawfile plot (D-0008): named
-//! variables with `dune_raw::VarType`s and real or complex columns,
+//! variables with [`VarType`](crate::VarType)s and real or complex
+//! columns ([`Data`](crate::Data), both re-exported from `dune_raw`),
 //! so the oracle, the CLI and the bindings all read the same thing.
 
 use dune_raw::{Data, Plot, VarType, Variable};
 use num_complex::Complex64;
 
+/// One analysis plot: what a rawfile plot holds, with
+/// [`crate::VarType`] and [`crate::Data`] re-exported at the crate
+/// root so callers need not depend on `dune_raw`.
 #[derive(Clone, Debug)]
 pub struct Solution {
     /// The `Plotname:` (e.g. `Operating Point`).
     pub plotname: String,
+    /// Variable names and kinds ([`crate::VarType`]), in rawfile
+    /// order.
     pub variables: Vec<(String, VarType)>,
     /// One column per variable, all the same length; complex for
-    /// `.ac`, real for everything else (mirrors `dune_raw::Data`).
+    /// `.ac`, real for everything else ([`crate::Data`]).
     pub data: Data,
     /// Index of the abscissa (`time`, `frequency`, `v(v-sweep)`) in
     /// `variables`; `None` for the operating point.

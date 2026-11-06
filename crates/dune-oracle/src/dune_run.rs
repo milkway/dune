@@ -6,7 +6,6 @@ use std::path::Path;
 
 use dune_core::{Circuit, Options};
 use dune_netlist::Severity;
-use dune_netlist::ir::Analysis;
 use dune_raw::Rawfile;
 
 use crate::corpus::Circuit as CorpusCircuit;
@@ -52,173 +51,12 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
 
     let mut plots = Vec::new();
     for analysis in &parsed.netlist.analyses {
-        match analysis {
-            Analysis::Op { .. } => {
-                let op = circuit.op(&options).map_err(|e| e.to_string())?;
-                plots.push(op.solution.to_plot(&parsed.netlist.title, ""));
-            }
-            Analysis::Dc { sweeps, .. } => {
-                let sweeps: Vec<dune_core::DcSweep> = sweeps
-                    .iter()
-                    .map(|s| dune_core::DcSweep {
-                        src: s.src.clone(),
-                        start: s.start,
-                        stop: s.stop,
-                        step: s.step,
-                    })
-                    .collect();
-                let dc = circuit.dc(&options, &sweeps).map_err(|e| e.to_string())?;
-                plots.push(dc.solution.to_plot(&parsed.netlist.title, ""));
-            }
-            Analysis::Tran {
-                tstep,
-                tstop,
-                tstart,
-                tmax,
-                uic,
-                ..
-            } => {
-                let tr = circuit
-                    .tran(&options, *tstep, *tstop, tstart.unwrap_or(0.0), *tmax, *uic)
-                    .map_err(|e| e.to_string())?;
-                plots.push(tr.solution.to_plot(&parsed.netlist.title, ""));
-            }
-            Analysis::Ac {
-                variation,
-                points,
-                fstart,
-                fstop,
-                ..
-            } => {
-                let sweep = match variation {
-                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                };
-                let ac = circuit
-                    .ac(&options, sweep, *points as usize, *fstart, *fstop)
-                    .map_err(|e| e.to_string())?;
-                plots.push(ac.solution.to_plot(&parsed.netlist.title, ""));
-            }
-            Analysis::Pz {
-                nodes,
-                input,
-                which,
-                ..
-            } => {
-                let input = match input {
-                    dune_netlist::ir::PzInput::Current => dune_core::PzInput::Current,
-                    dune_netlist::ir::PzInput::Voltage => dune_core::PzInput::Voltage,
-                };
-                let which = match which {
-                    dune_netlist::ir::PzWhich::Poles => dune_core::PzWhich::Poles,
-                    dune_netlist::ir::PzWhich::Zeros => dune_core::PzWhich::Zeros,
-                    dune_netlist::ir::PzWhich::Both => dune_core::PzWhich::Both,
-                };
-                let pz = circuit
-                    .pz(
-                        &options,
-                        [
-                            nodes[0].as_str(),
-                            nodes[1].as_str(),
-                            nodes[2].as_str(),
-                            nodes[3].as_str(),
-                        ],
-                        input,
-                        which,
-                    )
-                    .map_err(|e| e.to_string())?;
-                plots.push(pz.solution.to_plot(&parsed.netlist.title, ""));
-            }
-            Analysis::Noise {
-                output,
-                output_ref,
-                src,
-                variation,
-                points,
-                fstart,
-                fstop,
-                pts_per_summary,
-                ..
-            } => {
-                let sweep = match variation {
-                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                };
-                let no = circuit
-                    .noise(
-                        &options,
-                        output,
-                        output_ref.as_deref(),
-                        src,
-                        sweep,
-                        *points as usize,
-                        *fstart,
-                        *fstop,
-                        pts_per_summary.map(|p| p as usize),
-                    )
-                    .map_err(|e| e.to_string())?;
-                plots.push(no.density.to_plot(&parsed.netlist.title, ""));
-                if let Some(integ) = no.integrated {
-                    plots.push(integ.to_plot(&parsed.netlist.title, ""));
-                }
-            }
-            Analysis::Disto {
-                variation,
-                points,
-                fstart,
-                fstop,
-                f2overf1,
-                ..
-            } => {
-                let sweep = match variation {
-                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                };
-                let di = circuit
-                    .disto(
-                        &options,
-                        sweep,
-                        *points as usize,
-                        *fstart,
-                        *fstop,
-                        *f2overf1,
-                    )
-                    .map_err(|e| e.to_string())?;
-                for sol in di.solutions {
-                    plots.push(sol.to_plot(&parsed.netlist.title, ""));
-                }
-            }
-            Analysis::Tf { outvar, insrc, .. } => {
-                let tf = circuit
-                    .tf(&options, &output_var(outvar)?, insrc)
-                    .map_err(|e| e.to_string())?;
-                plots.push(tf.solution.to_plot(&parsed.netlist.title, ""));
-            }
-            Analysis::Sens {
-                outvar,
-                filters,
-                ac,
-                ..
-            } => {
-                let ac = ac.map(|(variation, points, fstart, fstop)| dune_core::SensAc {
-                    sweep: match variation {
-                        dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                        dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                        dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                    },
-                    points: points as usize,
-                    fstart,
-                    fstop,
-                });
-                let sens = circuit
-                    .sens(&options, &output_var(outvar)?, filters, ac)
-                    .map_err(|e| e.to_string())?;
-                plots.push(sens.solution.to_plot(&parsed.netlist.title, ""));
-            }
-        }
+        let (solutions, _notes) = circuit.run(analysis, &options).map_err(|e| e.to_string())?;
+        plots.extend(
+            solutions
+                .iter()
+                .map(|s| s.to_plot(&parsed.netlist.title, "")),
+        );
     }
     if plots.is_empty() {
         return Err("deck has no analyses".into());
@@ -227,19 +65,4 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
         plots,
         warnings: Vec::new(),
     })
-}
-
-/// The `.tf`/`.sens` output variable in the engine's form.
-fn output_var(v: &dune_netlist::ir::OutVar) -> Result<dune_core::OutputVar, String> {
-    use dune_netlist::ir::OutVar;
-    match v {
-        OutVar::Voltage {
-            node, reference, ..
-        } => Ok(dune_core::OutputVar::Voltage {
-            node: node.clone(),
-            reference: reference.clone(),
-        }),
-        OutVar::Current { vsrc, .. } => Ok(dune_core::OutputVar::Current { vsrc: vsrc.clone() }),
-        OutVar::Raw(r) => Err(format!("`{r}` is not an output variable")),
-    }
 }

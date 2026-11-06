@@ -37,6 +37,7 @@ mod noise;
 mod op;
 mod options;
 mod pz;
+mod run;
 mod select;
 mod sens;
 mod solution;
@@ -58,6 +59,11 @@ pub use circuit::{
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
 pub use disto::Disto;
+/// Rawfile column data and variable kinds, as carried by
+/// [`Solution::data`] and [`Solution::variables`]; re-exported so the
+/// public surface does not need `dune_raw` (the `dune_raw` paths name
+/// the same types).
+pub use dune_raw::{Data, VarType};
 pub use error::Error;
 pub use integ::Method;
 pub use jfet::JfetModel;

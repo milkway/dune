@@ -2,8 +2,8 @@
 //! `dune -b input.cir [-r output.raw]`. With `-r` the results go to
 //! a binary SPICE3 rawfile and `.print` cards are skipped, like the
 //! 3f5; without it, `.print` cards render in the spice3 column
-//! format (`print.rs`). `.op`, `.dc` and `.tran` run; the others
-//! arrive with their phases (PLAN.md §3).
+//! format (`print.rs`). Every analysis card runs through
+//! `Circuit::run`, the dispatch the oracle and the wasm build share.
 
 #![forbid(unsafe_code)]
 
@@ -67,185 +67,11 @@ fn main() -> Result<()> {
 
     let mut solutions: Vec<Solution> = Vec::new();
     for analysis in &parsed.netlist.analyses {
-        match analysis {
-            dune_netlist::ir::Analysis::Op { .. } => {
-                let op = circuit.op(&options)?;
-                for n in &op.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(op.solution);
-            }
-            dune_netlist::ir::Analysis::Dc { sweeps, .. } => {
-                let sweeps: Vec<dune_core::DcSweep> = sweeps
-                    .iter()
-                    .map(|s| dune_core::DcSweep {
-                        src: s.src.clone(),
-                        start: s.start,
-                        stop: s.stop,
-                        step: s.step,
-                    })
-                    .collect();
-                let dc = circuit.dc(&options, &sweeps)?;
-                for n in &dc.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(dc.solution);
-            }
-            dune_netlist::ir::Analysis::Tran {
-                tstep,
-                tstop,
-                tstart,
-                tmax,
-                uic,
-                ..
-            } => {
-                let tr =
-                    circuit.tran(&options, *tstep, *tstop, tstart.unwrap_or(0.0), *tmax, *uic)?;
-                for n in &tr.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(tr.solution);
-            }
-            dune_netlist::ir::Analysis::Ac {
-                variation,
-                points,
-                fstart,
-                fstop,
-                ..
-            } => {
-                let sweep = match variation {
-                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                };
-                let ac = circuit.ac(&options, sweep, *points as usize, *fstart, *fstop)?;
-                for n in &ac.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(ac.solution);
-            }
-            dune_netlist::ir::Analysis::Pz {
-                nodes,
-                input,
-                which,
-                ..
-            } => {
-                let input = match input {
-                    dune_netlist::ir::PzInput::Current => dune_core::PzInput::Current,
-                    dune_netlist::ir::PzInput::Voltage => dune_core::PzInput::Voltage,
-                };
-                let which = match which {
-                    dune_netlist::ir::PzWhich::Poles => dune_core::PzWhich::Poles,
-                    dune_netlist::ir::PzWhich::Zeros => dune_core::PzWhich::Zeros,
-                    dune_netlist::ir::PzWhich::Both => dune_core::PzWhich::Both,
-                };
-                let pz = circuit.pz(
-                    &options,
-                    [
-                        nodes[0].as_str(),
-                        nodes[1].as_str(),
-                        nodes[2].as_str(),
-                        nodes[3].as_str(),
-                    ],
-                    input,
-                    which,
-                )?;
-                for n in &pz.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(pz.solution);
-            }
-            dune_netlist::ir::Analysis::Noise {
-                output,
-                output_ref,
-                src,
-                variation,
-                points,
-                fstart,
-                fstop,
-                pts_per_summary,
-                ..
-            } => {
-                let sweep = match variation {
-                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                };
-                let no = circuit.noise(
-                    &options,
-                    output,
-                    output_ref.as_deref(),
-                    src,
-                    sweep,
-                    *points as usize,
-                    *fstart,
-                    *fstop,
-                    pts_per_summary.map(|p| p as usize),
-                )?;
-                for n in &no.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(no.density);
-                if let Some(integ) = no.integrated {
-                    solutions.push(integ);
-                }
-            }
-            dune_netlist::ir::Analysis::Disto {
-                variation,
-                points,
-                fstart,
-                fstop,
-                f2overf1,
-                ..
-            } => {
-                let sweep = match variation {
-                    dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                    dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                    dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                };
-                let di = circuit.disto(
-                    &options,
-                    sweep,
-                    *points as usize,
-                    *fstart,
-                    *fstop,
-                    *f2overf1,
-                )?;
-                for n in &di.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.extend(di.solutions);
-            }
-            dune_netlist::ir::Analysis::Tf { outvar, insrc, .. } => {
-                let tf = circuit.tf(&options, &output_var(outvar)?, insrc)?;
-                for n in &tf.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(tf.solution);
-            }
-            dune_netlist::ir::Analysis::Sens {
-                outvar,
-                filters,
-                ac,
-                ..
-            } => {
-                let ac = ac.map(|(variation, points, fstart, fstop)| dune_core::SensAc {
-                    sweep: match variation {
-                        dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
-                        dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
-                        dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
-                    },
-                    points: points as usize,
-                    fstart,
-                    fstop,
-                });
-                let sens = circuit.sens(&options, &output_var(outvar)?, filters, ac)?;
-                for n in &sens.notes {
-                    eprintln!("note: {n}");
-                }
-                solutions.push(sens.solution);
-            }
+        let (sols, notes) = circuit.run(analysis, &options)?;
+        for n in &notes {
+            eprintln!("note: {n}");
         }
+        solutions.extend(sols);
     }
     if solutions.is_empty() {
         eprintln!("note: no analyses in the deck; nothing to do");
@@ -347,19 +173,4 @@ fn run_prints(
         }
     }
     Ok(())
-}
-
-/// The `.tf`/`.sens` output variable in the engine's form.
-fn output_var(v: &dune_netlist::ir::OutVar) -> Result<dune_core::OutputVar> {
-    use dune_netlist::ir::OutVar;
-    match v {
-        OutVar::Voltage {
-            node, reference, ..
-        } => Ok(dune_core::OutputVar::Voltage {
-            node: node.clone(),
-            reference: reference.clone(),
-        }),
-        OutVar::Current { vsrc, .. } => Ok(dune_core::OutputVar::Current { vsrc: vsrc.clone() }),
-        OutVar::Raw(r) => bail!("`{r}` is not an output variable"),
-    }
 }

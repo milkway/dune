@@ -17,6 +17,7 @@ use crate::error::Error;
 use crate::matrix::{AnKind, InitMode};
 use crate::options::Options;
 use crate::solution::Solution;
+use crate::tf::OutputVar;
 
 const N_MINGAIN: f64 = 1e-20;
 const N_MINLOG: f64 = 1e-38;
@@ -66,12 +67,15 @@ fn nintegrate(
 impl Circuit {
     /// Run `.noise V(OUT<,REF>) SRC DEC|OCT|LIN PTS FSTART FSTOP
     /// <PTS_PER_SUMMARY>`.
+    ///
+    /// `output` must be an [`OutputVar::Voltage`]: the 3f5's `.noise`
+    /// takes only `V(OUTPUT<,REF>)` (spice.txt), so a current output
+    /// is an [`Error::Build`].
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub fn noise(
         &self,
         opts: &Options,
-        output: &str,
-        output_ref: Option<&str>,
+        output: &OutputVar,
         src: &str,
         sweep: AcSweep,
         points: usize,
@@ -79,6 +83,14 @@ impl Circuit {
         fstop: f64,
         pts_per_summary: Option<usize>,
     ) -> Result<Noise, Error> {
+        let (output, output_ref) = match output {
+            OutputVar::Voltage { node, reference } => (node.as_str(), reference.as_deref()),
+            OutputVar::Current { vsrc } => {
+                return Err(Error::Build(format!(
+                    ".noise output must be a voltage V(OUT<,REF>), not i({vsrc})"
+                )));
+            }
+        };
         let ok = fstart > 0.0 && fstart.is_finite() && fstop.is_finite() && fstop >= fstart;
         if !ok {
             return Err(Error::Build(".noise frequencies are inconsistent".into()));

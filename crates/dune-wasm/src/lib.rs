@@ -27,7 +27,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use dune_core::{Circuit, Options, Solution};
-use dune_netlist::ir::{Analysis, OutVar, PzInput, PzWhich, Variation};
 use dune_netlist::{IncludeLoader, Severity};
 use wasm_bindgen::prelude::*;
 
@@ -76,9 +75,8 @@ impl IncludeLoader for MapLoader<'_> {
 
 /// Parse, elaborate and run every analysis of `netlist`.
 ///
-/// The dispatch mirrors `crates/dune-cli/src/main.rs` card for card
-/// (same engine calls, same plot order, title and empty date as its
-/// rawfile); keep the two in step.
+/// Each card runs through [`Circuit::run`], the dispatch `dune-cli`
+/// shares (same plot order, title and empty date as its rawfile).
 pub fn run(netlist: &str, opts: &SimOptions) -> Result<RawfileJson, SimError> {
     let parsed = dune_netlist::parse_with_loader(
         Path::new(DECK_NAME),
@@ -111,8 +109,11 @@ pub fn run(netlist: &str, opts: &SimOptions) -> Result<RawfileJson, SimError> {
 
     let mut solutions: Vec<Solution> = Vec::new();
     for analysis in &parsed.netlist.analyses {
-        run_analysis(&circuit, &options, analysis, &mut solutions, &mut notes)
-            .map_err(|e| SimError::new("analysis", e))?;
+        let (sols, analysis_notes) = circuit
+            .run(analysis, &options)
+            .map_err(|e| SimError::new("analysis", e.to_string()))?;
+        notes.extend(analysis_notes);
+        solutions.extend(sols);
     }
     if solutions.is_empty() {
         notes.push("no analyses in the deck; nothing to do".into());
@@ -127,195 +128,6 @@ pub fn run(netlist: &str, opts: &SimOptions) -> Result<RawfileJson, SimError> {
         notes,
         diagnostics,
     })
-}
-
-fn sweep(v: &Variation) -> dune_core::AcSweep {
-    match v {
-        Variation::Dec => dune_core::AcSweep::Decade,
-        Variation::Oct => dune_core::AcSweep::Octave,
-        Variation::Lin => dune_core::AcSweep::Linear,
-    }
-}
-
-/// One analysis card, as `dune-cli` runs it.
-fn run_analysis(
-    circuit: &Circuit,
-    options: &Options,
-    analysis: &Analysis,
-    solutions: &mut Vec<Solution>,
-    notes: &mut Vec<String>,
-) -> Result<(), String> {
-    let e = |e: dune_core::Error| e.to_string();
-    match analysis {
-        Analysis::Op { .. } => {
-            let op = circuit.op(options).map_err(e)?;
-            notes.extend(op.notes);
-            solutions.push(op.solution);
-        }
-        Analysis::Dc { sweeps, .. } => {
-            let sweeps: Vec<dune_core::DcSweep> = sweeps
-                .iter()
-                .map(|s| dune_core::DcSweep {
-                    src: s.src.clone(),
-                    start: s.start,
-                    stop: s.stop,
-                    step: s.step,
-                })
-                .collect();
-            let dc = circuit.dc(options, &sweeps).map_err(e)?;
-            notes.extend(dc.notes);
-            solutions.push(dc.solution);
-        }
-        Analysis::Tran {
-            tstep,
-            tstop,
-            tstart,
-            tmax,
-            uic,
-            ..
-        } => {
-            let tr = circuit
-                .tran(options, *tstep, *tstop, tstart.unwrap_or(0.0), *tmax, *uic)
-                .map_err(e)?;
-            notes.extend(tr.notes);
-            solutions.push(tr.solution);
-        }
-        Analysis::Ac {
-            variation,
-            points,
-            fstart,
-            fstop,
-            ..
-        } => {
-            let ac = circuit
-                .ac(options, sweep(variation), *points as usize, *fstart, *fstop)
-                .map_err(e)?;
-            notes.extend(ac.notes);
-            solutions.push(ac.solution);
-        }
-        Analysis::Pz {
-            nodes,
-            input,
-            which,
-            ..
-        } => {
-            let input = match input {
-                PzInput::Current => dune_core::PzInput::Current,
-                PzInput::Voltage => dune_core::PzInput::Voltage,
-            };
-            let which = match which {
-                PzWhich::Poles => dune_core::PzWhich::Poles,
-                PzWhich::Zeros => dune_core::PzWhich::Zeros,
-                PzWhich::Both => dune_core::PzWhich::Both,
-            };
-            let pz = circuit
-                .pz(
-                    options,
-                    [
-                        nodes[0].as_str(),
-                        nodes[1].as_str(),
-                        nodes[2].as_str(),
-                        nodes[3].as_str(),
-                    ],
-                    input,
-                    which,
-                )
-                .map_err(e)?;
-            notes.extend(pz.notes);
-            solutions.push(pz.solution);
-        }
-        Analysis::Noise {
-            output,
-            output_ref,
-            src,
-            variation,
-            points,
-            fstart,
-            fstop,
-            pts_per_summary,
-            ..
-        } => {
-            let no = circuit
-                .noise(
-                    options,
-                    output,
-                    output_ref.as_deref(),
-                    src,
-                    sweep(variation),
-                    *points as usize,
-                    *fstart,
-                    *fstop,
-                    pts_per_summary.map(|p| p as usize),
-                )
-                .map_err(e)?;
-            notes.extend(no.notes);
-            solutions.push(no.density);
-            if let Some(integ) = no.integrated {
-                solutions.push(integ);
-            }
-        }
-        Analysis::Disto {
-            variation,
-            points,
-            fstart,
-            fstop,
-            f2overf1,
-            ..
-        } => {
-            let di = circuit
-                .disto(
-                    options,
-                    sweep(variation),
-                    *points as usize,
-                    *fstart,
-                    *fstop,
-                    *f2overf1,
-                )
-                .map_err(e)?;
-            notes.extend(di.notes);
-            solutions.extend(di.solutions);
-        }
-        Analysis::Tf { outvar, insrc, .. } => {
-            let tf = circuit
-                .tf(options, &output_var(outvar)?, insrc)
-                .map_err(e)?;
-            notes.extend(tf.notes);
-            solutions.push(tf.solution);
-        }
-        Analysis::Sens {
-            outvar,
-            filters,
-            ac,
-            ..
-        } => {
-            let ac = ac.map(|(variation, points, fstart, fstop)| dune_core::SensAc {
-                sweep: sweep(&variation),
-                points: points as usize,
-                fstart,
-                fstop,
-            });
-            let sens = circuit
-                .sens(options, &output_var(outvar)?, filters, ac)
-                .map_err(e)?;
-            notes.extend(sens.notes);
-            solutions.push(sens.solution);
-        }
-    }
-    Ok(())
-}
-
-/// The `.tf`/`.sens` output variable in the engine's form.
-fn output_var(v: &OutVar) -> Result<dune_core::OutputVar, String> {
-    match v {
-        OutVar::Voltage {
-            node, reference, ..
-        } => Ok(dune_core::OutputVar::Voltage {
-            node: node.clone(),
-            reference: reference.clone(),
-        }),
-        OutVar::Current { vsrc, .. } => Ok(dune_core::OutputVar::Current { vsrc: vsrc.clone() }),
-        OutVar::Raw(r) => Err(format!("`{r}` is not an output variable")),
-    }
 }
 
 /// `simulate(netlist, opts?)` — run a SPICE3 deck.
