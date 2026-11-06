@@ -422,13 +422,18 @@ pub struct PicSimOptions {
     pub includes: BTreeMap<String, String>,
 }
 
+/// Options of `render_pic`: none yet, so `{}` (or no argument).
+/// Unknown keys are an error.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct RenderOptionsJson {}
+
 fn finite(x: f64) -> Option<f64> {
     x.is_finite().then_some(x)
 }
 
 impl From<&Plot> for PlotJson {
     fn from(p: &Plot) -> Self {
-        let complex = p.is_complex();
         let columns = match &p.data {
             Data::Real(cols) => Columns::Real(
                 cols.iter()
@@ -441,6 +446,19 @@ impl From<&Plot> for PlotJson {
                     .collect(),
             ),
         };
+        PlotJson {
+            columns,
+            ..PlotJson::header(p)
+        }
+    }
+}
+
+impl PlotJson {
+    /// Everything of the plot but its data: `columns` is empty (`[]`
+    /// on the wire); `npoints` and `variables` still describe the data.
+    /// The typed-array entry points fill `columns` in afterwards.
+    pub fn header(p: &Plot) -> Self {
+        let complex = p.is_complex();
         PlotJson {
             title: p.title.clone(),
             date: p.date.clone(),
@@ -462,7 +480,7 @@ impl From<&Plot> for PlotJson {
                 })
                 .collect(),
             npoints: p.num_points(),
-            columns,
+            columns: Columns::Real(Vec::new()),
         }
     }
 }

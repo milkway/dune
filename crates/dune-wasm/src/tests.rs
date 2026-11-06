@@ -408,3 +408,120 @@ fn hostile_figures_do_not_panic() {
         }
     }
 }
+
+#[test]
+fn render_pic_marked_figure_has_the_map_ids() {
+    let src = corpus_pic("rc.pic");
+    let svg = render_pic_svg(&src, None).unwrap();
+    assert!(svg.starts_with("<svg") || svg.contains("<svg"), "{svg:.80}");
+    let pic = extract(&src, None).unwrap();
+    for e in &pic.map.elements {
+        for n in e.shapes.start..e.shapes.end {
+            assert!(svg.contains(&format!("id=\"s{n}\"")), "{} s{n}", e.refdes);
+        }
+    }
+    for n in pic.map.nets.iter().flat_map(|n| &n.shapes) {
+        assert!(svg.contains(&format!("id=\"s{n}\"")), "net s{n}");
+    }
+    // Same as dune_pic's own render (no extra wrapping here).
+    assert_eq!(
+        svg,
+        dune_pic::render_svg(&src, &ExtractOptions::default()).unwrap()
+    );
+}
+
+#[test]
+fn render_pic_does_not_need_spice_1() {
+    let svg = render_pic_svg(".PS\nR1: resistor((0,0),(1,0),1k)\n.PE\n", None).unwrap();
+    assert!(svg.contains("<svg"), "{svg:.80}");
+    assert!(render_pic_svg("box \"plain pic\"\n", Some("{}")).is_ok());
+}
+
+#[test]
+fn render_pic_errors() {
+    let err = render_pic_svg("spice = 1\n\nline from (0,0) to\n", None).unwrap_err();
+    assert_eq!(err.kind, "pic", "{err}");
+    let d = &err.diagnostics[0];
+    assert_eq!(d.kind.as_deref(), Some("compile"));
+    assert_eq!((d.file.as_deref(), d.line), (None, Some(3)), "{d:?}");
+    for bad in [r#"{"snap":1}"#, "[]", "nope"] {
+        let err = render_pic_svg(".PS\n.PE\n", Some(bad)).unwrap_err();
+        assert_eq!(err.kind, "options", "{bad}: {err}");
+    }
+}
+
+#[test]
+fn hostile_figures_do_not_panic_render() {
+    for f in [
+        "",
+        "[\n",
+        "\u{0}\u{feff}\u{1F600}",
+        "for i = 1 to 1e9 do { }\n",
+        "copy \"/etc/passwd\"\n",
+    ] {
+        if let Err(e) = render_pic_svg(f, None) {
+            assert_ne!(e.kind, "internal", "{f:?}: {e}");
+        }
+    }
+}
+
+/// The typed variants' data: real columns verbatim, complex ones
+/// interleaved, the JSON header with empty `columns`.
+#[test]
+fn typed_buffers_match_json_columns() {
+    let deck = "rc\nv1 1 0 dc 1 ac 1\nr1 1 2 1k\nc1 2 0 1u\n.op\n.ac dec 2 10 1k\n.end\n";
+    let data = run_data(deck, &SimOptions::default()).unwrap();
+    let json = data.to_json();
+    assert_eq!(json, run(deck, &SimOptions::default()).unwrap());
+    let header = data.header_json();
+    assert_eq!(header.plots.len(), 2);
+    for ((p, pj), ph) in data.plots.iter().zip(&json.plots).zip(&header.plots) {
+        assert_eq!(ph.columns, Columns::Real(Vec::new()));
+        assert_eq!(
+            PlotJson {
+                columns: pj.columns.clone(),
+                ..ph.clone()
+            },
+            *pj
+        );
+        let bufs = column_buffers(p);
+        assert_eq!(bufs.len(), pj.variables.len());
+        match &pj.columns {
+            Columns::Real(cols) => {
+                for (b, c) in bufs.iter().zip(cols) {
+                    assert_eq!(b.len(), pj.npoints);
+                    assert!(b.iter().zip(c).all(|(x, y)| Some(*x) == *y));
+                }
+            }
+            Columns::Complex(cols) => {
+                for (b, c) in bufs.iter().zip(cols) {
+                    assert_eq!(b.len(), 2 * pj.npoints);
+                    for (k, [re, im]) in c.iter().enumerate() {
+                        assert_eq!((Some(b[2 * k]), Some(b[2 * k + 1])), (*re, *im));
+                    }
+                }
+            }
+        }
+    }
+    // The header is valid wire JSON with `"columns":[]`.
+    let text = serde_json::to_string(&header).unwrap();
+    assert!(text.contains("\"columns\":[]"), "{text}");
+}
+
+#[test]
+fn typed_pic_run_matches_json_run() {
+    let src = corpus_pic("rc.pic");
+    let opts = PicSimOptions::default();
+    let (data, pic) = run_pic_data(&src, &opts).unwrap();
+    let full = run_pic(&src, &opts).unwrap();
+    assert_eq!(pic, full.pic);
+    assert_eq!(data.to_json(), full.raw);
+    // Failures carry the extraction just like run_pic's.
+    let err = run_pic_data(
+        &pic_fig("V1: vsource((0,1),(0,0), 1)\nR1: resistor((0,1),(0,0))\nground((0,0))\n.op"),
+        &opts,
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, "pic");
+    assert!(err.pic.is_some());
+}

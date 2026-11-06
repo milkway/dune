@@ -8,7 +8,7 @@ the netlist of an [rpic](https://github.com/milkway/rpic-lang) schematic figure
 (`spice = 1`) and simulate it. Browser and Node.
 
 ```js
-import { ready, simulate, extractPic, simulatePic } from '@strategicprojects/dune-sim';
+import { ready, simulate, extractPic, simulatePic, renderPic } from '@strategicprojects/dune-sim';
 
 await ready(); // Node: await ready(fs.readFileSync(require.resolve('…/pkg/dune_wasm_bg.wasm')))
 
@@ -27,6 +27,7 @@ ground((1.25,0))
 .PE`;
 const { netlist, diagnostics, map } = extractPic(figure);
 const run = simulatePic(figure); // simulate's result + { pic: { netlist, diagnostics, map } }
+const svg = renderPic(figure);   // <g id="sN"> ids match map
 ```
 
 With Vite, pass the wasm URL explicitly:
@@ -49,6 +50,31 @@ await ready(wasmUrl);
   { start, end } }]` and `nets[{ name, shapes: [n] }]`.
 - `simulatePic(src, { snap?, includes? })` → `simulate`'s result plus
   `pic: { netlist, diagnostics, map }`.
+- `renderPic(src)` → SVG text of the figure, compiled with the dune
+  prelude by dune's own rpic — the same compile `map` indexes, so the
+  `<g id="sN">` groups always line up with it, whatever rpic version the
+  page ships. Any figure rpic accepts renders (`spice = 1` is not
+  required); a figure rpic rejects throws kind `pic` with one `compile`
+  diagnostic. Supersedes rendering `prelude() + "\n" + src` with your own
+  rpic; `prelude()` stays exported for that.
+- `simulateTyped(netlist, opts?)` / `simulatePicTyped(src, opts?)` → the
+  same results, but each plot's `columns` is an `Array` of `Float64Array`s:
+  the values in a real plot, interleaved `re, im, re, im, …` (length
+  `2 * npoints`) in a complex one; NaN/±inf are kept as such. Each array
+  owns its buffer (a copy, not a view of wasm memory, which memory growth
+  would detach), so it outlives later calls and moves out of a Worker
+  without a copy:
+
+  ```js
+  const run = simulateTyped(deck);
+  postMessage(run, run.plots.flatMap((p) => p.columns.map((c) => c.buffer)));
+  ```
+
+  On a 100k-point, 6-vector `.tran` (Node 24, Apple-silicon Mac):
+  `simulate` 230 ms vs `simulateTyped` 178 ms; handing the result over
+  costs 15 ms to structured-clone the JSON object (48 ms to
+  `JSON.stringify` it) vs 0.8 ms to clone the typed one, ~0 ms to
+  transfer it (`npm run bench`).
 
 Errors are thrown as `Error`s with `kind` (`options`, `parse`, `elaborate`,
 `analysis`, `pic`, `internal`), `diagnostics` (with line/column) and, from

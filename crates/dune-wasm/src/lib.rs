@@ -1,7 +1,7 @@
 //! WebAssembly build of the Dune simulator (PLAN.md §4), the engine
 //! behind the Studio's "Simulate" panel.
 //!
-//! The JS surface is three functions:
+//! The JS surface:
 //!
 //! * `simulate(netlist, opts?)` parses the deck with `dune-netlist`,
 //!   builds it with [`Circuit::from_netlist`], runs every analysis card
@@ -11,17 +11,26 @@
 //!   figure with [`dune_pic::extract`] (embedded prelude) and returns
 //!   it with its diagnostics and overlay map ([`PicJson`]);
 //! * `simulate_pic(src, opts?)` does both: extraction, then the deck
-//!   through `simulate`'s pipeline ([`PicRunJson`]).
+//!   through `simulate`'s pipeline ([`PicRunJson`]);
+//! * `render_pic(src, opts?)` renders the figure to SVG with
+//!   [`dune_pic::render_svg`] — the same rpic compile (prelude
+//!   included) whose shape ids the overlay map refers to; it does not
+//!   require `spice = 1`;
+//! * `simulate_typed`/`simulate_pic_typed` are `simulate`/`simulate_pic`
+//!   with each plot's `columns` as `Float64Array`s instead of JSON
+//!   arrays (see [`simulate_typed`]);
+//! * `prelude()` is the embedded pic prelude.
 //!
 //! On failure each throws a JS `Error` whose `message` is the
 //! engine's, parser's or extractor's message, with `kind` and
 //! `diagnostics` properties (and `pic`, for the pic entry points) as
-//! in [`SimError`]. Rendering the figure is not here: the Studio has
-//! rpic's own wasm for the SVG.
+//! in [`SimError`].
 //!
 //! Native builds (the `rlib`) expose the same paths as
-//! [`simulate_json`]/[`run`], [`extract_pic_json`]/[`extract`] and
-//! [`simulate_pic_json`]/[`run_pic`], which is what the tests exercise.
+//! [`simulate_json`]/[`run`], [`extract_pic_json`]/[`extract`],
+//! [`simulate_pic_json`]/[`run_pic`] and [`render_pic_svg`], plus
+//! [`run_data`]/[`run_pic_data`] and [`column_buffers`] behind the
+//! typed variants, which is what the tests exercise.
 //!
 //! The deck and the figure are hostile input: nothing here panics on
 //! malformed input (the parser's no-panic contract carries over; every
@@ -32,10 +41,11 @@ mod schema;
 
 pub use schema::{
     Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, NetOverlayJson,
-    OverlayMapJson, PicJson, PicRunJson, PicSimOptions, PlotJson, RawfileJson, ShapeRangeJson,
-    SimError, SimOptions, VariableJson,
+    OverlayMapJson, PicJson, PicRunJson, PicSimOptions, PlotJson, RawfileJson, RenderOptionsJson,
+    ShapeRangeJson, SimError, SimOptions, VariableJson,
 };
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -43,6 +53,7 @@ use std::path::Path;
 use dune_core::{Circuit, Options, Solution};
 use dune_netlist::{IncludeLoader, Severity};
 use dune_pic::{ExtractOptions, PicError};
+use dune_raw::{Data, Plot};
 use serde::de::DeserializeOwned;
 use wasm_bindgen::prelude::*;
 
@@ -75,6 +86,21 @@ pub fn simulate_pic_json(src: &str, opts_json: Option<&str>) -> Result<String, S
         let opts: PicSimOptions = parse_options(opts_json)?;
         let out = run_pic(src, &opts)?;
         serde_json::to_string(&out).map_err(|e| SimError::new("internal", e.to_string()))
+    })
+}
+
+/// Render a figure to SVG text with the embedded prelude
+/// ([`dune_pic::render_svg`]): the drawing the overlay map of
+/// [`extract`] indexes (`<g id="sN">`). `opts_json` is a
+/// [`RenderOptionsJson`] object (currently empty), or `None`.
+///
+/// Any figure rpic compiles renders — `spice = 1` is not required. A
+/// figure rpic rejects is a `pic` error with one `compile` diagnostic,
+/// as in [`extract`].
+pub fn render_pic_svg(src: &str, opts_json: Option<&str>) -> Result<String, SimError> {
+    guarded(|| {
+        let _opts: RenderOptionsJson = parse_options(opts_json)?;
+        dune_pic::render_svg(src, &ExtractOptions::default()).map_err(pic_error)
     })
 }
 
@@ -126,26 +152,7 @@ pub fn extract(src: &str, snap: Option<f64>) -> Result<PicJson, SimError> {
         }
         opts.snap = snap;
     }
-    let ex = dune_pic::extract(src, &opts).map_err(|e| {
-        let (kind, span) = match &e {
-            PicError::Compile { span, .. } => ("compile", span.as_ref()),
-            PicError::NotMarked => ("not-marked", None),
-        };
-        let message = match &e {
-            PicError::Compile { message, .. } => message.clone(),
-            PicError::NotMarked => e.to_string(),
-        };
-        let shown = match span {
-            Some(s) => format!("{s}: {message}"),
-            None => message.clone(),
-        };
-        SimError {
-            kind: "pic".into(),
-            message: shown,
-            diagnostics: vec![DiagnosticJson::pic_located("error", kind, message, span)],
-            pic: None,
-        }
-    })?;
+    let ex = dune_pic::extract(src, &opts).map_err(pic_error)?;
     Ok(PicJson {
         netlist: ex.netlist,
         diagnostics: ex
@@ -157,12 +164,44 @@ pub fn extract(src: &str, snap: Option<f64>) -> Result<PicJson, SimError> {
     })
 }
 
+/// A figure that produced no deck (or no drawing): a `pic` error with
+/// one `compile` or `not-marked` diagnostic.
+fn pic_error(e: PicError) -> SimError {
+    let (kind, span) = match &e {
+        PicError::Compile { span, .. } => ("compile", span.as_ref()),
+        PicError::NotMarked => ("not-marked", None),
+    };
+    let message = match &e {
+        PicError::Compile { message, .. } => message.clone(),
+        PicError::NotMarked => e.to_string(),
+    };
+    let shown = match span {
+        Some(s) => format!("{s}: {message}"),
+        None => message.clone(),
+    };
+    SimError {
+        kind: "pic".into(),
+        message: shown,
+        diagnostics: vec![DiagnosticJson::pic_located("error", kind, message, span)],
+        pic: None,
+    }
+}
+
 /// Extract a figure's deck and run every analysis in it.
 ///
 /// Extraction errors (any diagnostic of severity error) stop here with
 /// a `pic` error; otherwise the deck goes through [`run`] and any
 /// failure there carries the extraction in [`SimError::pic`].
 pub fn run_pic(src: &str, opts: &PicSimOptions) -> Result<PicRunJson, SimError> {
+    let (data, pic) = run_pic_data(src, opts)?;
+    Ok(PicRunJson {
+        raw: data.to_json(),
+        pic,
+    })
+}
+
+/// [`run_pic`] with the plots kept in engine form ([`RunData`]).
+pub fn run_pic_data(src: &str, opts: &PicSimOptions) -> Result<(RunData, PicJson), SimError> {
     let pic = extract(src, opts.snap)?;
     // dune_pic diagnostics map 1:1, so the severity string decides.
     let first_error = pic
@@ -182,7 +221,7 @@ pub fn run_pic(src: &str, opts: &PicSimOptions) -> Result<PicRunJson, SimError> 
         });
     }
     match run_includes(&pic.netlist, &opts.includes) {
-        Ok(raw) => Ok(PicRunJson { raw, pic }),
+        Ok(data) => Ok((data, pic)),
         Err(mut e) => {
             e.pic = Some(Box::new(pic));
             Err(e)
@@ -214,13 +253,60 @@ impl IncludeLoader for MapLoader<'_> {
 /// Each card runs through [`Circuit::run`], the dispatch `dune-cli`
 /// shares (same plot order, title and empty date as its rawfile).
 pub fn run(netlist: &str, opts: &SimOptions) -> Result<RawfileJson, SimError> {
+    Ok(run_data(netlist, opts)?.to_json())
+}
+
+/// [`run`] with the plots kept in engine form ([`RunData`]).
+pub fn run_data(netlist: &str, opts: &SimOptions) -> Result<RunData, SimError> {
     run_includes(netlist, &opts.includes)
 }
 
-fn run_includes(
-    netlist: &str,
-    includes: &BTreeMap<String, String>,
-) -> Result<RawfileJson, SimError> {
+/// The outcome of a run before its plots become JSON: what the typed
+/// entry points read their columns from.
+#[derive(Clone, Debug)]
+pub struct RunData {
+    /// One per analysis result, in deck order (as [`RawfileJson::plots`]).
+    pub plots: Vec<Plot>,
+    pub notes: Vec<String>,
+    pub diagnostics: Vec<DiagnosticJson>,
+}
+
+impl RunData {
+    /// The full JSON result (what `simulate` returns).
+    pub fn to_json(&self) -> RawfileJson {
+        RawfileJson {
+            plots: self.plots.iter().map(PlotJson::from).collect(),
+            notes: self.notes.clone(),
+            diagnostics: self.diagnostics.clone(),
+        }
+    }
+
+    /// The JSON result without data: every plot's `columns` is an empty
+    /// array (metadata only; `npoints` still counts the points).
+    pub fn header_json(&self) -> RawfileJson {
+        RawfileJson {
+            plots: self.plots.iter().map(PlotJson::header).collect(),
+            notes: self.notes.clone(),
+            diagnostics: self.diagnostics.clone(),
+        }
+    }
+}
+
+/// A plot's data as flat `f64` buffers, one per variable in
+/// `variables` order: the column itself in a real plot (borrowed), the
+/// interleaved `re, im, re, im, …` (length `2·npoints`) in a complex
+/// one. Non-finite values stay as they are (NaN, ±inf).
+pub fn column_buffers(p: &Plot) -> Vec<Cow<'_, [f64]>> {
+    match &p.data {
+        Data::Real(cols) => cols.iter().map(|c| Cow::Borrowed(c.as_slice())).collect(),
+        Data::Complex(cols) => cols
+            .iter()
+            .map(|c| Cow::Owned(c.iter().flat_map(|z| [z.re, z.im]).collect()))
+            .collect(),
+    }
+}
+
+fn run_includes(netlist: &str, includes: &BTreeMap<String, String>) -> Result<RunData, SimError> {
     let parsed = dune_netlist::parse_with_loader(
         Path::new(DECK_NAME),
         netlist.to_string(),
@@ -264,11 +350,8 @@ fn run_includes(
     }
 
     let title = &parsed.netlist.title;
-    Ok(RawfileJson {
-        plots: solutions
-            .iter()
-            .map(|s| PlotJson::from(&s.to_plot(title, "")))
-            .collect(),
+    Ok(RunData {
+        plots: solutions.iter().map(|s| s.to_plot(title, "")).collect(),
         notes,
         diagnostics,
     })
@@ -288,6 +371,18 @@ pub fn simulate(netlist: &str, opts: JsValue) -> Result<JsValue, JsValue> {
     js_sys::JSON::parse(&out)
 }
 
+/// `prelude()` — the pic prelude dune-pic compiles ahead of the figure.
+///
+/// Kept for embedders that render with their own rpic: the SVG must
+/// come from exactly `prelude() + "\n" + src` (with rpic's circuits
+/// library on, and — before rpic 0.13 — the `.`-lines blanked) for the
+/// overlay's `sN` shape ids to line up with the map. `render_pic` does
+/// that with dune's own rpic and supersedes it.
+#[wasm_bindgen]
+pub fn prelude() -> String {
+    dune_pic::PRELUDE.to_string()
+}
+
 /// `extract_pic(src, opts?)` — the SPICE deck of an rpic figure.
 ///
 /// `opts` is `undefined`/`null` or an [`ExtractOptionsJson`] object
@@ -296,15 +391,6 @@ pub fn simulate(netlist: &str, opts: JsValue) -> Result<JsValue, JsValue> {
 /// included, are in the result. Throws an `Error` of kind `pic` when
 /// there is no deck at all (rpic rejected the figure, or it is not
 /// marked `spice = 1`), or `options`.
-/// The pic prelude dune-pic compiles ahead of the figure. The Studio
-/// must render the SVG from exactly `prelude() + "\n" + src` (with
-/// rpic's circuits library on) for the overlay's `sN` shape ids to
-/// line up with the map.
-#[wasm_bindgen]
-pub fn prelude() -> String {
-    dune_pic::PRELUDE.to_string()
-}
-
 #[wasm_bindgen]
 pub fn extract_pic(src: &str, opts: JsValue) -> Result<JsValue, JsValue> {
     #[cfg(feature = "console-panic")]
@@ -312,6 +398,23 @@ pub fn extract_pic(src: &str, opts: JsValue) -> Result<JsValue, JsValue> {
     let opts_json = opts_text(&opts)?;
     let out = extract_pic_json(src, opts_json.as_deref()).map_err(|e| js_error(&e))?;
     js_sys::JSON::parse(&out)
+}
+
+/// `render_pic(src, opts?)` — the SVG of an rpic figure.
+///
+/// Compiles `prelude + src` with dune's own rpic (circuits library on)
+/// — the very compile [`extract_pic`]'s overlay map indexes, so its
+/// `<g id="sN">` groups line up with the map whatever rpic version the
+/// embedder has. Does not require `spice = 1`; the figure's `.`-lines
+/// (SPICE directives) draw nothing. `opts` is `undefined`/`null` or
+/// `{}` ([`RenderOptionsJson`]). Throws an `Error` of kind `pic` (one
+/// `compile` diagnostic) when rpic rejects the figure, or `options`.
+#[wasm_bindgen]
+pub fn render_pic(src: &str, opts: JsValue) -> Result<String, JsValue> {
+    #[cfg(feature = "console-panic")]
+    console_error_panic_hook::set_once();
+    let opts_json = opts_text(&opts)?;
+    render_pic_svg(src, opts_json.as_deref()).map_err(|e| js_error(&e))
 }
 
 /// `simulate_pic(src, opts?)` — extract an rpic figure's deck and run
@@ -330,6 +433,72 @@ pub fn simulate_pic(src: &str, opts: JsValue) -> Result<JsValue, JsValue> {
     let opts_json = opts_text(&opts)?;
     let out = simulate_pic_json(src, opts_json.as_deref()).map_err(|e| js_error(&e))?;
     js_sys::JSON::parse(&out)
+}
+
+/// `simulate_typed(netlist, opts?)` — `simulate` with typed-array
+/// columns.
+///
+/// Same arguments, errors and result object as `simulate`, except that
+/// each plot's `columns` is a JS `Array` of `Float64Array`s, one per
+/// variable: the values themselves in a `real` plot (`npoints` long),
+/// interleaved `re, im, re, im, …` in a `complex` one (`2·npoints`
+/// long). NaN and ±inf stay as they are (the JSON variant writes
+/// `null`).
+///
+/// Each array is a **copy** into a JS-owned `ArrayBuffer` (one per
+/// column), not a view of wasm memory — a view would be detached by
+/// the next memory growth. They survive the instance, are
+/// structured-cloneable and can be listed as transferables in
+/// `postMessage`, which moves them without copying.
+#[wasm_bindgen]
+pub fn simulate_typed(netlist: &str, opts: JsValue) -> Result<JsValue, JsValue> {
+    #[cfg(feature = "console-panic")]
+    console_error_panic_hook::set_once();
+    let opts_json = opts_text(&opts)?;
+    let data = parse_options::<SimOptions>(opts_json.as_deref())
+        .and_then(|o| run_data(netlist, &o))
+        .map_err(|e| js_error(&e))?;
+    let header = serde_json::to_string(&data.header_json())
+        .map_err(|e| js_error(&SimError::new("internal", e.to_string())))?;
+    typed_result(&header, &data.plots)
+}
+
+/// `simulate_pic_typed(src, opts?)` — `simulate_pic` with the plots'
+/// `columns` as `Float64Array`s, as in [`simulate_typed`] (`pic` is
+/// unchanged).
+#[wasm_bindgen]
+pub fn simulate_pic_typed(src: &str, opts: JsValue) -> Result<JsValue, JsValue> {
+    #[cfg(feature = "console-panic")]
+    console_error_panic_hook::set_once();
+    let opts_json = opts_text(&opts)?;
+    let (data, pic) = guarded(|| {
+        let opts: PicSimOptions = parse_options(opts_json.as_deref())?;
+        run_pic_data(src, &opts)
+    })
+    .map_err(|e| js_error(&e))?;
+    let header = serde_json::to_string(&PicRunJson {
+        raw: data.header_json(),
+        pic,
+    })
+    .map_err(|e| js_error(&SimError::new("internal", e.to_string())))?;
+    typed_result(&header, &data.plots)
+}
+
+/// Parse the data-less JSON `header` and fill each plot's `columns`
+/// with the typed arrays of the matching engine plot.
+fn typed_result(header: &str, plots: &[Plot]) -> Result<JsValue, JsValue> {
+    let obj = js_sys::JSON::parse(header)?;
+    let js_plots: js_sys::Array = js_sys::Reflect::get(&obj, &"plots".into())?.unchecked_into();
+    let key: JsValue = "columns".into();
+    for (i, p) in plots.iter().enumerate() {
+        let cols = js_sys::Array::new();
+        for buf in column_buffers(p) {
+            // `From<&[f64]>` copies into a fresh JS-owned buffer.
+            cols.push(&js_sys::Float64Array::from(buf.as_ref()));
+        }
+        js_sys::Reflect::set(&js_plots.get(i as u32), &key, &cols)?;
+    }
+    Ok(obj)
 }
 
 /// `opts` as JSON text; `None` for `undefined`/`null`.

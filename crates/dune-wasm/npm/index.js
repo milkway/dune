@@ -41,7 +41,21 @@ export function simulate(netlist, opts) {
   return wasm.simulate(netlist, opts);
 }
 
-/** The pic prelude; render SVG from `prelude() + "\n" + src` so overlay ids match. */
+/**
+ * Run a SPICE3 deck like `simulate`, but each plot's `columns` is an Array of
+ * `Float64Array`s (interleaved re,im in complex plots; NaN/±inf kept). The
+ * arrays own their buffers (copies, not views of wasm memory): list
+ * `plot.columns.map((c) => c.buffer)` as transferables to `postMessage`.
+ */
+export function simulateTyped(netlist, opts) {
+  ensure();
+  return wasm.simulate_typed(netlist, opts);
+}
+
+/**
+ * The pic prelude. Superseded by `renderPic`; kept for embedders that render
+ * `prelude() + "\n" + src` with their own rpic (blanking `.`-lines before rpic 0.13).
+ */
 export function prelude() {
   ensure();
   return wasm.prelude();
@@ -57,4 +71,22 @@ export function extractPic(src, opts) {
 export function simulatePic(src, opts) {
   ensure();
   return wasm.simulate_pic(src, opts);
+}
+
+/** `simulatePic` with typed-array `columns`, as in `simulateTyped`. */
+export function simulatePicTyped(src, opts) {
+  ensure();
+  return wasm.simulate_pic_typed(src, opts);
+}
+
+/**
+ * SVG of the figure, compiled with the dune prelude by dune's own rpic — the
+ * same compile the overlay map indexes, so `<g id="sN">` lines up with
+ * `extractPic(src).map` regardless of the embedder's rpic version. Supersedes
+ * rendering `prelude() + src` yourself. No `spice = 1` needed. Throws kind
+ * `pic` (one `compile` diagnostic) when rpic rejects the figure.
+ */
+export function renderPic(src, opts) {
+  ensure();
+  return wasm.render_pic(src, opts);
 }

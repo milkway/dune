@@ -22,6 +22,33 @@ export function extractPic(src: string, opts?: ExtractOptions | null): PicExtrac
  */
 export function simulatePic(src: string, opts?: PicSimOptions | null): PicRun;
 
+/**
+ * `simulate` with typed-array columns: each plot's `columns` is one
+ * `Float64Array` per variable — the values in a real plot (`npoints` long),
+ * interleaved `re, im, …` in a complex one (`2·npoints`); NaN/±inf are kept.
+ * The arrays are copies in JS-owned buffers (not views of wasm memory, which
+ * growth would detach): structured-cloneable, and transferable via
+ * `postMessage(run, run.plots.flatMap((p) => p.columns.map((c) => c.buffer)))`.
+ */
+export function simulateTyped(netlist: string, opts?: SimOptions | null): TypedRawfile;
+
+/** `simulatePic` with typed-array columns, as in {@link simulateTyped}. */
+export function simulatePicTyped(src: string, opts?: PicSimOptions | null): TypedPicRun;
+
+/**
+ * Render an rpic figure to SVG with dune's own rpic and the dune prelude —
+ * the very compile {@link extractPic}'s overlay map indexes, so the
+ * `<g id="sN">` groups line up with the map whatever rpic the embedder ships.
+ * Supersedes rendering `prelude() + "\n" + src` yourself (and blanking the
+ * `.`-lines for older rpic). Does not require `spice = 1`. Throws a
+ * {@link SimError} of kind `pic` (one `compile` diagnostic) when rpic rejects
+ * the figure, or `options`.
+ */
+export function renderPic(src: string, opts?: RenderOptions | null): string;
+
+/** Options of {@link renderPic}: none yet (unknown keys are an error). */
+export interface RenderOptions {}
+
 export interface SimOptions {
   /** Files the deck may `.include`, by the path its card names. */
   includes?: Record<string, string>;
@@ -56,6 +83,20 @@ export interface Plot {
   npoints: number;
   /** One column per variable; complex plots hold `[re, im]` pairs; NaN/±inf are `null`. */
   columns: (number | null)[][] | [number | null, number | null][][];
+}
+
+/** A {@link Plot} whose data are typed arrays (see {@link simulateTyped}). */
+export interface TypedPlot extends Omit<Plot, 'columns'> {
+  /** One per variable: values (real plot) or interleaved `re, im` (complex plot). */
+  columns: Float64Array[];
+}
+
+export interface TypedRawfile extends Omit<Rawfile, 'plots'> {
+  plots: TypedPlot[];
+}
+
+export interface TypedPicRun extends TypedRawfile {
+  pic: PicExtraction;
 }
 
 export interface Diagnostic {
@@ -110,5 +151,9 @@ export interface SimError extends Error {
   pic?: PicExtraction;
 }
 
-/** The pic prelude; render SVG from `prelude() + "\n" + src` so overlay ids match. */
+/**
+ * The pic prelude. Superseded by {@link renderPic}; kept for embedders that
+ * render `prelude() + "\n" + src` with their own rpic (circuits library on;
+ * before rpic 0.13, blank the `.`-lines first) so overlay ids match.
+ */
 export function prelude(): string;

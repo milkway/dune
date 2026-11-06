@@ -1,7 +1,16 @@
 // Node smoke test of the built package (run ./build.sh first).
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { extractPic, ready, simulate, simulatePic } from '../index.js';
+import {
+  extractPic,
+  prelude,
+  ready,
+  renderPic,
+  simulate,
+  simulatePic,
+  simulatePicTyped,
+  simulateTyped,
+} from '../index.js';
 
 const wasm = readFileSync(new URL('../pkg/dune_wasm_bg.wasm', import.meta.url));
 const corpus = (name) => readFileSync(new URL(`../../../../corpus/pic/${name}`, import.meta.url), 'utf8');
@@ -64,5 +73,49 @@ assert.equal(d.severity, 'warning');
 assert.deepEqual([d.file, d.line, d.column], [null, 4, 5]);
 
 assert.throws(() => simulatePic(rc, { snap: -1 }), (e) => e.kind === 'options');
+
+// renderPic: dune's own compile; the map's ids are in the SVG.
+const svg = renderPic(rc);
+assert.match(svg, /^<svg|<svg /);
+for (const e of ex.map.elements) {
+  for (let n = e.shapes.start; n < e.shapes.end; n++) assert.ok(svg.includes(`id="s${n}"`), `s${n}`);
+}
+for (const n of ex.map.nets.flatMap((x) => x.shapes)) assert.ok(svg.includes(`id="s${n}"`), `net s${n}`);
+assert.match(renderPic('.PS\nR1: resistor((0,0),(1,0),1k)\n.PE\n'), /<svg/, 'unmarked figures render');
+assert.throws(() => renderPic('.PS\nline from (0,0) to\n.PE\n'), (e) => e.kind === 'pic' && e.diagnostics[0].kind === 'compile');
+assert.throws(() => renderPic(rc, { snap: 1 }), (e) => e.kind === 'options');
+assert.equal(typeof prelude(), 'string', 'prelude() still exported');
+
+// simulateTyped: same data as the JSON columns, as Float64Arrays.
+const acDeck = 'rc\nv1 1 0 dc 1 ac 1\nr1 1 2 1k\nc1 2 0 1u\n.op\n.ac dec 2 10 1k\n.end\n';
+const js = simulate(acDeck);
+const ty = simulateTyped(acDeck);
+assert.deepEqual(ty.notes, js.notes);
+assert.equal(ty.plots.length, js.plots.length);
+for (const [k, tp] of ty.plots.entries()) {
+  const jp = js.plots[k];
+  assert.deepEqual({ ...tp, columns: null }, { ...jp, columns: null });
+  const complex = tp.flags.startsWith('complex');
+  assert.equal(tp.columns.length, tp.variables.length);
+  for (const [i, col] of tp.columns.entries()) {
+    assert.ok(col instanceof Float64Array);
+    assert.equal(col.length, (complex ? 2 : 1) * tp.npoints);
+    const flat = complex ? jp.columns[i].flat() : jp.columns[i];
+    assert.deepEqual(Array.from(col), flat);
+  }
+}
+// Own buffers: transferable, and they survive later calls (memory growth).
+const tr = simulatePicTyped(rc);
+assert.equal(tr.pic.netlist, ex.netlist);
+const before = Array.from(tr.plots[0].columns[1]);
+const cols0 = tr.plots[0].columns.map((c) => c.buffer);
+assert.equal(new Set(cols0).size, cols0.length, 'one buffer per column');
+simulatePicTyped(rc);
+assert.deepEqual(Array.from(tr.plots[0].columns[1]), before);
+const moved = structuredClone(tr, { transfer: cols0 });
+assert.equal(tr.plots[0].columns[1].length, 0, 'transferred (detached at the source)');
+assert.deepEqual(Array.from(moved.plots[0].columns[1]), before);
+assert.throws(() => simulateTyped('t\nq1 1 1 0\n.op\n.end\n'), (e) => typeof e.kind === 'string');
+assert.throws(() => simulatePicTyped(rc, { snap: -1 }), (e) => e.kind === 'options');
 
 console.log('dune-sim smoke: ok');
