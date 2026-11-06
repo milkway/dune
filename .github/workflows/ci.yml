@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push supersedes the queued/running CI of older commits.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
