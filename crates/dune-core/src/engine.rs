@@ -760,16 +760,35 @@ impl Engine {
     ) -> Result<Vec<(f64, Vec<Complex64>)>, Error> {
         let n = number_steps.max(1);
         let freq_delta = match step_type {
-            AcStepType::Decade => f64::exp(f64::ln(10.0) / n as f64),
+            // ngspice-47 (`acan.c`), not the 3f5: under a decade of
+            // span the 3f5's `10^(1/n)` stays (`stop == start` gives
+            // 1, one point); over it the step is recomputed as
+            // `exp(ln(stop/start)/floor(log10(stop/start)·n))` so
+            // the last point lands exactly on FSTOP. The two agree
+            // only on whole-decade spans (every older corpus deck;
+            // gate: `corpus/regress/acdec.cir`).
+            AcStepType::Decade => {
+                if fstop / 10.0 < fstart {
+                    if fstop == fstart {
+                        1.0
+                    } else {
+                        f64::exp(f64::ln(10.0) / n as f64)
+                    }
+                } else {
+                    let steps = f64::floor((fstop / fstart).log10().abs() * n as f64);
+                    f64::exp(f64::ln(fstop / fstart) / steps)
+                }
+            }
             AcStepType::Octave => f64::exp(f64::ln(2.0) / n as f64),
             AcStepType::Linear => {
                 // The C: delta = (stop-start)/(n-1) only when
-                // n-1 > 1, else HUGE (a 2-point linear sweep yields
-                // one point; quirk kept).
+                // n-1 > 1, else 0 (the McRoberts patch in ngspice;
+                // a 2-point linear sweep yields one point either
+                // way — the 3f5's HUGE did the same).
                 if n - 1 > 1 {
                     (fstop - fstart) / (n - 1) as f64
                 } else {
-                    f64::MAX
+                    0.0
                 }
             }
         };

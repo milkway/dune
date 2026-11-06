@@ -1,0 +1,15 @@
+AC decade grid over a non-whole-decade span lands on FSTOP (ngspice)
+* Regression: ngspice-47 (acan.c) recomputes the decade step as
+* exp(ln(stop/start)/floor(log10(stop/start)*n)) whenever the span
+* exceeds one decade, so the sweep ends exactly at FSTOP; the 3f5's
+* 10^(1/n) agrees only on whole-decade spans. 10meg->2g spans 2.30
+* decades: the grids differ at every point past the first without
+* the ngspice form. Under one decade (and stop==start) the 3f5 step
+* survives in both programs.
+vin 1 0 dc 0 ac 1
+r1 1 2 1k
+c1 2 0 15.9p
+r2 2 3 10k
+l1 3 0 1u
+.ac dec 10 10meg 2g
+.end
