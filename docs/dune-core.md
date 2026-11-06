@@ -219,6 +219,45 @@ resultados espelhando o rawfile).
   bate a ≤3e-13 em quatro decks de sonda (harmônicos, IM com fases,
   diodo com RS e reverso, excitação por ISRC).
 
+- **LTRA** (`ltra.rs` ← `ltraset.c`, `ltratemp.c`, `ltraload.c`,
+  `ltraacct.c`, `ltratrun.c`, `ltraacld.c`, `ltramisc.c`;
+  Roychowdhury): linha com perdas por convolução. As duas equações
+  de porta são incógnitas *de tensão* (`CKTmkVolt`), nomeadas
+  `<nome>#i1/#i2` e salvas no rawfile como o ngspice
+  (`v(o1#i1)` — o filtro `saved_node()` agora esconde só os seis
+  sufixos internos do ngspice, não todo `#`). Quatro regimes:
+  LC (atraso puro), RLC (respostas ao impulso h1'/h2/h3' com os
+  fits de Bessel I0/I1 do Numerical Recipes), RC (kernels erfc,
+  `libm`) e RG (atenuador sem frequência). Coeficientes =
+  segundas diferenças das respostas duas-vezes-integradas na malha
+  de pontos aceitos (lista própria, o `CKTtimePoints` do C),
+  recomputados na 1ª iteração de cada ponto; valores atrasados por
+  interpolação quadrática/linear. Breakpoints a múltiplos do
+  atraso via `accept`; teto de passo (`steplimit`/RLC safe step)
+  via `trunc` (`TerrCtx` ganhou `sol`/`time`); "cannot find
+  delayed timepoint" vira `LoadCtx::fault` → não-convergência →
+  corte de passo (o `E_INTERN` do C). Não portados (inalcançáveis
+  ou sem deck): `LTRAlteCalculate` (exige `fullcontrol`, que
+  nenhuma tabela aceita) e a compactação `trytocompact`. Exigiu
+  três acertos fora do LTRA (todos em `corpus/KNOWN_DIFFS.md`):
+  a **regra de aproximação de breakpoint** do ngspice (resto
+  < 1.9·passo → dois passos iguais; medida na fronteira
+  1.899–1.901), o **`pnjlim` reverso** do ngspice e a **limitação
+  do predictor do diodo** (bug de fidelidade; `dioload.c` limita a
+  extrapolação — gate: ltra_1, que FALHA 1.061 sem ela). Valida:
+  ltra_1 PASS 0.058, ltra_2 PASS 0.003 (RLC concentrado — gate da
+  regra de breakpoint: 1.588 sem ela), `corpus/regress/ltra_rc.cir`
+  e `ltra_rg.cir` em lockstep (3e-14). **ltra_3 é XFAIL (teto
+  35)**: ringing de trapézio na corrente dos diodos do `dioload`
+  (rs + carga de difusão, sem cjo) — o golden do ngspice ringa
+  período-2 por intervalos inteiros, o Dune perde o ring em 8.49 ns
+  e o reinício em ordem 1 o amortece; o próprio ngspice re-rodado
+  a TMAX=0.01 ns difere do próprio golden por 26.9×; sem os
+  vetores x3.* o deck passa a 0.42, e a linha em si bate a 1.2 mV.
+  Mesma família do schmitt/mosamp2 (D-0011/D-0012). Nota menor:
+  nó x1.6 (flutuante, definido por fugas) fica 7 mV do ngspice no
+  op — não afeta vereditos.
+
 - **BSIM1 (nível 4)** (`bsim1.rs` ← `b1ld.c`, `b1eval.c`,
   `b1temp.c`, `b1set.c`, `b1moscap.c`, `b1acld.c`, `b1cvtest.c`):
   cada parâmetro elétrico vem em tripla (valor, dep. L, dep. W)
@@ -341,7 +380,9 @@ oráculo contra o ngspice.
   (`bjtdisto.c`/`mos*dist.c` no C); `.dc` varrendo TEMP e parâmetro
   de modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- MOS nível 3, JFET/MESFET, chaves, linhas T/O/U, fonte B (Fase 3).
+- MOS nível 3, JFET/MESFET, chaves, linhas T/U, fonte B (Fase 3).
+- LTRA: `trytocompact` (compactação do histórico) e o controle LTE
+  (`LTRAlteCalculate` — inalcançável sem `fullcontrol`).
 - Controlador de passo: cruzamento de `vds=0` num breakpoint com nó
   de ~1 fF mata o passo no BSIM1/2 (ver o caso-limite acima).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.
