@@ -284,6 +284,7 @@ impl Circuit {
                     ac,
                     distof1,
                     distof2,
+                    port,
                 } => {
                     let ac = ac.as_ref().map(|a| (a.mag, a.phase));
                     let distof1 = distof1.as_ref().map(|d| (d.mag, d.phase));
@@ -309,6 +310,10 @@ impl Circuit {
                                 ac,
                                 distof1,
                                 distof2,
+                                port: port.map(|p| crate::circuit::RfPort {
+                                    num: p.num,
+                                    z0: p.z0,
+                                }),
                             },
                             &mut problems,
                         ),

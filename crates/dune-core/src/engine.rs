@@ -21,7 +21,7 @@ use crate::state::States;
 use num_complex::Complex64;
 
 /// Memory guard for sweep/transient outputs: `points × vars` of f64.
-const MAX_OUTPUT_VALUES: usize = 50_000_000;
+pub(crate) const MAX_OUTPUT_VALUES: usize = 50_000_000;
 
 /// Refuse a frequency sweep whose PLANNED point count already blows
 /// [`MAX_OUTPUT_VALUES`], before any work. The per-iteration checks
@@ -872,6 +872,7 @@ impl Engine {
                 rhs_im: &mut im,
                 omega,
                 states: &self.states,
+                sp: false,
             };
             for d in &mut self.devices {
                 d.load_ac(&mut ctx);
@@ -953,6 +954,7 @@ impl Engine {
                 rhs_im: &mut im,
                 omega,
                 states: &self.states,
+                sp: false,
             };
             for d in &mut self.devices {
                 d.load_ac(&mut ctx);
@@ -1001,8 +1003,137 @@ impl Engine {
             freq,
             temp,
             states: &self.states,
+            sp_sink: None,
         };
         self.devices[d].noise_dens(&ctx)
+    }
+
+    /// The thermal and shot generators of every noisy device,
+    /// `(n1, n2, density)` in device order (`CKTspnoise` walking
+    /// `DEVnoise` under `DOING_SP`; `nevalsrc.c`). The adjoint
+    /// solution handed to the devices is only read for flicker gains,
+    /// which `.sp` drops.
+    pub fn sp_noise_generators(&self, freq: f64, temp: f64) -> Vec<crate::matrix::NoiseGen> {
+        let sink = std::cell::RefCell::new(Vec::new());
+        let zeros = vec![0.0; self.vars.len()];
+        let ctx = NoiseCtx {
+            re: &zeros,
+            im: &zeros,
+            freq,
+            temp,
+            states: &self.states,
+            sp_sink: Some(&sink),
+        };
+        for d in &self.devices {
+            if d.noise_suffixes().is_some() {
+                d.noise_dens(&ctx);
+            }
+        }
+        sink.into_inner()
+    }
+
+    /// `SPan`'s operating point (`span.c`): `CKTop`, then the
+    /// `MODEINITSMSIG` load that stores the small-signal parameters.
+    pub fn sp_prepare(&mut self, opts: &Options) -> Result<(), Error> {
+        self.set_kind(AnKind::DcOp, false);
+        self.op(opts)?;
+        self.load_all(InitMode::Smsig, opts, 1.0);
+        Ok(())
+    }
+
+    /// One `.sp` frequency (`span.c` inner loop): `NIspPreload` — the
+    /// AC load under `MODESP` and one complex factorization — then
+    /// one `NIspSolve` per port with that port's branch driven by 1 V
+    /// (`VSRCspupdate`), and, when `adjoint` is set, the transposed
+    /// solves with a unit current into each port's `+` node
+    /// (`NInspIter`) on the same factors.
+    ///
+    /// The base RHS reproduces the C exactly: `span.c` backs up the
+    /// loaded RHS with two `memcpy` into `rhswoPorts` (the second,
+    /// meant for `irhswoPorts`, overwrites it with the imaginary
+    /// part) and restores the never-written, zeroed `irhswoPorts` as
+    /// the imaginary part. With every V source's stimulus off under
+    /// `MODESP` only I-source `AC` values reach the load, and of
+    /// those only the imaginary part survives, as a real excitation.
+    ///
+    /// Returns per port, in port order, the forward solution and
+    /// (when asked) the adjoint solution, var-indexed.
+    #[allow(clippy::type_complexity)]
+    pub fn sp_point(
+        &mut self,
+        freq: f64,
+        ports: &[crate::circuit::PortInfo],
+        adjoint: bool,
+    ) -> Result<(Vec<Vec<Complex64>>, Vec<Vec<Complex64>>), Error> {
+        let omega = 2.0 * std::f64::consts::PI * freq;
+        let num_slots = self.values.len();
+        let nvars = self.vars.len();
+        let mut g = vec![0.0; num_slots];
+        let mut b = vec![0.0; num_slots];
+        let mut load_re = vec![0.0; nvars];
+        let mut load_im = vec![0.0; nvars];
+        {
+            let mut ctx = AcCtx {
+                g: &mut g,
+                b: &mut b,
+                rhs_re: &mut load_re,
+                rhs_im: &mut load_im,
+                omega,
+                states: &self.states,
+                sp: true,
+            };
+            for d in &mut self.devices {
+                d.load_ac(&mut ctx);
+            }
+        }
+        self.solver
+            .factor_complex(&g[1..], &b[1..])
+            .map_err(|e| self.map_singular(e))?;
+        // `rhswoPorts` ends up holding the loaded imaginary part.
+        let base_re = load_im;
+
+        let mut forward = Vec::with_capacity(ports.len());
+        let mut re = vec![0.0; nvars];
+        let mut im = vec![0.0; nvars];
+        for p in ports {
+            re.copy_from_slice(&base_re);
+            im.fill(0.0);
+            re[p.br] += 1.0;
+            self.solver
+                .solve_complex_in_place(&mut re[1..], &mut im[1..])
+                .map_err(|e| self.map_singular(e))?;
+            re[0] = 0.0;
+            im[0] = 0.0;
+            forward.push(
+                re.iter()
+                    .zip(&im)
+                    .map(|(r, i)| Complex64::new(*r, *i))
+                    .collect(),
+            );
+        }
+
+        let mut adjoints = Vec::new();
+        if adjoint {
+            for p in ports {
+                re.fill(0.0);
+                im.fill(0.0);
+                re[p.pos] = 1.0;
+                re[p.neg] = -1.0;
+                re[0] = 0.0;
+                self.solver
+                    .solve_complex_transposed_in_place(&mut re[1..], &mut im[1..])
+                    .map_err(|e| self.map_singular(e))?;
+                re[0] = 0.0;
+                im[0] = 0.0;
+                adjoints.push(
+                    re.iter()
+                        .zip(&im)
+                        .map(|(r, i)| Complex64::new(*r, *i))
+                        .collect(),
+                );
+            }
+        }
+        Ok((forward, adjoints))
     }
 
     /// `DISTOan` (`ckt/distoan.c`): operating point, the
@@ -1294,6 +1425,7 @@ impl Engine {
             rhs_im: &mut scratch_im,
             omega,
             states: &self.states,
+            sp: false,
         };
         for d in &mut self.devices {
             d.load_ac(&mut ctx);
@@ -1608,6 +1740,7 @@ impl Engine {
             rhs_im: &mut im,
             omega,
             states: &self.states,
+            sp: false,
         };
         for d in &mut self.devices {
             d.load_ac(&mut ctx);
@@ -1649,6 +1782,7 @@ impl Engine {
                 rhs_im: &mut im,
                 omega,
                 states: &engine.states,
+                sp: false,
             };
             engine.devices[dev].load_ac(&mut ctx);
             (g, b, re, im)

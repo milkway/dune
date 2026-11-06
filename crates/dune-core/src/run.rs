@@ -17,7 +17,8 @@ use crate::tf::OutputVar;
 
 impl Circuit {
     /// Run one analysis card (`.op`, `.dc`, `.tran`, `.ac`, `.pz`,
-    /// `.noise`, `.disto`, `.tf`, `.sens`) as `spice3 -b` would.
+    /// `.noise`, `.disto`, `.tf`, `.sens`, and ngspice's `.sp`) as
+    /// `spice3 -b` (`ngspice -b` for `.sp`) would.
     ///
     /// Returns the plots in rawfile order with their 3f5/ngspice
     /// plotnames — one for most analyses; `.noise` gives the density
@@ -145,6 +146,24 @@ impl Circuit {
                     *f2overf1,
                 )?;
                 (di.solutions, di.notes)
+            }
+            Analysis::Sp {
+                variation,
+                points,
+                fstart,
+                fstop,
+                donoise,
+                ..
+            } => {
+                let sp = self.sp(
+                    opts,
+                    sweep(*variation),
+                    *points as usize,
+                    *fstart,
+                    *fstop,
+                    *donoise,
+                )?;
+                (vec![sp.solution], sp.notes)
             }
             Analysis::Tf { outvar, insrc, .. } => {
                 let tf = self.tf(opts, &output_var(outvar)?, insrc)?;

@@ -17,7 +17,7 @@ const ROOTS: &[&str] = &["spice3f5/examples", "berkeley", "basic", "regress"];
 
 /// Analysis cards recognized by the inventory scan (3f5 grammar).
 const ANALYSES: &[&str] = &[
-    ".op", ".dc", ".ac", ".tran", ".pz", ".noise", ".disto", ".sens", ".tf",
+    ".op", ".dc", ".ac", ".tran", ".pz", ".noise", ".disto", ".sens", ".tf", ".sp",
 ];
 
 /// One corpus circuit.

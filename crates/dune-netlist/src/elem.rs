@@ -12,7 +12,8 @@ use std::collections::HashSet;
 use crate::deck::Card;
 use crate::diag::Diagnostic;
 use crate::ir::{
-    AcSpec, Device, DistoSpec, Element, OnOff, Param, ParamValue, SourceKind, TranFn, TranFnKind,
+    AcSpec, Device, DistoSpec, Element, OnOff, Param, ParamValue, RfPort, SourceKind, TranFn,
+    TranFnKind,
 };
 use crate::param::ParamEnv;
 use crate::scan::Scanner;
@@ -279,10 +280,38 @@ fn source(ctx: &mut ElemCtx, kind: SourceKind) -> Parsed {
     let mut tran: Option<TranFn> = None;
     let mut distof1 = None;
     let mut distof2 = None;
+    // ngspice RF port state, set in card order as `VSRCparam` does
+    // (`vsrcpar.c`): `portnum` resets a non-positive Z0 to 50, so
+    // `z0=-1 portnum 1` is a 50 Ω port but `portnum 1 z0=-1` is
+    // not a port at all.
+    let mut port_num: Option<i64> = None;
+    let mut port_z0 = 0.0_f64;
+    let mut port_z0_given = false;
 
     while let Some(tok) = ctx.sc.next_tok() {
         let span = ctx.sc.span(&tok);
         match tok.lc().as_str() {
+            "portnum" if kind == SourceKind::Voltage => {
+                // IF_INTEGER: `(int) INPevaluate(…)`, truncation.
+                let v = ctx.value_req("port number")?;
+                port_num = Some(v.trunc().clamp(i32::MIN as f64, i32::MAX as f64) as i64);
+                if port_z0 <= 0.0 {
+                    port_z0 = 50.0;
+                }
+            }
+            "z0" if kind == SourceKind::Voltage => {
+                port_z0 = ctx.value_req("port impedance")?;
+                port_z0_given = true;
+            }
+            p @ ("pwr" | "freq" | "phase") if kind == SourceKind::Voltage => {
+                // These turn the port into ngspice's `PORT` sinusoid
+                // (time domain and DC operating point), not ported.
+                ctx.value_opt();
+                ctx.err(
+                    span,
+                    format!("RF port power-source parameter `{p}` is not supported"),
+                );
+            }
             "dc" => dc = Some(ctx.value_req("DC value")?),
             "ac" => {
                 let mag = ctx.value_opt();
@@ -328,6 +357,16 @@ fn source(ctx: &mut ElemCtx, kind: SourceKind) -> Parsed {
         }
     }
 
+    // `VSRCtemp`: an absent Z0 defaults to 50 Ω; the source is a
+    // port when both the index and the impedance are positive.
+    let port = port_num.and_then(|num| {
+        let z0 = if port_z0_given { port_z0 } else { 50.0 };
+        u32::try_from(num)
+            .ok()
+            .filter(|&n| n > 0 && z0 > 0.0)
+            .map(|num| RfPort { num, z0 })
+    });
+
     Some((
         vec![n1, n2],
         Device::Source {
@@ -337,6 +376,7 @@ fn source(ctx: &mut ElemCtx, kind: SourceKind) -> Parsed {
             tran,
             distof1,
             distof2,
+            port,
         },
     ))
 }
@@ -791,6 +831,51 @@ mod tests {
             diags
                 .iter()
                 .any(|d| d.message.contains("unknown parameter (bogus)"))
+        );
+    }
+
+    #[test]
+    fn rf_port_parameters() {
+        let port = |card: &str| match ok(card).device {
+            Device::Source { port, .. } => port,
+            d => panic!("{d:?}"),
+        };
+        assert_eq!(
+            port("v1 1 0 dc 0 ac 1 portnum 1"),
+            Some(RfPort { num: 1, z0: 50.0 })
+        );
+        assert_eq!(
+            port("v2 2 0 portnum=2 z0=75"),
+            Some(RfPort { num: 2, z0: 75.0 })
+        );
+        // `IF_INTEGER` truncates.
+        assert_eq!(
+            port("v2 2 0 portnum 2.7"),
+            Some(RfPort { num: 2, z0: 50.0 })
+        );
+        // Not ports: index 0, Z0 given non-positive after the index,
+        // Z0 without an index.
+        assert_eq!(port("v3 3 0 portnum 0"), None);
+        assert_eq!(port("v3 3 0 portnum 1 z0 -5"), None);
+        assert_eq!(port("v3 3 0 z0 75"), None);
+        // `VSRCparam` order quirk: the index resets a bad Z0 to 50.
+        assert_eq!(
+            port("v3 3 0 z0 -5 portnum 1"),
+            Some(RfPort { num: 1, z0: 50.0 })
+        );
+        // Current sources have no ports; the power-source keywords
+        // are refused.
+        let (_, diags) = parse("i1 1 0 portnum 1");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("unknown parameter (portnum)"))
+        );
+        let (_, diags) = parse("v1 1 0 portnum 1 pwr 0.01");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("`pwr` is not supported"))
         );
     }
 

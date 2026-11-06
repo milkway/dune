@@ -11,6 +11,7 @@ fn vsrc(name: &str, p: &str, n: &str, dc: f64) -> Vsource {
         ac: None,
         distof1: None,
         distof2: None,
+        port: None,
     }
 }
 

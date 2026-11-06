@@ -1,0 +1,23 @@
+S-parameters of a passive RLC two-port, ports of different Z0 (ngspice .sp)
+* Coverage: two RF ports (PORTNUM) with Z0 = 50 and 75 ohm around an
+* RLC T-network with a shunt resonator, dec sweep across the
+* resonance. Port 1 also carries a DC value and an AC stimulus: .op
+* sees the source behind its 50 ohm reference resistor (internal node
+* v1#res), .ac drives through it, and .sp ignores the AC stimulus
+* (MODESP) and excites the ports itself. S/Y/Z against ngspice-47.
+* The cards follow ngspice's run order (its analysis table, not the
+* deck), which Dune's card-order run must match plot by plot.
+v1 in 0 dc 1 ac 1 portnum 1
+v2 out 0 dc 0 portnum 2 z0 75
+r1 in a 10
+l1 a mid 100n
+c1 mid 0 10p
+l2 mid b 1u
+c2 b 0 100p
+r2 b 0 1k
+r3 mid out 22
+rl out 0 300
+.ac dec 5 1meg 1g
+.op
+.sp dec 10 1meg 1g
+.end

@@ -1,0 +1,24 @@
+S-parameters of a MOS common-source stage (ngspice .sp, non-reciprocal)
+* Coverage: an active two-port between PORTNUM sources, so S21 and
+* S12 differ by the transistor's gain (S12 only through the overlap
+* and junction capacitances); the ports have no DC value and sit
+* behind 50 ohm. The span is not a whole number of decades: span.c
+* steps by 10^(1/n) from FSTART (the 3f5 rule), unlike ngspice-47's
+* .ac, which re-spaces the points onto FSTOP. MOS1 keeps the
+* operating point free of the Boltzmann/charge constants, which
+* differ between the 3f5 and ngspice (KNOWN_DIFFS).
+vdd vdd 0 dc 5
+v1 p1 0 portnum 1
+v2 p2 0 portnum 2
+cin p1 g 10n
+rg1 vdd g 300k
+rg2 g 0 100k
+m1 d g s 0 nm w=50u l=2u ad=100p as=100p pd=54u ps=54u
+rs s 0 200
+cs s 0 1n
+rd vdd d 2k
+cout d p2 10n
+.model nm nmos level=1 vto=0.7 kp=60u lambda=0.02 gamma=0.4 phi=0.65
++ cgso=0.3n cgdo=0.3n cbd=50f cbs=50f mj=0.5 pb=0.8 rd=10 rs=10
+.sp dec 10 1meg 500meg
+.end

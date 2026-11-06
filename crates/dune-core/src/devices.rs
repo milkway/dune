@@ -708,6 +708,29 @@ pub(crate) struct VsourceI {
     branch: BranchStamp,
     /// `DISTOF1`/`DISTOF2 <MAG <PHASE°>>` (`VSRCdF1mag` …).
     disto: SourceDisto,
+    /// RF port (ngspice-47 RFSPICE): the series reference
+    /// conductance between `+` and the internal node, which the
+    /// branch equation then drives instead of `+`.
+    port: Option<PortStamp>,
+}
+
+/// The `Y0 = 1/Z0` stamp of an RF port between the external `+`
+/// node and `<name>#res` (`VSRCposPosPtr` … `VSRCnegPosPtr` of
+/// `vsrcset.c`, which despite their names sit on `res`).
+struct PortStamp {
+    pos: Var,
+    res: Var,
+    y0: f64,
+    slots: [Slot; 4],
+}
+
+impl PortStamp {
+    fn stamp(&self, mut add: impl FnMut(Slot, f64)) {
+        add(self.slots[0], self.y0);
+        add(self.slots[1], self.y0);
+        add(self.slots[2], -self.y0);
+        add(self.slots[3], -self.y0);
+    }
 }
 
 impl VsourceI {
@@ -728,12 +751,29 @@ impl VsourceI {
             ac_im,
             branch: BranchStamp::new(pos, neg, br),
             disto: SourceDisto::default(),
+            port: None,
         }
     }
 
     /// Attach the `DISTOF1`/`DISTOF2` inputs.
     pub fn with_disto(mut self, f1: Option<(f64, f64)>, f2: Option<(f64, f64)>) -> Self {
         self.disto = SourceDisto { f1, f2 };
+        self
+    }
+
+    /// Make the source an RF port (`VSRCsetup`/`VSRCtemp` under
+    /// RFSPICE): the branch incidence moves from `+` to the internal
+    /// node `res`, and `Y0 = 1/z0` joins `+` to `res` in every
+    /// analysis (`VSRCload` and `VSRCacLoad` both stamp it).
+    pub fn with_port(mut self, res: Var, z0: f64) -> Self {
+        let pos = self.branch.pos;
+        self.branch.pos = res;
+        self.port = Some(PortStamp {
+            pos,
+            res,
+            y0: 1.0 / z0,
+            slots: [TRASH; 4],
+        });
         self
     }
 }
@@ -773,6 +813,14 @@ impl Device for VsourceI {
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
+        if let Some(p) = &mut self.port {
+            p.slots = [
+                mb.slot(p.pos, p.pos),
+                mb.slot(p.res, p.res),
+                mb.slot(p.pos, p.res),
+                mb.slot(p.res, p.pos),
+            ];
+        }
         self.branch.alloc(mb);
     }
 
@@ -788,22 +836,34 @@ impl Device for VsourceI {
 
     fn load(&mut self, ctx: &mut LoadCtx) {
         self.branch.load(ctx);
+        if let Some(p) = &self.port {
+            p.stamp(|sl, v| ctx.add(sl, v));
+        }
         let v = source_value(ctx, self.dc, &self.wave);
         ctx.rhs[self.branch.br] += v;
     }
 
-    /// `VSRCacLoad`.
+    /// `VSRCacLoad` (ngspice-47, RFSPICE): under `.sp` every V
+    /// source's AC stimulus is off (`MODESP`; the analysis drives
+    /// the ports itself).
     fn load_ac(&mut self, ctx: &mut AcCtx) {
         ctx.add_g(self.branch.slots[0], 1.0);
         ctx.add_g(self.branch.slots[1], 1.0);
         ctx.add_g(self.branch.slots[2], -1.0);
         ctx.add_g(self.branch.slots[3], -1.0);
-        ctx.rhs_re[self.branch.br] += self.ac_re;
-        ctx.rhs_im[self.branch.br] += self.ac_im;
+        if !ctx.sp {
+            ctx.rhs_re[self.branch.br] += self.ac_re;
+            ctx.rhs_im[self.branch.br] += self.ac_im;
+        }
+        if let Some(p) = &self.port {
+            p.stamp(|sl, v| ctx.add_g(sl, v));
+        }
     }
 
     /// `VSRCpzLoad`: the branch incidence, no excitation (the PZ
-    /// drive comes from the column surgery).
+    /// drive comes from the column surgery). ngspice's `vsrcpzld.c`
+    /// has no RFSPICE branch, so a port loads only its branch (on the
+    /// internal node) and no reference conductance.
     fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
         ctx.add_g(self.branch.slots[0], 1.0);
         ctx.add_g(self.branch.slots[1], 1.0);
@@ -824,7 +884,10 @@ impl Device for VsourceI {
 
     /// `VSRCpTable` (ngspice-47 `vsrc.c`, RF ports compiled in): the
     /// principal `dc`, the AC-only `acmag`/`acphase`, then the port
-    /// entries `z0 pwr freq phase`, inert without `portnum`.
+    /// entries `z0 pwr freq phase`, inert without `portnum`. On a
+    /// port `z0` is live (`sens_temp` reruns `VSRCtemp`, which
+    /// recomputes `Y0`); `pwr freq phase` only shape ngspice's `PORT`
+    /// time function, which Dune does not port, and stay inert.
     fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
         let mut v = vec![sens_param("", sens_dc_value(self.dc, &self.wave))];
         if ac {
@@ -832,11 +895,21 @@ impl Device for VsourceI {
             v.push(sens_param("_acmag", mag));
             v.push(sens_param("_acphase", phase));
         }
-        v.extend(sens_inert(&["_z0", "_pwr", "_freq", "_phase"]));
+        match &self.port {
+            Some(p) => v.push(sens_param("_z0", 1.0 / p.y0)),
+            None => v.extend(sens_inert(&["_z0"])),
+        }
+        v.extend(sens_inert(&["_pwr", "_freq", "_phase"]));
         Some(v)
     }
 
     fn sens_set(&mut self, suffix: &str, value: f64) {
+        if suffix == "_z0" {
+            if let Some(p) = &mut self.port {
+                p.y0 = 1.0 / value;
+            }
+            return;
+        }
         if let Some(ac) = sens_set_source(suffix, value, &mut self.dc, &mut self.ac) {
             (self.ac_re, self.ac_im) = ac_parts(Some(ac));
         }

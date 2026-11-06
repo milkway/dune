@@ -956,6 +956,7 @@ mod tests {
             ac: None,
             distof1: Some((0.1, 0.0)),
             distof2,
+            port: None,
         })
         .unwrap();
         for (name, a, b) in [("r1", "1", "2"), ("r2", "2", "0")] {

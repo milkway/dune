@@ -42,6 +42,7 @@ mod run;
 mod select;
 mod sens;
 mod solution;
+mod sp;
 mod srcfn;
 mod state;
 mod switch;
@@ -56,7 +57,7 @@ pub use bsim2::Bsim2Model;
 pub use bsim3::Bsim3Model;
 pub use circuit::{
     Bjt, Bsim1, Bsim2, Bsim3, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra,
-    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, Spec, SwitchI, SwitchV, Tra, Vccs, Vcvs,
+    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vccs, Vcvs,
     Vsource,
 };
 pub use dc::{Dc, DcSweep};
@@ -83,6 +84,7 @@ pub use pz::{Pz, PzInput, PzWhich};
 pub use select::{ColData, OutColumn, OutExpr, Part, Selection};
 pub use sens::{Sens, SensAc};
 pub use solution::Solution;
+pub use sp::Sp;
 pub use srcfn::Wave;
 pub use switch::{CswModel, SwModel};
 pub use tf::{OutputVar, Tf};

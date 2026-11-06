@@ -77,6 +77,11 @@ pub enum Device {
         /// `DISTOF1 <MAG <PHASE>>`.
         distof1: Option<DistoSpec>,
         distof2: Option<DistoSpec>,
+        /// `PORTNUM N <Z0 Z>` (ngspice RF port, V sources only):
+        /// present only when the card makes the source a port —
+        /// `N > 0` and a positive reference impedance — as
+        /// `VSRCtemp` decides it.
+        port: Option<RfPort>,
     },
     /// `E`: VCVS, 4 nodes + gain.
     Vcvs { gain: Option<f64> },
@@ -158,6 +163,17 @@ pub enum OnOff {
 pub struct AcSpec {
     pub mag: f64,
     pub phase: f64,
+}
+
+/// An ngspice RF port on a V source (`PORTNUM N <Z0 Z>`, `vsrc.c`
+/// under `RFSPICE`): the source sits behind a series reference
+/// impedance `z0` (default 50 Ω) and `.sp` excites it as port `num`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RfPort {
+    /// Port index, 1-based (`VSRCportNum`).
+    pub num: u32,
+    /// Reference impedance in ohms (`VSRCportZ0`), > 0.
+    pub z0: f64,
 }
 
 /// `DISTOF1/DISTOF2 <MAG <PHASE>>` (defaults 1 and 0).
@@ -276,6 +292,18 @@ pub enum Analysis {
         outvar: OutVar,
         filters: Vec<Ident>,
         ac: Option<(Variation, f64, f64, f64)>,
+        span: Span,
+    },
+    /// `.sp DEC|OCT|LIN N FSTART FSTOP <DONOISE>` — ngspice's
+    /// S-parameter analysis over the `PORTNUM` V sources
+    /// (`inp2dot.c` `dot_sp`; `DONOISE` is the integer 1 to add the
+    /// noise-correlation outputs).
+    Sp {
+        variation: Variation,
+        points: f64,
+        fstart: f64,
+        fstop: f64,
+        donoise: bool,
         span: Span,
     },
     /// `.tf OUTVAR INSRC`

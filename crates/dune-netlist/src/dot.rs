@@ -88,6 +88,7 @@ pub(crate) fn parse_dot(
         ".disto" => dot_disto(&mut ctx, nl, span),
         ".sens" => dot_sens(&mut ctx, nl, span),
         ".tf" => dot_tf(&mut ctx, nl, span),
+        ".sp" => dot_sp(&mut ctx, nl, span),
         ".options" | ".option" | ".opt" => dot_options(&mut ctx, nl),
         ".ic" => dot_nodeinit(&mut ctx, nl, NodeInitKind::Ic),
         ".nodeset" => dot_nodeinit(&mut ctx, nl, NodeInitKind::Nodeset),
@@ -173,6 +174,40 @@ fn dot_ac(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
         points,
         fstart,
         fstop,
+        span,
+    });
+}
+
+/// `.sp DEC|OCT|LIN N FSTART FSTOP <DONOISE>` (ngspice `dot_sp`,
+/// `inp2dot.c`): the `.ac` shape plus an optional integer that turns
+/// on the noise outputs when it is exactly 1 (`SPsetParm`:
+/// `iValue == 1`, after `IF_INTEGER` truncation).
+fn dot_sp(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
+    let mut sc = Scanner::new(ctx.card);
+    sc.next_tok();
+    let Some(vtok) = sc.next_tok() else {
+        ctx.err(span, ".sp needs dec, oct or lin");
+        return;
+    };
+    let Some(var) = variation(&vtok.lc()) else {
+        let s = sc.span(&vtok);
+        ctx.err(s, format!("expected dec, oct or lin, got `{}`", vtok.text));
+        return;
+    };
+    let (Some(points), Some(fstart), Some(fstop)) = (
+        ctx.value_req(&mut sc, "number of points"),
+        ctx.value_req(&mut sc, "start frequency"),
+        ctx.value_req(&mut sc, "stop frequency"),
+    ) else {
+        return;
+    };
+    let donoise = ctx.value_opt(&mut sc).is_some_and(|v| v.trunc() == 1.0);
+    nl.analyses.push(Analysis::Sp {
+        variation: var,
+        points,
+        fstart,
+        fstop,
+        donoise,
         span,
     });
 }

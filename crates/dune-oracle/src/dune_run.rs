@@ -16,7 +16,7 @@ use crate::corpus::Circuit as CorpusCircuit;
 /// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
     const ANALYSES: &[&str] = &[
-        ".op", ".dc", ".tran", ".ac", ".pz", ".noise", ".disto", ".tf", ".sens",
+        ".op", ".dc", ".tran", ".ac", ".pz", ".noise", ".disto", ".tf", ".sens", ".sp",
     ];
     const DEVICES: &[char] = &[
         'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'j', 'z', 'm', 'o', 's', 'w',

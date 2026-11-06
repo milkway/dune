@@ -62,6 +62,32 @@ pub struct Vsource {
     pub distof1: Option<(f64, f64)>,
     /// `DISTOF2 <MAG <PHASE°>>`: the `.disto` input at f2.
     pub distof2: Option<(f64, f64)>,
+    /// `PORTNUM N <Z0 Z>`: makes the source an ngspice RF port —
+    /// in every analysis it then drives its `+` node through the
+    /// series reference impedance (internal node `<name>#res`), and
+    /// `.sp` excites it. `None` for an ordinary source.
+    pub port: Option<RfPort>,
+}
+
+/// An ngspice RF port (`vsrc.c` under `RFSPICE`, ngspice-47):
+/// `PORTNUM num Z0 z0`. The source is a port only when `num > 0`
+/// and `z0 > 0` (`VSRCtemp`); otherwise the field is inert. The
+/// ports of a circuit must be numbered `1..=N` without gaps or
+/// duplicates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RfPort {
+    /// Port index, 1-based (`VSRCportNum`).
+    pub num: u32,
+    /// Reference impedance in ohms (`VSRCportZ0`; 50 on a card that
+    /// gives none).
+    pub z0: f64,
+}
+
+impl RfPort {
+    /// `VSRCisPort`.
+    pub(crate) fn is_port(&self) -> bool {
+        self.num > 0 && self.z0 > 0.0
+    }
 }
 
 /// `IYYYYYYY N+ N- <DC VALUE> <tranfn(…)>` (flows through the source
@@ -778,6 +804,19 @@ impl Vars {
 }
 
 /// Fully resolved circuit: instances bound to variable indices.
+/// One RF port as the `.sp` analysis sees it (`VSRCinstance` with
+/// `VSRCisPort`): external terminals, branch equation and
+/// reference impedance.
+#[derive(Clone, Debug)]
+pub(crate) struct PortInfo {
+    pub name: String,
+    pub num: u32,
+    pub z0: f64,
+    pub pos: Var,
+    pub neg: Var,
+    pub br: Var,
+}
+
 pub(crate) struct Built {
     pub vars: Vars,
     pub devices: Vec<Box<dyn crate::devices::Device>>,
@@ -789,6 +828,8 @@ pub(crate) struct Built {
     /// Independent V/I source element name → index in `devices`
     /// (what a `.dc` sweep drives) and whether it is a V source.
     pub sources: HashMap<String, (usize, bool)>,
+    /// RF ports (`CKTrfPorts`), sorted by port number `1..=N`.
+    pub ports: Vec<PortInfo>,
     /// Total device state slots (`CKTnumStates`).
     pub num_states: usize,
     /// Diode temperature-adjust notes etc., surfaced by the caller.
@@ -874,6 +915,12 @@ impl Circuit {
                 Spec::Vsource(s) => {
                     let br = vars.push(s.name.clone(), VarKind::Branch);
                     branches.insert(s.name.clone(), br);
+                    // `VSRCsetup` (RFSPICE): a port's internal node
+                    // behind the reference impedance, made after the
+                    // branch with `CKTmkVolt` (`v1#res`).
+                    if s.port.is_some_and(|p| p.is_port()) {
+                        node(&mut vars, &mut node_ids, &format!("{}#res", s.name));
+                    }
                 }
                 Spec::Inductor(s) => {
                     let br = vars.push(s.name.clone(), VarKind::Branch);
@@ -1023,6 +1070,7 @@ impl Circuit {
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
         let mut names: Vec<String> = Vec::new();
         let mut sources: HashMap<String, (usize, bool)> = HashMap::new();
+        let mut ports: Vec<PortInfo> = Vec::new();
         let mut notes = Vec::new();
         let get = |node_ids: &HashMap<String, Var>, n: &str| node_ids[n];
         // `BSIM3temp`'s per-model knot list: models (as given) with
@@ -1396,17 +1444,24 @@ impl Circuit {
                 }
                 Spec::Vsource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), true));
-                    devices.push(Box::new(
-                        VsourceI::new(
-                            s.dc,
-                            s.wave.clone(),
-                            s.ac,
-                            get(&node_ids, &s.nodes[0]),
-                            get(&node_ids, &s.nodes[1]),
-                            branches[&s.name],
-                        )
-                        .with_disto(s.distof1, s.distof2),
-                    ));
+                    let pos = get(&node_ids, &s.nodes[0]);
+                    let neg = get(&node_ids, &s.nodes[1]);
+                    let br = branches[&s.name];
+                    let mut dev = VsourceI::new(s.dc, s.wave.clone(), s.ac, pos, neg, br)
+                        .with_disto(s.distof1, s.distof2);
+                    if let Some(p) = s.port.filter(RfPort::is_port) {
+                        let res = get(&node_ids, &format!("{}#res", s.name));
+                        dev = dev.with_port(res, p.z0);
+                        ports.push(PortInfo {
+                            name: s.name.clone(),
+                            num: p.num,
+                            z0: p.z0,
+                            pos,
+                            neg,
+                            br,
+                        });
+                    }
+                    devices.push(Box::new(dev));
                 }
                 Spec::Isource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), false));
@@ -1593,6 +1648,7 @@ impl Circuit {
 
         // The mutual inductor adds no matrix row of its own but
         // keeps `devices` and `names` aligned by construction.
+        let ports = check_ports(ports)?;
         Ok(Built {
             vars,
             devices,
@@ -1600,10 +1656,33 @@ impl Circuit {
             nodesets,
             ics,
             sources,
+            ports,
             num_states,
             notes,
         })
     }
+}
+
+/// `VSRCtemp`'s port checks (ngspice-47, RFSPICE): with N ports,
+/// every index must lie in `1..=N` and none may repeat, so the ports
+/// are exactly `1..=N`. The C walks the instances newest first (the
+/// instance list is built by prepending), so the reported instance
+/// is the last offending card. Returns the ports sorted by index
+/// (`CKTrfPorts`).
+fn check_ports(mut ports: Vec<PortInfo>) -> Result<Vec<PortInfo>, Error> {
+    let count = ports.len();
+    let mut seen = vec![false; count + 1];
+    for p in ports.iter().rev() {
+        let n = p.num as usize;
+        if n > count {
+            return Err(Error::Build(format!("{}: incorrect port ordering", p.name)));
+        }
+        if std::mem::replace(&mut seen[n], true) {
+            return Err(Error::Build(format!("{}: duplicate port Index", p.name)));
+        }
+    }
+    ports.sort_by_key(|p| p.num);
+    Ok(ports)
 }
 
 /// Terminal and prime-node variables of a JFET/MESFET.

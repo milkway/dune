@@ -305,6 +305,30 @@ resultados espelhando o rawfile).
   frequência, lineares), `sens_acsweep` (LIN com o passo
   multiplicado pinado).
 
+- **`.sp`** (`sp.rs`, `engine::sp_prepare/sp_point` ← `span.c` do
+  **ngspice-47**, contrato E oráculo — pós-3f5; Fase 3.5): portas =
+  VSRCs com `portnum`/`z0` (default 50), que no ngspice mudam a
+  fonte em TODAS as análises (nó `<nome>#res` + condutância 1/Z0,
+  `vsrcset.c:56` — o `.op` enxerga o DC através de 50 Ω; `.pz`
+  carrega só o ramo). Por frequência: um load AC em modo SP (AC de
+  VSRC desligado, ISRC fica), uma fatoração, um solve por porta com
+  1 V no ramo; ondas de potência `a,b=(V±Z0·I)/(2√Z0)`, `S=B·A⁻¹`,
+  Y/Z pelas fórmulas do span.c (inversão por Gauss–Jordan com
+  pivoteio — o ngspice usa adjugada, custo fatorial); vetores
+  `S/Y/Z_i_j`, e com 2 portas NF/SOpt/NFmin/Rn de `Cy/(4kT)`.
+  `donoise=1`: adjunto por porta, `Cy += i·iᴴ` (flicker descartado
+  — caminho gain-only do NevalSrc, medido). Passo DEC fica no
+  `10^(1/n)` (o `.sp` de lá não re-espaça no FSTOP como o `.ac` —
+  pinado por sp_amp em span não-inteiro). Quirks literais: bug de
+  memcpy do span.c:779 (base imaginária vira a real; só com ISRC AC
+  de fase), ordem dos cartões no reset de z0 (`z0=-1 portnum 1` é
+  porta; invertido não é), checks do VSRCtemp (portas 0/1, ordem,
+  duplicata). `pwr/freq/phase` (fonte PORT) recusados no parser.
+  Sondas: `sp_2port` (RLC, Z0 50/75, ~1e-15 apertado), `sp_amp`
+  (MOS1, não-recíproco S21≠S12, 3e-13), `sp_noise` (BJT donoise;
+  NF/Rn/SOpt/NFmin a 1e-6–1e-5). Unit: T-pad casado K=2 fechado
+  (S21=1/K, Bosma `Cy=4kT·Re(Y)`, NF=20·logK).
+
 - **LTRA** (`ltra.rs` ← `ltraset.c`, `ltratemp.c`, `ltraload.c`,
   `ltraacct.c`, `ltratrun.c`, `ltraacld.c`, `ltramisc.c`;
   Roychowdhury): linha com perdas por convolução. As duas equações

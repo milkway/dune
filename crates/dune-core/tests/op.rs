@@ -28,6 +28,7 @@ fn voltage_divider() {
         ac: None,
         distof1: None,
         distof2: None,
+        port: None,
     })
     .unwrap();
     ckt.add(Resistor {

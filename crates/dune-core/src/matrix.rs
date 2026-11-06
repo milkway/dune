@@ -209,6 +209,11 @@ impl PzCtx<'_> {
     }
 }
 
+/// One uncorrelated noise generator between two nodes: `(n1, n2,
+/// spectral density)` — A²/Hz for the thermal `4kT·g` and shot
+/// `2q|I|` forms of `NevalSrc`.
+pub(crate) type NoiseGen = (Var, Var, f64);
+
 /// What a device's noise evaluation sees (`CKTnoise` → `*noise.c`):
 /// the adjoint AC solution (transfer from each internal source to
 /// the output) and the shared per-frequency data.
@@ -220,6 +225,13 @@ pub(crate) struct NoiseCtx<'a> {
     /// `CKTtemp`, kelvin.
     pub temp: f64,
     pub states: &'a crate::state::States,
+    /// `DOING_SP` (ngspice-47 `nevalsrc.c`): when set, every thermal
+    /// and shot generator is recorded here as `(n1, n2, density)` —
+    /// the `.sp` noise correlation is built from the generators, not
+    /// from the densities the device returns. Flicker noise goes
+    /// through the plain gain (`N_GAIN`) and is not recorded, as in
+    /// the C.
+    pub sp_sink: Option<&'a std::cell::RefCell<Vec<NoiseGen>>>,
 }
 
 impl NoiseCtx<'_> {
@@ -233,12 +245,22 @@ impl NoiseCtx<'_> {
 
     /// `NevalSrc(THERMNOISE)`: `4kT·g` times the squared gain.
     pub fn thermal(&self, n1: Var, n2: Var, g: f64) -> f64 {
-        self.gain2(n1, n2) * 4.0 * crate::consts::BOLTZ * self.temp * g
+        let density = 4.0 * crate::consts::BOLTZ * self.temp * g;
+        self.record(n1, n2, density);
+        self.gain2(n1, n2) * density
     }
 
     /// `NevalSrc(SHOTNOISE)`: `2q|I|` times the squared gain.
     pub fn shot(&self, n1: Var, n2: Var, current: f64) -> f64 {
-        self.gain2(n1, n2) * 2.0 * crate::consts::CHARGE * current.abs()
+        let density = 2.0 * crate::consts::CHARGE * current.abs();
+        self.record(n1, n2, density);
+        self.gain2(n1, n2) * density
+    }
+
+    fn record(&self, n1: Var, n2: Var, density: f64) {
+        if let Some(sink) = self.sp_sink {
+            sink.borrow_mut().push((n1, n2, density));
+        }
     }
 }
 
@@ -269,6 +291,9 @@ pub(crate) struct AcCtx<'a> {
     /// Small-signal parameters stored by the `MODEINITSMSIG` pass
     /// (`CKTstate0`, read-only here).
     pub states: &'a crate::state::States,
+    /// `MODESP`: the `.sp` load, where V sources leave their AC
+    /// stimulus out (ngspice-47 `vsrcacld.c`).
+    pub sp: bool,
 }
 
 impl AcCtx<'_> {

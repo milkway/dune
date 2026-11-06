@@ -45,6 +45,7 @@ op(opts)
 dc(opts, sweeps: &[DcSweep])                       // 1 ou 2 varreduras
 tran(opts, tstep, tstop, tstart, tmax: Option<f64>, uic: bool)
 ac(opts, sweep: AcSweep, points, fstart, fstop)
+sp(opts, sweep, points, fstart, fstop, donoise: bool)   # D-0018
 pz(opts, nodes: [&str; 4], input: PzInput, which: PzWhich)
 noise(opts, output: &str, output_ref: Option<&str>, src: &str,
       sweep, points, fstart, fstop, pts_per_summary: Option<usize>)
@@ -85,7 +86,7 @@ Phase, Db}`; `Selection { scale, columns: Vec<OutColumn> }`;
 | `Resistor` [2 nós] | `value` |
 | `Capacitor`/`Inductor` [2] | `value`, `ic: Option<f64>` |
 | `Mutual` | `l1`, `l2`, `k` |
-| `Vsource`/`Isource` [2] | `dc: Option<f64>`, `wave: Option<Wave>`, `ac: Option<(mag, fase°)>`, `distof1/2: Option<(mag, fase°)>` |
+| `Vsource`/`Isource` [2] | `dc: Option<f64>`, `wave: Option<Wave>`, `ac: Option<(mag, fase°)>`, `distof1/2: Option<(mag, fase°)>`; Vsource ainda `port: Option<RfPort{num, z0}>` (D-0018 — porta RF muda a fonte em TODAS as análises, como no ngspice) |
 | `Vcvs`/`Vccs` [4] | `gain` |
 | `Cccs`/`Ccvs` [2] | `ctrl` (nome da Vsource), `gain` |
 | `Diode` [2] | `model`, `area`, `off`, `temp: Option<f64>`, `ic: Option<f64>` |
