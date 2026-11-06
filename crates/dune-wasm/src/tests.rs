@@ -167,3 +167,244 @@ fn truncated_corpus_deck_does_not_panic() {
         }
     }
 }
+
+// ---- pic figures (extract_pic / simulate_pic) ----
+
+fn corpus_pic(name: &str) -> String {
+    let path = format!("{}/../../corpus/pic/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(path).unwrap()
+}
+
+fn pic_fig(body: &str) -> String {
+    format!(".PS\nspice = 1\n{body}\n.PE\n")
+}
+
+const DANGLING: &str = "V1: vsource((0,1),(0,0), 1)
+R1: resistor((0,1),(1,1),1k)
+ground((0,0))
+.op";
+
+#[test]
+fn extract_pic_rc_shape() {
+    let json = extract_pic_json(&corpus_pic("rc.pic"), None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["diagnostics", "map", "netlist"]);
+    let pic: PicJson = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(pic.netlist, corpus_pic("golden/rc.cir"));
+    assert!(pic.diagnostics.is_empty(), "{:?}", pic.diagnostics);
+    let refdes: Vec<&str> = pic.map.elements.iter().map(|e| e.refdes.as_str()).collect();
+    assert_eq!(refdes, ["V1", "R1", "C1"]);
+    for e in &pic.map.elements {
+        assert!(e.shapes.start < e.shapes.end, "{e:?}");
+    }
+    let nets: Vec<&str> = pic.map.nets.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(nets[0], "0");
+    assert!(nets.contains(&"Vin") && nets.contains(&"Vout"), "{nets:?}");
+    // Wire format: `shapes: {start, end}` on elements, a list on nets.
+    assert!(v["map"]["elements"][0]["shapes"]["start"].is_u64());
+    assert!(v["map"]["nets"][0]["shapes"].is_array());
+    // Ground net draws its wire and ground symbol.
+    assert!(!pic.map.nets[0].shapes.is_empty());
+}
+
+/// rc.pic end to end: extract, run the `.tran`, check the RC charge
+/// (tau = 1 ms) against the closed form.
+#[test]
+fn simulate_pic_rc_tran() {
+    let json = simulate_pic_json(&corpus_pic("rc.pic"), None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    for k in ["plots", "notes", "diagnostics", "pic"] {
+        assert!(v.get(k).is_some(), "missing {k}");
+    }
+    let out: PicRunJson = serde_json::from_value(v).unwrap();
+    assert_eq!(out.pic.netlist, corpus_pic("golden/rc.cir"));
+    let p = &out.raw.plots[0];
+    assert_eq!(p.plotname, "Transient Analysis");
+    let Columns::Real(cols) = &p.columns else {
+        panic!("tran is real")
+    };
+    let iv = p
+        .variables
+        .iter()
+        .position(|x| x.name.eq_ignore_ascii_case("v(vout)"))
+        .unwrap_or_else(|| panic!("v(vout) in {:?}", p.variables));
+    let t = &cols[0];
+    let vout = &cols[iv];
+    let last = p.npoints - 1;
+    assert!((t[last].unwrap() - 5e-3).abs() < 1e-12);
+    for k in 0..p.npoints {
+        let (tk, vk) = (t[k].unwrap(), vout[k].unwrap());
+        assert!((-1e-6..=5.0 + 1e-6).contains(&vk), "v(vout)={vk} at t={tk}");
+        // Ideal step response, ignoring the 1 µs rise: tolerance
+        // covers the rise and the tran's LTE.
+        if tk > 1e-4 {
+            let ideal = 5.0 * (1.0 - (-(tk - 0.5e-6) / 1e-3).exp());
+            assert!((vk - ideal).abs() < 0.02, "t={tk}: {vk} vs {ideal}");
+        }
+    }
+    assert!((vout[last].unwrap() - 4.966).abs() < 0.01);
+}
+
+#[test]
+fn every_corpus_figure_simulates() {
+    for name in ["rc.pic", "rlc.pic", "rect.pic", "bjtamp.pic"] {
+        let out = run_pic(&corpus_pic(name), &PicSimOptions::default())
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(!out.raw.plots.is_empty(), "{name}");
+        let golden = corpus_pic(&format!("golden/{}", name.replace(".pic", ".cir")));
+        assert_eq!(out.pic.netlist, golden, "{name}");
+    }
+}
+
+#[test]
+fn unmarked_figure_is_a_pic_error() {
+    let src = ".PS\nR1: resistor((0,0),(1,0),1k)\n.PE\n";
+    for err in [
+        extract_pic_json(src, None).unwrap_err(),
+        simulate_pic_json(src, None).unwrap_err(),
+    ] {
+        assert_eq!(err.kind, "pic", "{err}");
+        assert!(err.message.contains("spice = 1"), "{err}");
+        assert_eq!(err.diagnostics.len(), 1);
+        let d = &err.diagnostics[0];
+        assert_eq!(d.kind.as_deref(), Some("not-marked"));
+        assert_eq!(d.severity, "error");
+        assert_eq!(d.line, None);
+        assert!(err.pic.is_none());
+    }
+}
+
+#[test]
+fn compile_error_is_a_pic_error_with_position() {
+    let err = extract_pic_json("spice = 1\n\nline from (0,0) to\n", None).unwrap_err();
+    assert_eq!(err.kind, "pic", "{err}");
+    let d = &err.diagnostics[0];
+    assert_eq!(d.kind.as_deref(), Some("compile"));
+    assert_eq!((d.file.as_deref(), d.line), (None, Some(3)), "{d:?}");
+    assert!(err.message.starts_with("3:"), "{err}");
+}
+
+#[test]
+fn dangling_pin_is_a_warning_in_the_result() {
+    let src = pic_fig(DANGLING);
+    let pic: PicJson = serde_json::from_str(&extract_pic_json(&src, None).unwrap()).unwrap();
+    let d = pic
+        .diagnostics
+        .iter()
+        .find(|d| d.kind.as_deref() == Some("dangling-pin"))
+        .unwrap_or_else(|| panic!("{:?}", pic.diagnostics));
+    assert_eq!(d.severity, "warning");
+    assert!(d.message.contains("R1.N"), "{}", d.message);
+    // R1's call site in the figure: line 4 (after `.PS`, `spice = 1`,
+    // V1), column 5.
+    assert_eq!(
+        (d.file.as_deref(), d.line, d.column),
+        (None, Some(4), Some(5))
+    );
+    assert!(d.end_column.unwrap() > 5);
+    // Warnings do not stop simulate_pic; they ride along under `pic`.
+    let out = run_pic(&src, &PicSimOptions::default()).unwrap();
+    assert_eq!(out.raw.plots[0].plotname, "Operating Point");
+    assert!(
+        out.pic
+            .diagnostics
+            .iter()
+            .any(|d| d.kind.as_deref() == Some("dangling-pin"))
+    );
+}
+
+#[test]
+fn extraction_errors_stop_simulate_pic() {
+    // R1 lacks its value: an error diagnostic, still a netlist.
+    let src = pic_fig("V1: vsource((0,1),(0,0), 1)\nR1: resistor((0,1),(0,0))\nground((0,0))\n.op");
+    let pic: PicJson = serde_json::from_str(&extract_pic_json(&src, None).unwrap()).unwrap();
+    assert!(pic.diagnostics.iter().any(|d| d.severity == "error"));
+    let err = run_pic(&src, &PicSimOptions::default()).unwrap_err();
+    assert_eq!(err.kind, "pic", "{err}");
+    assert!(
+        err.diagnostics
+            .iter()
+            .any(|d| d.kind.as_deref() == Some("missing-value"))
+    );
+    assert_eq!(err.pic.as_ref().unwrap().netlist, pic.netlist);
+}
+
+#[test]
+fn deck_failures_after_extraction_carry_the_extraction() {
+    // A `.dc` over a source the figure does not have.
+    let src = pic_fig(&DANGLING.replace(".op", ".dc v9 0 1 0.1"));
+    let err = run_pic(&src, &PicSimOptions::default()).unwrap_err();
+    assert!(matches!(err.kind.as_str(), "analysis" | "parse"), "{err}");
+    assert!(err.pic.as_ref().unwrap().netlist.contains("R1 "));
+}
+
+#[test]
+fn pic_options() {
+    let src = pic_fig(DANGLING);
+    assert!(extract_pic_json(&src, Some(r#"{"snap":0.01}"#)).is_ok());
+    assert!(simulate_pic_json(&src, Some(r#"{"snap":0.01,"includes":{}}"#)).is_ok());
+    for opts in [
+        "[]",
+        r#"{"snap":0}"#,
+        r#"{"snap":-1}"#,
+        r#"{"snap":"x"}"#,
+        r#"{"includes":{}}"#, // extract_pic takes no includes
+    ] {
+        let err = extract_pic_json(&src, Some(opts)).unwrap_err();
+        assert_eq!(err.kind, "options", "{opts}: {err}");
+    }
+    let err = simulate_pic_json(&src, Some(r#"{"snapp":1}"#)).unwrap_err();
+    assert_eq!(err.kind, "options");
+    // Includes reach the extracted deck.
+    let src = pic_fig(
+        "V1: vsource((0,1),(0,0), 1)\nD1: diode((0,1),(0,0), dmod)\nground((0,0))\n.include m.lib\n.op",
+    );
+    assert_eq!(simulate_pic_json(&src, None).unwrap_err().kind, "parse");
+    let opts = r#"{"includes":{"m.lib":".model dmod d is=1e-14\n"}}"#;
+    assert!(simulate_pic_json(&src, Some(opts)).is_ok());
+}
+
+/// The netlist-only output keeps its exact keys: pic additions to the
+/// shared types serialize only when set.
+#[test]
+fn simulate_wire_format_unchanged() {
+    let err = simulate_json("t\nv1 1 0 dc 1\nq1 1 1 0\n.op\n.end\n", None).unwrap_err();
+    let d = serde_json::to_value(&err.diagnostics[0]).unwrap();
+    let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, ["column", "file", "line", "message", "severity"]);
+    assert!(serde_json::to_value(&err).unwrap().get("pic").is_none());
+}
+
+#[test]
+fn hostile_figures_do_not_panic() {
+    let figures: &[&str] = &[
+        "",
+        "spice = 1",
+        ".PS\nspice = 1\n.PE\n",
+        ".PS\nspice = 1\n[\n.PE\n",
+        ".PS\nspice = 1\nR1: resistor((0,0),(0,0),1k)\n.PE\n",
+        ".PS\nspice = 1\nR1: resistor((0,0),(1e308,1e308),1k)\n.PE\n",
+        ".PS\nspice = 1\nX1: opamp((0,0))\n.PE\n",
+        ".PS\nspice = 1\nR1: resistor((0,0),(1,0),1k)\nR1: resistor((0,0),(1,0),1k)\n.PE\n",
+        ".PS\nspice = 1\ncopy \"/etc/passwd\"\n.PE\n",
+        ".PS\nspice = 1\n.tran 0 0\n+ x\n.PE\n",
+        ".PS\nspice = 1\nfor i = 1 to 1e9 do { }\n.PE\n",
+        "\u{0}\u{feff}\u{1F600}",
+    ];
+    for f in figures {
+        let r = simulate_pic_json(f, None);
+        if let Err(e) = &r {
+            assert_ne!(e.kind, "internal", "{f:?}: {e}");
+        }
+    }
+    let text = corpus_pic("bjtamp.pic");
+    for cut in (0..text.len()).step_by(11) {
+        if text.is_char_boundary(cut) {
+            let r = extract_pic_json(&text[..cut], None);
+            if let Err(e) = &r {
+                assert_ne!(e.kind, "internal", "cut {cut}: {e}");
+            }
+        }
+    }
+}

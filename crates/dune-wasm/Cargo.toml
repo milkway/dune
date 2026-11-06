@@ -1,6 +1,6 @@
 [package]
 name = "dune-wasm"
-description = "WebAssembly build of the Dune simulator: simulate(netlist, opts) -> rawfile JSON"
+description = "WebAssembly build of the Dune simulator: simulate(netlist) and simulate_pic(figure) -> rawfile JSON"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,6 +20,7 @@ console-panic = ["dep:console_error_panic_hook"]
 dune-netlist.workspace = true
 dune-core.workspace = true
 dune-raw.workspace = true
+dune-pic.workspace = true
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 wasm-bindgen = { version = "0.2", default-features = false, features = ["std"] }

@@ -177,6 +177,7 @@ dependencies = [
  "console_error_panic_hook",
  "dune-core",
  "dune-netlist",
+ "dune-pic",
  "dune-raw",
  "js-sys",
  "serde",

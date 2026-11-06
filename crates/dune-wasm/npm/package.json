@@ -1,0 +1,39 @@
+{
+  "name": "@strategicprojects/dune-sim",
+  "version": "0.1.0",
+  "description": "The Dune SPICE3 circuit simulator in WebAssembly: run a netlist, or extract and simulate an rpic (pic) schematic figure. Browser + Node.",
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./pkg/dune_wasm_bg.wasm": "./pkg/dune_wasm_bg.wasm",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "pkg/dune_wasm.js",
+    "pkg/dune_wasm.d.ts",
+    "pkg/dune_wasm_bg.wasm",
+    "pkg/dune_wasm_bg.wasm.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "./build.sh",
+    "test": "node test/smoke.mjs"
+  },
+  "keywords": ["spice", "circuit", "simulator", "pic", "rpic", "schematic", "wasm"],
+  "author": "André Leite <leite@de.ufpe.br>",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/milkway/dune.git",
+    "directory": "crates/dune-wasm/npm"
+  },
+  "sideEffects": false
+}

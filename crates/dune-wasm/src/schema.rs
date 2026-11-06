@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use dune_netlist::{Diagnostic, Severity, SourceMap};
+use dune_pic::{OverlayMap, PicDiagKind, PicDiagnostic, PicSeverity, PicSpan};
 use dune_raw::{Data, Plot};
 use serde::{Deserialize, Serialize};
 
@@ -107,13 +108,35 @@ pub enum Columns {
 ///
 /// `file`, `line` and `column` (1-based; the column counts bytes) are
 /// `null` for deck-level diagnostics that have no span.
+///
+/// Diagnostics of a pic figure (`extract_pic`/`simulate_pic`, and the
+/// `pic` errors) carry two more keys, absent everywhere else:
+///
+/// ```json
+/// { "severity": "warning", "kind": "dangling-pin", "message": "...",
+///   "file": null, "line": 4, "column": 5, "end_column": 26 }
+/// ```
+///
+/// * `kind` — what the diagnostic is about: `dangling-pin`,
+///   `floating-net`, `missing-value`, `duplicate-refdes`,
+///   `unknown-element`, `missing-pin`, `unlabeled-element`,
+///   `node-name-conflict`, `prelude` (extraction), `compile` (rpic
+///   rejected the figure) or `not-marked` (no `spice = 1`).
+/// * `file` — `null` with a `line` is the user's figure itself;
+///   `"spice.pic"` is the dune prelude, `"circuits"` rpic's std
+///   library. `line`/`column`/`end_column` (1-based, end exclusive,
+///   in characters as rpic counts them) are `null` when unknown.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DiagnosticJson {
     pub severity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     pub message: String,
     pub file: Option<String>,
     pub line: Option<u32>,
     pub column: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<u32>,
 }
 
 /// Run options (the `opts` argument of `simulate`). Every field is
@@ -145,11 +168,29 @@ pub struct SimOptions {
 /// `elaborate` (the deck parsed but does not build into a circuit)
 /// or `analysis` (an analysis failed: no convergence, timestep too
 /// small, singular matrix, …).
+///
+/// The pic entry points (`extract_pic`, `simulate_pic`) add:
+///
+/// * `pic` — the figure produced no deck: rpic rejected it
+///   (`diagnostics` = one `compile` entry with its position), it is
+///   not marked `spice = 1` (one `not-marked` entry), or — in
+///   `simulate_pic` only — extraction reported errors (`diagnostics`
+///   = all extraction diagnostics, and the error's `pic` property
+///   holds the [`PicJson`], netlist included).
+/// * `internal` — a bug: the Rust side panicked. Caught on native
+///   builds only; in wasm a panic traps (`WebAssembly.RuntimeError`)
+///   and the instance must be discarded.
+///
+/// A `simulate_pic` failure after extraction (`parse`, `elaborate`,
+/// `analysis`) also carries the extraction as the error's `pic`
+/// property, so the extracted netlist can be shown.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SimError {
     pub kind: String,
     pub message: String,
     pub diagnostics: Vec<DiagnosticJson>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pic: Option<Box<PicJson>>,
 }
 
 impl SimError {
@@ -158,6 +199,7 @@ impl SimError {
             kind: kind.to_string(),
             message: message.into(),
             diagnostics: Vec::new(),
+            pic: None,
         }
     }
 }
@@ -189,12 +231,195 @@ impl DiagnosticJson {
         };
         DiagnosticJson {
             severity: severity.to_string(),
+            kind: None,
             message: d.message.clone(),
             file,
             line,
             column,
+            end_column: None,
         }
     }
+
+    pub(crate) fn from_pic(d: &PicDiagnostic) -> Self {
+        let severity = match d.severity {
+            PicSeverity::Error => "error",
+            PicSeverity::Warning => "warning",
+        };
+        let kind = match d.kind {
+            PicDiagKind::DanglingPin => "dangling-pin",
+            PicDiagKind::FloatingNet => "floating-net",
+            PicDiagKind::MissingValue => "missing-value",
+            PicDiagKind::DuplicateRefdes => "duplicate-refdes",
+            PicDiagKind::UnknownElement => "unknown-element",
+            PicDiagKind::MissingPin => "missing-pin",
+            PicDiagKind::UnlabeledElement => "unlabeled-element",
+            PicDiagKind::NodeNameConflict => "node-name-conflict",
+            PicDiagKind::Prelude => "prelude",
+        };
+        Self::pic_located(severity, kind, d.message.clone(), d.span.as_ref())
+    }
+
+    pub(crate) fn pic_located(
+        severity: &str,
+        kind: &str,
+        message: String,
+        span: Option<&PicSpan>,
+    ) -> Self {
+        DiagnosticJson {
+            severity: severity.to_string(),
+            kind: Some(kind.to_string()),
+            message,
+            file: span.and_then(|s| s.file.clone()),
+            line: span.map(|s| s.line),
+            column: span.map(|s| s.col),
+            end_column: span.map(|s| s.end_col),
+        }
+    }
+}
+
+/// The extraction of a pic figure: what `extract_pic` returns, and the
+/// `pic` key of `simulate_pic`'s result.
+///
+/// ```json
+/// {
+///   "netlist": "* netlist extracted by dune-pic\nR1 in out 1k\n...\n.end\n",
+///   "diagnostics": [ DiagnosticJson, ... ],
+///   "map": OverlayMapJson
+/// }
+/// ```
+///
+/// * `netlist` — the SPICE3 deck, title line first, ending in `.end`.
+/// * `diagnostics` — the extraction diagnostics, warnings and errors,
+///   each with its pic `kind` (see [`DiagnosticJson`]). An `error`
+///   means an element was skipped or its card is incomplete: the
+///   netlist is still returned by `extract_pic`, but `simulate_pic`
+///   refuses to run it (kind `pic`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PicJson {
+    pub netlist: String,
+    pub diagnostics: Vec<DiagnosticJson>,
+    pub map: OverlayMapJson,
+}
+
+/// Map from netlist names back to the shapes of the compiled figure
+/// (mirrors [`dune_pic::OverlayMap`]), for drawing results over it.
+///
+/// ```json
+/// {
+///   "elements": [ { "refdes": "R1", "shapes": { "start": 12, "end": 19 } }, ... ],
+///   "nets": [ { "name": "0", "shapes": [ 30, 31, 32 ] }, { "name": "out", "shapes": [ 27 ] }, ... ]
+/// }
+/// ```
+///
+/// Shape numbers are indices into the drawing rpic compiles from the
+/// figure **with the dune prelude** (`spice.pic` after rpic's circuit
+/// library): number `N` is the SVG group `<g id="sN">`. The Studio must
+/// therefore render the same prelude-prefixed source for the ids to
+/// line up.
+///
+/// * `elements` — one per emitted card, in card order; `shapes` is
+///   the element block's half-open range: ids `s{start}` …
+///   `s{end-1}`.
+/// * `nets` — named nets in order of first appearance, ground (`0`)
+///   first when present; `shapes` are the net's wires, junction dots
+///   and ground symbols, sorted (named places draw nothing, so a net
+///   that is only pins has an empty list). `name` is the node name in
+///   the netlist, i.e. the `x` of the `v(x)` result vectors.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OverlayMapJson {
+    pub elements: Vec<ElementOverlayJson>,
+    pub nets: Vec<NetOverlayJson>,
+}
+
+/// One element of [`OverlayMapJson`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ElementOverlayJson {
+    pub refdes: String,
+    pub shapes: ShapeRangeJson,
+}
+
+/// A half-open range of shape numbers, `{ "start": a, "end": b }`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapeRangeJson {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// One net of [`OverlayMapJson`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NetOverlayJson {
+    pub name: String,
+    pub shapes: Vec<usize>,
+}
+
+impl From<&OverlayMap> for OverlayMapJson {
+    fn from(m: &OverlayMap) -> Self {
+        OverlayMapJson {
+            elements: m
+                .elements
+                .iter()
+                .map(|e| ElementOverlayJson {
+                    refdes: e.refdes.clone(),
+                    shapes: ShapeRangeJson {
+                        start: e.shapes.start,
+                        end: e.shapes.end,
+                    },
+                })
+                .collect(),
+            nets: m
+                .nets
+                .iter()
+                .map(|n| NetOverlayJson {
+                    name: n.name.clone(),
+                    shapes: n.shapes.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Result of `simulate_pic`: a [`RawfileJson`] (its keys at the top
+/// level) plus the extraction under `pic`.
+///
+/// ```json
+/// { "plots": [...], "notes": [...], "diagnostics": [...], "pic": PicJson }
+/// ```
+///
+/// The top-level `diagnostics` are the netlist parser's and
+/// `.options`' (file `deck.cir`, the extracted deck); the figure's are
+/// in `pic.diagnostics`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PicRunJson {
+    #[serde(flatten)]
+    pub raw: RawfileJson,
+    pub pic: PicJson,
+}
+
+/// Options of `extract_pic`. Unknown keys are an error.
+///
+/// ```json
+/// { "snap": 0.001 }
+/// ```
+///
+/// * `snap` — distance (pic inches) under which two terminals are the
+///   same point; a positive finite number, default `0.001`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ExtractOptionsJson {
+    pub snap: Option<f64>,
+}
+
+/// Options of `simulate_pic`: those of `extract_pic` and of
+/// `simulate`. Unknown keys are an error.
+///
+/// ```json
+/// { "snap": 0.001, "includes": { "models.lib": "..." } }
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct PicSimOptions {
+    pub snap: Option<f64>,
+    pub includes: BTreeMap<String, String>,
 }
 
 fn finite(x: f64) -> Option<f64> {
