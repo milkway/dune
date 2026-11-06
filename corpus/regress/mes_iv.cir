@@ -1,0 +1,17 @@
+MESFET I-V: NMF and PMF output/transfer families with RD/RS
+* Coverage: no corpus deck has a Z card. This pins mesload.c's
+* Statz drain current (cubic below 3/ALPHA, doping-tail B, LAMBDA,
+* normal and inverse mode) and the gate diodes at CONSTvt0 against
+* ngspice-47. The PMF is driven by mirrored copies of the sweep
+* sources so one .dc grid covers both devices. The area goes in as
+* AREA= because ngspice-47 drops the positional area of a Z card.
+vds 1 0 dc 3
+vgs 2 0 dc 0
+z1 1 2 0 zn
+e1 3 0 1 0 -1.2
+e2 4 0 2 0 -0.7
+z2 3 4 0 zp area=1.5
+.model zn nmf vto=-1.8 beta=3e-3 b=0.3 alpha=2.5 lambda=0.05 rd=5 rs=5
+.model zp pmf vto=-1.2 beta=2e-3 b=0.5 alpha=3 lambda=0.02 rd=10 rs=8
+.dc vds -0.3 4 0.1 vgs -2 0.2 0.2
+.end

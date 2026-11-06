@@ -1,0 +1,19 @@
+JFET I-V: NJF and PJF output/transfer families with RD/RS
+* Coverage: no corpus deck has a J card. This pins jfetload.c's
+* drain current (B != 1 doping tail, LAMBDA, normal and inverse
+* mode), the gate diodes and the RD/RS prime nodes against
+* ngspice-47. The PJF is driven by mirrored copies of the sweep
+* sources so one .dc grid covers both devices; j3 runs hot (TEMP=80
+* against TNOM=50) to pin JFETtemp's saturation current and vcrit.
+vds 1 0 dc 5
+vgs 2 0 dc 0
+j1 1 2 0 jn
+e1 3 0 1 0 -1
+e2 4 0 2 0 -0.8
+j2 3 4 0 jp 2
+j3 1 2 0 jt temp=80
+.model jn njf vto=-2 beta=1e-3 lambda=0.02 rd=50 rs=30 b=0.9
+.model jp pjf vto=-1.5 beta=5e-4 lambda=0.03 rd=20 rs=20 b=1.1 is=1e-13
+.model jt njf vto=-1.8 beta=4e-4 rd=10 rs=10 is=1e-13 tnom=50
+.dc vds -0.5 6 0.25 vgs -2.5 0 0.25
+.end

@@ -1,0 +1,17 @@
+JFET common-source amplifier: gate junction caps in .op/.ac/.tran
+* Coverage: CGS/CGD depletion charge (jfetload.c), the INITSMSIG
+* capacitances read by jfetacld.c, and the transient integration of
+* both gate charges (the 1.5 V swing forward-biases the gate past
+* FC*PB, into the linearized f1/f2/f3 branch), against ngspice-47.
+vdd 1 0 dc 15
+vin 5 0 dc 0 ac 1 sin(0 1.5 1meg)
+rsig 5 2 10k
+j1 3 2 4 jn
+rd 1 3 4.7k
+rs 4 0 100
+.model jn njf vto=-2 beta=1.3e-3 lambda=0.01 rd=20 rs=15 cgs=3p cgd=1.5p
++ pb=0.8 is=2e-14 b=0.95
+.ac dec 10 1k 1g
+.op
+.tran 10n 3u
+.end

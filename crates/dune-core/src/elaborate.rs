@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Ltra, Mos1, Mos2,
-    Mos6, Mutual, Resistor, Vccs, Vcvs, Vsource,
+    Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes,
+    Mos1, Mos2, Mos6, Mutual, Resistor, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -37,10 +37,52 @@ impl Circuit {
         // Unsupported-level MOS models only become an error when an
         // element uses them: decks routinely carry alternative model
         // cards for levels they never instantiate (mos6inv.cir).
-        let mut mos_unsupported: HashMap<&str, String> = HashMap::new();
+        let mut unsupported_models: HashMap<&str, String> = HashMap::new();
         let mut omodels: HashMap<&str, crate::ltra::LtraModel> = HashMap::new();
+        let mut jmodels: HashMap<&str, crate::jfet::JfetModel> = HashMap::new();
+        let mut zmodels: HashMap<&str, crate::mes::MesModel> = HashMap::new();
         for m in &nl.models {
             match m.mtype.as_str() {
+                // `LEVEL` on J/Z cards is ngspice's selector (JFET
+                // 2 = Parker-Skellern; MES 2 = MESA, 5/6 = HFET);
+                // only level 1, the 3f5 model, is implemented, and
+                // like the MOS levels an unsupported card only errs
+                // when an element instantiates it.
+                "njf" | "pjf" => {
+                    let level = num_param(&m.params, "level").unwrap_or(1.0);
+                    if level != 1.0 {
+                        unsupported_models.insert(
+                            m.name.as_str(),
+                            format!("model `{}`: JFET level {level} is not implemented", m.name),
+                        );
+                    } else {
+                        match jfet_model(m, &mut notes) {
+                            Ok(jm) => {
+                                jmodels.insert(m.name.as_str(), jm);
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                    }
+                }
+                "nmf" | "pmf" => {
+                    let level = num_param(&m.params, "level").unwrap_or(1.0);
+                    if level != 1.0 {
+                        unsupported_models.insert(
+                            m.name.as_str(),
+                            format!(
+                                "model `{}`: MESFET level {level} is not implemented",
+                                m.name
+                            ),
+                        );
+                    } else {
+                        match mes_model(m, &mut notes) {
+                            Ok(zm) => {
+                                zmodels.insert(m.name.as_str(), zm);
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                    }
+                }
                 "ltra" => match ltra_model(m, &mut notes) {
                     Ok(lm) => {
                         omodels.insert(m.name.as_str(), lm);
@@ -99,7 +141,7 @@ impl Circuit {
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
                     } else {
-                        mos_unsupported.insert(
+                        unsupported_models.insert(
                             m.name.as_str(),
                             format!(
                                 "model `{}`: MOS level {level} is not implemented yet (Phase 3)",
@@ -372,7 +414,7 @@ impl Circuit {
                 }
                 ir::Device::Mosfet { model, params } => {
                     let Some(mm) = mmodels.get(model.as_str()) else {
-                        if let Some(reason) = mos_unsupported.get(model.as_str()) {
+                        if let Some(reason) = unsupported_models.get(model.as_str()) {
                             problems.push(format!("`{name}`: {reason}"));
                         } else {
                             problems.push(format!(
@@ -506,6 +548,93 @@ impl Circuit {
                             &mut problems,
                         ),
                     }
+                }
+                ir::Device::Jfet {
+                    model,
+                    area,
+                    off,
+                    params,
+                } => {
+                    let Some(jm) = jmodels.get(model.as_str()) else {
+                        if let Some(reason) = unsupported_models.get(model.as_str()) {
+                            problems.push(format!("`{name}`: {reason}"));
+                        } else {
+                            problems.push(format!(
+                                "`{name}`: unable to find definition of model `{model}`"
+                            ));
+                        }
+                        continue;
+                    };
+                    let mut area = *area;
+                    let mut temp = None;
+                    let mut ic = (0.0, 0.0);
+                    for p in params {
+                        match (p.name.as_str(), &p.value) {
+                            ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
+                            ("area", ParamValue::Num(v)) => area = Some(*v),
+                            ("ic", ParamValue::Num(v)) => ic.0 = *v,
+                            ("ic", ParamValue::NumList(v)) if (1..=2).contains(&v.len()) => {
+                                ic = (v[0], v.get(1).copied().unwrap_or(ic.1));
+                            }
+                            _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
+                        }
+                    }
+                    add(
+                        &mut ckt,
+                        Jfet {
+                            name,
+                            nodes: three(&el.nodes),
+                            model: jm.clone(),
+                            area: area.unwrap_or(1.0),
+                            off: *off,
+                            ic,
+                            temp,
+                        },
+                        &mut problems,
+                    );
+                }
+                ir::Device::Mesfet {
+                    model,
+                    area,
+                    off,
+                    params,
+                } => {
+                    let Some(zm) = zmodels.get(model.as_str()) else {
+                        if let Some(reason) = unsupported_models.get(model.as_str()) {
+                            problems.push(format!("`{name}`: {reason}"));
+                        } else {
+                            problems.push(format!(
+                                "`{name}`: unable to find definition of model `{model}`"
+                            ));
+                        }
+                        continue;
+                    };
+                    let mut area = *area;
+                    let mut ic = (0.0, 0.0);
+                    for p in params {
+                        match (p.name.as_str(), &p.value) {
+                            ("area", ParamValue::Num(v)) => area = Some(*v),
+                            ("icvds", ParamValue::Num(v)) => ic.0 = *v,
+                            ("icvgs", ParamValue::Num(v)) => ic.1 = *v,
+                            ("ic", ParamValue::Num(v)) => ic.0 = *v,
+                            ("ic", ParamValue::NumList(v)) if (1..=2).contains(&v.len()) => {
+                                ic = (v[0], v.get(1).copied().unwrap_or(ic.1));
+                            }
+                            _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
+                        }
+                    }
+                    add(
+                        &mut ckt,
+                        Mes {
+                            name,
+                            nodes: three(&el.nodes),
+                            model: zm.clone(),
+                            area: area.unwrap_or(1.0),
+                            off: *off,
+                            ic,
+                        },
+                        &mut problems,
+                    );
                 }
                 ir::Device::TlineLossy { model } => {
                     let Some(lm) = omodels.get(model.as_str()) else {
@@ -1145,6 +1274,10 @@ fn two(nodes: &[String]) -> [String; 2] {
     [nodes[0].clone(), nodes[1].clone()]
 }
 
+fn three(nodes: &[String]) -> [String; 3] {
+    [nodes[0].clone(), nodes[1].clone(), nodes[2].clone()]
+}
+
 fn four(nodes: &[String]) -> [String; 4] {
     [
         nodes[0].clone(),
@@ -1208,4 +1341,83 @@ fn diode_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<DiodeModel, Str
         }
     }
     Ok(dm)
+}
+
+/// `.model x njf/pjf(...)` → [`crate::jfet::JfetModel`] (`jfet.c`
+/// model table: `VT0` with `VTO` as alias, the Sydney `B`). `LEVEL`
+/// is ngspice's selector (2 = Parker–Skellern); only level 1, the
+/// 3f5 model, is accepted.
+fn jfet_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::jfet::JfetModel, String> {
+    let mut jm = crate::jfet::JfetModel::new(m.mtype == "njf");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "njf" || p.name == "pjf" => {
+                jm.njf = p.name == "njf";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "level" => {}
+            "vt0" | "vto" => jm.vto = v,
+            "beta" => jm.beta = v,
+            "lambda" => jm.lambda = v,
+            "rd" => jm.rd = v,
+            "rs" => jm.rs = v,
+            "cgs" => jm.cgs = v,
+            "cgd" => jm.cgd = v,
+            "pb" => jm.pb = v,
+            "is" => jm.is = v,
+            "fc" => jm.fc = v,
+            "b" => jm.b = v,
+            "tnom" => jm.tnom = Some(v + CTOK),
+            "kf" => jm.kf = v,
+            "af" => jm.af = v,
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(jm)
+}
+
+/// `.model x nmf/pmf(...)` → [`crate::mes::MesModel`] (`mes.c` model
+/// table). `LEVEL` is ngspice's selector (1 = Statz, the 3f5 model;
+/// 2 MESA, 5/6 HFET); only level 1 is accepted.
+fn mes_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mes::MesModel, String> {
+    let mut zm = crate::mes::MesModel::new(m.mtype == "nmf");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmf" || p.name == "pmf" => {
+                zm.nmf = p.name == "nmf";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "level" => {}
+            "vt0" | "vto" => zm.vto = v,
+            "alpha" => zm.alpha = v,
+            "beta" => zm.beta = v,
+            "lambda" => zm.lambda = v,
+            "b" => zm.b = v,
+            "rd" => zm.rd = v,
+            "rs" => zm.rs = v,
+            "cgs" => zm.cgs = v,
+            "cgd" => zm.cgd = v,
+            "pb" => zm.pb = v,
+            "is" => zm.is = v,
+            "fc" => zm.fc = v,
+            "kf" => zm.kf = v,
+            "af" => zm.af = v,
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(zm)
 }

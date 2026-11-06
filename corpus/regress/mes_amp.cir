@@ -1,0 +1,15 @@
+MESFET amplifier: Statz gate charge in .ac and .tran
+* Coverage: qggnew's total gate charge and its four-point split
+* (mesload.c), including the forward-gate extension past vmax, the
+* INITSMSIG capacitances read by mesacl.c, against ngspice-47.
+vdd 1 0 dc 5
+vin 5 0 dc -0.5 ac 1 sin(-0.5 1.5 1g)
+rsig 5 2 50
+z1 3 2 0 zn
+rl 1 3 1k
+cl 3 0 50f
+.model zn nmf vto=-1.8 beta=3e-3 b=0.3 alpha=2.5 lambda=0.05 rd=5 rs=5
++ cgs=1p cgd=0.2p pb=0.8
+.ac dec 10 1meg 100g
+.tran 10p 4n
+.end

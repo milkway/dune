@@ -151,6 +151,8 @@ impl Engine {
             step: self.step,
             final_time: self.final_time,
             gmin: opts.gmin,
+            reltol: opts.reltol,
+            abstol: opts.abstol,
             srcfact,
             noncon: false,
             states: &mut self.states,

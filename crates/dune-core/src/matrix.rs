@@ -114,6 +114,10 @@ pub(crate) struct LoadCtx<'a> {
     /// `CKTfinalTime` (0 outside transient jobs).
     pub final_time: f64,
     pub gmin: f64,
+    /// `CKTreltol`, `CKTabstol`: the JFET/MESFET loads run their
+    /// current-agreement convergence test inline (`jfetload.c`).
+    pub reltol: f64,
+    pub abstol: f64,
     /// `CKTsrcFact`, the source-stepping scale.
     pub srcfact: f64,
     /// Set by devices that limited (`CKTnoncon`).

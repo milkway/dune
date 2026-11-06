@@ -259,6 +259,38 @@ pub struct Diode {
     pub ic: Option<f64>,
 }
 
+/// `JXXXXXXX ND NG NS MNAME <AREA> <OFF> <IC=VDS,VGS> <TEMP=T>` with
+/// its model inline. Prime nodes past `RD`/`RS` are named
+/// `<name>#drain`/`<name>#source` (`JFETsetup`'s `CKTmkVolt` calls).
+#[derive(Clone, Debug)]
+pub struct Jfet {
+    pub name: String,
+    /// Drain, gate, source.
+    pub nodes: [String; 3],
+    pub model: crate::jfet::JfetModel,
+    pub area: f64,
+    pub off: bool,
+    /// `IC=VDS,VGS`.
+    pub ic: (f64, f64),
+    /// Instance temperature override, kelvin.
+    pub temp: Option<f64>,
+}
+
+/// `ZXXXXXXX ND NG NS MNAME <AREA> <OFF> <IC=VDS,VGS>` (MESFET) with
+/// its model inline; prime nodes as for [`Jfet`]. The 3f5 MESFET has
+/// no instance temperature.
+#[derive(Clone, Debug)]
+pub struct Mes {
+    pub name: String,
+    /// Drain, gate, source.
+    pub nodes: [String; 3],
+    pub model: crate::mes::MesModel,
+    pub area: f64,
+    pub off: bool,
+    /// `IC=VDS,VGS`.
+    pub ic: (f64, f64),
+}
+
 /// `OXXXXXXX N1 N2 N3 N4 MNAME`: a lossy transmission line (LTRA)
 /// between port 1 (`N1`, `N2`) and port 2 (`N3`, `N4`), with its
 /// model inline. The two port currents are extra unknowns named
@@ -290,6 +322,8 @@ pub enum Spec {
     Cccs(Cccs),
     Ccvs(Ccvs),
     Diode(Diode),
+    Jfet(Box<Jfet>),
+    Mes(Box<Mes>),
     Ltra(Box<Ltra>),
 }
 
@@ -340,6 +374,18 @@ impl From<Bsim2> for Spec {
     }
 }
 
+impl From<Jfet> for Spec {
+    fn from(s: Jfet) -> Spec {
+        Spec::Jfet(Box::new(s))
+    }
+}
+
+impl From<Mes> for Spec {
+    fn from(s: Mes) -> Spec {
+        Spec::Mes(Box::new(s))
+    }
+}
+
 impl From<Ltra> for Spec {
     fn from(s: Ltra) -> Spec {
         Spec::Ltra(Box::new(s))
@@ -366,6 +412,8 @@ impl Spec {
             Spec::Cccs(s) => &s.name,
             Spec::Ccvs(s) => &s.name,
             Spec::Diode(s) => &s.name,
+            Spec::Jfet(s) => &s.name,
+            Spec::Mes(s) => &s.name,
             Spec::Ltra(s) => &s.name,
         }
     }
@@ -508,6 +556,14 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Jfet(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
+        Spec::Mes(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
         Spec::Ltra(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -622,6 +678,8 @@ impl Circuit {
                     flux
                 }
                 Spec::Diode(_) => st.alloc(5),
+                Spec::Jfet(_) => st.alloc(crate::jfet::FET3_NUM_STATES),
+                Spec::Mes(_) => st.alloc(crate::mes::MES_NUM_STATES),
                 _ => 0,
             });
             let node_names: &[String] = match spec {
@@ -642,6 +700,8 @@ impl Circuit {
                 Spec::Cccs(s) => &s.nodes,
                 Spec::Ccvs(s) => &s.nodes,
                 Spec::Diode(s) => &s.nodes,
+                Spec::Jfet(s) => &s.nodes,
+                Spec::Mes(s) => &s.nodes,
                 Spec::Ltra(s) => &s.nodes,
             };
             for n in node_names {
@@ -675,6 +735,24 @@ impl Circuit {
                 // `<name>#internal` like `CKTmkVolt` does.
                 Spec::Diode(s) if s.model.rs != 0.0 => {
                     node(&mut vars, &mut node_ids, &format!("{}#internal", s.name));
+                }
+                // `JFETsetup`/`MESsetup`: source prime first, then
+                // drain prime (`<name>#source`, `<name>#drain`).
+                Spec::Jfet(s) => {
+                    if s.model.rs != 0.0 {
+                        node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
+                    }
+                    if s.model.rd != 0.0 {
+                        node(&mut vars, &mut node_ids, &format!("{}#drain", s.name));
+                    }
+                }
+                Spec::Mes(s) => {
+                    if s.model.rs != 0.0 {
+                        node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
+                    }
+                    if s.model.rd != 0.0 {
+                        node(&mut vars, &mut node_ids, &format!("{}#drain", s.name));
+                    }
                 }
                 // `BJTsetup`: one prime node per nonzero parasitic
                 // resistance (`q1#collector` etc., `CKTmkVolt`).
@@ -1114,6 +1192,24 @@ impl Circuit {
                         base,
                     )));
                 }
+                Spec::Jfet(s) => {
+                    let (nodes, primes) =
+                        fet3_vars(&node_ids, &s.name, &s.nodes, s.model.rd, s.model.rs);
+                    let temp = s.temp.unwrap_or(opts.temp);
+                    let t = crate::jfet::JfetTemp::new(&s.name, &s.model, temp, opts.tnom);
+                    notes.extend(t.notes.iter().cloned());
+                    devices.push(Box::new(crate::jfet::JfetI::new(
+                        nodes, primes, t, s.area, s.off, s.ic, base,
+                    )));
+                }
+                Spec::Mes(s) => {
+                    let (nodes, primes) =
+                        fet3_vars(&node_ids, &s.name, &s.nodes, s.model.rd, s.model.rs);
+                    let t = crate::mes::MesTemp::new(&s.model);
+                    devices.push(Box::new(crate::mes::MesI::new(
+                        nodes, primes, t, s.area, s.off, s.ic, base,
+                    )));
+                }
                 Spec::Ltra(s) => {
                     let n = [
                         get(&node_ids, &s.nodes[0]),
@@ -1165,6 +1261,30 @@ impl Circuit {
             notes,
         })
     }
+}
+
+/// Terminal and prime-node variables of a JFET/MESFET.
+fn fet3_vars(
+    node_ids: &HashMap<String, Var>,
+    name: &str,
+    nodes: &[String; 3],
+    rd: f64,
+    rs: f64,
+) -> ([Var; 3], [Var; 2]) {
+    let d = node_ids[&nodes[0]];
+    let g = node_ids[&nodes[1]];
+    let s = node_ids[&nodes[2]];
+    let dp = if rd != 0.0 {
+        node_ids[&format!("{name}#drain")]
+    } else {
+        d
+    };
+    let sp = if rs != 0.0 {
+        node_ids[&format!("{name}#source")]
+    } else {
+        s
+    };
+    ([d, g, s], [dp, sp])
 }
 
 fn ctrl_branch(branches: &HashMap<String, Var>, name: &str, ctrl: &str) -> Result<Var, Error> {

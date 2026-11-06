@@ -258,6 +258,31 @@ resultados espelhando o rawfile).
   nó x1.6 (flutuante, definido por fugas) fica 7 mV do ngspice no
   op — não afeta vereditos.
 
+- **JFET e MESFET** (`jfet.rs` ← `jfetload.c`, `jfettemp.c`,
+  `jfetset.c`, `jfetacld.c`, `jfettrun.c`; `mes.rs` ← `mesload.c`,
+  `messetup.c`, `mestemp.c`, `mesacl.c`, `mestrunc.c`): o
+  `mesload.c` é o `jfetload.c` linha a linha fora corrente, carga e
+  `CONSTvt0`, então o esqueleto comum dos FETs de 3 terminais vive
+  em `jfet.rs` e os dois usam (`Fet3Nodes`, `fet3_bias` — escada de
+  inicialização, predictor, `pnjlim`+`fetlim` —, `gate_diode` com
+  gmin, `fet3_charge`, `fet3_finish` — teste de convergência por
+  concordância de correntes *dentro do load*, como no C, que não
+  tem `*cvtest.c` para eles —, `fet3_ac`). JFET: Shichman–Hodges
+  com o rabo de dopagem `B` de Sydney (`Bfac=(1−B)/(PB−VTO)`),
+  `JFETtemp` completo (os parâmetros térmicos extras do ngspice —
+  XTI/EG/VTOTC… — são ignorados com aviso; nos defaults o ngspice
+  reproduz o 3f5, medido a 2e-4 a 80 °C e pinado por `j3` em
+  `jfet_iv`). MESFET: Statz com saturação contínua em `3/ALPHA`;
+  default de BETA é **2.5e-3** (`messetup.c` e ngspice; o
+  spice.txt documenta 1e-4 errado). Nós primos `#source`/`#drain`
+  (source primeiro, ordem do C). `LEVEL≠1` (Parker–Skellern, MESA,
+  HFET do ngspice) difere como os níveis MOS: só erra se
+  instanciado. Sem ruído (`jfetnoi.c`/`mesnoise.c`), `.pz` ou
+  `.disto`. Sondas: `regress/jfet_iv` (famílias I-V NJF/PJF/quente,
+  margem 0.27 — constantes físicas ×v/vt no diodo de porta),
+  `jfet_amp` (op/ac/tran), `mes_iv`, `mes_amp` (carga de Statz com
+  porta direta além de `vmax`), todas PASS.
+
 - **BSIM1 (nível 4)** (`bsim1.rs` ← `b1ld.c`, `b1eval.c`,
   `b1temp.c`, `b1set.c`, `b1moscap.c`, `b1acld.c`, `b1cvtest.c`):
   cada parâmetro elétrico vem em tripla (valor, dep. L, dep. W)
@@ -374,13 +399,16 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- `.tf`; ruído dos demais dispositivos (diodo/MOS têm
-  `*noise.c` no C, aqui ainda não; R sem fNcoef → flicker 0); `.pz` dos semicondutores restantes (BJT/
+- `.tf`; ruído dos demais dispositivos (diodo/MOS/JFET/MESFET têm
+  `*noise.c` no C — o `.noise` hoje os trata como silenciosos; R
+  sem fNcoef → flicker 0); `.pz` dos semicondutores restantes (BJT/
   MOS têm `pzLoad` no C, aqui ainda não); `.disto` de BJT/MOS/BSIM
   (`bjtdisto.c`/`mos*dist.c` no C); `.dc` varrendo TEMP e parâmetro
   de modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- MOS nível 3, JFET/MESFET, chaves, linhas T/U, fonte B (Fase 3).
+- MOS nível 3, chaves S/W, linhas T/U, fonte B (Fase 3); JFET
+  nível 2 (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são ngspice,
+  fora do contrato 3f5.
 - LTRA: `trytocompact` (compactação do histórico) e o controle LTE
   (`LTRAlteCalculate` — inalcançável sem `fullcontrol`).
 - Controlador de passo: cruzamento de `vds=0` num breakpoint com nó
