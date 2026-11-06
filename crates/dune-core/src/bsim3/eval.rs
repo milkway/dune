@@ -84,14 +84,16 @@ pub(crate) fn evaluate(
     let cox = model.cox;
     let tox = model.tox;
 
-    let (mut t0, mut t1, mut t2, mut t3, mut t4, mut t5, mut t6, mut t7, mut t8, mut t9) =
-        (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut t0, mut t1, mut t2, mut t3, mut t4, mut t5, mut t6, mut t7, mut t8, mut t9) = (
+        0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64,
+    );
     let (mut t10, mut t11, mut t12) = (0.0f64, 0.0f64, 0.0f64);
     let (mut dt0_dvg, mut dt0_dvd, mut dt0_dvb) = (0.0f64, 0.0f64, 0.0f64);
     let (mut dt1_dvg, mut dt1_dvd, mut dt1_dvb) = (0.0f64, 0.0f64, 0.0f64);
     let (mut dt2_dvg, mut dt2_dvd, mut dt2_dvb) = (0.0f64, 0.0f64, 0.0f64);
     let (mut dt3_dvg, mut dt3_dvd, mut dt3_dvb) = (0.0f64, 0.0f64, 0.0f64);
-    let (mut tmp, mut tmp1, mut tmp2, mut tmp3, mut tmp4) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    let (mut tmp, mut tmp1, mut tmp2, mut tmp3, mut tmp4) =
+        (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
 
     t0 = vbs - pp.vbsc - 0.001;
     t1 = f64::sqrt(t0 * t0 - 0.004 * pp.vbsc);
@@ -201,7 +203,8 @@ pub(crate) fn evaluate(
     let ddibl_sft_dvd = t3 * pp.theta0vb0;
     let dibl_sft = ddibl_sft_dvd * vds;
 
-    let vth = typ * it.vth0 - pp.k1 * pp.sqrt_phi + pp.k1ox * sqrt_phis - pp.k2ox * vbseff
+    let vth = typ * it.vth0 - pp.k1 * pp.sqrt_phi + pp.k1ox * sqrt_phis
+        - pp.k2ox * vbseff
         - delt_vth
         - t2
         + (pp.k3 + pp.k3b * vbseff) * tmp2
@@ -210,8 +213,7 @@ pub(crate) fn evaluate(
 
     e.von = vth;
 
-    let dvth_dvb = pp.k1ox * dsqrt_phis_dvb - pp.k2ox - ddelt_vth_dvb - dt2_dvb
-        + pp.k3b * tmp2
+    let dvth_dvb = pp.k1ox * dsqrt_phis_dvb - pp.k2ox - ddelt_vth_dvb - dt2_dvb + pp.k3b * tmp2
         - pp.etab * vds * pp.theta0vb0 * t4
         + pp.kt2 * temp_ratio;
     let dvth_dvd = -ddibl_sft_dvd;
@@ -304,7 +306,7 @@ pub(crate) fn evaluate(
         // To avoid the discontinuity problem due to Weff.
         t0 = 1.0 / (6.0e-8 - 2.0 * weff);
         weff = 2.0e-8 * (4.0e-8 - weff) * t0;
-        t0 *= t0 * 4.0e-16;
+        t0 = t0 * t0 * 4.0e-16;
         dweff_dvg *= t0;
         dweff_dvb *= t0;
     }
@@ -492,10 +494,10 @@ pub(crate) fn evaluate(
         t7 = vgst2vtm * t9;
         t6 = vgst2vtm * wvcox_rds;
         t0 = 2.0 * abulk * (t9 - 1.0 + 1.0 / lambda);
-        dt0_dvg = 2.0
-            * (t8 * tmp2 - abulk * tmp1 + (2.0 * t9 + 1.0 / lambda - 1.0) * dabulk_dvg);
+        dt0_dvg = 2.0 * (t8 * tmp2 - abulk * tmp1 + (2.0 * t9 + 1.0 / lambda - 1.0) * dabulk_dvg);
 
-        dt0_dvb = 2.0 * (t8 * (2.0 / abulk * dabulk_dvb + tmp3) + (1.0 / lambda - 1.0) * dabulk_dvb);
+        dt0_dvb =
+            2.0 * (t8 * (2.0 / abulk * dabulk_dvb + tmp3) + (1.0 / lambda - 1.0) * dabulk_dvb);
         dt0_dvd = 0.0;
         t1 = vgst2vtm * (2.0 / lambda - 1.0) + abulk * esat_l + 3.0 * t7;
 
@@ -716,8 +718,8 @@ pub(crate) fn evaluate(
     let dbeta_dvb = cox_wov_l * dueff_dvb + beta * dweff_dvb / weff;
 
     t0 = 1.0 - 0.5 * abulk * vdseff / vgst2vtm;
-    dt0_dvg = -0.5 * (abulk * dvdseff_dvg - abulk * vdseff / vgst2vtm + vdseff * dabulk_dvg)
-        / vgst2vtm;
+    dt0_dvg =
+        -0.5 * (abulk * dvdseff_dvg - abulk * vdseff / vgst2vtm + vdseff * dabulk_dvg) / vgst2vtm;
     dt0_dvd = -0.5 * abulk * dvdseff_dvd / vgst2vtm;
     dt0_dvb = -0.5 * (abulk * dvdseff_dvb + dabulk_dvb * vdseff) / vgst2vtm;
 
@@ -818,7 +820,7 @@ pub(crate) fn evaluate(
         return e;
     }
 
-    let (mut qgate, mut qbulk, qdrn, mut qsrc);
+    let (mut qgate, mut qbulk, qdrn, qsrc);
     let cox_wl;
     if model.cap_mod == 0 {
         if vbseff < 0.0 {
@@ -1139,7 +1141,7 @@ pub(crate) fn evaluate(
     } // End of VgsteffCV
 
     let (mut cgg, mut cgd, mut cgb, mut cbg, mut cbd, mut cbb);
-    let (mut csg, mut csd, mut csb);
+    let (mut csg, csd, mut csb);
     if model.cap_mod == 1 {
         let vfb = it.vfbzb;
         let arg1 = vgs_eff - vbseff_cv - vfb - vgsteff;
@@ -1371,7 +1373,7 @@ pub(crate) fn evaluate(
         t7 = 1.0 - abulk_cv;
         qbulk = cox_wl * t7 * (0.5 * vdseff_cv - t3);
         t4 = -t7 * (t4 - 1.0);
-        t5 = -t7 * t5;
+        t5 *= -t7;
         t6 = -(t7 * t6 + (0.5 * vdseff_cv - t3));
         let mut cbg1 = cox_wl * (t4 + t5 * dvdseff_cv_dvg);
         let cbd1 = cox_wl * t5 * dvdseff_cv_dvd + cbg1 * dvgsteff_dvd;
@@ -1669,8 +1671,8 @@ pub(crate) fn evaluate(
             // 40/60 partition.
             t2 /= 12.0;
             t3 = 0.5 * cox_wlcen / (t2 * t2);
-            t4 = t1 * (2.0 * t0 * t0 / 3.0 + t1 * (t1 - 4.0 * t0 / 3.0))
-                - 2.0 * t0 * t0 * t0 / 15.0;
+            t4 =
+                t1 * (2.0 * t0 * t0 / 3.0 + t1 * (t1 - 4.0 * t0 / 3.0)) - 2.0 * t0 * t0 * t0 / 15.0;
             qsrc = -t3 * t4;
             qov_cox = qsrc / coxeff;
             t8 = 4.0 / 3.0 * t1 * (t1 - t0) + 0.4 * t0 * t0;

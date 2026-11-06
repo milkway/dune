@@ -915,6 +915,11 @@ impl Engine {
     }
 
     /// Devices with noise generators, in device order (`CKTnoise`).
+    /// [`crate::devices::Device::noise_sep`] of device `d`.
+    pub fn noise_sep(&self, d: usize) -> &'static str {
+        self.devices[d].noise_sep()
+    }
+
     pub fn noise_devices(&self) -> Vec<(usize, &'static [&'static str])> {
         self.devices
             .iter()

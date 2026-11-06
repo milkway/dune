@@ -179,7 +179,7 @@ impl Circuit {
             for &(d, suffixes) in &noisy {
                 for sfx in suffixes {
                     dens_vars.push((
-                        format!("onoise_{}{}", engine.names[d], sfx),
+                        format!("onoise{}{}{}", engine.noise_sep(d), engine.names[d], sfx),
                         VarType::Other("voltage-density".into()),
                     ));
                 }
@@ -336,12 +336,22 @@ impl Circuit {
                 for (k, &(d, suffixes)) in noisy.iter().enumerate() {
                     for (i, sfx) in suffixes.iter().enumerate() {
                         vars.push((
-                            format!("{owrap}(onoise_total_{}{})", engine.names[d], sfx),
+                            format!(
+                                "{owrap}(onoise_total{}{}{})",
+                                engine.noise_sep(d),
+                                engine.names[d],
+                                sfx
+                            ),
                             otype.clone(),
                         ));
                         cols.push(vec![out_noiz_dev[k][i].sqrt()]);
                         vars.push((
-                            format!("{iwrap}(inoise_total_{}{})", engine.names[d], sfx),
+                            format!(
+                                "{iwrap}(inoise_total{}{}{})",
+                                engine.noise_sep(d),
+                                engine.names[d],
+                                sfx
+                            ),
                             itype.clone(),
                         ));
                         cols.push(vec![in_noiz_dev[k][i].sqrt()]);

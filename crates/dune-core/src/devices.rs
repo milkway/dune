@@ -51,6 +51,12 @@ pub(crate) trait Device {
     fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
         None
     }
+    /// What joins `onoise`/`onoise_total` and the instance name in
+    /// the per-generator vector names: `_` for the 3f5 devices
+    /// (`"onoise_%s%s"`), `.` for ngspice's BSIM3 (`"onoise.%s%s"`).
+    fn noise_sep(&self) -> &'static str {
+        "_"
+    }
     /// Spectral densities at the adjoint solution, one per suffix
     /// (the device computes its own total, like the C).
     fn noise_dens(&self, _ctx: &NoiseCtx) -> Vec<f64> {

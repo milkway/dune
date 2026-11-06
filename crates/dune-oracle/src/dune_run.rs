@@ -23,7 +23,7 @@ pub fn supported(c: &CorpusCircuit) -> bool {
         't', 'x',
     ];
     // MOS levels implemented so far.
-    const MOS_LEVELS: &[u32] = &[1, 2, 3, 4, 5, 6];
+    const MOS_LEVELS: &[u32] = &[1, 2, 3, 4, 5, 6, 8, 49];
     !c.analyses.is_empty()
         && c.analyses.iter().all(|a| ANALYSES.contains(&a.as_str()))
         && c.devices.iter().all(|d| DEVICES.contains(d))

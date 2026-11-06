@@ -792,7 +792,7 @@ bsim3_params! {
     /// Cross-term dependence of ua1 (`BSIM3pua1`)
     pua1: "pua1" = Some(0.0);
     /// Cross-term dependence of ub (`BSIM3pub`)
-    pub: "pub" = Some(0.0);
+    pub_: "pub" = Some(0.0);
     /// Cross-term dependence of ub1 (`BSIM3pub1`)
     pub1: "pub1" = Some(0.0);
     /// Cross-term dependence of uc (`BSIM3puc`)
@@ -1031,7 +1031,11 @@ impl Bsim3Model {
             self.vth0 = if nmos { 0.7 } else { -0.7 };
         }
         if !g.uc {
-            self.uc = if self.mob_mod == 3 { -0.0465 } else { -0.0465e-9 };
+            self.uc = if self.mob_mod == 3 {
+                -0.0465
+            } else {
+                -0.0465e-9
+            };
         }
         if !g.uc1 {
             self.uc1 = if self.mob_mod == 3 { -0.056 } else { -0.056e-9 };
@@ -1115,5 +1119,25 @@ impl Bsim3Model {
     /// nodes when `rsh·squares != 0`, ACM off).
     pub(crate) fn needs_prime(&self, squares: f64) -> bool {
         self.sheet_resistance * squares != 0.0
+    }
+}
+
+impl Bsim3Model {
+    /// A given integer selector (`capmod`, `nqsmod`, …), `None` when
+    /// not given.
+    pub(crate) fn get_int(&self, name: &str) -> Option<i32> {
+        let g = &self.given;
+        match name {
+            "capmod" if g.cap_mod => Some(self.cap_mod),
+            "mobmod" if g.mob_mod => Some(self.mob_mod),
+            "noimod" if g.noi_mod => Some(self.noi_mod),
+            "nqsmod" if g.nqs_mod => Some(self.nqs_mod),
+            "acnqsmod" if g.acnqs_mod => Some(self.acnqs_mod),
+            "acm" if g.acm_mod => Some(self.acm_mod),
+            "calcacm" if g.calcacm => Some(self.calcacm),
+            "paramchk" if g.param_chk => Some(self.param_chk),
+            "binunit" if g.bin_unit => Some(self.bin_unit),
+            _ => None,
+        }
     }
 }

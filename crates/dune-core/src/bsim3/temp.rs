@@ -57,12 +57,15 @@ impl Bsim3MTemp {
         }
         let tnom = m.tnom;
         let t_ratio = temp / tnom;
-        let vcrit = crate::consts::VT0 * f64::ln(crate::consts::VT0 / (crate::consts::ROOT2 * 1.0e-14));
+        let vcrit =
+            crate::consts::VT0 * f64::ln(crate::consts::VT0 / (crate::consts::ROOT2 * 1.0e-14));
         let factor1 = f64::sqrt(EPSSI / EPSOX * m.tox);
 
         let vtm0 = KBOQ * tnom;
         let eg0 = 1.16 - 7.02e-4 * tnom * tnom / (tnom + 1108.0);
-        let ni = 1.45e10 * (tnom / 300.15) * f64::sqrt(tnom / 300.15)
+        let ni = 1.45e10
+            * (tnom / 300.15)
+            * f64::sqrt(tnom / 300.15)
             * f64::exp(21.5565981 - eg0 / (2.0 * vtm0));
 
         let vtm = KBOQ * temp;
@@ -102,12 +105,20 @@ impl Bsim3MTemp {
         };
         let cj = scale(m.unit_area_jct_cap, m.tcj, "cj", notes);
         let cjsw = scale(m.unit_length_sidewall_jct_cap, m.tcjsw, "cjsw", notes);
-        let cjswg = scale(m.unit_length_gate_sidewall_jct_cap, m.tcjswg, "cjswg", notes);
+        let cjswg = scale(
+            m.unit_length_gate_sidewall_jct_cap,
+            m.tcjswg,
+            "cjswg",
+            notes,
+        );
 
         let mut phi_b = m.bulk_jct_potential - m.tpb * del_temp;
         if phi_b < 0.01 {
             phi_b = 0.01;
-            notes.push("Temperature effect has caused pb to be less than 0.01. Pb is clamped to 0.01.".into());
+            notes.push(
+                "Temperature effect has caused pb to be less than 0.01. Pb is clamped to 0.01."
+                    .into(),
+            );
         }
         let mut phi_bsw = m.sidewall_jct_potential - m.tpbsw * del_temp;
         if phi_bsw <= 0.01 {
@@ -149,6 +160,8 @@ impl Bsim3MTemp {
 /// `P = P0 + PL/Leff + PW/Weff + PP/(Leff·Weff)` (µm units with
 /// `BINUNIT = 1`) and everything `BSIM3temp` derives from them.
 #[derive(Clone, Debug, Default)]
+// `dl`/`dlc`/`dw`/`dwc` and `elm` (NQS) are kept as in the C struct.
+#[allow(dead_code)]
 pub(crate) struct Bsim3Size {
     /// Drawn `Length`/`Width` the knot is keyed on.
     pub length: f64,
@@ -301,11 +314,15 @@ impl Bsim3Size {
 
         let leff = l + m.xl - 2.0 * dl;
         if leff <= 0.0 {
-            return Err(format!("BSIM3: mosfet {name}: Effective channel length <= 0"));
+            return Err(format!(
+                "BSIM3: mosfet {name}: Effective channel length <= 0"
+            ));
         }
         let weff = w + m.xw - 2.0 * dw;
         if weff <= 0.0 {
-            return Err(format!("BSIM3: mosfet {name}: Effective channel width <= 0"));
+            return Err(format!(
+                "BSIM3: mosfet {name}: Effective channel width <= 0"
+            ));
         }
         let leff_cv = l + m.xl - 2.0 * dlc;
         if leff_cv <= 0.0 {
@@ -379,7 +396,7 @@ impl Bsim3Size {
             vth0: p(m.vth0, m.lvth0, m.wvth0, m.pvth0),
             ua: p(m.ua, m.lua, m.wua, m.pua),
             ua1: p(m.ua1, m.lua1, m.wua1, m.pua1),
-            ub: p(m.ub, m.lub, m.wub, m.pub),
+            ub: p(m.ub, m.lub, m.wub, m.pub_),
             ub1: p(m.ub1, m.lub1, m.wub1, m.pub1),
             uc: p(m.uc, m.luc, m.wuc, m.puc),
             uc1: p(m.uc1, m.luc1, m.wuc1, m.puc1),
@@ -513,11 +530,7 @@ impl Bsim3Size {
         if s.k2 < 0.0 {
             let t0 = 0.5 * s.k1 / s.k2;
             s.vbsc = 0.9 * (s.phi - t0 * t0);
-            if s.vbsc > -3.0 {
-                s.vbsc = -3.0;
-            } else if s.vbsc < -30.0 {
-                s.vbsc = -30.0;
-            }
+            s.vbsc = s.vbsc.clamp(-30.0, -3.0);
         } else {
             s.vbsc = -30.0;
         }
@@ -552,21 +565,28 @@ impl Bsim3Size {
         let tmp2 = mt.factor1 * tmp;
 
         let t0 = -0.5 * s.dvt1w * s.weff * s.leff / tmp2;
-        let t1 = if t0 > -EXP_THRESHOLD { t0.exp() } else { MIN_EXP };
+        let t1 = if t0 > -EXP_THRESHOLD {
+            t0.exp()
+        } else {
+            MIN_EXP
+        };
         let t2 = t1 * (1.0 + 2.0 * t1);
         let t0 = s.dvt0w * t2;
         let t2 = t0 * tmp1;
 
         let t0 = -0.5 * s.dvt1 * s.leff / tmp2;
-        let t1 = if t0 > -EXP_THRESHOLD { t0.exp() } else { MIN_EXP };
+        let t1 = if t0 > -EXP_THRESHOLD {
+            t0.exp()
+        } else {
+            MIN_EXP
+        };
         let t3 = t1 * (1.0 + 2.0 * t1);
         let t3 = s.dvt0 * t3 * tmp1;
 
         let t4 = m.tox * s.phi / (s.weff + s.w0);
 
         let t0 = f64::sqrt(1.0 + s.nlx / s.leff);
-        let t5 = s.k1ox * (t0 - 1.0) * s.sqrt_phi
-            + (s.kt1 + s.kt1l / s.leff) * (mt.t_ratio - 1.0);
+        let t5 = s.k1ox * (t0 - 1.0) * s.sqrt_phi + (s.kt1 + s.kt1l / s.leff) * (mt.t_ratio - 1.0);
 
         let tmp3 = typ * s.vth0 - t2 - t3 + s.k3 * t4 + t5;
         s.vfbzb = tmp3 - s.phi - s.k1 * s.sqrt_phi;
@@ -638,13 +658,19 @@ fn check_model(
         fatal.push("(B1 + Weff) = 0 causing divided-by-zero.".into());
     }
     if s.u0temp <= 0.0 {
-        fatal.push(format!("u0 at current temperature = {} is not positive.", s.u0temp));
+        fatal.push(format!(
+            "u0 at current temperature = {} is not positive.",
+            s.u0temp
+        ));
     }
     if s.delta < 0.0 {
         fatal.push(format!("Delta = {} is less than zero.", s.delta));
     }
     if s.vsattemp <= 0.0 {
-        fatal.push(format!("Vsat at current temperature = {} is not positive.", s.vsattemp));
+        fatal.push(format!(
+            "Vsat at current temperature = {} is not positive.",
+            s.vsattemp
+        ));
     }
     if s.pclm <= 0.0 {
         fatal.push(format!("Pclm = {} is not positive.", s.pclm));

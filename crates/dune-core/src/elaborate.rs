@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
-    Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes,
-    Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Tra, Vccs, Vcvs, Vsource,
+    Bjt, Bsim1, Bsim2, Bsim3, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra,
+    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Tra, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -33,6 +33,7 @@ impl Circuit {
             M6(crate::mos6::Mos6Model),
             B1(Box<crate::bsim1::Bsim1Model>),
             B2(Box<crate::bsim2::Bsim2Model>),
+            B3(Box<crate::bsim3::Bsim3Model>),
         }
         let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
         // Unsupported-level MOS models only become an error when an
@@ -152,6 +153,22 @@ impl Circuit {
                         match bsim2_model(m, &mut notes) {
                             Ok(mm) => {
                                 mmodels.insert(m.name.as_str(), MosModel::B2(Box::new(mm)));
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                    } else if level == 8.0 || level == 49.0 {
+                        // ngspice's `inpdomod.c`: `VERSION` picks the
+                        // BSIM3 code base; 3.3 (the default) is the
+                        // one implemented.
+                        match bsim3_model(m, &mut notes) {
+                            Ok(Ok(mm)) => {
+                                mmodels.insert(m.name.as_str(), MosModel::B3(Box::new(mm)));
+                            }
+                            Ok(Err(reason)) => {
+                                unsupported_models.insert(
+                                    m.name.as_str(),
+                                    format!("model `{}`: {reason}", m.name),
+                                );
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
@@ -446,7 +463,54 @@ impl Circuit {
                         continue;
                     };
                     let mut inst = MosInst::new();
+                    let is_b3 = matches!(mm, MosModel::B3(_));
                     for p in params {
+                        if is_b3 {
+                            // The BSIM3 instance table (`b3.c`) adds
+                            // these and has no `TEMP`.
+                            match (p.name.as_str(), &p.value) {
+                                ("m", ParamValue::Num(v)) => {
+                                    inst.m = *v;
+                                    continue;
+                                }
+                                ("delvto", ParamValue::Num(v)) => {
+                                    inst.delvto = *v;
+                                    continue;
+                                }
+                                ("mulu0", ParamValue::Num(v)) => {
+                                    inst.mulu0 = *v;
+                                    continue;
+                                }
+                                ("icvds", ParamValue::Num(v)) => {
+                                    inst.ic.0 = *v;
+                                    continue;
+                                }
+                                ("icvgs", ParamValue::Num(v)) => {
+                                    inst.ic.1 = *v;
+                                    continue;
+                                }
+                                ("icvbs", ParamValue::Num(v)) => {
+                                    inst.ic.2 = *v;
+                                    continue;
+                                }
+                                ("nqsmod" | "acnqsmod", ParamValue::Num(v)) => {
+                                    if *v != 0.0 {
+                                        problems.push(format!(
+                                            "`{name}`: BSIM3 {} = {v} (the non-quasi-static model) is not implemented",
+                                            p.name
+                                        ));
+                                    }
+                                    continue;
+                                }
+                                // `GEO` only matters with ACM > 0.
+                                ("geo", ParamValue::Num(_)) => continue,
+                                ("temp", _) => {
+                                    problems.push(format!("`{name}`: unknown parameter (temp)"));
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
                         match (p.name.as_str(), &p.value) {
                             ("l", ParamValue::Num(v)) => inst.l = Some(*v),
                             ("w", ParamValue::Num(v)) => inst.w = Some(*v),
@@ -565,6 +629,28 @@ impl Circuit {
                                 ps: inst.ps,
                                 nrd: inst.nrd,
                                 nrs: inst.nrs,
+                                off: inst.off,
+                                ic: inst.ic,
+                            },
+                            &mut problems,
+                        ),
+                        MosModel::B3(b3) => add(
+                            &mut ckt,
+                            Bsim3 {
+                                name,
+                                nodes,
+                                model: (**b3).clone(),
+                                l: inst.l,
+                                w: inst.w,
+                                ad: inst.ad.unwrap_or(0.0),
+                                as_: inst.as_.unwrap_or(0.0),
+                                pd: inst.pd,
+                                ps: inst.ps,
+                                nrd: inst.nrd,
+                                nrs: inst.nrs,
+                                m: inst.m,
+                                delvto: inst.delvto,
+                                mulu0: inst.mulu0,
                                 off: inst.off,
                                 ic: inst.ic,
                             },
@@ -982,6 +1068,10 @@ struct MosInst {
     off: bool,
     ic: (f64, f64, f64),
     temp: Option<f64>,
+    /// BSIM3 only: `M`, `DELVTO`, `MULU0`.
+    m: f64,
+    delvto: f64,
+    mulu0: f64,
 }
 
 impl MosInst {
@@ -989,6 +1079,8 @@ impl MosInst {
         MosInst {
             nrd: 1.0,
             nrs: 1.0,
+            m: 1.0,
+            mulu0: 1.0,
             ..Default::default()
         }
     }
@@ -1281,6 +1373,69 @@ fn bsim1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim1::B
         }
     }
     Ok(b)
+}
+
+/// Map `.model x nmos/pmos(level=8|49 …)` onto
+/// [`crate::bsim3::Bsim3Model`] (`b3.c` keyword table via
+/// [`crate::bsim3::Bsim3Model::set`]). The outer `Err` is a broken
+/// card; `Ok(Err(reason))` a card for a BSIM3 variant that is not
+/// implemented (another `VERSION`, the NQS model, `ACM > 0`, a
+/// `CAPMOD` outside 0–3), which only errs when instantiated.
+fn bsim3_model(
+    m: &ir::Model,
+    notes: &mut Vec<String>,
+) -> Result<Result<crate::bsim3::Bsim3Model, String>, String> {
+    let mut b = crate::bsim3::Bsim3Model::new(m.mtype == "nmos");
+    for p in &m.params {
+        if p.name == "version" {
+            // A string in ngspice (`IF_STRING`); the lexer may read
+            // it as a number or a number list (`3.3.0`).
+            let v = match &p.value {
+                ParamValue::Str(s) => s.clone(),
+                ParamValue::Num(v) => format!("{v}"),
+                ParamValue::NumList(v) => v
+                    .iter()
+                    .map(|x| format!("{x}"))
+                    .collect::<Vec<_>>()
+                    .join("."),
+                ParamValue::Flag => return Err("parameter version needs a value".into()),
+            };
+            if !v.starts_with("3.3") {
+                return Ok(Err(format!(
+                    "BSIM3 version {v} is not implemented (only 3.3.x, ngspice's default)"
+                )));
+            }
+            b.set_version(&v);
+            continue;
+        }
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmos" || p.name == "pmos" => continue,
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        if p.name == "level" {
+            continue;
+        }
+        if let Err(e) = b.set(&p.name, v) {
+            // `INPmakeMod`: unknown parameters are a warning.
+            notes.push(format!("model `{}`: {e} (ignored)", m.name));
+        }
+    }
+    let int = |k: &str| b.get_int(k);
+    if int("nqsmod") == Some(1) || int("acnqsmod") == Some(1) {
+        return Ok(Err(
+            "the BSIM3 non-quasi-static model (NQSMOD/ACNQSMOD = 1) is not implemented".into(),
+        ));
+    }
+    if int("acm").is_some_and(|a| a != 0) {
+        return Ok(Err(
+            "BSIM3 ACM > 0 junction geometry is not implemented".into()
+        ));
+    }
+    if int("capmod").is_some_and(|c| !(0..=3).contains(&c)) {
+        return Ok(Err("BSIM3 CAPMOD must be 0, 1, 2 or 3".into()));
+    }
+    Ok(Ok(b))
 }
 
 /// Map `.model x nmos/pmos(level=5 …)` parameters onto

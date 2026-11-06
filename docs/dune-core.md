@@ -344,6 +344,27 @@ resultados espelhando o rawfile).
   nó x1.6 (flutuante, definido por fugas) fica 7 mV do ngspice no
   op — não afeta vereditos.
 
+- **BSIM3v3.3.0 (níveis 8/49)** (`bsim3/` ← `b3set.c`, `b3temp.c`,
+  `b3ld.c`, `b3cvtest.c`, `b3acld.c`, `b3pzld.c`, `b3noi.c` do
+  **ngspice-47**, que aqui é contrato E oráculo — o modelo não
+  existe no 3f5; Fase 3.5 por decisão do usuário): o b3ld.c
+  inteiro fora NQS e bypass — 3 mobMods, capMod 0–3 com as 3
+  partições XPART, os 3 modelos de overlap, junções com limite
+  ijth; parâmetros em knots por (L,W) cacheados como o C
+  (binning L/W/P, BINUNIT 0/1); versão default "3.3.0", outras
+  versões/NQS/ACM≠0 recusados com erro adiado à instanciação.
+  Ruído noiMod 1–6 com vetores `onoise.m1.rd` como o ngspice
+  (gancho interno `noise_sep`). API: `Bsim3Model` com acesso por
+  keyword (`set/get` — 413 parâmetros reais + 9 seletores; campos
+  públicos seriam ~420) e spec `Bsim3` com `m`/`delvto`/`mulu0`
+  da tabela de instância do ngspice. Quirk literal: capMod 3 sem
+  o `−T3` em `dVdseffCV_dVb` (`b3ld.c:2119`; BSIM4 corrigiu).
+  Sondas: `bsim3_{iv,vg,inv,cap,noise,pz}` com os cartões 0.35 µm
+  de `examples/mos/modelcard.*` do ngspice — todas PASS (pior
+  margem 0.211, piso de abstol em sublimiar profundo); gates
+  medidos no ruído (PMOS→noiMod 1 falha a 17; KF=0 a 476).
+  Resta do BSIM3: NQS, ACM, `.disto`/`.sens`, b3getic/UIC.
+
 - **Chaves S/W** (`switch.rs` ← `swload.c`/`cswload.c` do
   **ngspice-47** — o 3f5 tem outra máquina, ver KNOWN_DIFFS):
   um tipo só, controlado por par de nós (S) ou pela corrente de

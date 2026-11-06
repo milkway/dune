@@ -268,6 +268,36 @@ pub struct Bsim2 {
     pub ic: (f64, f64, f64),
 }
 
+/// A BSIM3v3.3.0 MOSFET (`LEVEL=8`/`49`, ngspice-47's instance
+/// line `MXXX D G S B MNAME <L=> <W=> <AD=> <AS=> <PD=> <PS=> <NRD=>
+/// <NRS=> <M=> <DELVTO=> <MULU0=> <OFF> <IC=VDS,VGS,VBS>`, `b3.c`).
+/// L and W default to 5 µm (`b3set.c`), not the `.options` MOS
+/// defaults.
+#[derive(Clone, Debug)]
+pub struct Bsim3 {
+    pub name: String,
+    /// Drain, gate, source, bulk.
+    pub nodes: [String; 4],
+    pub model: crate::bsim3::Bsim3Model,
+    pub l: Option<f64>,
+    pub w: Option<f64>,
+    pub ad: f64,
+    pub as_: f64,
+    pub pd: f64,
+    pub ps: f64,
+    pub nrd: f64,
+    pub nrs: f64,
+    /// `M`: parallel multiplier (1).
+    pub m: f64,
+    /// `DELVTO`: threshold shift added to `VTH0` (0).
+    pub delvto: f64,
+    /// `MULU0`: low-field mobility multiplier (1).
+    pub mulu0: f64,
+    pub off: bool,
+    /// `IC=VDS,VGS,VBS`.
+    pub ic: (f64, f64, f64),
+}
+
 /// `DXXXXXXX N+ N- MNAME <AREA> <OFF>` with its model inline.
 #[derive(Clone, Debug)]
 pub struct Diode {
@@ -387,6 +417,7 @@ pub enum Spec {
     Mos6(Box<Mos6>),
     Bsim1(Box<Bsim1>),
     Bsim2(Box<Bsim2>),
+    Bsim3(Box<Bsim3>),
     Resistor(Resistor),
     Capacitor(Capacitor),
     Inductor(Inductor),
@@ -460,6 +491,12 @@ impl From<Bsim2> for Spec {
     }
 }
 
+impl From<Bsim3> for Spec {
+    fn from(s: Bsim3) -> Spec {
+        Spec::Bsim3(Box::new(s))
+    }
+}
+
 impl From<Jfet> for Spec {
     fn from(s: Jfet) -> Spec {
         Spec::Jfet(Box::new(s))
@@ -494,6 +531,7 @@ impl Spec {
             Spec::Mos6(s) => &s.name,
             Spec::Bsim1(s) => &s.name,
             Spec::Bsim2(s) => &s.name,
+            Spec::Bsim3(s) => &s.name,
             Spec::Resistor(s) => &s.name,
             Spec::Capacitor(s) => &s.name,
             Spec::Inductor(s) => &s.name,
@@ -656,6 +694,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Bsim3(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
         Spec::Jfet(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -785,6 +827,7 @@ impl Circuit {
                 Spec::Mos6(_) => st.alloc(crate::mos6::MOS6_NUM_STATES),
                 Spec::Bsim1(_) => st.alloc(crate::bsim1::BSIM1_NUM_STATES),
                 Spec::Bsim2(_) => st.alloc(crate::bsim2::BSIM2_NUM_STATES),
+                Spec::Bsim3(_) => st.alloc(crate::bsim3::BSIM3_NUM_STATES),
                 Spec::Capacitor(_) => st.alloc(2),
                 Spec::Inductor(s) => {
                     let flux = st.alloc(2);
@@ -805,6 +848,7 @@ impl Circuit {
                 Spec::Mos6(s) => &s.nodes,
                 Spec::Bsim1(s) => &s.nodes,
                 Spec::Bsim2(s) => &s.nodes,
+                Spec::Bsim3(s) => &s.nodes,
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
                 Spec::Inductor(s) => &s.nodes,
@@ -961,6 +1005,15 @@ impl Circuit {
                         node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
                     }
                 }
+                // `BSIM3setup`: `CKTmkVolt(…, "drain")` / `"source"`.
+                Spec::Bsim3(s) => {
+                    if s.model.needs_prime(s.nrd) {
+                        node(&mut vars, &mut node_ids, &format!("{}#drain", s.name));
+                    }
+                    if s.model.needs_prime(s.nrs) {
+                        node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
+                    }
+                }
                 _ => {}
             }
         }
@@ -972,6 +1025,10 @@ impl Circuit {
         let mut sources: HashMap<String, (usize, bool)> = HashMap::new();
         let mut notes = Vec::new();
         let get = |node_ids: &HashMap<String, Var>, n: &str| node_ids[n];
+        // `BSIM3temp`'s per-model knot list: models (as given) with
+        // their set-up copy, temperature part and the size-dependent
+        // parameter sets already built, keyed by drawn (L, W).
+        let mut bsim3_models: Vec<crate::bsim3::Bsim3Knots> = Vec::new();
         for (spec, &base) in self.specs.iter().zip(&state_base) {
             names.push(spec.name().to_string());
             match spec {
@@ -1233,6 +1290,57 @@ impl Circuit {
                         [d, gt, so, b],
                         [dp, sp],
                         sz,
+                        geom,
+                        s.off,
+                        s.ic,
+                        base,
+                    )));
+                }
+                Spec::Bsim3(s) => {
+                    let d = get(&node_ids, &s.nodes[0]);
+                    let gt = get(&node_ids, &s.nodes[1]);
+                    let so = get(&node_ids, &s.nodes[2]);
+                    let b = get(&node_ids, &s.nodes[3]);
+                    let dp = if s.model.needs_prime(s.nrd) {
+                        node_ids[&format!("{}#drain", s.name)]
+                    } else {
+                        d
+                    };
+                    let sp = if s.model.needs_prime(s.nrs) {
+                        node_ids[&format!("{}#source", s.name)]
+                    } else {
+                        so
+                    };
+                    let geom = crate::bsim3::Bsim3Geom {
+                        l: s.l.unwrap_or(5e-6),
+                        w: s.w.unwrap_or(5e-6),
+                        ad: s.ad,
+                        as_: s.as_,
+                        pd: s.pd,
+                        ps: s.ps,
+                        nrd: s.nrd,
+                        nrs: s.nrs,
+                        m: s.m,
+                        delvto: s.delvto,
+                        mulu0: s.mulu0,
+                    };
+                    let (model, mt, pp) = crate::bsim3::Bsim3Knots::resolve(
+                        &mut bsim3_models,
+                        &s.name,
+                        &s.model,
+                        geom.l,
+                        geom.w,
+                        opts.temp,
+                        opts.tnom,
+                        &mut notes,
+                    )
+                    .map_err(Error::Build)?;
+                    devices.push(Box::new(crate::bsim3::Bsim3I::new(
+                        [d, gt, so, b],
+                        [dp, sp],
+                        model,
+                        mt,
+                        pp,
                         geom,
                         s.off,
                         s.ic,
