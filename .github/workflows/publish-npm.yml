@@ -6,6 +6,12 @@ name: publish-npm
 # dwg2geo pattern). Register it on npmjs under the package settings
 # (GitHub: milkway/dune, workflow publish-npm.yml) after the first
 # manual publish. Trigger from the Actions tab or a release.
+#
+# Build and publish are separate jobs on purpose: the build job may
+# use third-party actions and a shared cache, while the job holding
+# id-token only downloads the artifact through first-party actions,
+# so neither a hijacked tag nor a poisoned cache can reach the OIDC
+# credential. Third-party actions are pinned by SHA.
 on:
   release:
     types: [published]
@@ -15,23 +21,19 @@ permissions:
   contents: read
 
 jobs:
-  npm:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      id-token: write # OIDC for npm Trusted Publishing + provenance
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      - name: npm >= 11.5.1 (required for OIDC publishing)
-        run: npm install -g npm@latest && npm --version
+          # Published artifacts must not inherit another workflow's
+          # cache; this key is written only by this workflow.
+          prefix-key: publish-npm
       - name: Install wasm-bindgen (lockfile-pinned) and wasm-opt
         run: |
           VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep version | cut -d'"' -f2)
@@ -43,6 +45,30 @@ jobs:
       - name: Smoke test
         working-directory: crates/dune-wasm/npm
         run: node test/smoke.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-package
+          path: |
+            crates/dune-wasm/npm
+            !crates/dune-wasm/npm/node_modules
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write # OIDC for npm Trusted Publishing + provenance
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: npm-package
+          path: npm-package
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: npm >= 11.5.1 (required for OIDC publishing)
+        run: npm install -g npm@latest && npm --version
       - name: Publish
-        working-directory: crates/dune-wasm/npm
+        working-directory: npm-package
         run: npm publish --access public
