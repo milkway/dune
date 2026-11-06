@@ -16,7 +16,9 @@ use crate::corpus::Circuit as CorpusCircuit;
 /// `x` is fine because subcircuits expand to their contents, which
 /// the scan also sees).
 pub fn supported(c: &CorpusCircuit) -> bool {
-    const ANALYSES: &[&str] = &[".op", ".dc", ".tran", ".ac", ".pz", ".noise", ".disto"];
+    const ANALYSES: &[&str] = &[
+        ".op", ".dc", ".tran", ".ac", ".pz", ".noise", ".disto", ".tf", ".sens",
+    ];
     const DEVICES: &[char] = &[
         'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'j', 'z', 'm', 'o', 's', 'w',
         'x',
@@ -189,7 +191,33 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
                     plots.push(sol.to_plot(&parsed.netlist.title, ""));
                 }
             }
-            other => return Err(format!("analysis {other:?} not supported yet")),
+            Analysis::Tf { outvar, insrc, .. } => {
+                let tf = circuit
+                    .tf(&options, &output_var(outvar)?, insrc)
+                    .map_err(|e| e.to_string())?;
+                plots.push(tf.solution.to_plot(&parsed.netlist.title, ""));
+            }
+            Analysis::Sens {
+                outvar,
+                filters,
+                ac,
+                ..
+            } => {
+                let ac = ac.map(|(variation, points, fstart, fstop)| dune_core::SensAc {
+                    sweep: match variation {
+                        dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                        dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                        dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                    },
+                    points: points as usize,
+                    fstart,
+                    fstop,
+                });
+                let sens = circuit
+                    .sens(&options, &output_var(outvar)?, filters, ac)
+                    .map_err(|e| e.to_string())?;
+                plots.push(sens.solution.to_plot(&parsed.netlist.title, ""));
+            }
         }
     }
     if plots.is_empty() {
@@ -199,4 +227,19 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
         plots,
         warnings: Vec::new(),
     })
+}
+
+/// The `.tf`/`.sens` output variable in the engine's form.
+fn output_var(v: &dune_netlist::ir::OutVar) -> Result<dune_core::OutputVar, String> {
+    use dune_netlist::ir::OutVar;
+    match v {
+        OutVar::Voltage {
+            node, reference, ..
+        } => Ok(dune_core::OutputVar::Voltage {
+            node: node.clone(),
+            reference: reference.clone(),
+        }),
+        OutVar::Current { vsrc, .. } => Ok(dune_core::OutputVar::Current { vsrc: vsrc.clone() }),
+        OutVar::Raw(r) => Err(format!("`{r}` is not an output variable")),
+    }
 }

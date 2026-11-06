@@ -83,6 +83,11 @@ impl<'c> Scanner<'c> {
         })
     }
 
+    /// Continue scanning from byte offset `pos` of the card text.
+    pub fn seek(&mut self, pos: usize) {
+        self.pos = pos.min(self.card.text.len());
+    }
+
     pub fn peek_tok(&self) -> Option<Token<'c>> {
         self.clone().next_tok()
     }

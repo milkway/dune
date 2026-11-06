@@ -75,6 +75,47 @@ pub(crate) trait Device {
     fn disto_rhs(&self, _which: DistoInput, _re: &mut [f64], _im: &mut [f64]) -> bool {
         false
     }
+    /// The parameters `.sens` perturbs (`cktsgen.c`'s walk over the
+    /// device's `IFparm` tables, in their ngspice-47 form: model
+    /// table first, then instance table; AC-only entries only when
+    /// `ac`). `None` marks a device without a sensitivity port, which
+    /// makes the analysis fail loudly.
+    fn sens_params(&self, _ac: bool) -> Option<Vec<SensParam>> {
+        None
+    }
+    /// `sens_setp` + `sens_temp`: set the parameter named by `suffix`
+    /// (as listed by [`Device::sens_params`]) and redo the
+    /// temperature-dependent derived values. Parameters with no
+    /// effect on Dune's equations are no-ops.
+    fn sens_set(&mut self, _suffix: &str, _value: f64) {}
+}
+
+/// One perturbable parameter of a device instance (`sgen`): the
+/// sensitivity vector is named `<instance><suffix>` — `:kw` for a
+/// model parameter, the bare instance name for the principal
+/// (`IF_PRINCIPAL`) instance parameter, `_kw` for the others
+/// (`cktsens.c`).
+#[derive(Clone, Debug)]
+pub(crate) struct SensParam {
+    pub suffix: &'static str,
+    /// The value `sens_getp` reads; the perturbation is
+    /// `value·1e-6`, or `1e-6` when it is zero.
+    pub value: f64,
+}
+
+/// Parameters with no effect on the equations of Dune's device
+/// (temperature coefficients at `TEMP == TNOM`, geometry of a
+/// resistor whose value is given, noise coefficients, …): listed
+/// with value 0 so the vector exists, as in the ngspice output,
+/// where they come out exactly zero.
+fn sens_inert(suffixes: &[&'static str]) -> impl Iterator<Item = SensParam> {
+    suffixes
+        .iter()
+        .map(|&suffix| SensParam { suffix, value: 0.0 })
+}
+
+fn sens_param(suffix: &'static str, value: f64) -> SensParam {
+    SensParam { suffix, value }
 }
 
 /// The `disto_setup` of a device with no nonlinearity (`DEVdisto ==
@@ -90,21 +131,52 @@ macro_rules! disto_linear {
 /// `RESload` (`dev/res/resload.c`): conductance between two nodes.
 pub(crate) struct ResistorI {
     pub g: f64,
+    /// `RESacConduct`: the AC conductance (`ac=` resistance or `g`).
+    g_ac: f64,
+    /// Resistance, the `ac=` resistance, multiplier and scale the
+    /// conductances derive from (ngspice's `RESupdate_conduct`:
+    /// `g = m/(R·scale)`); only `.sens` moves them.
+    r: f64,
+    r_ac: Option<f64>,
+    m: f64,
+    scale: f64,
     pub pos: Var,
     pub neg: Var,
     slots: [Slot; 4],
 }
 
 impl ResistorI {
-    pub fn new(g: f64, pos: Var, neg: Var) -> Self {
-        ResistorI {
-            g,
+    pub fn new(r: f64, pos: Var, neg: Var) -> Self {
+        let mut res = ResistorI {
+            g: 0.0,
+            g_ac: 0.0,
+            r,
+            r_ac: None,
+            m: 1.0,
+            scale: 1.0,
             pos,
             neg,
             slots: [TRASH; 4],
-        }
+        };
+        res.update_conduct();
+        res
+    }
+
+    /// `RESupdate_conduct` (ngspice `restemp.c`) at `TEMP == TNOM`.
+    fn update_conduct(&mut self) {
+        self.g = self.m / (self.r * self.scale);
+        self.g_ac = self.m / (self.r_ac.unwrap_or(self.r) * self.scale);
     }
 }
+
+/// ngspice-47 `RESmPTable` entries `.sens` walks (`res.c`; the
+/// `IF_REDUNDANT` aliases, `IF_NONSENSE` `defw`/`l`/`tnom` and the
+/// integer `noisy` drop out of `set_param`). Plain resistors still
+/// have a default model, so these are always listed.
+const RES_MODEL_SENS: &[&str] = &[
+    ":rsh", ":narrow", ":short", ":tc1", ":tc2", ":tce", ":kf", ":af", ":r", ":bv_max", ":lf",
+    ":wf", ":ef",
+];
 
 impl Device for ResistorI {
     disto_linear!();
@@ -126,10 +198,37 @@ impl Device for ResistorI {
     }
 
     fn load_ac(&mut self, ctx: &mut AcCtx) {
-        ctx.add_g(self.slots[0], self.g);
-        ctx.add_g(self.slots[1], self.g);
-        ctx.add_g(self.slots[2], -self.g);
-        ctx.add_g(self.slots[3], -self.g);
+        ctx.add_g(self.slots[0], self.g_ac);
+        ctx.add_g(self.slots[1], self.g_ac);
+        ctx.add_g(self.slots[2], -self.g_ac);
+        ctx.add_g(self.slots[3], -self.g_ac);
+    }
+
+    /// `RESpTable`: the principal `resistance`, the AC-only `ac`,
+    /// then `temp dtemp l w m tc tc2 tce bv_max scale`; only the
+    /// resistance, `ac`, `m` and `scale` reach Dune's conductance.
+    fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
+        let mut v: Vec<SensParam> = sens_inert(RES_MODEL_SENS).collect();
+        v.push(sens_param("", self.r));
+        if ac {
+            v.push(sens_param("_ac", self.r_ac.unwrap_or(self.r)));
+        }
+        v.extend(sens_inert(&["_temp", "_dtemp", "_l", "_w"]));
+        v.push(sens_param("_m", self.m));
+        v.extend(sens_inert(&["_tc", "_tc2", "_tce", "_bv_max"]));
+        v.push(sens_param("_scale", self.scale));
+        Some(v)
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        match suffix {
+            "" => self.r = value,
+            "_ac" => self.r_ac = Some(value),
+            "_m" => self.m = value,
+            "_scale" => self.scale = value,
+            _ => return,
+        }
+        self.update_conduct();
     }
 
     fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
@@ -159,6 +258,12 @@ impl Device for ResistorI {
 /// transient. States: charge, companion current.
 pub(crate) struct CapacitorI {
     capac: f64,
+    /// Instance capacitance, multiplier and scale (`capac =
+    /// C·m·scale`, ngspice `captemp.c` + `capload.c`); only `.sens`
+    /// moves them.
+    c: f64,
+    m: f64,
+    scale: f64,
     ic: f64,
     pos: Var,
     neg: Var,
@@ -170,6 +275,9 @@ impl CapacitorI {
     pub fn new(capac: f64, ic: f64, pos: Var, neg: Var, q: usize) -> Self {
         CapacitorI {
             capac,
+            c: capac,
+            m: 1.0,
+            scale: 1.0,
             ic,
             pos,
             neg,
@@ -245,6 +353,43 @@ impl Device for CapacitorI {
         ctx.add_b(self.slots[3], -val);
     }
 
+    /// `CAPmPTable`/`CAPpTable` (ngspice-47 `cap.c`): the capacitance,
+    /// `ic`, `w`, `l` and the model's geometry entries are `IF_AC`,
+    /// so a DC walk lists only `bv_max` and the temperature/scale
+    /// entries — all without effect on an open circuit.
+    fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
+        let mut v: Vec<SensParam> = Vec::new();
+        if ac {
+            v.extend(sens_inert(&[
+                ":cap", ":cj", ":cjsw", ":narrow", ":short", ":del", ":tc1", ":tc2", ":di",
+                ":thick",
+            ]));
+        }
+        v.extend(sens_inert(&[":bv_max"]));
+        if ac {
+            v.push(sens_param("", self.c));
+            v.push(sens_param("_ic", self.ic));
+        }
+        v.extend(sens_inert(&["_temp", "_dtemp"]));
+        if ac {
+            v.extend(sens_inert(&["_w", "_l"]));
+        }
+        v.push(sens_param("_m", self.m));
+        v.extend(sens_inert(&["_tc1", "_tc2", "_bv_max"]));
+        v.push(sens_param("_scale", self.scale));
+        Some(v)
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        match suffix {
+            "" => self.c = value,
+            "_m" => self.m = value,
+            "_scale" => self.scale = value,
+            _ => return,
+        }
+        self.capac = self.c * self.m * self.scale;
+    }
+
     fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
         ctx.add_cap(self.slots[0], self.capac);
         ctx.add_cap(self.slots[1], self.capac);
@@ -258,6 +403,12 @@ impl Device for CapacitorI {
 /// integrated; DC collapses it to a 0 V source. States: flux, volt.
 pub(crate) struct InductorI {
     induct: f64,
+    /// Instance inductance, multiplier and scale (`induct =
+    /// L·scale/m`, ngspice `indtemp.c` + `indload.c`); only `.sens`
+    /// moves them.
+    l: f64,
+    m: f64,
+    scale: f64,
     ic: f64,
     pos: Var,
     neg: Var,
@@ -271,6 +422,9 @@ impl InductorI {
     pub fn new(induct: f64, ic: f64, pos: Var, neg: Var, br: Var, flux: usize) -> Self {
         InductorI {
             induct,
+            l: induct,
+            m: 1.0,
+            scale: 1.0,
             ic,
             pos,
             neg,
@@ -352,6 +506,37 @@ impl Device for InductorI {
         ctx.add_b(self.br_br, -val);
     }
 
+    /// `INDmPTable`/`INDpTable` (ngspice-47 `ind.c`): every model
+    /// entry, the inductance and `ic` are `IF_AC`. The coupling
+    /// factors of `K` cards are their own device (`MUTtemp`) and do
+    /// not follow a perturbed inductance, as in the C.
+    fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
+        let mut v: Vec<SensParam> = Vec::new();
+        if ac {
+            v.extend(sens_inert(&[
+                ":ind", ":tc1", ":tc2", ":csect", ":dia", ":length", ":nt", ":mu",
+            ]));
+            v.push(sens_param("", self.l));
+            v.push(sens_param("_ic", self.ic));
+        }
+        v.extend(sens_inert(&["_temp", "_dtemp"]));
+        v.push(sens_param("_m", self.m));
+        v.extend(sens_inert(&["_tc1", "_tc2"]));
+        v.push(sens_param("_scale", self.scale));
+        v.extend(sens_inert(&["_nt"]));
+        Some(v)
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        match suffix {
+            "" => self.l = value,
+            "_m" => self.m = value,
+            "_scale" => self.scale = value,
+            _ => return,
+        }
+        self.induct = self.l * self.scale / self.m;
+    }
+
     fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
         ctx.add_g(self.slots[0], 1.0);
         ctx.add_g(self.slots[1], 1.0);
@@ -367,6 +552,9 @@ impl Device for InductorI {
 pub(crate) struct MutualI {
     /// `MUTfactor = k·sqrt(L1·L2)`.
     pub factor: f64,
+    /// The coupling `k` and `sqrt(|L1·L2|)` it multiplies (`.sens`).
+    k: f64,
+    sqrt_l1l2: f64,
     pub br1: Var,
     pub br2: Var,
     pub flux1: usize,
@@ -401,6 +589,23 @@ impl Device for MutualI {
         ctx.add_b(self.slots[1], -val);
     }
 
+    /// `MUTpTable`: the principal coupling `k` is `IF_AC`; nothing
+    /// in a DC walk.
+    fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
+        Some(if ac {
+            vec![sens_param("", self.k)]
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        if suffix.is_empty() {
+            self.k = value;
+            self.factor = self.k * self.sqrt_l1l2;
+        }
+    }
+
     fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
         ctx.add_cap(self.slots[0], -self.factor);
         ctx.add_cap(self.slots[1], -self.factor);
@@ -409,9 +614,12 @@ impl Device for MutualI {
 }
 
 impl MutualI {
-    pub fn new(factor: f64, br1: Var, br2: Var, flux1: usize, flux2: usize) -> Self {
+    /// `k` and `sqrt(|L1·L2|)`; `MUTfactor` is their product.
+    pub fn new(k: f64, sqrt_l1l2: f64, br1: Var, br2: Var, flux1: usize, flux2: usize) -> Self {
         MutualI {
-            factor,
+            factor: k * sqrt_l1l2,
+            k,
+            sqrt_l1l2,
             br1,
             br2,
             flux1,
@@ -486,6 +694,8 @@ fn source_value(ctx: &LoadCtx, dc: Option<f64>, wave: &Option<Wave>) -> f64 {
 pub(crate) struct VsourceI {
     pub dc: Option<f64>,
     pub wave: Option<Wave>,
+    /// `AC <MAG <PHASE°>>` as given (`.sens` moves it).
+    ac: Option<(f64, f64)>,
     /// `VSRCacReal`/`VSRCacImag` (`vsrctemp.c`: phase in degrees).
     ac_re: f64,
     ac_im: f64,
@@ -507,6 +717,7 @@ impl VsourceI {
         VsourceI {
             dc,
             wave,
+            ac,
             ac_re,
             ac_im,
             branch: BranchStamp::new(pos, neg, br),
@@ -604,12 +815,71 @@ impl Device for VsourceI {
     fn set_dc(&mut self, value: f64) {
         self.dc = Some(value);
     }
+
+    /// `VSRCpTable` (ngspice-47 `vsrc.c`, RF ports compiled in): the
+    /// principal `dc`, the AC-only `acmag`/`acphase`, then the port
+    /// entries `z0 pwr freq phase`, inert without `portnum`.
+    fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
+        let mut v = vec![sens_param("", sens_dc_value(self.dc, &self.wave))];
+        if ac {
+            let (mag, phase) = self.ac.unwrap_or((0.0, 0.0));
+            v.push(sens_param("_acmag", mag));
+            v.push(sens_param("_acphase", phase));
+        }
+        v.extend(sens_inert(&["_z0", "_pwr", "_freq", "_phase"]));
+        Some(v)
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        if let Some(ac) = sens_set_source(suffix, value, &mut self.dc, &mut self.ac) {
+            (self.ac_re, self.ac_im) = ac_parts(Some(ac));
+        }
+    }
+}
+
+/// The `dc` value `sens_getp` reads off an independent source: the
+/// given DC value, else the transient function at t = 0 (what
+/// `VSRCtemp`/`ISRCtemp` store when no DC value was given).
+fn sens_dc_value(dc: Option<f64>, wave: &Option<Wave>) -> f64 {
+    match (dc, wave) {
+        (Some(v), _) => v,
+        (None, Some(w)) => w.value(0.0, 0.0, 0.0),
+        (None, None) => 0.0,
+    }
+}
+
+/// `VSRCparam`/`ISRCparam` for the entries `.sens` moves: setting
+/// `dc` makes it given (so it wins over a transient function in DC
+/// modes, as in `VSRCload`); `acmag`/`acphase` make the AC stimulus
+/// given. Returns the new `(mag, phase)` when the AC value changed.
+fn sens_set_source(
+    suffix: &str,
+    value: f64,
+    dc: &mut Option<f64>,
+    ac: &mut Option<(f64, f64)>,
+) -> Option<(f64, f64)> {
+    let (mag, phase) = ac.unwrap_or((0.0, 0.0));
+    let new = match suffix {
+        "" => {
+            *dc = Some(value);
+            return None;
+        }
+        "_acmag" => (value, phase),
+        "_acphase" => (mag, value),
+        _ => return None,
+    };
+    *ac = Some(new);
+    Some(new)
 }
 
 /// `ISRCload` (`dev/isrc/isrcload.c`).
 pub(crate) struct IsourceI {
     pub dc: Option<f64>,
     pub wave: Option<Wave>,
+    /// `AC <MAG <PHASE°>>` as given, and the parallel multiplier
+    /// (`ISRCmValue`, 1 on cards; `.sens` moves both).
+    ac: Option<(f64, f64)>,
+    m: f64,
     ac_re: f64,
     ac_im: f64,
     pub pos: Var,
@@ -629,6 +899,8 @@ impl IsourceI {
         IsourceI {
             dc,
             wave,
+            ac,
+            m: 1.0,
             ac_re,
             ac_im,
             pos,
@@ -667,7 +939,7 @@ impl Device for IsourceI {
     }
 
     fn load(&mut self, ctx: &mut LoadCtx) {
-        let v = source_value(ctx, self.dc, &self.wave);
+        let v = self.m * source_value(ctx, self.dc, &self.wave);
         ctx.rhs[self.pos] -= v;
         ctx.rhs[self.neg] += v;
     }
@@ -678,10 +950,35 @@ impl Device for IsourceI {
     /// current-driven deck). Dune follows ngspice
     /// (corpus/KNOWN_DIFFS.md).
     fn load_ac(&mut self, ctx: &mut AcCtx) {
-        ctx.rhs_re[self.pos] -= self.ac_re;
-        ctx.rhs_re[self.neg] += self.ac_re;
-        ctx.rhs_im[self.pos] -= self.ac_im;
-        ctx.rhs_im[self.neg] += self.ac_im;
+        let (re, im) = (self.m * self.ac_re, self.m * self.ac_im);
+        ctx.rhs_re[self.pos] -= re;
+        ctx.rhs_re[self.neg] += re;
+        ctx.rhs_im[self.pos] -= im;
+        ctx.rhs_im[self.neg] += im;
+    }
+
+    /// `ISRCpTable` (ngspice-47 `isrc.c`): the principal `dc`, `m`,
+    /// then the AC-only `acmag`/`acphase`; `ISRCload`/`ISRCacLoad`
+    /// scale both values by `m`.
+    fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
+        let mut v = vec![
+            sens_param("", sens_dc_value(self.dc, &self.wave)),
+            sens_param("_m", self.m),
+        ];
+        if ac {
+            let (mag, phase) = self.ac.unwrap_or((0.0, 0.0));
+            v.push(sens_param("_acmag", mag));
+            v.push(sens_param("_acphase", phase));
+        }
+        Some(v)
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        if suffix == "_m" {
+            self.m = value;
+        } else if let Some(ac) = sens_set_source(suffix, value, &mut self.dc, &mut self.ac) {
+            (self.ac_re, self.ac_im) = ac_parts(Some(ac));
+        }
     }
 
     /// `ISRCpzLoad`: an ideal current source is open-circuit.
@@ -756,6 +1053,17 @@ impl Device for VcvsI {
         ctx.add_g(self.cslots[1], self.gain);
         Ok(())
     }
+
+    /// `VCVSpTable`: `gain` (not principal).
+    fn sens_params(&self, _ac: bool) -> Option<Vec<SensParam>> {
+        Some(vec![sens_param("_gain", self.gain)])
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        if suffix == "_gain" {
+            self.gain = value;
+        }
+    }
 }
 
 /// `VCCSload`: G source.
@@ -809,6 +1117,21 @@ impl Device for VccsI {
         ctx.add_g(self.slots[3], self.gain);
         Ok(())
     }
+
+    /// `VCCSpTable`: `gain` and `m`. ngspice folds `m` into the
+    /// coefficient before the analyses, so moving it afterwards does
+    /// nothing (the golden's `g*_m` vectors are exactly zero).
+    fn sens_params(&self, _ac: bool) -> Option<Vec<SensParam>> {
+        let mut v = vec![sens_param("_gain", self.gain)];
+        v.extend(sens_inert(&["_m"]));
+        Some(v)
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        if suffix == "_gain" {
+            self.gain = value;
+        }
+    }
 }
 
 /// `CCCSload`: F source.
@@ -856,6 +1179,19 @@ impl Device for CccsI {
         ctx.add_g(self.slots[0], self.gain);
         ctx.add_g(self.slots[1], -self.gain);
         Ok(())
+    }
+
+    /// `CCCSpTable`: `gain` and an inert `m` (as for the VCCS).
+    fn sens_params(&self, _ac: bool) -> Option<Vec<SensParam>> {
+        let mut v = vec![sens_param("_gain", self.gain)];
+        v.extend(sens_inert(&["_m"]));
+        Some(v)
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        if suffix == "_gain" {
+            self.gain = value;
+        }
     }
 }
 
@@ -906,5 +1242,16 @@ impl Device for CcvsI {
         ctx.add_g(self.branch.slots[3], -1.0);
         ctx.add_g(self.cslot, -self.coeff);
         Ok(())
+    }
+
+    /// `CCVSpTable`: `gain` (the transresistance).
+    fn sens_params(&self, _ac: bool) -> Option<Vec<SensParam>> {
+        Some(vec![sens_param("_gain", self.coeff)])
+    }
+
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        if suffix == "_gain" {
+            self.coeff = value;
+        }
     }
 }

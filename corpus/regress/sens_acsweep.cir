@@ -1,0 +1,24 @@
+AC sensitivity sweep: RLC ladder and voltage-output controlled sources
+* Coverage: the frequency stepping of sens_sens (ckt/cktsens.c) against
+* ngspice-47. count_steps gives LIN its point count, but inc_freq tests
+* the step type against LINEAR (3) instead of SENS_LINEAR (15), so a
+* linear sweep multiplies by its step too: 100, 1e4, 1e6 Hz here
+* (kept by Dune). Only devices whose AC sensitivity ngspice-47 keeps
+* right past the first frequency are present (R, C, L, V, I, E, H):
+* it redoes CKTsetup before every frequency, and from the second one
+* on its VCCS/CCCS gain and K coupling vectors come out wrong
+* (corpus/KNOWN_DIFFS.md; sens_ac.cir pins those at one frequency).
+vin 1 0 dc 0 ac 1 -45
+r1 1 2 1k
+l1 2 3 10m
+c1 3 0 100n
+i1 0 3 dc 0 ac 0.2m 90
+e1 5 0 3 0 2
+r5 5 6 1k
+c2 6 0 47n
+vs 6 7 0
+r7 7 0 500
+h1 8 0 vs 100
+r8 8 0 1k
+.sens v(8) ac lin 3 100 400
+.end

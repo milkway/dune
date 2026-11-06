@@ -243,7 +243,45 @@ pub(crate) struct DiodeI {
     /// `DIOdCoeffs` (`diodefs.h`): `id_x2, id_x3, cdif_x2, cdif_x3,
     /// cjnc_x2, cjnc_x3`, set by `DIOdSetup`.
     d: DioDistoCoeffs,
+    /// What `DIOtemp` is recomputed from when `.sens` perturbs a
+    /// parameter: the model, the instance temperature (K), the
+    /// ngspice multiplier `m` (1 on cards; it scales like the area)
+    /// and the circuit `TNOM`/`RELTOL`.
+    sens: DiodeSensBase,
 }
+
+/// The inputs of [`DiodeTemp::new`] a sensitivity perturbation can
+/// move.
+pub(crate) struct DiodeSensBase {
+    pub name: String,
+    pub model: DiodeModel,
+    pub temp: f64,
+    pub m: f64,
+    pub default_tnom: f64,
+    pub reltol: f64,
+}
+
+/// The diode parameters `.sens` walks: ngspice-47's `DIOmPTable`
+/// order restricted to the entries the 3f5 model has (the AC-only
+/// `tt`/`cjo` only in an AC walk), then the whole `DIOpTable` walk.
+/// ngspice's own model extensions (`jsw`, `ikf`, `isr`, `jtun`, …)
+/// are not listed: several only switch on once *given*, so their
+/// ngspice sensitivities are artifacts of the perturbation itself
+/// (`corpus/KNOWN_DIFFS.md`). Of the instance entries only `temp`,
+/// `area` and `m` act on Dune's equations; `dtemp` is listed inert
+/// because it is inert in the C too — `temp` comes first in the
+/// table and perturbing it marks it given, after which `DIOtemp`
+/// ignores `dtemp` — and `pj`/`w`/`l`/`lm`/`lp`/`wm`/`wp` act only
+/// through the sidewall/level-3 terms the 3f5 model lacks (zero at
+/// their defaults).
+const DIO_SENS_DC: &[&str] = &[
+    ":is", ":rs", ":n", ":vj", ":m", ":eg", ":xti", ":kf", ":af", ":fc", "_temp", "_dtemp",
+    "_area", "_pj", "_w", "_l", "_m", "_lm", "_lp", "_wm", "_wp",
+];
+const DIO_SENS_AC: &[&str] = &[
+    ":is", ":rs", ":n", ":tt", ":cjo", ":vj", ":m", ":eg", ":xti", ":kf", ":af", ":fc", "_temp",
+    "_dtemp", "_ic", "_area", "_pj", "_w", "_l", "_m", "_lm", "_lp", "_wm", "_wp",
+];
 
 /// Taylor coefficients of the diode nonlinearities at the operating
 /// point (`diodset.c`): conductance (`id_x*`), diffusion (`cdif_x*`)
@@ -274,6 +312,7 @@ impl DiodeI {
         off: bool,
         init_cond: f64,
         st: usize,
+        sens: DiodeSensBase,
     ) -> Self {
         DiodeI {
             pos,
@@ -286,6 +325,32 @@ impl DiodeI {
             st,
             slots: [TRASH; 7],
             d: DioDistoCoeffs::default(),
+            sens,
+        }
+    }
+
+    /// The current value of a sensitivity parameter.
+    fn sens_value(&self, suffix: &str) -> f64 {
+        let m = &self.sens.model;
+        match suffix {
+            ":is" => m.is,
+            ":rs" => m.rs,
+            ":n" => m.n,
+            ":tt" => m.tt,
+            ":cjo" => m.cjo,
+            ":vj" => m.vj,
+            ":m" => m.m,
+            ":eg" => m.eg,
+            ":xti" => m.xti,
+            ":kf" => m.kf,
+            ":af" => m.af,
+            ":fc" => m.fc,
+            // `DIOask(DIO_TEMP)` reports °C.
+            "_temp" => self.sens.temp - crate::consts::CTOK,
+            "_area" => self.area,
+            "_m" => self.sens.m,
+            "_ic" => self.init_cond,
+            _ => 0.0,
         }
     }
 }
@@ -465,6 +530,63 @@ impl crate::devices::Device for DiodeI {
     fn trunc(&self, t: &crate::integ::TerrCtx, time_step: &mut f64) {
         // `DIOtrunc`: `CKTterr` on the junction charge.
         crate::integ::terr(self.st + CAP_CHARGE, t, time_step);
+    }
+
+    fn sens_params(&self, ac: bool) -> Option<Vec<crate::devices::SensParam>> {
+        let list = if ac { DIO_SENS_AC } else { DIO_SENS_DC };
+        Some(
+            list.iter()
+                .map(|&suffix| crate::devices::SensParam {
+                    suffix,
+                    value: self.sens_value(suffix),
+                })
+                .collect(),
+        )
+    }
+
+    /// `DIOmParam`/`DIOparam` + `DIOtemp`. The junction capacitance
+    /// and the stored small-signal values are not recomputed: the C
+    /// sets the zero-bias capacitance in `DIOsetup` and the AC load
+    /// reads `gd`/`capd` back from the state vector, so neither moves
+    /// under a perturbation there either.
+    fn sens_set(&mut self, suffix: &str, value: f64) {
+        let b = &mut self.sens;
+        match suffix {
+            ":is" => b.model.is = value,
+            // `DIOconductance = 1/RS` is set in `DIOsetup`, which the
+            // walk runs *before* the perturbation: moving RS changes
+            // nothing in the C, so it is inert here too.
+            ":n" => b.model.n = value,
+            ":tt" => b.model.tt = value,
+            ":cjo" => b.model.cjo = value,
+            ":vj" => b.model.vj = value,
+            ":m" => b.model.m = value,
+            ":eg" => b.model.eg = value,
+            ":xti" => b.model.xti = value,
+            ":kf" => b.model.kf = value,
+            ":af" => b.model.af = value,
+            ":fc" => b.model.fc = value,
+            "_temp" => b.temp = value + crate::consts::CTOK,
+            "_area" => self.area = value,
+            "_m" => b.m = value,
+            _ => return,
+        }
+        let b = &self.sens;
+        let t = DiodeTemp::new(
+            &b.name,
+            &b.model,
+            self.area * b.m,
+            b.temp,
+            b.default_tnom,
+            b.reltol,
+        );
+        // Keep the setup-time capacitance/charge parameters.
+        self.t.csat = t.csat;
+        self.t.gspr = t.gspr;
+        self.t.vt = t.vt;
+        self.t.vte = t.vte;
+        self.t.vcrit = t.vcrit;
+        self.t.brkdwn = t.brkdwn;
     }
 
     /// `DIOacLoad`: `gd` from the operating point plus `jω·capd`.

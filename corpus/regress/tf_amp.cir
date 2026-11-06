@@ -1,0 +1,31 @@
+Transfer function: BJT stage with controlled-source feedback
+* Coverage: no corpus deck has a .tf card. This pins TFanal
+* (ckt/tfanal.c) against ngspice-47: one extra solve of the factored
+* operating-point Jacobian with a unit excitation on the input
+* source's branch gives the gain and the input resistance; a unit
+* current into the output node gives the output resistance. A
+* common-emitter BJT (biased off the operating point, so the
+* Jacobian holds its small-signal gm/gpi/go) drives a VCVS buffer,
+* a VCCS feeds part of the output back to the base, and an F/H pair
+* adds a current-controlled path, so gain, Rin and Rout are all
+* nontrivial. The output is a node pair, so the third vector is
+* named output_impedance_at_V(out,ref).
+vin 1 0 dc 0.75
+rs 1 2 2k
+vcc 9 0 dc 10
+rb 9 2 200k
+rc 9 3 4.7k
+q1 3 2 4 qn
+re 4 0 330
+vsense 4 5 0
+r5 5 0 1meg
+e1 6 0 3 0 0.5
+ro 6 7 1k
+rl 7 0 10k
+g1 2 0 7 0 -2e-6
+f1 7 0 vsense 0.1
+h1 8 0 vsense 50
+rref 8 0 1k
+.model qn npn is=1e-15 bf=120 br=2 vaf=60 rb=50 re=2 rc=20
+.tf v(7,8) vin
+.end

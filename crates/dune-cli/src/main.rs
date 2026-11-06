@@ -216,7 +216,35 @@ fn main() -> Result<()> {
                 }
                 solutions.extend(di.solutions);
             }
-            other => bail!("analysis {other:?} is not implemented yet (PLAN.md §3)"),
+            dune_netlist::ir::Analysis::Tf { outvar, insrc, .. } => {
+                let tf = circuit.tf(&options, &output_var(outvar)?, insrc)?;
+                for n in &tf.notes {
+                    eprintln!("note: {n}");
+                }
+                solutions.push(tf.solution);
+            }
+            dune_netlist::ir::Analysis::Sens {
+                outvar,
+                filters,
+                ac,
+                ..
+            } => {
+                let ac = ac.map(|(variation, points, fstart, fstop)| dune_core::SensAc {
+                    sweep: match variation {
+                        dune_netlist::ir::Variation::Dec => dune_core::AcSweep::Decade,
+                        dune_netlist::ir::Variation::Oct => dune_core::AcSweep::Octave,
+                        dune_netlist::ir::Variation::Lin => dune_core::AcSweep::Linear,
+                    },
+                    points: points as usize,
+                    fstart,
+                    fstop,
+                });
+                let sens = circuit.sens(&options, &output_var(outvar)?, filters, ac)?;
+                for n in &sens.notes {
+                    eprintln!("note: {n}");
+                }
+                solutions.push(sens.solution);
+            }
         }
     }
     if solutions.is_empty() {
@@ -319,4 +347,19 @@ fn run_prints(
         }
     }
     Ok(())
+}
+
+/// The `.tf`/`.sens` output variable in the engine's form.
+fn output_var(v: &dune_netlist::ir::OutVar) -> Result<dune_core::OutputVar> {
+    use dune_netlist::ir::OutVar;
+    match v {
+        OutVar::Voltage {
+            node, reference, ..
+        } => Ok(dune_core::OutputVar::Voltage {
+            node: node.clone(),
+            reference: reference.clone(),
+        }),
+        OutVar::Current { vsrc, .. } => Ok(dune_core::OutputVar::Current { vsrc: vsrc.clone() }),
+        OutVar::Raw(r) => bail!("`{r}` is not an output variable"),
+    }
 }

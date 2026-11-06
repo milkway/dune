@@ -1,0 +1,15 @@
+Title: transfer function: bjt stage with controlled-source feedback
+Date: Fri Nov  6 00:33:40  2026
+Command: ngspice-47, Build 
+Plotname: Transfer Function
+Flags: real
+No. Variables: 3
+No. Points: 1       
+Variables:
+	0	v(Transfer_function)	voltage
+	1	v(vin#Input_impedance)	voltage
+	2	v(output_impedance_at_V(7,8))	voltage
+Values:
+0		-5.085838702042677e+00
+	3.007153683602301e+04
+	8.905969501743901e+02

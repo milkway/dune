@@ -64,6 +64,12 @@ impl MatrixBuilder {
         self.entries.len() + 1
     }
 
+    /// 0-based `(row, col)` of every slot past the trash one: slot
+    /// `k` sits at `entries()[k - 1]`.
+    pub fn entries(&self) -> &[(usize, usize)] {
+        &self.entries
+    }
+
     pub fn slots_in_row(&self, r: Var) -> &[Slot] {
         &self.row_slots[r]
     }

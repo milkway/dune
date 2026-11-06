@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::circuit::{Built, VarKind, Vars};
-use crate::devices::Device;
+use crate::devices::{Device, SensParam};
 use crate::disto::{DistoCtx, DistoInput, DistoKernels, DistoMode, DistoSetupCtx};
 use crate::error::Error;
 use crate::integ::{Method, TerrCtx, com_cof};
@@ -1374,6 +1374,218 @@ impl Engine {
             setup.b[dn.0] = 0.0;
         }
         Ok(self.solver.det_complex(&setup.g[1..], &setup.b[1..]))
+    }
+}
+
+/// `.tf` and `.sens` (`ckt/tfanal.c`, `ckt/cktsens.c`): extra solves
+/// against the factorization the operating point (or one AC point)
+/// left in the solver, and the per-parameter perturbation loads of
+/// the sensitivity analysis.
+impl Engine {
+    /// `SMPsolve` of `rhs` (var-indexed, `[0]` is ground) against the
+    /// operating-point Jacobian still factored in the solver — the
+    /// last Newton iteration's matrix, as `TFanal` uses it.
+    pub fn solve_factored(&mut self, rhs: &mut [f64]) -> Result<(), Error> {
+        rhs[0] = 0.0;
+        self.solver
+            .solve_in_place(&mut rhs[1..])
+            .map_err(|e| self.map_singular(e))?;
+        rhs[0] = 0.0;
+        Ok(())
+    }
+
+    /// The sensitivity parameters of every device, in device order;
+    /// a device without a sensitivity port fails the analysis (the C
+    /// would perturb its parameters too, so skipping it silently
+    /// would drop vectors).
+    pub fn sens_params(&self, ac: bool) -> Result<Vec<Vec<SensParam>>, Error> {
+        self.devices
+            .iter()
+            .zip(&self.names)
+            .map(|(d, name)| {
+                d.sens_params(ac).ok_or_else(|| Error::Unsupported {
+                    name: name.clone(),
+                    what: "sensitivity analysis of this device".into(),
+                })
+            })
+            .collect()
+    }
+
+    /// `Y·x` restricted to the stamps in `values` (slot-indexed), the
+    /// `SMPmultiply` of `delta_Y·E`: returns the var-indexed product.
+    fn slot_product(&self, values: &[f64], x: &[f64]) -> Vec<f64> {
+        let mut out = vec![0.0; x.len()];
+        for (k, &(r, c)) in self.mb.entries().iter().enumerate() {
+            let v = values[k + 1];
+            if v != 0.0 {
+                out[r + 1] += v * x[c + 1];
+            }
+        }
+        out
+    }
+
+    /// One DC sensitivity column (`sens_sens`, `is_dc`): device `dev`
+    /// loaded into an empty matrix/RHS at the operating point, its
+    /// parameter `suffix` moved from `value` by `delta`, loaded again,
+    /// restored; then `delta_E = Y⁻¹·(ΔI − ΔY·E) / delta`. The loads
+    /// see `CKTrhsOld` — the iterate the last Jacobian was built at,
+    /// which `op` leaves in `rhs` — and `E` is the converged solution.
+    pub fn sens_dc_column(
+        &mut self,
+        opts: &Options,
+        dev: usize,
+        suffix: &str,
+        value: f64,
+        delta: f64,
+    ) -> Result<Vec<f64>, Error> {
+        let saved = self.states.snapshot0();
+        let load_at = self.rhs.clone();
+        let one = |engine: &mut Engine| {
+            let mut values = vec![0.0; engine.values.len()];
+            let mut rhs = vec![0.0; engine.rhs.len()];
+            let mut ctx = LoadCtx {
+                values: &mut values,
+                rhs: &mut rhs,
+                sol: &load_at,
+                mode: InitMode::Float,
+                kind: AnKind::DcOp,
+                uic: false,
+                time: 0.0,
+                step: 0.0,
+                final_time: 0.0,
+                gmin: opts.gmin,
+                reltol: opts.reltol,
+                abstol: opts.abstol,
+                srcfact: 1.0,
+                noncon: false,
+                states: &mut engine.states,
+                ag: [0.0; 7],
+                order: 1,
+                method: engine.method,
+                pred_xfact: 0.0,
+                delta: 0.0,
+                fault: None,
+            };
+            engine.devices[dev].load(&mut ctx);
+            engine.devices[dev].load_late(&mut ctx);
+            match ctx.fault {
+                Some(f) => Err(Error::Build(f.into())),
+                None => Ok((values, rhs)),
+            }
+        };
+        let (y0, i0) = one(self)?;
+        self.devices[dev].sens_set(suffix, value + delta);
+        let perturbed = one(self);
+        self.devices[dev].sens_set(suffix, value);
+        self.states.restore0(&saved);
+        let (y1, i1) = perturbed?;
+
+        let dy: Vec<f64> = y1.iter().zip(&y0).map(|(a, b)| a - b).collect();
+        let dye = self.slot_product(&dy, &self.sol);
+        let mut w: Vec<f64> = i1
+            .iter()
+            .zip(&i0)
+            .zip(&dye)
+            .map(|((a, b), p)| (a - b) - p)
+            .collect();
+        self.solve_factored(&mut w)?;
+        for x in &mut w {
+            *x /= delta;
+        }
+        Ok(w)
+    }
+
+    /// The AC solution at `omega` (`NIacIter` after the small-signal
+    /// pass), leaving `G + jB` factored for the sensitivity solves.
+    pub fn sens_ac_solution(&mut self, omega: f64) -> Result<(Vec<f64>, Vec<f64>), Error> {
+        let num_slots = self.values.len();
+        let nvars = self.vars.len();
+        let mut g = vec![0.0; num_slots];
+        let mut b = vec![0.0; num_slots];
+        let mut re = vec![0.0; nvars];
+        let mut im = vec![0.0; nvars];
+        let mut ctx = AcCtx {
+            g: &mut g,
+            b: &mut b,
+            rhs_re: &mut re,
+            rhs_im: &mut im,
+            omega,
+            states: &self.states,
+        };
+        for d in &mut self.devices {
+            d.load_ac(&mut ctx);
+        }
+        self.solver
+            .factor_complex(&g[1..], &b[1..])
+            .map_err(|e| self.map_singular(e))?;
+        self.solver
+            .solve_complex_in_place(&mut re[1..], &mut im[1..])
+            .map_err(|e| self.map_singular(e))?;
+        re[0] = 0.0;
+        im[0] = 0.0;
+        Ok((re, im))
+    }
+
+    /// One AC sensitivity column: the [`Engine::sens_dc_column`]
+    /// recipe on the `DEVacLoad` stamps (complex `ΔY`, `ΔI`) against
+    /// the AC solution `e` and the factorization of
+    /// [`Engine::sens_ac_solution`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn sens_ac_column(
+        &mut self,
+        omega: f64,
+        dev: usize,
+        suffix: &str,
+        value: f64,
+        delta: f64,
+        e: (&[f64], &[f64]),
+    ) -> Result<(Vec<f64>, Vec<f64>), Error> {
+        let one = |engine: &mut Engine| {
+            let mut g = vec![0.0; engine.values.len()];
+            let mut b = vec![0.0; engine.values.len()];
+            let mut re = vec![0.0; engine.rhs.len()];
+            let mut im = vec![0.0; engine.rhs.len()];
+            let mut ctx = AcCtx {
+                g: &mut g,
+                b: &mut b,
+                rhs_re: &mut re,
+                rhs_im: &mut im,
+                omega,
+                states: &engine.states,
+            };
+            engine.devices[dev].load_ac(&mut ctx);
+            (g, b, re, im)
+        };
+        let (g0, b0, r0, i0) = one(self);
+        self.devices[dev].sens_set(suffix, value + delta);
+        let (g1, b1, r1, i1) = one(self);
+        self.devices[dev].sens_set(suffix, value);
+
+        let dg: Vec<f64> = g1.iter().zip(&g0).map(|(a, b)| a - b).collect();
+        let db: Vec<f64> = b1.iter().zip(&b0).map(|(a, b)| a - b).collect();
+        let (er, ei) = e;
+        // (dG + j dB)(er + j ei)
+        let gr = self.slot_product(&dg, er);
+        let gi = self.slot_product(&dg, ei);
+        let br = self.slot_product(&db, er);
+        let bi = self.slot_product(&db, ei);
+        let mut wr: Vec<f64> = (0..r1.len())
+            .map(|k| (r1[k] - r0[k]) - (gr[k] - bi[k]))
+            .collect();
+        let mut wi: Vec<f64> = (0..i1.len())
+            .map(|k| (i1[k] - i0[k]) - (gi[k] + br[k]))
+            .collect();
+        wr[0] = 0.0;
+        wi[0] = 0.0;
+        self.solver
+            .solve_complex_in_place(&mut wr[1..], &mut wi[1..])
+            .map_err(|e| self.map_singular(e))?;
+        wr[0] = 0.0;
+        wi[0] = 0.0;
+        for x in wr.iter_mut().chain(wi.iter_mut()) {
+            *x /= delta;
+        }
+        Ok((wr, wi))
     }
 }
 

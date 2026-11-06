@@ -242,6 +242,35 @@ resultados espelhando o rawfile).
   bate a ≤3e-13 em quatro decks de sonda (harmônicos, IM com fases,
   diodo com RS e reverso, excitação por ISRC).
 
+- **`.tf`** (`tf.rs` ← `ckt/tfanal.c`, idêntico nos dois): dois
+  solves extras contra o Jacobiano fatorado do op — excitação
+  unitária no ramo da fonte de entrada dá ganho e resistência de
+  entrada; corrente unitária no nó de saída dá a de saída. Clamps
+  do C mantidos (1e20 quando a corrente do ramo < 1e-20;
+  `1/max(1e-20, i)` para saída em corrente). Plot `Transfer
+  Function`, vetores `v(Transfer_function)`,
+  `v(<fonte>#Input_impedance)`, `v(output_impedance_at_V(n,m))`.
+  Sonda: `regress/tf_amp` (BJT + E/G/F/H, saída em par de nós).
+
+- **`.sens`** (`sens.rs` ← `ckt/cktsens.c`/`cktsgen.c` — a
+  perturbação `sens_sens` do próprio 3f5; o adjunto de Meikle
+  nunca foi o que roda, nem lá nem no ngspice): cada parâmetro
+  move 1e-6·valor (1e-6 se zero), o dispositivo recarrega numa
+  matriz vazia e resolve-se `Y⁻¹(ΔI − ΔY·E)/δ` contra a matriz
+  fatorada. Extensões do ngspice adotadas: parâmetros zero
+  listados, filtros glob no cartão, plot `Sensitivity Analysis`
+  com vetores `v(<inst>:<kw>)`/`v(<inst>_<kw>)`. Cobertura:
+  R/C/L/K/V/I/E/F/G/H + diodo (tabela do 3f5); outros dispositivos
+  → erro estruturado. Quirks dos dois C mantidos (LIN multiplica o
+  passo — `LINEAR` vs `SENS_LINEAR` —, OCT multiplica por ln2 onde
+  devia dividir; `rs` do diodo sem efeito, condutância fixada no
+  setup). **Diverge do oráculo onde o ngspice está quebrado** (AC
+  com não-lineares zerados, K e G/F errados — verificado por
+  diferença finita de dois `.ac` do próprio ngspice; 6 entradas no
+  KNOWN_DIFFS). Sondas: `sens_dc` (divisor+diodo), `sens_ac` (1
+  frequência, lineares), `sens_acsweep` (LIN com o passo
+  multiplicado pinado).
+
 - **LTRA** (`ltra.rs` ← `ltraset.c`, `ltratemp.c`, `ltraload.c`,
   `ltraacct.c`, `ltratrun.c`, `ltraacld.c`, `ltramisc.c`;
   Roychowdhury): linha com perdas por convolução. As duas equações
@@ -441,7 +470,7 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- `.tf`; ruído dos demais dispositivos (diodo/MOS/JFET/MESFET têm
+- Ruído dos demais dispositivos (diodo/MOS/JFET/MESFET têm
   `*noise.c` no C — o `.noise` hoje os trata como silenciosos; R
   sem fNcoef → flicker 0); `.pz` dos semicondutores restantes (BJT/
   MOS têm `pzLoad` no C, aqui ainda não); `.disto` de BJT/MOS/BSIM

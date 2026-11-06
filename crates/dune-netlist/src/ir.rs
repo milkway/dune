@@ -269,9 +269,12 @@ pub enum Analysis {
         f2overf1: Option<f64>,
         span: Span,
     },
-    /// `.sens OUTVAR` / `.sens OUTVAR AC DEC|OCT|LIN N FSTART FSTOP`
+    /// `.sens OUTVAR [FILTER…] [AC DEC|OCT|LIN N FSTART FSTOP | DC]`
+    /// (the filters — glob patterns over the sensitivity vector
+    /// names, `*` and `?` — are ngspice's extension of the 3f5 card).
     Sens {
         outvar: OutVar,
+        filters: Vec<Ident>,
         ac: Option<(Variation, f64, f64, f64)>,
         span: Span,
     },

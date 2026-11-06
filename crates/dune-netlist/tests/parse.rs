@@ -275,6 +275,61 @@ fn analyses_parse() {
 }
 
 #[test]
+fn tf_and_sens_cards() {
+    let nl = clean(
+        "tf and sens\n\
+         v1 1 0 ac 1\n\
+         r1 1 2 1k\n\
+         v2 2 0 0\n\
+         .tf v( 2 , 1 ) v1\n\
+         .tf i(v2) v1\n\
+         .sens v(2) r* d1:is d1_m ac dec 5 10 1k\n\
+         .sens i(v2) dc\n\
+         .sens v(1,2)\n\
+         .end\n",
+    );
+    assert_eq!(nl.analyses.len(), 5);
+    assert!(matches!(
+        &nl.analyses[0],
+        Analysis::Tf { outvar: OutVar::Voltage { node, reference: Some(r), .. }, insrc, .. }
+            if node == "2" && r == "1" && insrc == "v1"
+    ));
+    assert!(matches!(
+        &nl.analyses[1],
+        Analysis::Tf { outvar: OutVar::Current { vsrc, .. }, insrc, .. }
+            if vsrc == "v2" && insrc == "v1"
+    ));
+    match &nl.analyses[2] {
+        Analysis::Sens {
+            outvar:
+                OutVar::Voltage {
+                    node,
+                    reference: None,
+                    ..
+                },
+            filters,
+            ac: Some((Variation::Dec, points, fstart, fstop)),
+            ..
+        } => {
+            assert_eq!(node, "2");
+            assert_eq!(filters, &["r*", "d1:is", "d1_m"]);
+            assert_eq!((*points, *fstart, *fstop), (5.0, 10.0, 1e3));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    assert!(matches!(
+        &nl.analyses[3],
+        Analysis::Sens { outvar: OutVar::Current { vsrc, .. }, filters, ac: None, .. }
+            if vsrc == "v2" && filters.is_empty()
+    ));
+    assert!(matches!(
+        &nl.analyses[4],
+        Analysis::Sens { outvar: OutVar::Voltage { reference: Some(r), .. }, ac: None, .. }
+            if r == "2"
+    ));
+}
+
+#[test]
 fn output_variable_forms() {
     let nl = clean(
         "outputs\n\

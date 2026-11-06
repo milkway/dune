@@ -453,7 +453,7 @@ impl From<Ltra> for Spec {
 }
 
 impl Spec {
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         match self {
             Spec::Bjt(s) => &s.name,
             Spec::Mos1(s) => &s.name,
@@ -1196,7 +1196,7 @@ impl Circuit {
                 }
                 Spec::Resistor(s) => {
                     devices.push(Box::new(ResistorI::new(
-                        1.0 / s.value,
+                        s.value,
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                     )));
@@ -1232,9 +1232,9 @@ impl Circuit {
                     let (flux1, l1) = inductors[&s.l1];
                     let (flux2, l2) = inductors[&s.l2];
                     // `MUTfactor = k·sqrt(L1·L2)` (`mutsetup.c`).
-                    let factor = s.k * (l1 * l2).abs().sqrt();
                     devices.push(Box::new(MutualI::new(
-                        factor,
+                        s.k,
+                        (l1 * l2).abs().sqrt(),
                         branches[&s.l1],
                         branches[&s.l2],
                         flux1,
@@ -1325,6 +1325,14 @@ impl Circuit {
                         s.off,
                         s.ic.unwrap_or(0.0),
                         base,
+                        crate::diode::DiodeSensBase {
+                            name: s.name.clone(),
+                            model: s.model.clone(),
+                            temp,
+                            m: 1.0,
+                            default_tnom: opts.tnom,
+                            reltol: opts.reltol,
+                        },
                     )));
                 }
                 Spec::Jfet(s) => {

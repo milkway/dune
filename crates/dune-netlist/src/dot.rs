@@ -372,60 +372,165 @@ fn dot_disto(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
     });
 }
 
-/// `.sens OUTVAR` / `.sens OUTVAR AC DEC|OCT|LIN N FSTART FSTOP`
-fn dot_sens(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
-    let flds = fields(ctx.card);
-    if flds.len() < 2 {
-        ctx.err(span, ".sens needs an output variable");
-        return;
-    }
-    let outvar = parse_outvar_field(ctx, flds[1]);
-    let mut ac = None;
-    if flds.len() > 2 {
-        let text = ctx.card.text[flds[2].0..flds[2].1].to_ascii_lowercase();
-        if text != "ac" {
-            let s = ctx.card.span_of(flds[2].0, flds[2].1);
-            ctx.err(s, format!("expected ac, got `{text}`"));
-            return;
+/// The output variable of `.tf` and `.sens`, walked like `INP2dot`
+/// does: the single-letter token `v` followed by `(` and one or two
+/// nodes (`V(N1)` when the character after the first node is `)`),
+/// or `i` followed by the source name. Leaves the scanner after the
+/// last name and returns the byte offset where it ended.
+fn tf_outvar(
+    ctx: &mut DotCtx,
+    sc: &mut Scanner,
+    span: Span,
+    card: &str,
+) -> Option<(OutVar, usize)> {
+    let Some(tok) = sc.next_tok() else {
+        ctx.err(
+            span,
+            format!("{card} needs an output variable, v(node) or i(vsrc)"),
+        );
+        return None;
+    };
+    let text = ctx.card.text.as_bytes();
+    // The first non-blank character at or after `pos`.
+    let next_char = |pos: usize| {
+        text[pos.min(text.len())..]
+            .iter()
+            .copied()
+            .find(|b| !matches!(b, b' ' | b'\t' | b','))
+    };
+    if tok.eq_ic("v") {
+        if next_char(tok.end) != Some(b'(') {
+            let s = sc.span(&tok);
+            ctx.err(s, "syntax error: '(' expected after 'v'");
+            return None;
         }
-        if flds.len() < 7 {
-            ctx.err(span, ".sens ac needs dec|oct|lin, points and frequencies");
-            return;
-        }
-        let vtext = ctx.card.text[flds[3].0..flds[3].1].to_ascii_lowercase();
-        let Some(var) = variation(&vtext) else {
-            let s = ctx.card.span_of(flds[3].0, flds[3].1);
-            ctx.err(s, format!("expected dec, oct or lin, got `{vtext}`"));
-            return;
+        let Some(n1) = sc.next_tok() else {
+            let s = sc.here();
+            ctx.err(s, "missing output node");
+            return None;
         };
-        let mut nums = [0.0; 3];
-        for (i, f) in flds[4..7].iter().enumerate() {
-            match crate::scan::evaluate(&ctx.card.text[f.0..f.1]) {
-                Some(v) => nums[i] = v,
-                None => {
-                    let s = ctx.card.span_of(f.0, f.1);
-                    ctx.err(s, "expected a number");
-                    return;
-                }
-            }
+        if next_char(n1.end) == Some(b')') {
+            let out = OutVar::Voltage {
+                node: n1.lc(),
+                reference: None,
+                suffix: None,
+            };
+            return Some((out, n1.end));
         }
-        ac = Some((var, nums[0], nums[1], nums[2]));
+        let Some(n2) = sc.next_tok() else {
+            let s = sc.here();
+            ctx.err(s, "missing reference node");
+            return None;
+        };
+        let out = OutVar::Voltage {
+            node: n1.lc(),
+            reference: Some(n2.lc()),
+            suffix: None,
+        };
+        Some((out, n2.end))
+    } else if tok.eq_ic("i") {
+        let Some(src) = sc.next_tok() else {
+            let s = sc.here();
+            ctx.err(s, "missing output source");
+            return None;
+        };
+        Some((
+            OutVar::Current {
+                vsrc: src.lc(),
+                suffix: None,
+            },
+            src.end,
+        ))
+    } else {
+        let s = sc.span(&tok);
+        ctx.err(s, "syntax error: voltage or current expected");
+        None
     }
-    nl.analyses.push(Analysis::Sens { outvar, ac, span });
 }
 
-/// `.tf OUTVAR INSRC`
-fn dot_tf(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
-    let flds = fields(ctx.card);
-    if flds.len() != 3 {
-        ctx.err(span, ".tf needs an output variable and an input source");
+/// `.sens OUTVAR [FILTER…] [AC DEC|OCT|LIN N FSTART FSTOP | DC]`
+/// (ngspice's `dot_sens`; the 3f5 card has no filters). The filters
+/// are scanned by hand on blanks because `INPgetTok` would break the
+/// `*` globs: everything up to `ac` or `dc` is a filter.
+fn dot_sens(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
+    let mut sc = Scanner::new(ctx.card);
+    sc.next_tok();
+    let Some((outvar, end)) = tf_outvar(ctx, &mut sc, span, ".sens") else {
         return;
+    };
+    // `while (*line && *line > ' ') ++line;` — skip the rest of the
+    // output token (its closing parenthesis), then split on blanks.
+    let text = ctx.card.text.as_str();
+    let bytes = text.as_bytes();
+    let mut pos = end;
+    while pos < bytes.len() && bytes[pos] > b' ' {
+        pos += 1;
     }
-    let outvar = parse_outvar_field(ctx, flds[1]);
-    let insrc = ctx.card.text[flds[2].0..flds[2].1].to_ascii_lowercase();
+    let mut filters = Vec::new();
+    let mut ac = None;
+    loop {
+        while pos < bytes.len() && bytes[pos] <= b' ' {
+            pos += 1;
+        }
+        if pos >= bytes.len() {
+            break;
+        }
+        let start = pos;
+        while pos < bytes.len() && bytes[pos] > b' ' {
+            pos += 1;
+        }
+        let word = text[start..pos].to_ascii_lowercase();
+        if word == "dc" {
+            break;
+        }
+        if word != "ac" {
+            filters.push(word);
+            continue;
+        }
+        let mut sc = Scanner::new(ctx.card);
+        sc.seek(pos);
+        let Some(vtok) = sc.next_tok() else {
+            ctx.err(span, ".sens ac needs dec, oct or lin");
+            return;
+        };
+        let Some(var) = variation(&vtok.lc()) else {
+            let s = sc.span(&vtok);
+            ctx.err(s, format!("expected dec, oct or lin, got `{}`", vtok.text));
+            return;
+        };
+        let (Some(points), Some(fstart), Some(fstop)) = (
+            ctx.value_req(&mut sc, "number of points"),
+            ctx.value_req(&mut sc, "start frequency"),
+            ctx.value_req(&mut sc, "stop frequency"),
+        ) else {
+            return;
+        };
+        ac = Some((var, points, fstart, fstop));
+        break;
+    }
+    nl.analyses.push(Analysis::Sens {
+        outvar,
+        filters,
+        ac,
+        span,
+    });
+}
+
+/// `.tf V(N1<,N2>)|I(VSRC) INSRC` (`INP2dot`).
+fn dot_tf(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
+    let mut sc = Scanner::new(ctx.card);
+    sc.next_tok();
+    let Some((outvar, _)) = tf_outvar(ctx, &mut sc, span, ".tf") else {
+        return;
+    };
+    let Some(src) = sc.next_tok() else {
+        let s = sc.here();
+        ctx.err(s, ".tf needs an input source");
+        return;
+    };
     nl.analyses.push(Analysis::Tf {
         outvar,
-        insrc,
+        insrc: src.lc(),
         span,
     });
 }

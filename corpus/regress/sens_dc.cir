@@ -1,0 +1,45 @@
+DC sensitivity: divider, diodes and every controlled source
+* Coverage: no corpus deck has a .sens card. This pins sens_sens
+* (ckt/cktsens.c, DC form) against ngspice-47: each parameter is
+* moved by 1e-6 of its value (1e-6 when zero), the one device is
+* reloaded into an empty matrix, and Y^-1 (dI - dY E) / delta gives
+* the output's sensitivity. dx1 has area 2, dx2 a series RS (internal
+* node; dx2:rs still comes out zero in both, since the series
+* conductance is set in DIOsetup, which the walk runs before the
+* perturbation) and dx3 runs at TEMP=60, so its EG sensitivity is
+* live. dx4 shares dx1's model: dx1:is and dx4:is are separate
+* vectors (sgen_next moves the model parameter but reloads only the
+* one instance); it also keeps ngspice's unused-model pruning from
+* dropping dmoda, which takes the numeric area "2.0" for dx1's model
+* name otherwise. v1 is both the input and the current sense of the
+* F/H pair.
+* The filters (ngspice's extension of the card) keep the diodes to
+* the parameters the 3f5 model has: ngspice-47 also perturbs its own
+* extensions (isr, jtun, ikf, ...), several of which only switch on
+* once "given", so their values are artifacts of the perturbation
+* (corpus/KNOWN_DIFFS.md). At most six filters: dot_sens grows its
+* filter array once, to 7 slots, and writes past it after that
+* (ngspice-47 heap overflow; 8+ filters gave garbage output here).
+v1 1 0 dc 5
+r1 1 2 1k
+r2 2 0 2k
+dx1 2 3 dmoda 2.0
+r3 3 0 4.7k
+dx2 3 0 dmodb
+i1 0 3 dc 0.2m
+dx3 2 9 dmodc temp=60
+r9 9 0 10k
+dx4 9 0 dmoda
+e1 4 0 2 0 0.5
+r4 4 5 1k
+g1 0 5 3 0 0.2m
+r5 5 0 2.2k
+f1 0 7 v1 2
+r7 7 8 1k
+h1 8 0 v1 300
+r8 7 5 3.3k
+.model dmoda d is=2e-14 n=1.2
+.model dmodb d is=5e-15 rs=10
+.model dmodc d is=1e-14 n=1.05 eg=1.15 xti=2.5
+.sens v(7) r* ?1* dx?:is dx?:? dx?:eg dx?_*
+.end
