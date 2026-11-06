@@ -27,6 +27,11 @@ tempfile = "3"
 # `erfc` for the RC lossy line (fdlibm port, pure Rust, wasm-safe).
 libm = "0.2"
 
+# The Xingó project's sparse LU (D-0005), from crates.io; only
+# `dune-core`'s optional `solver-xingo` feature uses it. No default
+# features: its own `faer` feature is the KKT/LDL side, unused here.
+xingo-sparse = { version = "0.3", default-features = false }
+
 dune-netlist = { path = "crates/dune-netlist" }
 dune-core = { path = "crates/dune-core" }
 dune-raw = { path = "crates/dune-raw" }

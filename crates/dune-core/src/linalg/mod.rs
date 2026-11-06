@@ -1,6 +1,6 @@
 //! Linear solver abstraction (D-0005). Devices never see the backend;
-//! nothing outside `linalg::backend` may call `faer` (or, later,
-//! `xingo-sparse`) directly.
+//! nothing outside `linalg::backend` may call `faer` or
+//! `xingo-sparse` directly.
 //!
 //! The split mirrors the 3f5's SMP layer: `analyze` fixes the
 //! sparsity pattern (`SMPpreOrder`), `factor` refactors with new
@@ -67,16 +67,23 @@ pub trait LinearSolver {
     fn det_complex(&mut self, re: &[f64], im: &[f64]) -> (num_complex::Complex64, i32);
 }
 
-/// The default backend for this build.
+/// The backend for this build: the dense faer LU by default; the
+/// `solver-xingo` feature switches every engine to the xingo-sparse LU
+/// (D-0005; the choice of default is P-3, still open — enabling
+/// `solver-xingo` is an explicit opt-in, not a new default).
 pub fn default_solver() -> Box<dyn LinearSolver> {
-    #[cfg(feature = "solver-faer")]
+    #[cfg(feature = "solver-xingo")]
+    {
+        Box::new(backend::xingo_sparse::XingoSparse::default())
+    }
+    #[cfg(all(feature = "solver-faer", not(feature = "solver-xingo")))]
     {
         Box::new(backend::faer_dense::FaerDense::default())
     }
-    #[cfg(not(feature = "solver-faer"))]
+    #[cfg(not(any(feature = "solver-faer", feature = "solver-xingo")))]
     {
         compile_error!(
-            "dune-core needs a linear solver backend (enable the `solver-faer` feature)"
+            "dune-core needs a linear solver backend (enable the `solver-faer` or the `solver-xingo` feature)"
         );
     }
 }
