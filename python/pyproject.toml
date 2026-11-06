@@ -7,8 +7,19 @@ name = "spice"
 # The version comes from Cargo.toml (single source; 0.0.1).
 dynamic = ["version"]
 description = "SPICE3f5-faithful circuit simulation (the Dune engine) for Python"
+readme = "README.md"
 license = "BSD-3-Clause"
-authors = [{ name = "André Leite" }]
+authors = [{ name = "André Leite", email = "leite@de.ufpe.br" }]
+maintainers = [{ name = "André Leite", email = "leite@de.ufpe.br" }]
+keywords = [
+    "spice",
+    "circuit-simulation",
+    "spice3f5",
+    "ngspice",
+    "eda",
+    "electronics",
+    "transient-analysis",
+]
 # 3.10 floor: the abi3-py310 wheel covers every CPython >= 3.10;
 # 3.9 is end-of-life (Oct 2025), NumPy >= 2.1 and current polars no
 # longer support it, and 3.10 lets the typed layer use `X | Y` unions
@@ -22,11 +33,20 @@ dependencies = [
     "numpy>=1.23",
 ]
 classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Repository = "https://github.com/milkway/dune"
+Issues = "https://github.com/milkway/dune/issues"
 
 [project.optional-dependencies]
 # `Plot.df(pandas=True)`.
