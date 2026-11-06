@@ -29,6 +29,7 @@ mod matrix;
 mod mes;
 mod mos1;
 mod mos2;
+mod mos3;
 mod mos6;
 mod noise;
 mod op;
@@ -46,7 +47,7 @@ pub use bsim1::Bsim1Model;
 pub use bsim2::Bsim2Model;
 pub use circuit::{
     Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes, Mos1,
-    Mos2, Mos6, Mutual, Resistor, Spec, Vccs, Vcvs, Vsource,
+    Mos2, Mos3, Mos6, Mutual, Resistor, Spec, Vccs, Vcvs, Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
@@ -58,6 +59,7 @@ pub use ltra::{LtraInterp, LtraModel};
 pub use mes::MesModel;
 pub use mos1::Mos1Model;
 pub use mos2::Mos2Model;
+pub use mos3::Mos3Model;
 pub use mos6::Mos6Model;
 pub use noise::Noise;
 pub use op::Op;

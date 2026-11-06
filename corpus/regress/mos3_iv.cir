@@ -1,0 +1,32 @@
+MOS3 I-V: level-3 NMOS/PMOS output and transfer families
+* Coverage: no corpus deck has a level-3 card. This pins moseq3
+* (mos3load.c) against ngspice-47: the ETA static feedback, the XJ
+* short-channel factor, the DELTA narrow-width term (W=2u), THETA
+* mobility degradation, VMAX velocity saturation with the KAPPA
+* lateral-field channel-length modulation (n3), the plain depletion
+* CLM of line510 without VMAX (p3), and the NFS weak-inversion
+* exponential (the vgs grid starts in subthreshold). RD/RS come from
+* RSH*NRD/NRS (prime nodes). Each device has its own E-source drive
+* so every drain current is a separate branch vector; m3 runs hot
+* (TEMP=80, no NFS: the hard cutoff at von) to pin MOS3temp.
+vds 1 0 dc 3
+vgs 2 0 dc 1
+e1 11 0 1 0 1
+e2 12 0 2 0 1
+m1 11 12 0 0 n3 l=2u w=2u nrd=2 nrs=2
+e3 21 0 1 0 -1
+e4 22 0 2 0 -1
+m2 21 22 0 0 p3 l=3u w=6u nrd=1 nrs=1
+e5 31 0 1 0 1
+m3 31 2 0 0 n3h l=4u w=10u temp=80
+vbb 4 0 dc -1
+e6 41 0 1 0 1
+m4 41 2 0 4 n3 l=2u w=2u nrd=2 nrs=2
+.model n3 nmos level=3 vto=0.7 nsub=3e16 tox=2e-8 xj=0.2u ld=0.05u u0=500
++ theta=0.08 eta=0.3 delta=1.2 vmax=1.5e5 kappa=0.5 nfs=8e11 rsh=20
+.model p3 pmos level=3 vto=-0.8 gamma=0.6 nsub=2e16 tox=2e-8 xj=0.25u ld=0.08u
++ u0=200 theta=0.05 eta=0.2 delta=0.8 kappa=0.8 nfs=5e11 rsh=30
+.model n3h nmos level=3 vto=0.6 kp=6e-5 phi=0.7 nsub=1e16 tox=2.5e-8 theta=0.1
++ vmax=2e5 kappa=0.3 tnom=40
+.dc vgs 0 4 0.1 vds 0 5 1
+.end

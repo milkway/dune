@@ -106,6 +106,29 @@ resultados espelhando o rawfile).
   mosamp2 é XFAIL documentado (dependência de caminho do modelo de
   Meyer — ver `corpus/XFAIL`).
 
+- **MOSFET nível 3** (`mos3.rs` ← `mos3load.c`, `mos3temp.c`,
+  `mos3set.c`, `mos3cvtest.c`, `mos3acld.c`): o semi-empírico de
+  canal curto (limiar com ETA/DELTA/largura estreita, THETA,
+  VMAX/KAPPA, sublimiar NFS/xn), **nas formas alansfixes do
+  ngspice-47**, que aqui vão além de derivadas: CLM suavizada sem
+  VMAX (muda a corrente em até 3.5% perto de vdsat), derivadas
+  corrigidas (o 3f5 tem `gds` de saturação com fórmula linear,
+  `gmbs` incompleto e `gds0` lido sem inicializar), cauda cúbica
+  nos diodos de corpo, `ni(TNOM)` no PHI de NSUB e os coeficientes
+  de junção na forma MOS1/MOS2 (o `f4s` do 3f5 usa `tBulkPot` onde
+  cabe `tDepCap`) — tudo em `corpus/KNOWN_DIFFS.md`, com gates
+  medidos (reverter `gmbs`/`gds` FALHA mos3_inv a 9.6/317).
+  `.options badmos3` é aceito e ignorado (sempre a forma default).
+  Esqueleto compartilhado com MOS1/2 (MosGeom, DEVqmeyer, NEWCONV,
+  17 estados); nós primos `#internal#drain`/`#internal#source`
+  como no `mos3set.c` (e no MOS2). Extras do ngspice
+  (`xl/wd/delvto/m/nlev`) e parâmetros sem case no `mos3mpar.c`
+  (`XD/ALPHA/input_delta`) caem no aviso de parâmetro ignorado.
+  Sondas: `regress/mos3_iv` (famílias NMOS/PMOS/quente/corpo
+  polarizado, sublimiar→inversão forte) e `mos3_inv` (inversor
+  CMOS 2 estágios + amplificador com degeneração para `gmbs` no
+  `.ac`), PASS.
+
 - **MOSFET nível 6** (`mos6.rs` ← `mos6load.c`, `mos6temp.c`,
   `mos6set.c`, `mos6trunc.c`; Sakurai–Newton): corrente de saturação
   `KC·(vgs−von)^NC`, tensão de saturação `KV·(vgs−von)^NV`, correção
@@ -406,9 +429,9 @@ oráculo contra o ngspice.
   (`bjtdisto.c`/`mos*dist.c` no C); `.dc` varrendo TEMP e parâmetro
   de modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- MOS nível 3, chaves S/W, linhas T/U, fonte B (Fase 3); JFET
-  nível 2 (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são ngspice,
-  fora do contrato 3f5.
+- Chaves S/W, linhas T/U, fonte B (Fase 3); JFET nível 2
+  (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são ngspice, fora do
+  contrato 3f5.
 - LTRA: `trytocompact` (compactação do histórico) e o controle LTE
   (`LTRAlteCalculate` — inalcançável sem `fullcontrol`).
 - Controlador de passo: cruzamento de `vds=0` num breakpoint com nó

@@ -9,7 +9,7 @@ use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
     Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes,
-    Mos1, Mos2, Mos6, Mutual, Resistor, Vccs, Vcvs, Vsource,
+    Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -29,6 +29,7 @@ impl Circuit {
         enum MosModel {
             M1(crate::mos1::Mos1Model),
             M2(crate::mos2::Mos2Model),
+            M3(crate::mos3::Mos3Model),
             M6(crate::mos6::Mos6Model),
             B1(Box<crate::bsim1::Bsim1Model>),
             B2(Box<crate::bsim2::Bsim2Model>),
@@ -116,6 +117,13 @@ impl Circuit {
                         match mos2_model(m, &mut notes) {
                             Ok(mm) => {
                                 mmodels.insert(m.name.as_str(), MosModel::M2(mm));
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                    } else if level == 3.0 {
+                        match mos3_model(m, &mut notes) {
+                            Ok(mm) => {
+                                mmodels.insert(m.name.as_str(), MosModel::M3(mm));
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
@@ -475,6 +483,26 @@ impl Circuit {
                                 name,
                                 nodes,
                                 model: m2.clone(),
+                                l: inst.l,
+                                w: inst.w,
+                                ad: inst.ad,
+                                as_: inst.as_,
+                                pd: inst.pd,
+                                ps: inst.ps,
+                                nrd: inst.nrd,
+                                nrs: inst.nrs,
+                                off: inst.off,
+                                ic: inst.ic,
+                                temp: inst.temp,
+                            },
+                            &mut problems,
+                        ),
+                        MosModel::M3(m3) => add(
+                            &mut ckt,
+                            Mos3 {
+                                name,
+                                nodes,
+                                model: m3.clone(),
                                 l: inst.l,
                                 w: inst.w,
                                 ad: inst.ad,
@@ -919,6 +947,69 @@ fn mos2_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos2::Mos
             "xj" => mm.xj = v,
             "neff" => mm.neff = v,
             "nfs" => mm.nfs = v,
+            "kf" => mm.kf = v,
+            "af" => mm.af = v,
+            "tnom" => mm.tnom = Some(v + CTOK),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(mm)
+}
+
+/// Map `.model x nmos/pmos(level=3 …)` parameters onto
+/// [`crate::mos3::Mos3Model`] (`mos3.c`). `XD`/`ALPHA` are output-
+/// only in practice (`mos3mpar.c` has no case for them) and
+/// `input_delta` is the C's internal alias; all three fall through
+/// to the unrecognized-parameter note.
+fn mos3_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos3::Mos3Model, String> {
+    let mut mm = crate::mos3::Mos3Model::new(m.mtype == "nmos");
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmos" || p.name == "pmos" => {
+                mm.nmos = p.name == "nmos";
+                continue;
+            }
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "level" => {}
+            "vto" | "vt0" => mm.vto = Some(v),
+            "kp" => mm.kp = Some(v),
+            "gamma" => mm.gamma = Some(v),
+            "phi" => mm.phi = Some(v),
+            "rd" => mm.rd = Some(v),
+            "rs" => mm.rs = Some(v),
+            "cbd" => mm.cbd = Some(v),
+            "cbs" => mm.cbs = Some(v),
+            "is" => mm.is = v,
+            "pb" => mm.pb = v,
+            "cgso" => mm.cgso = v,
+            "cgdo" => mm.cgdo = v,
+            "cgbo" => mm.cgbo = v,
+            "rsh" => mm.rsh = Some(v),
+            "cj" => mm.cj = Some(v),
+            "mj" => mm.mj = v,
+            "cjsw" => mm.cjsw = Some(v),
+            "mjsw" => mm.mjsw = v,
+            "js" => mm.js = v,
+            "tox" => mm.tox = Some(v),
+            "ld" => mm.ld = v,
+            "u0" | "uo" => mm.u0 = Some(v),
+            "fc" => mm.fc = v,
+            "nsub" => mm.nsub = Some(v),
+            "tpg" => mm.tpg = Some(v),
+            "nss" => mm.nss = Some(v),
+            "vmax" => mm.vmax = v,
+            "xj" => mm.xj = v,
+            "nfs" => mm.nfs = v,
+            "eta" => mm.eta = v,
+            "delta" => mm.delta = v,
+            "theta" => mm.theta = v,
+            "kappa" => mm.kappa = v,
             "kf" => mm.kf = v,
             "af" => mm.af = v,
             "tnom" => mm.tnom = Some(v + CTOK),
