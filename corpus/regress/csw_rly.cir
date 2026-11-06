@@ -1,0 +1,36 @@
+Current-controlled switch: W cards keyed by a separate control loop
+* Coverage: no corpus deck has a W card. vi drives 0 -> 5 mA -> 0 through
+* the sense source vsense in its own loop; w1 (IT=2.4m, IH=0.9m: closes
+* above 3.3 mA, opens below 1.5 mA) charges c3 through RON and lets it
+* bleed through rl1 when open, like a relay contact. w5 watches the
+* mirrored loop (vsense2 carries 5 mA - i(vsense)), so the rising .dc
+* also falls through a window. w2/w3 share a model whose window
+* (-0.6m..5.4m) contains the whole control range: CSWload (ngspice)
+* holds the state of the last *accepted* point (state1) inside the
+* window, which is zero in the operating point, so w2 opens despite its
+* ON hint (the 3f5 and SWload keep it closed). w4 has a negative IH.
+vi 10 0 dc 0 pwl(0 0 1m 5 2m 0)
+rctl 10 11 1k
+vsense 11 0 dc 0
+vo 12 0 dc 5
+e1 13 12 10 0 -1
+rctl2 13 14 1k
+vsense2 14 0 dc 0
+vdd 2 0 dc 10
+w1 2 3 vsense wmod
+rl1 3 0 1k
+c3 3 0 100n
+w2 2 4 vsense wwin on
+rl2 4 0 1k
+w3 2 5 vsense wwin off
+rl3 5 0 1k
+w4 2 6 vsense wneg
+rl4 6 0 1k
+w5 2 7 vsense2 wmod
+rl5 7 0 1k
+.model wmod csw it=2.4m ih=0.9m ron=10 roff=1e6
+.model wwin csw it=2.4m ih=3m ron=100 roff=1e5
+.model wneg csw it=2.4m ih=-0.7m ron=50 roff=2e5
+.dc vi 0 5 0.2
+.tran 20u 2m
+.end

@@ -9,7 +9,7 @@ use dune_netlist::ir::{self, Netlist, ParamValue};
 
 use crate::circuit::{
     Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes,
-    Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, Vccs, Vcvs, Vsource,
+    Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::diode::DiodeModel;
@@ -42,8 +42,22 @@ impl Circuit {
         let mut omodels: HashMap<&str, crate::ltra::LtraModel> = HashMap::new();
         let mut jmodels: HashMap<&str, crate::jfet::JfetModel> = HashMap::new();
         let mut zmodels: HashMap<&str, crate::mes::MesModel> = HashMap::new();
+        let mut smodels: HashMap<&str, crate::switch::SwModel> = HashMap::new();
+        let mut wmodels: HashMap<&str, crate::switch::CswModel> = HashMap::new();
         for m in &nl.models {
             match m.mtype.as_str() {
+                "sw" => match sw_model(m, &mut notes) {
+                    Ok(sm) => {
+                        smodels.insert(m.name.as_str(), sm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
+                "csw" => match csw_model(m, &mut notes) {
+                    Ok(wm) => {
+                        wmodels.insert(m.name.as_str(), wm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
                 // `LEVEL` on J/Z cards is ngspice's selector (JFET
                 // 2 = Parker-Skellern; MES 2 = MESA, 5/6 = HFET);
                 // only level 1, the 3f5 model, is implemented, and
@@ -660,6 +674,47 @@ impl Circuit {
                             area: area.unwrap_or(1.0),
                             off: *off,
                             ic,
+                        },
+                        &mut problems,
+                    );
+                }
+                ir::Device::SwitchV { model, state } => {
+                    let Some(sm) = smodels.get(model.as_str()) else {
+                        problems.push(format!(
+                            "`{name}`: unable to find definition of model `{model}`"
+                        ));
+                        continue;
+                    };
+                    add(
+                        &mut ckt,
+                        SwitchV {
+                            name,
+                            nodes: four(&el.nodes),
+                            model: sm.clone(),
+                            on: *state == Some(ir::OnOff::On),
+                        },
+                        &mut problems,
+                    );
+                }
+                ir::Device::SwitchI {
+                    vname,
+                    model,
+                    state,
+                } => {
+                    let Some(wm) = wmodels.get(model.as_str()) else {
+                        problems.push(format!(
+                            "`{name}`: unable to find definition of model `{model}`"
+                        ));
+                        continue;
+                    };
+                    add(
+                        &mut ckt,
+                        SwitchI {
+                            name,
+                            nodes: two(&el.nodes),
+                            ctrl: vname.clone(),
+                            model: wm.clone(),
+                            on: *state == Some(ir::OnOff::On),
                         },
                         &mut problems,
                     );
@@ -1472,6 +1527,65 @@ fn jfet_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::jfet::Jfe
         }
     }
     Ok(jm)
+}
+
+/// `RON`/`ROFF` of a switch model: a zero resistance would make
+/// the C's `1.0/value` conductance infinite and poison the matrix.
+fn switch_resistance(name: &str, v: f64) -> Result<f64, String> {
+    if v == 0.0 || !v.is_finite() {
+        return Err(format!("{name} must be a nonzero finite resistance"));
+    }
+    Ok(v)
+}
+
+/// `.model x sw(...)` → [`crate::switch::SwModel`] (`sw.c` model
+/// table; `GON`/`GOFF` are output-only there). `VH` keeps its sign as
+/// in ngspice (`swmparam.c`); the 3f5 stored `|VH|`.
+fn sw_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::switch::SwModel, String> {
+    let mut sm = crate::switch::SwModel::default();
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "sw" => continue,
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "vt" => sm.vt = v,
+            "vh" => sm.vh = v,
+            "ron" => sm.ron = Some(switch_resistance("ron", v)?),
+            "roff" => sm.roff = Some(switch_resistance("roff", v)?),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(sm)
+}
+
+/// `.model x csw(...)` → [`crate::switch::CswModel`] (`csw.c` model
+/// table). `IH` keeps its sign as in ngspice (`cswmpar.c`); the 3f5
+/// stored `|IH|`.
+fn csw_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::switch::CswModel, String> {
+    let mut wm = crate::switch::CswModel::default();
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "csw" => continue,
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "it" => wm.it = v,
+            "ih" => wm.ih = v,
+            "ron" => wm.ron = Some(switch_resistance("ron", v)?),
+            "roff" => wm.roff = Some(switch_resistance("roff", v)?),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(wm)
 }
 
 /// `.model x nmf/pmf(...)` → [`crate::mes::MesModel`] (`mes.c` model

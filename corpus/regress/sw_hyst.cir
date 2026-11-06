@@ -1,0 +1,42 @@
+Switch hysteresis: S cards swept through VT+-VH both ways in .tran/.dc
+* Coverage: no corpus deck has an S card. A slow triangle (0 -> 5 -> 0 V)
+* drives s1 through its whole window (VT=2.4, VH=0.9: closes above 3.3,
+* opens below 1.5) into a 1k load, in .tran and in a .dc. s6/s7 watch the
+* mirror 5-v(1), so the one rising .dc also falls through their windows
+* (ngspice runs two .dc cards in reverse deck order, Dune in deck order,
+* so a second, falling .dc cannot be paired). s2/s3 share a model whose
+* window (-0.6..5.4) contains the whole control range, so they keep the
+* ON/OFF hint of the operating point all the way through (s2 on, s3 off). s4 has the default RON (1 ohm) and
+* ROFF (1/GMIN); s5 has a negative VH, ngspice's inverted-window state
+* machine (the 3f5 took |VH|). The 40u step lets swtrunc.c (ngspice)
+* shorten the steps that approach each threshold. The .ac pins
+* ngspice's INITSMSIG, which reads the switch state from state1: zero
+* after a bare operating point, so s2 is open in AC although the
+* operating point has it closed.
+vc 1 0 dc 0 pwl(0 0 1m 5 2m 0)
+rc 1 0 1k
+vdd 2 0 dc 10 ac 1
+s1 2 3 1 0 shys
+rl1 3 0 1k
+s2 2 4 1 0 swin on
+rl2 4 0 1k
+s3 2 5 1 0 swin off
+rl3 5 0 1k
+s4 2 6 1 0 sdef
+rl4 6 0 1k
+s5 2 7 1 0 sneg
+rl5 7 0 1k
+vo 9 0 dc 5
+e1 8 9 1 0 -1
+s6 2 10 8 0 shys
+rl6 10 0 1k
+s7 2 11 8 0 sneg
+rl7 11 0 1k
+.model shys sw vt=2.4 vh=0.9 ron=10 roff=1e6
+.model swin sw vt=2.4 vh=3 ron=100 roff=1e5
+.model sdef sw vt=2.4 vh=0.9
+.model sneg sw vt=2.4 vh=-0.7 ron=50 roff=2e5
+.ac lin 1 1k 1k
+.dc vc 0 5 0.2
+.tran 40u 2m
+.end

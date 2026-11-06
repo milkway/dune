@@ -327,6 +327,32 @@ pub struct Ltra {
     pub model: crate::ltra::LtraModel,
 }
 
+/// `SXXXXXXX N+ N- NC+ NC- MODEL <ON|OFF>`: voltage-controlled
+/// switch with its model inline (`dev/sw/`).
+#[derive(Clone, Debug)]
+pub struct SwitchV {
+    pub name: String,
+    /// Switch +/−, control +/−.
+    pub nodes: [String; 4],
+    pub model: crate::switch::SwModel,
+    /// `ON` (true) or `OFF`/nothing: the state the operating point
+    /// starts from (`SWzero_stateGiven`).
+    pub on: bool,
+}
+
+/// `WXXXXXXX N+ N- VNAM MODEL <ON|OFF>`: current-controlled switch
+/// keyed by the branch current of voltage source `ctrl`, with its
+/// model inline (`dev/csw/`).
+#[derive(Clone, Debug)]
+pub struct SwitchI {
+    pub name: String,
+    pub nodes: [String; 2],
+    pub ctrl: String,
+    pub model: crate::switch::CswModel,
+    /// `ON` (true) or `OFF`/nothing (`CSWzero_stateGiven`).
+    pub on: bool,
+}
+
 #[derive(Clone, Debug)]
 pub enum Spec {
     Bjt(Box<Bjt>),
@@ -350,6 +376,8 @@ pub enum Spec {
     Jfet(Box<Jfet>),
     Mes(Box<Mes>),
     Ltra(Box<Ltra>),
+    SwitchV(SwitchV),
+    SwitchI(SwitchI),
 }
 
 macro_rules! impl_into_spec {
@@ -360,7 +388,8 @@ macro_rules! impl_into_spec {
     )*};
 }
 impl_into_spec!(
-    Resistor, Capacitor, Inductor, Mutual, Vsource, Isource, Vcvs, Vccs, Cccs, Ccvs, Diode
+    Resistor, Capacitor, Inductor, Mutual, Vsource, Isource, Vcvs, Vccs, Cccs, Ccvs, Diode,
+    SwitchV, SwitchI
 );
 
 impl From<Bjt> for Spec {
@@ -447,6 +476,8 @@ impl Spec {
             Spec::Jfet(s) => &s.name,
             Spec::Mes(s) => &s.name,
             Spec::Ltra(s) => &s.name,
+            Spec::SwitchV(s) => &s.name,
+            Spec::SwitchI(s) => &s.name,
         }
     }
 }
@@ -604,6 +635,15 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::SwitchV(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
+        Spec::SwitchI(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+            lc(&mut s.ctrl);
+        }
     }
 }
 
@@ -717,6 +757,7 @@ impl Circuit {
                 Spec::Diode(_) => st.alloc(5),
                 Spec::Jfet(_) => st.alloc(crate::jfet::FET3_NUM_STATES),
                 Spec::Mes(_) => st.alloc(crate::mes::MES_NUM_STATES),
+                Spec::SwitchV(_) | Spec::SwitchI(_) => st.alloc(crate::switch::SW_NUM_STATES),
                 _ => 0,
             });
             let node_names: &[String] = match spec {
@@ -741,6 +782,8 @@ impl Circuit {
                 Spec::Jfet(s) => &s.nodes,
                 Spec::Mes(s) => &s.nodes,
                 Spec::Ltra(s) => &s.nodes,
+                Spec::SwitchV(s) => &s.nodes,
+                Spec::SwitchI(s) => &s.nodes,
             };
             for n in node_names {
                 node(&mut vars, &mut node_ids, n);
@@ -1318,6 +1361,36 @@ impl Circuit {
                             .map_err(Error::Build)?;
                     notes.extend(p.notes.iter().cloned());
                     devices.push(Box::new(crate::ltra::LtraI::new(p, n, br)));
+                }
+                Spec::SwitchV(s) => {
+                    let m = &s.model;
+                    let p = crate::switch::SwitchParams::new(m.vt, m.vh, m.ron, m.roff, opts.gmin);
+                    let ctrl = crate::switch::Control::Voltage {
+                        pos: get(&node_ids, &s.nodes[2]),
+                        neg: get(&node_ids, &s.nodes[3]),
+                    };
+                    devices.push(Box::new(crate::switch::SwitchInst::new(
+                        p,
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[1]),
+                        ctrl,
+                        s.on,
+                        base,
+                    )));
+                }
+                Spec::SwitchI(s) => {
+                    // `CSWsetup`: "unknown controlling source".
+                    let branch = ctrl_branch(&branches, &s.name, &s.ctrl)?;
+                    let m = &s.model;
+                    let p = crate::switch::SwitchParams::new(m.it, m.ih, m.ron, m.roff, opts.gmin);
+                    devices.push(Box::new(crate::switch::SwitchInst::new(
+                        p,
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[1]),
+                        crate::switch::Control::Current { branch },
+                        s.on,
+                        base,
+                    )));
                 }
             }
         }

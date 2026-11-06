@@ -281,6 +281,25 @@ resultados espelhando o rawfile).
   nó x1.6 (flutuante, definido por fugas) fica 7 mV do ngspice no
   op — não afeta vereditos.
 
+- **Chaves S/W** (`switch.rs` ← `swload.c`/`cswload.c` do
+  **ngspice-47** — o 3f5 tem outra máquina, ver KNOWN_DIFFS):
+  um tipo só, controlado por par de nós (S) ou pela corrente de
+  uma Vsource (W, resolvida como F/H). Máquina de 4 estados
+  (`REALLY_ON/OFF` fora da janela, `HYST_ON/OFF` dentro), ramo
+  separado para histerese ≤0, hints `ON`/`OFF` na escada de
+  inicialização, flip de estado marca não-convergência; `SWtrunc`
+  limita o passo ao se aproximar do limiar; AC/pz/ruído leem
+  state1 (um gerador térmico, `onoise_s1`). GOFF default = gmin;
+  RON/ROFF zero ou não-finito é erro estruturado na elaboração
+  (o C faria 1/0). O `.dc` do Dune espelha a rotação de bancos do
+  `DCtrCurv` com um `copy01` por ponto (só as chaves leem state1
+  em DC). Sondas: `regress/sw_hyst` (janela varrida nos dois
+  sentidos via nó espelhado, VH negativo, defaults) e `csw_rly`
+  (relé por corrente, IH negativo), PASS a ~1e-14. Nota de deck:
+  o ngspice agrupa análises por tipo e roda cada tipo em ordem
+  **reversa** do deck — um deck novo com duas análises do mesmo
+  tipo não pareia no oráculo; use nós espelhados.
+
 - **JFET e MESFET** (`jfet.rs` ← `jfetload.c`, `jfettemp.c`,
   `jfetset.c`, `jfetacld.c`, `jfettrun.c`; `mes.rs` ← `mesload.c`,
   `messetup.c`, `mestemp.c`, `mesacl.c`, `mestrunc.c`): o
@@ -429,9 +448,10 @@ oráculo contra o ngspice.
   (`bjtdisto.c`/`mos*dist.c` no C); `.dc` varrendo TEMP e parâmetro
   de modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- Chaves S/W, linhas T/U, fonte B (Fase 3); JFET nível 2
-  (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são ngspice, fora do
-  contrato 3f5.
+- Linhas T/U, fonte B (Fase 3); JFET nível 2 (Parker–Skellern) e
+  MES 2/5/6 (MESA/HFET) são ngspice, fora do contrato 3f5.
+- Ruído/pz das chaves sem golden (só testes unitários); um deck de
+  `.noise` com chave pinaria nomes e saída.
 - LTRA: `trytocompact` (compactação do histórico) e o controle LTE
   (`LTRAlteCalculate` — inalcançável sem `fullcontrol`).
 - Controlador de passo: cruzamento de `vds=0` num breakpoint com nó

@@ -475,6 +475,13 @@ impl Engine {
                 self.op(opts)?;
             }
             start_mode = InitMode::Float;
+            // `DCtrCurv` rotates the state banks before every point,
+            // so state1 there is the previous point's state0. We keep
+            // state0 in place instead (the loads start in INITFLOAT
+            // from it), but the switches read the previous point's
+            // state from state1 (ngspice `cswload.c`), so mirror it.
+            // No other device reads state1 in a DC mode.
+            self.states.copy01();
             if (rows.len() + 1).saturating_mul(self.vars.len()) > MAX_OUTPUT_VALUES {
                 return Err(Error::Build(
                     "dc sweep produces too many points; refusing".into(),
