@@ -147,7 +147,10 @@ resultados espelhando o rawfile).
   só viram erro quando algum M os instancia (mos6inv traz cartões
   nível 3 sem uso).
 
-- **`.ac`** (`ac.rs`, `engine.rs::ac` ← `ckt/acan.c`,
+- **`.ac`** (`ac.rs`, `engine.rs::ac` ← `ckt/acan.c` — grade DEC
+  na forma do **ngspice**: span > 1 década recalcula o passo para
+  pousar exato em FSTOP (gate `regress/acdec.cir`; o 3f5 só
+  coincide em décadas inteiras),
   `ni/niaciter.c`, `dev/*acld.c`): ponto de operação, um passe
   `MODEINITSMSIG` (o diodo guarda `capd` em `capCurrent`), e um
   solve complexo direto por frequência (`G + jB`, sem iteração).
@@ -360,6 +363,26 @@ resultados espelhando o rawfile).
   **reversa** do deck — um deck novo com duas análises do mesmo
   tipo não pareia no oráculo; use nós espelhados.
 
+- **Linha de transmissão ideal T** (`tra.rs` ← `traload.c`,
+  `trasetup.c`, `traacld.c`, `tratrunc.c`, `traacct.c`): método das
+  características — dois ramos Thevenin cujas fontes leem tensão e
+  corrente da OUTRA porta atrasadas de TD, com tabela de histórico
+  própria e interpolação; DC = Z0 entre as portas com o quirk
+  `(1−gmin)·Z0` do C; UIC carrega por `IC=`/`V1..I2`; atraso por
+  `TD` ou `F`/`NL` (defaults F=1GHz, NL=0.25); REL/ABS são
+  só-saída na tabela do C (não parseiam). Incógnitas extras
+  `#i1/#i2/#int1/#int2` (ordem do C, tipadas tensão, todas salvas
+  como no rawfile do ngspice). Exigiu três acertos no laço
+  transiente (KNOWN_DIFFS): o "take earlier point" do
+  `cktsetbk.c:37-40` que faltava (fidelidade), o teste de
+  breakpoint estrito (`>`) do ngspice e o breakpoint em TSTEP sob
+  UIC — baseline medida: só tra_pulse e truic mudam no corpus
+  (truic aperta de 1.8e-3 a 7.5e-15). `.pz` com linha T: recusa
+  estruturada (o ngspice a ignora em silêncio — sem pzLoad lá).
+  Sondas em lockstep (≤6e-8): `tra_pulse` (casada + descasada com
+  reflexões, 136 breakpoints plantados), `tra_ac` (stubs aberto e
+  curto), `tra_uic`.
+
 - **JFET e MESFET** (`jfet.rs` ← `jfetload.c`, `jfettemp.c`,
   `jfetset.c`, `jfetacld.c`, `jfettrun.c`; `mes.rs` ← `mesload.c`,
   `messetup.c`, `mestemp.c`, `mesacl.c`, `mestrunc.c`): o
@@ -510,8 +533,13 @@ oráculo contra o ngspice.
   MOS6/BSIM2 não têm no C); `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- Linhas T/U, fonte B (Fase 3); JFET nível 2 (Parker–Skellern) e
-  MES 2/5/6 (MESA/HFET) são ngspice, fora do contrato 3f5.
+- Linha U (URC) e fonte B (Fase 3, sem deck); JFET nível 2
+  (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são ngspice, fora do
+  contrato 3f5.
+- Oráculo: a coluna de escala não é comparada (a malha de
+  frequência errada do acdec só apareceu como erro de variável) e
+  o tubo do tran absorve um shift de malha inteiro (o tra_uic
+  pré-fix passava com 0.68 V de erro pontual).
 - Pz das chaves sem golden (só testes unitários); o ruído está
   pinado por `regress/fetnoise` (`onoise_s1`).
 - LTRA: `trytocompact` (compactação do histórico) e o controle LTE
