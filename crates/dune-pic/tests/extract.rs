@@ -258,6 +258,32 @@ ground((0,0))
 }
 
 #[test]
+fn continuation_lines_fold_into_their_directive() {
+    // rpic folds column-1 `+` lines into the passthrough entry above;
+    // each is trimmed at both ends (CRLF too), and the lines after them keep
+    // their numbers (the dangling R2 is reported on line 7: `.PS`,
+    // `spice = 1`, then the body).
+    let src = ".PS\r\nspice = 1\r\n.model DX D(IS=1e-14  \r\n+ RS=2 \r\n+   N=1.5)\r\n\
+               V1: vsource((0,1),(0,0), DC 1); D1: diode((0,1),(0,0), DX)\r\n\
+               R2: resistor((3,1),(3,0), 1k); ground((0,0)); ground((3,0))\r\n.op\r\n.PE\r\n";
+    let e = extract(src, &ExtractOptions::default()).unwrap();
+    assert_eq!(
+        e.netlist,
+        "* netlist extracted by dune-pic\nV1 n1 0 DC 1\nD1 n1 0 DX\nR2 n2 0 1k\n\
+         .model DX D(IS=1e-14\n+ RS=2\n+   N=1.5)\n.op\n.end\n"
+    );
+    let d = e
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == PicDiagKind::DanglingPin)
+        .unwrap_or_else(|| panic!("{:?}", e.diagnostics));
+    assert_eq!(
+        d.span.as_ref().map(|s| (s.file.clone(), s.line)),
+        Some((None, 7))
+    );
+}
+
+#[test]
 fn snap_tolerance_is_an_option() {
     let src = ".PS\nspice = 1
 V1: vsource((0,1),(0,0), 1)
@@ -470,14 +496,27 @@ line from (0,0) to (1,0); ground((0,0))",
 #[test]
 fn value_falls_back_to_the_drawing() {
     // The outermost call is the wrapper `rr`, whose 3rd argument is not
-    // R7's value: the drawn text decides. A call split over lines
-    // cannot be re-read, so it keeps pic's normalized argument.
+    // R7's value: the drawn text decides. A call split over lines still
+    // reads each argument raw (`MacroCall.raw_args`); only an argument
+    // that is itself split keeps pic's normalized text.
     let e = ex("define rr { R7: resistor($2, $1, 10k) }
 rr((0,0), (1,0), 5)
 R8: resistor((1,0), \\
   (2,0), 2.5e3)
-ground((0,0)); ground((2,0))");
-    assert_eq!(cards(&e), ["R7 n1 0 10k", "R8 n1 0 2500"]);
+R9: resistor((2,0), (3,0), 1.5e3 \\
+  )
+V1: vsource((3,0), (4,0), PULSE(0 1e-3 \\
+  0 1e-9))
+ground((0,0)); ground((4,0))");
+    assert_eq!(
+        cards(&e),
+        [
+            "R7 n1 0 10k",
+            "R8 n1 n2 2.5e3",
+            "R9 n2 n3 1.5e3",
+            "V1 n3 0 PULSE(0 0.001 0 0.000000001)"
+        ]
+    );
 }
 
 #[test]

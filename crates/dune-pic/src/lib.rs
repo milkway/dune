@@ -59,14 +59,13 @@
 
 #![forbid(unsafe_code)]
 
-mod compat;
 mod connect;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::ops::Range;
 
-use rpic_core::ir::{Drawing, Shape};
+use rpic_core::ir::{Drawing, MacroCall, Shape};
 use rpic_core::{CompileOptions, IncludePolicy};
 
 use crate::connect::{Pt, UnionFind, join_geometry};
@@ -322,7 +321,7 @@ pub fn extract(src: &str, opts: &ExtractOptions) -> Result<Extraction, PicError>
 /// A compiled figure.
 struct Compiled {
     drawing: Drawing,
-    /// The user's directives in source order: each passthrough line
+    /// The user's directives in source order: each passthrough entry
     /// with its `+` continuations, one per line.
     directives: Vec<String>,
     /// Lines the prelude occupies ahead of the user source.
@@ -331,14 +330,13 @@ struct Compiled {
 
 fn compile(src: &str, opts: &ExtractOptions) -> Result<Compiled, PicError> {
     let prelude = opts.prelude.unwrap_or(PRELUDE);
-    let (user, continuations) = compat::split_continuations(src);
-    let mut full = String::with_capacity(prelude.len() + user.len() + 1);
+    let mut full = String::with_capacity(prelude.len() + src.len() + 1);
     full.push_str(prelude);
     if !prelude.ends_with('\n') {
         full.push('\n');
     }
     let prelude_lines = full.matches('\n').count() as u32;
-    full.push_str(&user);
+    full.push_str(src);
     let copts = CompileOptions {
         circuits: true,
         includes: IncludePolicy::Deny,
@@ -360,29 +358,32 @@ fn compile(src: &str, opts: &ExtractOptions) -> Result<Compiled, PicError> {
             span,
         }
     })?;
-    // Directives: the user's passthrough lines (a prelude has none of
-    // its own to contribute), each followed by its `+` lines.
+    // Directives: the user's passthrough entries (a prelude has none of
+    // its own to contribute). rpic folds the column-1 `+` continuations
+    // of a request into its entry, one line per `\n`.
     let directives = drawing
         .passthrough
         .iter()
         .filter(|l| l.span.file.is_none() && l.span.line > prelude_lines)
-        .map(|l| {
-            let mut text = l.text.trim_end().to_string();
-            let line = l.span.line - prelude_lines;
-            if let Some(c) = continuations.iter().find(|c| c.head == line) {
-                for cl in &c.lines {
-                    text.push('\n');
-                    text.push_str(cl);
-                }
-            }
-            text
-        })
+        .map(|l| directive_text(&l.text))
         .collect();
     Ok(Compiled {
         drawing,
         directives,
         prelude_lines,
     })
+}
+
+/// A passthrough entry as a netlist line: the request trimmed at the
+/// end, each `+` continuation line trimmed.
+fn directive_text(text: &str) -> String {
+    let mut lines = text.split('\n');
+    let mut out = lines.next().unwrap_or("").trim_end().to_string();
+    for cont in lines {
+        out.push('\n');
+        out.push_str(cont.trim());
+    }
+    out
 }
 
 /// Map a position in the prelude+user stream back to its source.
@@ -1195,8 +1196,9 @@ impl<'a> Extractor<'a> {
     /// drew (both normalized by pic), which rules out a user wrapper
     /// macro whose arguments are not the element's (`BlockInfo.call` is
     /// the *outermost* call). Fallbacks, in order: rpic's normalized
-    /// argument (a call spanning lines, whose text cannot be re-read);
-    /// the drawn text (no call — an inline block — or a mismatch).
+    /// argument (an argument itself split over lines, see
+    /// [`Self::raw_arg`]); the drawn text (no call — an inline block —
+    /// or a mismatch).
     fn value(&self, b: usize, ms: &[(usize, &'a str, Pt)], letter: char) -> Option<String> {
         let coupling = letter == 'K';
         let drawn = self.value_text(b);
@@ -1247,13 +1249,7 @@ impl<'a> Extractor<'a> {
         if !drawn.is_empty() && expect != words(&drawn) {
             return fallback;
         }
-        let raw = self
-            .raw_args(b, &call.name)
-            .filter(|raw| raw.len() == call.args.len());
-        let pick = |i: usize| match &raw {
-            Some(raw) => unquote(&raw[i]).trim().to_string(),
-            None => unquote(&call.args[i]).trim().to_string(),
-        };
+        let pick = |i: usize| unquote(&self.raw_arg(call, i)).trim().to_string();
         Some(if coupling {
             (0..3).map(pick).collect::<Vec<_>>().join(" ")
         } else {
@@ -1261,23 +1257,22 @@ impl<'a> Extractor<'a> {
         })
     }
 
-    /// The arguments of block `b`'s call as written in the user source,
-    /// when the call sits on one line of it.
-    fn raw_args(&self, b: usize, name: &str) -> Option<Vec<String>> {
-        let s = self.d.blocks[b].span.as_ref()?;
-        if s.file.is_some() || s.line <= self.prelude_lines {
-            return None;
+    /// Argument `i` of `call` as the user wrote it (`MacroCall.raw_args`:
+    /// `1e-9` stays `1e-9`) when it is one line of the user's source;
+    /// otherwise — an argument split by `\` continuations, or one that
+    /// is not the user's text — rpic's normalized argument.
+    fn raw_arg(&self, call: &MacroCall, i: usize) -> String {
+        match call.raw_args.get(i) {
+            Some(raw)
+                if call.raw_args.len() == call.args.len()
+                    && raw.span.file.is_none()
+                    && raw.span.line > self.prelude_lines
+                    && raw.end_line == raw.span.line =>
+            {
+                raw.text.clone()
+            }
+            _ => call.args[i].clone(),
         }
-        let line = self
-            .src
-            .lines()
-            .nth((s.line - self.prelude_lines - 1) as usize)?;
-        let text: String = line
-            .chars()
-            .skip(s.col.saturating_sub(1) as usize)
-            .take(s.end_col.saturating_sub(s.col) as usize)
-            .collect();
-        compat::raw_call_args(&text, name)
     }
 
     /// The first text shape inside block `b` (any depth), lines joined
