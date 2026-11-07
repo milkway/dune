@@ -1,0 +1,7 @@
+* netlist extracted by dune-pic
+Ibias 0 Va dc 1m ac 1m
+D1 Va 0 dmod
+Rsh Va 0 100k
+.model dmod d(is=1e-14 rs=10 cjo=5p tt=10n vj=0.8 m=0.4)
+.ac oct 8 1k 100meg
+.end

@@ -1,0 +1,19 @@
+.PS
+# basic/acdiode.cir drawn: a 1 mA bias (with a 1 mA AC part) into a
+# diode shunted by 100k; .ac sees the diode's small-signal model at
+# that bias, rd = n Vt / Id = 25.9 ohm plus RS, against CJ + Cd.
+# Card order kept; deck node 1 Va.
+spice = 1
+Va: (1.3,1.6)
+
+Ibias: isource((0.3,0), (0.3,1.6), dc 1m ac 1m)
+D1: diode((1.3,1.6), (1.3,0), dmod)
+Rsh: resistor((2.3,1.6), (2.3,0), 100k)
+
+line from Ibias.N to Rsh.P
+line from Ibias.P to Rsh.N
+dot at Va; dot at D1.N
+ground((0.8,0))
+.model dmod d(is=1e-14 rs=10 cjo=5p tt=10n vj=0.8 m=0.4)
+.ac oct 8 1k 100meg
+.PE

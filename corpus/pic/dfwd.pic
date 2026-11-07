@@ -1,0 +1,20 @@
+.PS
+# basic/dfwd.cir drawn: two diodes of one model forward at 0.9 V — D1
+# straight across the source with area 2 (twice IS, half RS), D2 in
+# series with 50 ohm. Card order kept; deck nodes 1 Va, 2 Vk.
+spice = 1
+Va: (1.7,1.6)
+Vk: (3,1.6)
+
+V1: vsource((0.3,1.6), (0.3,0), dc 0.9)
+D1: diode((1.7,1.6), (1.7,0), dmod 2.0)
+D2: diode((1.7,1.6), (3,1.6), dmod)
+R2: resistor((3,1.6), (3,0), 50)
+
+line from V1.P to Va
+line from V1.N to R2.N
+dot at Va; dot at D1.N
+ground((1,0))
+.model dmod d(is=2.5e-15 rs=4 n=1.2)
+.op
+.PE
