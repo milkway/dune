@@ -1,0 +1,26 @@
+.PS
+# Current-controlled sources read the current through V0, a 0 V
+# ammeter in series with R1: i(v0) = 2 V / 1k = 2 mA. The CCCS
+# (gain 3) pulls 6 mA out of Va through itself, so v(va) = -6 V across
+# R2; the CCVS (500 ohm transresistance) sets v(vb) = 1 V across R3.
+spice = 1
+In: (0.3,2)
+Vs: (1.5,2)
+Va: (3.6,2)
+Vb: (5.6,2)
+
+V1: vsource((0.3,2), (0.3,0), DC 2)
+R1: resistor((0.3,2), (1.5,2), 1k)
+V0: vsource((1.5,2), (1.5,0), DC 0)
+F1: cccs((2.8,2), (2.8,0), V0 3)
+R2: resistor((3.6,2), (3.6,0), 1k)
+H1: ccvs((4.8,2), (4.8,0), V0 500)
+R3: resistor((5.6,2), (5.6,0), 1k)
+
+line from F1.P to R2.P
+line from H1.P to R3.P
+line from V1.N to R3.N
+dot at V0.N; dot at F1.N; dot at R2.N; dot at H1.N
+ground(V1.N)
+.op
+.PE

@@ -187,7 +187,7 @@ fn element_errors() {
     let e = ex("V1: vsource((0,1),(0,0))
 R1: resistor((0,1),(1,1))
 R1: resistor((0,1),(1,1),5)
-K1: resistor((0,1),(1,1),5)
+Z1: resistor((0,1),(1,1),5)
 Q1: resistor((0,1),(1,1),5)
 resistor((0,1),(1,1),7k)
 line from (1,1) to (0,0); ground((0,0))");
@@ -513,4 +513,177 @@ fn directives_are_column_one_lines() {
     // An indented `.` line is pic, as in dpic: here, a syntax error.
     let err = extract(".PS\nspice = 1\n  .op\n.PE\n", &Default::default()).unwrap_err();
     assert!(matches!(err, PicError::Compile { .. }), "{err:?}");
+}
+
+/// Controlled sources (D-0026): E/G are four-point with the gain as
+/// the 5th argument; F/H are two-point with `Vname gain` as the value.
+#[test]
+fn controlled_sources_emit_card_order() {
+    let e = ex("V1: vsource((0,2),(0,0), DC 1)
+R1: resistor((0,2),(1,2),1k); V0: vsource((1,2),(1,0), 0)
+E1: vcvs((3,2),(3,0),(2.5,1.2),(2.5,0.8), 1e1)
+line from (1,2) to (2.1,2) then to (2.1,1.2) then to E1.Cp
+line from E1.Cn to (2.1,0.8) then to (2.1,0)
+R2: resistor((3.8,2),(3.8,0),1k); line from E1.P to R2.P
+G1: vccs((5,2),(5,0),(4.5,1.2),(4.5,0.8), \"2m\")
+line from R2.P to (4.2,2) then to (4.2,1.2) then to G1.Cp
+line from G1.Cn to (4.2,0.8) then to (4.2,0)
+F1: cccs((6,2),(6,0), V0 3)
+H1: ccvs((7,2),(7,0), V0 1e3)
+R3: resistor((5.5,2),(5.5,0),1k); line from G1.P to R3.P then to F1.P then to H1.P
+line from (0,0) to (7,0); ground((0,0))
+.op");
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    assert_eq!(
+        cards(&e),
+        [
+            "V1 n1 0 DC 1",
+            "R1 n1 n2 1k",
+            "V0 n2 0 0",
+            "E1 n3 0 n2 0 1e1",
+            "R2 n3 0 1k",
+            "G1 n4 0 n3 0 2m",
+            "F1 n4 0 V0 3",
+            "H1 n4 0 V0 1e3",
+            "R3 n4 0 1k",
+        ]
+    );
+    let parsed = dune_netlist::parse_str("dep.cir", &e.netlist);
+    assert!(parsed.is_clean(), "{:?}", parsed.diags);
+}
+
+#[test]
+fn controlled_source_references_are_checked() {
+    let e = ex("V1: vsource((0,1),(0,0), 1); R1: resistor((0,1),(1,1),1k)
+L1: inductor((1,1),(1,0),1u); line from (0,0) to (9,0); ground((0,0))
+F1: cccs((2,1),(2,0), R1 2)
+H1: ccvs((3,1),(3,0), V9 2)
+F2: cccs((4,1),(4,0), V1 2)
+E1: resistor((5,1),(5,0), 2)
+K1: coupling(L1, R1, 0.5)
+K2: resistor((6,1),(6,0), 0.5)
+line from (2,1) to (4,1)");
+    let msgs: Vec<String> = e
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == PicSeverity::Error)
+        .map(|d| format!("{:?} {}", d.kind, d.message))
+        .collect();
+    let has = |needle: &str| {
+        assert!(
+            msgs.iter().any(|m| m.contains(needle)),
+            "{needle}: {msgs:#?}"
+        )
+    };
+    has(
+        "MissingValue `F1` needs a controlling voltage source (`Vname gain`): `R1` is not a `V` element",
+    );
+    has(
+        "MissingValue `H1` needs a controlling voltage source (`Vname gain`): no element `V9` in the figure",
+    );
+    has("MissingValue `K1` needs two inductors (`L1, L2, k`): `R1` is not a `L` element");
+    has("MissingPin `E1`: a `E` element needs pins P, N, Cp, Cn");
+    has("MissingPin `K2`: a `K` element is drawn with `coupling(L1, L2, k)`");
+    assert_eq!(msgs.len(), 5, "{msgs:#?}");
+    // F2 is fine; the bad cards still go out (the netlist is wrong, as
+    // for a missing value), the mis-drawn ones are skipped.
+    let c = cards(&e);
+    assert!(c.contains(&"F2 n3 0 V1 2".to_string()), "{c:?}");
+    assert!(c.contains(&"K1 L1 R1 0.5".to_string()), "{c:?}");
+    assert!(!c.iter().any(|l| l.starts_with("E1") || l.starts_with("K2")));
+    // Located at the user's call.
+    let f1 = e
+        .diagnostics
+        .iter()
+        .find(|d| d.message.starts_with("`F1`"))
+        .unwrap();
+    let sp = f1.span.as_ref().unwrap();
+    assert_eq!((sp.file.as_deref(), sp.line, sp.col), (None, 5, 5));
+}
+
+#[test]
+fn coupling_emits_k_and_simulates() {
+    // An ideal-ish transformer: k = 0.99, 1:4 inductance = 1:2 turns.
+    let e = ex("V1: acsource((0,1),(0,0), AC 1)
+R1: resistor((0,1),(1,1),1)
+L1: inductor((1,1),(1,0),1m)
+L2: inductor((2,1),(2,0),4m)
+K1: coupling(L1, L2, 0.99)
+R2: resistor((3,1),(3,0),1Meg); line from L2.P to R2.P
+line from (0,0) to (3,0); ground((0,0))
+Out: (3,1)
+.ac lin 1 10k 10k");
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    assert!(e.netlist.contains("\nK1 L1 L2 0.99\n"), "{}", e.netlist);
+    // The coupling block is in the overlay map, like any element.
+    assert!(e.map.elements.iter().any(|m| m.refdes == "K1"));
+    let parsed = dune_netlist::parse_str("k.cir", &e.netlist);
+    assert!(parsed.is_clean(), "{:?}", parsed.diags);
+    let (ckt, _) = dune_core::Circuit::from_netlist(&parsed.netlist).unwrap();
+    let s = &ckt
+        .run(&parsed.netlist.analyses[0], &dune_core::Options::default())
+        .unwrap()
+        .0[0];
+    // Open secondary: v2/v1 = k sqrt(L2/L1) = 1.98 (wL1 = 63 ohm >> R1).
+    let v = s.column_complex("v(out)").unwrap()[0].norm();
+    assert!((v - 1.98).abs() < 0.01, "|v(out)| = {v}");
+}
+
+#[test]
+fn four_terminal_transistors() {
+    let e = ex("Vdd: (0,3); Vsub: (6,-1)
+V1: vsource((0,3),(0,0), DC 5)
+line from (0,3) to (5,3); line from (0,0) to (5,0); ground((0,0))
+V2: vsource((6,0),(6,-1), DC 2)
+line from (5,0) to (6,0)
+M1: nmos4((1,1.5), NM W=10u L=1u)
+line from M1.D to (1.16,3); line from M1.G to (0.6,3); line from M1.S to (1.16,0)
+line from M1.B to (1.6,-1) then to Vsub
+M2: pmos4((2.5,1.5), PM)
+line from M2.S to (2.66,3); line from M2.G to (2.1,0); line from M2.D to (2.66,0)
+line from M2.B to (3.2,3)
+R1: resistor((4,3),(4,2.5),10k)
+Q1: npn4((4,1.5), QM)
+line from R1.N to Q1.C; line from Q1.B to (3.52,3); line from Q1.E to (4.16,0)
+line from Q1.S to (4.5,0)
+.model NM NMOS
+.model PM PMOS
+.model QM NPN(CJS=1p)
+.op");
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    let c = cards(&e);
+    let card = |p: &str| c.iter().find(|l| l.starts_with(p)).unwrap().clone();
+    // Bulk on its own net, not the source.
+    assert_eq!(card("M1 "), "M1 Vdd Vdd 0 Vsub NM W=10u L=1u");
+    // pmos4: source on top, bulk to Vdd.
+    assert_eq!(card("M2 "), "M2 0 0 Vdd Vdd PM");
+    // The substrate is the 4th node, before the model (INP2Q).
+    let coll = card("R1 ").split(' ').nth(2).unwrap().to_string();
+    assert_eq!(card("Q1 "), format!("Q1 {coll} Vdd 0 0 QM"));
+    let parsed = dune_netlist::parse_str("m4.cir", &e.netlist);
+    assert!(parsed.is_clean(), "{:?}\n{}", parsed.diags, e.netlist);
+    let (ckt, _) = dune_core::Circuit::from_netlist(&parsed.netlist).unwrap();
+    let s = &ckt
+        .run(&parsed.netlist.analyses[0], &dune_core::Options::default())
+        .unwrap()
+        .0[0];
+    assert_eq!(s.plotname, "Operating Point");
+    assert!((s.column("v(vsub)").unwrap()[0] + 2.0).abs() < 1e-12);
+}
+
+#[test]
+fn substrate_named_like_the_model_is_flagged() {
+    // `Q1 c b e QM QM` would read the substrate as the model.
+    let e = ex("QM: (4.5,0.5)
+Q1: npn4((4,1.5), QM)
+line from Q1.S to (4.5,0.5); R1: resistor((4.5,0.5),(4.5,0),1); ground((4.5,0))
+line from Q1.C to (4.16,2); R2: resistor((4.16,2),(4.16,2.5),1); ground((4.16,2.5))
+line from Q1.B to (3.52,0); line from Q1.E to (4.16,0); ground((3.52,0)); ground((4.16,0))");
+    let d = e
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == PicDiagKind::NodeNameConflict)
+        .unwrap_or_else(|| panic!("{:#?}", e.diagnostics));
+    assert_eq!(d.severity, PicSeverity::Warning);
+    assert!(d.message.contains("substrate net `QM`"), "{}", d.message);
 }

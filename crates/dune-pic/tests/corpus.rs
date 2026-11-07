@@ -369,3 +369,209 @@ ground((0.4,0))
     assert!((at(t, vend, 2.8e-9) - 0.5).abs() < 5e-3);
     assert!((at(t, col(s, "v(in)"), 0.5e-9) - 0.5).abs() < 5e-3);
 }
+
+#[test]
+fn vcvs_vccs_cascade_gain() {
+    let sols = check("vcamp");
+    assert_eq!(sols.len(), 1);
+    let s = &sols[0];
+    assert_eq!(s.plotname, "DC transfer characteristic");
+    let vin = col(s, "v(vin)");
+    assert_eq!(vin.len(), 5);
+    // Divider 1/2, VCVS x10, VCCS 1 mS into 2k (current pulled out of
+    // the P node): v(vm) = 5 vin, v(vout) = -10 vin. Linear, so exact
+    // to roundoff.
+    for (k, &vi) in vin.iter().enumerate() {
+        for (name, gain) in [("v(vx)", 0.5), ("v(vm)", 5.0), ("v(vout)", -10.0)] {
+            let got = col(s, name)[k];
+            assert!(
+                (got - gain * vi).abs() <= 1e-9,
+                "{name} at vin={vi}: {got}, want {}",
+                gain * vi
+            );
+        }
+    }
+}
+
+#[test]
+fn cccs_ccvs_read_the_ammeter_current() {
+    let sols = check("ccprobe");
+    assert_eq!(sols.len(), 1);
+    let s = &sols[0];
+    assert_eq!(s.plotname, "Operating Point");
+    // i(v0) = 2 V / 1k; F: 3 i(v0) out of Va through 1k; H: 500 i(v0).
+    let i0 = col(s, "i(v0)")[0];
+    assert!((i0 - 2e-3).abs() < 1e-12, "i(v0) = {i0}");
+    let va = col(s, "v(va)")[0];
+    let vb = col(s, "v(vb)")[0];
+    assert!((va + 6.0).abs() < 1e-9, "v(va) = {va}");
+    assert!((vb - 1.0).abs() < 1e-9, "v(vb) = {vb}");
+}
+
+#[test]
+fn coupled_tanks_match_nodal_closed_form() {
+    use num_complex::Complex64 as C64;
+    let sols = check("tuned");
+    assert_eq!(sols.len(), 1);
+    let s = &sols[0];
+    assert_eq!(s.plotname, "AC Analysis");
+    let f = s.column_complex("frequency").unwrap();
+    let v = s.column_complex("v(vout)").unwrap();
+    assert_eq!(f.len(), 401);
+    let (rs, rl, l, c, k) = (1e3, 1e3, 10e-6, 10e-9, 0.1);
+    // Inductor currents from the inverse inductance matrix:
+    // I = Gamma V / (j w), Gamma = [L M; M L]^-1.
+    let m = k * l;
+    let det = l * l - m * m;
+    let (g11, g12) = (l / det, -m / det);
+    let mut mags = Vec::with_capacity(f.len());
+    for (fk, vk) in f.iter().zip(v) {
+        let w = 2.0 * std::f64::consts::PI * fk.re;
+        let jw = C64::new(0.0, w);
+        // Node 1: (V1 - 1)/Rs + jwC V1 + (g11 V1 + g12 V2)/jw = 0
+        // Node 2: V2/RL + jwC V2 + (g12 V1 + g11 V2)/jw = 0
+        let a11 = 1.0 / rs + jw * c + g11 / jw;
+        let a12 = g12 / jw;
+        let a22 = 1.0 / rl + jw * c + g11 / jw;
+        let v2 = -(a12 / rs) / (a11 * a22 - a12 * a12);
+        assert!(
+            (vk - v2).norm() <= 1e-6 * v2.norm().max(1e-3),
+            "f={} {vk} vs {v2}",
+            fk.re
+        );
+        mags.push(vk.norm());
+    }
+    // Overcoupled (kQ = 3.2): two peaks near f0/sqrt(1 +- k), each at
+    // the matched-transfer limit 1/2 (Rs = RL, lossless coupling).
+    let peaks: Vec<(f64, f64)> = (1..mags.len() - 1)
+        .filter(|&i| mags[i] > mags[i - 1] && mags[i] > mags[i + 1])
+        .map(|i| (f[i].re, mags[i]))
+        .collect();
+    assert_eq!(peaks.len(), 2, "{peaks:?}");
+    let f0 = 1.0 / (2.0 * std::f64::consts::PI * (l * c).sqrt());
+    let (lo, hi) = (f0 / (1.0 + k).sqrt(), f0 / (1.0 - k).sqrt());
+    assert!((peaks[0].0 - lo).abs() / lo < 0.01, "{peaks:?} vs {lo}");
+    assert!((peaks[1].0 - hi).abs() / hi < 0.01, "{peaks:?} vs {hi}");
+    for p in &peaks {
+        assert!((p.1 - 0.5).abs() < 2e-3, "peak |H| = {}", p.1);
+    }
+}
+
+#[test]
+fn bulk_bias_raises_the_threshold() {
+    let sols = check("mos4bias");
+    assert_eq!(sols.len(), 2);
+    // MOS1 saturation, LAMBDA = 0: Id = KP/2 W/L (VGS - VT)^2 with
+    // VT = VTO + GAMMA (sqrt(PHI - VBS) - sqrt(PHI)).
+    let id = |vbs: f64| {
+        let vt = 0.7 + 0.5 * ((0.6 - vbs).sqrt() - 0.6f64.sqrt());
+        0.5 * 100e-6 * 10.0 * (2.0 - vt).powi(2)
+    };
+    let op = &sols[0];
+    assert_eq!(op.plotname, "Operating Point");
+    let got = -col(op, "i(v1)")[0];
+    assert!((got - id(-2.0)).abs() <= 1e-6 * id(-2.0), "{got}");
+    assert!((got - 0.388e-3).abs() < 1e-6, "{got}");
+    // The drain sits at 5 - Id * 1k, deep in saturation.
+    assert!((col(op, "v(vd)")[0] - (5.0 - 1e3 * got)).abs() < 1e-9);
+
+    let dc = &sols[1];
+    assert_eq!(dc.plotname, "DC transfer characteristic");
+    let vb = col(dc, "v(vb)");
+    let i = col(dc, "i(v1)");
+    assert_eq!(vb.len(), 4);
+    for (&vbs, &ik) in vb.iter().zip(i) {
+        assert!(
+            (-ik - id(vbs)).abs() <= 1e-6 * id(vbs),
+            "vbs {vbs}: {}",
+            -ik
+        );
+    }
+    // Body effect: no bias 0.845 mA, VBS = -3 V less than half.
+    assert!((-i[0] - 0.845e-3).abs() < 1e-6);
+    assert!(-i[3] < 0.4 * -i[0]);
+}
+
+/// Run every analysis of a deck file (as `dune -b` does).
+fn run_deck(path: &std::path::Path) -> Vec<Solution> {
+    let text = std::fs::read_to_string(path).unwrap();
+    let parsed = dune_netlist::parse_with_loader(path, text, &mut dune_netlist::deck::FsLoader);
+    assert!(parsed.is_clean(), "{}: {:?}", path.display(), parsed.diags);
+    let (ckt, _) = Circuit::from_netlist(&parsed.netlist).unwrap();
+    let mut options = Options::default();
+    options.apply(&parsed.netlist.options, &mut Vec::new());
+    let mut sols = Vec::new();
+    for a in &parsed.netlist.analyses {
+        sols.extend(ckt.run(a, &options).unwrap().0);
+    }
+    sols
+}
+
+/// The figure's solutions against the Berkeley deck's, column by
+/// column through `map` (deck column, figure column). The figure keeps
+/// the deck's card order, so the circuits are the same matrices and
+/// the results agree to roundoff.
+fn same_as_berkeley(name: &str, map: &[(&str, &str)]) {
+    let fig = check(name);
+    let deck = run_deck(
+        &corpus("")
+            .join("../spice3f5/examples")
+            .join(format!("{name}.cir")),
+    );
+    assert_eq!(fig.len(), deck.len());
+    for (f, d) in fig.iter().zip(&deck) {
+        assert_eq!(f.plotname, d.plotname);
+        assert_eq!(f.variables.len(), d.variables.len(), "{}", f.plotname);
+        for &(dc, fc) in map {
+            let (a, b) = (col(d, dc), col(f, fc));
+            assert_eq!(a.len(), b.len(), "{}: {dc}", f.plotname);
+            for (k, (x, y)) in a.iter().zip(b).enumerate() {
+                assert!(
+                    (x - y).abs() <= 1e-9 * x.abs().max(1e-3),
+                    "{} {dc} vs {fc} [{k}]: {x} vs {y}",
+                    f.plotname
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn diffpair_figure_simulates_like_the_berkeley_deck() {
+    // Berkeley node -> figure place (see the figure's header).
+    same_as_berkeley(
+        "diffpair",
+        &[
+            ("time", "time"),
+            ("v(1)", "v(in)"),
+            ("v(2)", "v(b1)"),
+            ("v(3)", "v(b2)"),
+            ("v(4)", "v(vc1)"),
+            ("v(5)", "v(vc2)"),
+            ("v(6)", "v(tail)"),
+            ("v(7)", "v(bias)"),
+            ("v(8)", "v(vp)"),
+            ("v(9)", "v(vn)"),
+            ("i(vin)", "i(vin)"),
+            ("i(vcc)", "i(vcc)"),
+            ("i(vee)", "i(vee)"),
+        ],
+    );
+}
+
+#[test]
+fn rtlinv_figure_simulates_like_the_berkeley_deck() {
+    same_as_berkeley(
+        "rtlinv",
+        &[
+            ("v(1)", "v(in)"),
+            ("v(2)", "v(b1)"),
+            ("v(3)", "v(out1)"),
+            ("v(4)", "v(b2)"),
+            ("v(5)", "v(out2)"),
+            ("v(6)", "v(vp)"),
+            ("i(vcc)", "i(vcc)"),
+            ("i(vin)", "i(vin)"),
+        ],
+    );
+}

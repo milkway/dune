@@ -1,0 +1,14 @@
+* netlist extracted by dune-pic
+Vcc Vp 0 5
+Vin In 0 pulse(0 5 2ns 2ns 2ns 80ns)
+RB1 In B1 10k
+RC1 Vp Out1 1k
+Q1 Out1 B1 0 qnd
+RB2 Out1 B2 10k
+Q2 Out2 B2 0 qnd
+RC2 Vp Out2 1k
+.model qnd npn(bf=50 rb=70 rc=40 ccs=2pf tf=0.1ns tr=10ns cje=0.9pf
++   cjc=1.5pf pc=0.85 va=50)
+.dc vin 0.0 2.5 0.025
+.tran 2ns 200ns
+.end

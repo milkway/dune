@@ -15,15 +15,23 @@
 #                              tail of current sources)
 #   switch (S)     P N Cp Cn  (Cp/Cn = controlling voltage +/-)
 #   cswitch (W)    P N
+#   vcvs (E),      P N Cp Cn  (four points; gain is the 5th argument)
+#   vccs (G)
+#   cccs (F),      P N        (value `Vname gain`)
+#   ccvs (H)
+#   coupling (K)   none       (`K1: coupling(L1, L2, k)`)
 #   npn/pnp (Q)    C B E
+#   npn4/pnp4 (Q)  C B E S    (S = substrate)
 #   nmos/pmos (M)  D G S B    (B drawn tied to S; pmos has S on top)
+#   nmos4/pmos4(M) D G S B    (B its own stub)
 #   njfet/pjfet(J) D G S
 #   opamp (X)      Inp Inm Out (subcircuit pin order)
 #   tline (T),     P1 N1 P2 N2 (port 1 +/-, port 2 +/-: card order)
 #   ltraline (O)
 #
 # Reserved marker labels: `Gnd` (ground block), `At` (anchor of
-# centered elements; their value is the 2nd argument, not the 3rd). Pin
+# centered elements; their value is the 2nd argument, not the 3rd),
+# `Mutual` (a coupling block, whose pins are none). Pin
 # markers are `circle invis rad 0`; the extractor recognizes exactly
 # that shape. Net names are plain pic places (`Vout: (2,1)`), not
 # prelude macros.
@@ -92,6 +100,110 @@ define __dn_battery {
   line from (bsx+bux*(bM+bg/2),bsy+buy*(bM+bg/2)) to (bex,bey)
 }
 
+# --- controlled sources (D-0026) ---------------------------------------------
+# The diamond of std vsource_ctrl/isource_ctrl, oriented like vsource
+# (+ toward P) and isource (arrow from P to N).
+#
+# vcvs(P, N, Cp, Cn, gain) -> E, vccs(P, N, Cp, Cn, gain) -> G: four
+# points, card order `E1 P N Cp Cn gain`. The controlling pair is drawn
+# at Cp and Cn as two small open terminals (the switch's convention,
+# D-0020), each with a short stub aimed at the diamond and its sign
+# (+ at Cp, - at Cn) on the outside; place them beside the body (the
+# textbook layout is left of a vertical source) and wire to them. The
+# gain goes on the side of the body away from the controlling pair.
+define __dn_ctl_stub {
+  # $1/$2 terminal x/y; $3 = 1 for +, 0 for -; $4/$5 unit vector away
+  # from the other terminal. Uses dnmx/dnmy (diamond center) and
+  # dnnx/dnny (unit normal of the body axis). The stub runs square to
+  # the body, toward it, and stops short of the diamond; a terminal
+  # that is not beside the body aims at its center instead.
+  dnsx=dnmx-($1); dnsy=dnmy-($2)
+  dnsn=dnsx*dnnx+dnsy*dnny
+  if (dnsn > 0.3) || (dnsn < -0.3) then {
+    dnsl=dnsn; if dnsl < 0 then { dnsl=0-dnsl }
+    dnsx=dnnx*dnsn; dnsy=dnny*dnsn
+  } else {
+    dnsl=sqrt(dnsx*dnsx+dnsy*dnsy)
+  }
+  dnsk=0.2; if dnsl-0.3 < dnsk then { dnsk=dnsl-0.3 }
+  circle rad 0.03 at ($1,$2)
+  if dnsk > 0.04 then {
+    dnsx=dnsx/dnsl; dnsy=dnsy/dnsl
+    line from ($1+dnsx*0.03,$2+dnsy*0.03) to ($1+dnsx*dnsk,$2+dnsy*dnsk)
+    dnsgx=$1+dnsx*dnsk*0.6+($4)*0.1; dnsgy=$2+dnsy*dnsk*0.6+($5)*0.1
+  } else {
+    dnsgx=$1+($4)*0.12; dnsgy=$2+($5)*0.12
+  }
+  if $3 == 1 then { "+" at (dnsgx,dnsgy) } else { "−" at (dnsgx,dnsgy) }
+}
+define __dn_dep4 {
+  # $1 P, $2 N, $3 Cp, $4 Cn, $5 gain, $6 = 0 vcvs / 1 vccs.
+  dnax=$1.x; dnay=$1.y; dnbx=$2.x; dnby=$2.y
+  dncpx=$3.x; dncpy=$3.y; dncnx=$4.x; dncny=$4.y
+  dndx=dnbx-dnax; dndy=dnby-dnay; dnl=sqrt(dndx*dndx+dndy*dndy)
+  dnpx=0-dndy/dnl; dnpy=dndx/dnl; dnnx=dnpx; dnny=dnpy
+  dnmx=(dnax+dnbx)/2; dnmy=(dnay+dnby)/2
+  # The gain: on the far side from the controlling pair.
+  dnside=((dncpx+dncnx)/2-dnmx)*dnpx+((dncpy+dncny)/2-dnmy)*dnpy
+  if dnside > 0 then { dnpx=0-dnpx; dnpy=0-dnpy }
+  dntx=dnmx+dnpx*0.32; dnty=dnmy+dnpy*0.32
+  if dnpx > 0.5 then {
+    "$5" ljust at (dntx,dnty)
+  } else { if dnpx < -0.5 then {
+    "$5" rjust at (dntx,dnty)
+  } else {
+    "$5" at (dntx,dnty)
+  } }
+  if $6 == 0 then { vsource_ctrl($2,$1) } else { isource_ctrl($1,$2) }
+  __dn_pn($1,$2)
+  # Each sign sits away from the other terminal.
+  dnux=dncpx-dncnx; dnuy=dncpy-dncny; dnul=sqrt(dnux*dnux+dnuy*dnuy)
+  if dnul < 0.001 then { dnux=0; dnuy=1; dnul=1 }
+  dnux=dnux/dnul; dnuy=dnuy/dnul
+  __dn_ctl_stub(dncpx,dncpy,1,dnux,dnuy)
+  __dn_ctl_stub(dncnx,dncny,0,0-dnux,0-dnuy)
+  Cp: circle invis rad 0 at (dncpx,dncpy)
+  Cn: circle invis rad 0 at (dncnx,dncny)
+}
+define vcvs { [ __dn_dep4($1,$2,$3,$4,$5,0) ] with .P at $1 }
+define vccs { [ __dn_dep4($1,$2,$3,$4,$5,1) ] with .P at $1 }
+# cccs(P, N, Vname gain) -> F, ccvs(P, N, Vname gain) -> H: two points;
+# the controlling branch is the current through voltage source Vname,
+# named in the value exactly as the card wants it.
+define cccs { [ __dn_val($1,$2,0.32,$3); isource_ctrl($1,$2);   __dn_pn($1,$2) ] with .P at $1 }
+define ccvs { [ __dn_val($1,$2,0.32,$3); vsource_ctrl($2,$1);   __dn_pn($1,$2) ] with .P at $1 }
+
+# --- mutual inductance (K) -----------------------------------------------------
+# K1: coupling(L1, L2, k): no pins; the arguments are the two inductor
+# refdes (drawn earlier in the figure) and the coefficient, emitted as
+# `K1 L1 L2 k`. Drawn as a double-headed arch between the middles of
+# the two coils, raised clear of their value labels and labeled `k=...`
+# (above a side-by-side pair). The `Mutual` marker tells the extractor
+# this block is a coupling.
+define coupling {
+  [ dnax=(($1.P.x)+($1.N.x))/2; dnay=(($1.P.y)+($1.N.y))/2
+    dnbx=(($2.P.x)+($2.N.x))/2; dnby=(($2.P.y)+($2.N.y))/2
+    dndx=dnbx-dnax; dndy=dnby-dnay; dnl=sqrt(dndx*dndx+dndy*dndy)
+    if dnl < 0.001 then { dnl=0.001; dndx=0.001 }
+    dnux=dndx/dnl; dnuy=dndy/dnl; dnpx=0-dnuy; dnpy=dnux
+    if (dnpy < -0.001) || ((dnpy < 0.001) && (dnpx > 0)) then { dnpx=0-dnpx; dnpy=0-dnpy }
+    dnmx=(dnax+dnbx)/2; dnmy=(dnay+dnby)/2
+    dne=0.22; if dnl*0.3 < dne then { dne=dnl*0.3 }
+    # (justified away from the arch when it bows sideways)
+    if dnpx < -0.5 then {
+      "k=$3" rjust at (dnmx+dnpx*0.47,dnmy+dnpy*0.47)
+    } else { if dnpx > 0.5 then {
+      "k=$3" ljust at (dnmx+dnpx*0.47,dnmy+dnpy*0.47)
+    } else {
+      "k=$3" at (dnmx+dnpx*0.5,dnmy+dnpy*0.5)
+    } }
+    spline <-> from (dnax+dnux*dne+dnpx*0.16,dnay+dnuy*dne+dnpy*0.16) \
+      to (dnmx+dnpx*0.42,dnmy+dnpy*0.42) \
+      to (dnbx-dnux*dne+dnpx*0.16,dnby-dnuy*dne+dnpy*0.16)
+    Mutual: circle invis rad 0 at (dnmx,dnmy)
+  ] with .Mutual at ((($1.P.x)+($1.N.x)+($2.P.x)+($2.N.x))/4,(($1.P.y)+($1.N.y)+($2.P.y)+($2.N.y))/4)
+}
+
 # --- switches --------------------------------------------------------------
 # switch(P, N, model): voltage-controlled (S card). The control pins sit
 # left of the P -> N direction: Cp/Cn are small open terminals 0.45 in
@@ -136,6 +248,23 @@ define __dn_bjt {
 }
 define npn { __dn_bjt($1, 0, $2) }
 define pnp { __dn_bjt($1, 1, $2) }
+# npn4(C, model) / pnp4(C, model): the same symbols plus the substrate
+# (S) as a stub leaving the envelope on the collector side, to the
+# right, above the model text. Card order `Q1 C B E S model`.
+define __dn_bjt4 {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$3" ljust at (dncx+0.36,dncy-0.04)
+    __bjt((dncx,dncy), 1, 1, $2)
+    line from (dncx+0.2236,dncy+0.2) to (dncx+0.5,dncy+0.2)
+    B: circle invis rad 0 at (gBase_x,gBase_y)
+    C: circle invis rad 0 at (gColl_x,gColl_y)
+    E: circle invis rad 0 at (gEmit_x,gEmit_y)
+    S: circle invis rad 0 at (dncx+0.5,dncy+0.2)
+  ] with .At at $1
+}
+define npn4 { __dn_bjt4($1, 0, $2) }
+define pnp4 { __dn_bjt4($1, 1, $2) }
 
 # nmos(C, model): gate left, drain up, source down; pmos(C, model):
 # gate left, source up, drain down. The body (B) is drawn tied to the
@@ -166,6 +295,48 @@ define pmos {
     B: circle invis rad 0 at (gDrain_x,gDrain_y)
   ] with .At at $1
 }
+# nmos4(C, model) / pmos4(C, model): the same symbols with the body as
+# its own pin, a stub 0.24 in right of the D/S leads (B); nothing ties
+# it to the source. The model text moves up, clear of the stub.
+define nmos4 {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$2" ljust at (dncx+0.26,dncy+0.24)
+    __dn_mos4_geom((dncx,dncy))
+    arrow from (dncx+0.16,dncy) to (dncx-0.08,dncy)
+    __dn_mos_pins
+    B: circle invis rad 0 at (dncx+0.4,dncy)
+  ] with .At at $1
+}
+define pmos4 {
+  [ dncx=$1.x; dncy=$1.y
+    At: circle invis rad 0 at (dncx,dncy)
+    "$2" ljust at (dncx+0.26,dncy+0.24)
+    __dn_mos4_geom((dncx,dncy))
+    arrow from (dncx-0.08,dncy) to (dncx+0.16,dncy)
+    S: circle invis rad 0 at (gDrain_x,gDrain_y)
+    G: circle invis rad 0 at (gGate_x,gGate_y)
+    D: circle invis rad 0 at (gSrc_x,gSrc_y)
+    B: circle invis rad 0 at (dncx+0.4,dncy)
+  ] with .At at $1
+}
+# The nmos/pmos geometry without the body-to-source tie and the body
+# arrow (the caller draws it), plus the bulk lead out to the right.
+define __dn_mos4_geom {
+  mx=$1.x; my=$1.y
+  line from (mx-0.4,my) to (mx-0.2,my)
+  line from (mx-0.2,my-0.18) to (mx-0.2,my+0.18)
+  line from (mx-0.08,my+0.07) to (mx-0.08,my+0.18)
+  line from (mx-0.08,my-0.055) to (mx-0.08,my+0.055)
+  line from (mx-0.08,my-0.18) to (mx-0.08,my-0.07)
+  line from (mx-0.08,my+0.125) to (mx+0.16,my+0.125)
+  line from (mx+0.16,my+0.125) to (mx+0.16,my+0.36)
+  line from (mx-0.08,my-0.125) to (mx+0.16,my-0.125)
+  line from (mx+0.16,my-0.125) to (mx+0.16,my-0.36)
+  line from (mx+0.16,my) to (mx+0.4,my)
+  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
+}
+
 # njfet(C, model) / pjfet(C, model): gate left, drain up.
 define njfet {
   [ dncx=$1.x; dncy=$1.y

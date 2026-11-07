@@ -1,0 +1,28 @@
+.PS
+# Double-tuned (coupled-resonator) band-pass: two 10u || 10n tanks
+# (f0 = 503 kHz, Q = 31.6 with the 1k source and load) coupled by
+# k = 0.1. kQ > 1, so the pair is overcoupled: two peaks near
+# f0/sqrt(1 +- k) = 480 and 531 kHz, each at the matched-transfer
+# limit |v(vout)| = 1/2.
+spice = 1
+In:   (0.3,2)
+Pri:  (1.4,2)
+Vout: (4.8,2)
+
+V1: acsource((0.3,2), (0.3,0), AC 1)
+RS: resistor((0.3,2), (1.4,2), 1k)
+C1: capacitor((1.4,2), (1.4,0), 10n)
+L1: inductor((2.2,2), (2.2,0), 10u)
+L2: inductor((3.2,2), (3.2,0), 10u)
+K1: coupling(L1, L2, 0.1)
+C2: capacitor((4,2), (4,0), 10n)
+RL: resistor((4.8,2), (4.8,0), 1k)
+
+line from C1.P to L1.P
+line from L2.P to RL.P
+line from V1.N to RL.N
+dot at C1.P; dot at C2.P
+dot at C1.N; dot at L1.N; dot at L2.N; dot at C2.N
+ground(V1.N)
+.ac lin 401 400k 650k
+.PE

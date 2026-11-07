@@ -1,0 +1,49 @@
+.PS
+# Berkeley's diffpair.cir drawn: an emitter-coupled pair Q1/Q2 with
+# 10k collector loads, its tail current set by the Q3/Q4 mirror and
+# Rbias (~0.56 mA). Elements are in the deck's card order, so the
+# figure's netlist is the deck's with named nodes (1 In, 2 B1, 3 B2,
+# 4 Vc1, 5 Vc2, 6 Tail, 7 Bias, 8 Vp, 9 Vn) and simulates identically.
+spice = 1
+Vin: vsource((0.3,2.5), (0.3,1.7), sin(0 0.1 5meg) ac 1)
+Vcc: vsource((6.2,4), (6.2,3.2), 12)
+Vee: vsource((6.2,0.3), (6.2,1.1), -12)
+Q1: npn((2.9,2.5), qnl)
+Q2: npn((5.2,2.5), qnl)
+RS1: resistor((1.5,2.5), Q1.B, 1k)
+RS2: resistor(Q2.B, (3.9,2.5), 1k)
+RC1: resistor(Q1.C, (Q1.C.x,4), 10k)
+RC2: resistor(Q2.C, (Q2.C.x,4), 10k)
+Q3: npn((4.3,1), qnl)
+Q4: npn((2.6,1), qnl)
+Rbias: resistor((1.2,1.42), (1.2,2.3), 20k)
+
+In:   (0.3,2.5)
+B1:   Q1.B
+B2:   Q2.B
+Vc1:  Q1.C
+Vc2:  Q2.C
+Tail: (Q3.C.x,1.7)
+Bias: (1.95,1.42)
+Vp:   (6.2,4)
+Vn:   (6.2,0.3)
+
+# input; the bias riser crosses it without a dot (no connection)
+line from Vin.P to RS1.P
+line from Rbias.N to (1.2,4) then to Vcc.P
+# emitter-coupled tail and its current source
+line from Q1.E to (Q1.E.x,1.7) then to (Q2.E.x,1.7) then to Q2.E
+line from Q3.C to Tail
+# mirror: Q4 diode-connected, its base/collector node drives Q3
+line from Q3.B to (3.45,1) then to (3.45,1.42) then to Rbias.P
+line from Q4.B to (1.95,1) then to Bias
+line from Q4.E to (Q4.E.x,0.3) then to Vee.P
+line from Q3.E to (Q3.E.x,0.3)
+line from Vee.N to (6.6,1.1)
+dot at Tail; dot at Q4.C; dot at Bias; dot at (Q3.E.x,0.3)
+dot at RC1.N; dot at RC2.N
+ground(Vin.N); ground(RS2.N); ground(Vcc.N); ground((6.6,1.1))
+.model qnl npn(bf=80 rb=100 ccs=2pf tf=0.3ns tr=6ns cje=3pf cjc=2pf
++   va=50)
+.tran 5ns 500ns
+.PE

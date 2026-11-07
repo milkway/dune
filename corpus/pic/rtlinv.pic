@@ -1,0 +1,34 @@
+.PS
+# Berkeley's rtlinv.cir drawn: two cascaded RTL inverters. Elements
+# are in the deck's card order, so the figure's netlist is the deck's
+# with named nodes (1 In, 2 B1, 3 Out1, 4 B2, 5 Out2, 6 Vp) and
+# simulates identically.
+spice = 1
+In:   (0.3,1.2)
+B1:   (1.72,1.2)
+Out1: (2.36,1.62)
+B2:   (3.72,1.2)
+Out2: (4.36,1.62)
+Vp:   (5.2,3)
+
+Vcc: vsource((5.2,3), (5.2,0.3), 5)
+Vin: vsource((0.3,1.2), (0.3,0.3), pulse(0 5 2ns 2ns 2ns 80ns))
+RB1: resistor((0.3,1.2), (1.72,1.2), 10k)
+RC1: resistor((2.36,3), (2.36,1.62), 1k)
+Q1: npn((2.2,1.2), qnd)
+RB2: resistor((2.36,1.62), (3.4,1.62), 10k)
+Q2: npn((4.2,1.2), qnd)
+RC2: resistor((4.36,3), (4.36,1.62), 1k)
+
+line from RC1.P to Vcc.P
+line from RB2.N to (3.4,1.2) then to Q2.B
+line from Q1.E to (Q1.E.x,0.3)
+line from Q2.E to (Q2.E.x,0.3)
+line from Vin.N to Vcc.N
+dot at Out1; dot at RC2.P; dot at (Q1.E.x,0.3); dot at (Q2.E.x,0.3)
+ground((1.2,0.3))
+.model qnd npn(bf=50 rb=70 rc=40 ccs=2pf tf=0.1ns tr=10ns cje=0.9pf
++   cjc=1.5pf pc=0.85 va=50)
+.dc vin 0.0 2.5 0.025
+.tran 2ns 200ns
+.PE

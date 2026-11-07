@@ -1,0 +1,10 @@
+* netlist extracted by dune-pic
+M1 Vd Vg 0 Vb NMOD W=10u L=1u
+V1 Vdd 0 DC 5
+V2 Vg 0 DC 2
+V3 Vb 0 DC -2
+RD Vdd Vd 1k
+.model NMOD NMOS(LEVEL=1 VTO=0.7 KP=100u GAMMA=0.5 PHI=0.6)
+.op
+.dc V3 0 -3 -1
+.end

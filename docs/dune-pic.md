@@ -17,7 +17,8 @@ na release 0.13.0.
    rpic (std `circuits: true`; `copy` negado). Exige `spice = 1` nos
    `vars`.
 3. Colhe blocos rotulados (label = refdes; 1ª letra = cartão, só
-   R C L V I D Q M J S W X T O), marcadores de pino invisíveis, blocos
+   R C L V I D Q M J S W X T O E F G H K — o K não tem pinos, só o
+   marcador `Mutual`), marcadores de pino invisíveis, blocos
    `ground()` (nó 0), **places nomeados** (`Vout: (2.5,1.5)` —
    D-0004 §3 como desenhado; `Drawing.places`, só os da fonte do
    usuário), fios (todo vértice de polilinha é terminal) e `dot`s.
@@ -46,7 +47,11 @@ na release 0.13.0.
    testado): pino solto, net flutuante,
    valor faltando (warning em V/I — SPICE trata como 0 — e erro no
    resto), refdes duplicado, letra desconhecida, sem `spice = 1`,
-   conflito de nome de nó.
+   conflito de nome de nó. Referências são checadas depois da
+   coleta: F/H sem um V de controle existente e K sem dois L
+   existentes são **erro** (MissingValue, com span; o cartão ainda
+   sai); substrato de Q com o nome do modelo é warning (regra do
+   INP2Q, ver ressalvas).
 
 ## Convenções pic (D-0020)
 
@@ -54,7 +59,18 @@ na release 0.13.0.
   anodo, cauda da seta); Q `C/B/E`; J `D/G/S`; M `D/G/S/B` (B
   desenhado amarrado ao S); X `Inp/Inm/Out`; S `P/N/Cp/Cn`; W
   `P/N` com valor `Vctl modelo`; T/O `P1/N1/P2/N2` (porta 1 +/−,
-  porta 2 +/−, a ordem do cartão `T1 p1 n1 p2 n2 Z0=50 TD=1n`).
+  porta 2 +/−, a ordem do cartão `T1 p1 n1 p2 n2 Z0=50 TD=1n`);
+  E/G `P/N/Cp/Cn` (4 pontos, ganho no 5º argumento — o par de
+  controle é desenhado nos pontos do usuário, terminal aberto +
+  stub, como a chave); F/H `P/N` com valor `Vname ganho`; Q ganha o
+  substrato opcional `S` (`npn4/pnp4`, C/B/E/S, stub no lado do
+  coletor); `nmos4/pmos4` têm o bulk `B` como stub próprio
+  (D-0026).
+- `coupling(L1, L2, k)` (K) não tem pinos: desenha um arco `<->`
+  entre os meios das duas bobinas (rótulo `k=…`; empilhadas, o
+  rótulo justifica para fora) e emite `K1 L1 L2 k`. Os dois L
+  precisam estar **desenhados antes** — rótulo inexistente é erro
+  de compilação do pic com span na linha do usuário.
 - `tline(P1, P2, params)` / `ltraline(P1, P2, model)` são macros de
   **2 pontos**: o estádio coaxial de P1 a P2 é o condutor de sinal;
   os retornos N1/N2 saem da blindagem perto de cada extremidade e
@@ -63,8 +79,9 @@ na release 0.13.0.
 - Labels pic exigem maiúscula (por isso não há `R1.a`);
   `Gnd`/`At` são reservados pelo prelude.
 - Macros do prelude: resistor, capacitor, inductor, diode, vsource,
-  acsource, battery, isource, switch, cswitch, npn, pnp, nmos,
-  pmos, njfet, pjfet, opamp, tline, ltraline, ground. (O `node()`
+  acsource, battery, isource, vcvs, vccs, cccs, ccvs, coupling,
+  switch, cswitch, npn, pnp, npn4, pnp4, nmos, pmos, nmos4, pmos4,
+  njfet, pjfet, opamp, tline, ltraline, ground. (O `node()`
   interino saiu — nomes de nó são places.)
 - Valor desenhado na figura (acima do elemento horizontal, à
   esquerda do vertical) — é o que o extrator lê.
@@ -103,6 +120,13 @@ na release 0.13.0.
 - Place redefinido num laço funde as nets pelo nome (semântica de
   net label); um "cursor" rotulado móvel curto-circuitaria em
   silêncio.
+- Cartão Q de 4 nós: o INP2Q do 3f5 só trata o 4º token como
+  substrato se ele **não** for nome de `.model` — uma net com o
+  nome do modelo seria lida como modelo. O extrator avisa
+  (NodeNameConflict, warning).
+- No losango horizontal do vcvs/ccvs o "−" sai como barra
+  perpendicular ("+ |") — comportamento do `vsource_ctrl`/
+  `voltage_source` do std, mantido.
 - A releitura crua assume colunas em caracteres e confere a
   contagem de argumentos contra a do rpic antes de usar.
 - O `snap` se aplica depois do auto-scale do rpic (`maxpswid`);
@@ -119,6 +143,14 @@ faixas; op-amp inversor no ganho de A finito a 1e-5; tline com
 Γ=0.5 em 6 instantes; bandpass vs R/(R+j(ωL−1/ωC)) a 1e-6; CMOS
 rail-to-rail). O `ltraline` tem testes inline no `extract.rs`
 (cartão O + `.model` LTRA) e preview visual, sem figura de corpus
-própria. Previews visuais revisados (regra do
+própria. 3ª leva (D-0026): `vcamp` (vcvs+vccs, ganhos vin/2, 5·vin
+e −10·vin a 1e-9), `ccprobe` (cccs/ccvs exatos), `tuned` (dois
+tanques LC com `coupling`, kQ=3.2 sobreacoplado — picos 481/529 kHz
+com |H|≈0.5, forma fechada nodal 2×2 a 1e-6), `mos4bias` (nmos4 com
+VBS=−2: Id=0.38814 mA pela fórmula de mão a 1e-6) e **diffpair/
+rtlinv** — as figuras dos decks de Berkeley, cuja simulação bate
+**bit a bit** (diferença 0) com os decks originais; candidatas
+óbvias a entrar no `--ci` quando ganharem goldens ngspice próprios.
+Previews visuais revisados (regra do
 CLAUDE.md). Fora do `--ci` do oráculo nesta leva (75 inalterado) —
 entrará quando as figuras ganharem goldens ngspice próprios.

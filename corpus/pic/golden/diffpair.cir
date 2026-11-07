@@ -1,0 +1,17 @@
+* netlist extracted by dune-pic
+Vin In 0 sin(0 0.1 5meg) ac 1
+Vcc Vp 0 12
+Vee Vn 0 -12
+Q1 Vc1 B1 Tail qnl
+Q2 Vc2 B2 Tail qnl
+RS1 In B1 1k
+RS2 B2 0 1k
+RC1 Vc1 Vp 10k
+RC2 Vc2 Vp 10k
+Q3 Tail Bias Vn qnl
+Q4 Bias Bias Vn qnl
+Rbias Bias Vp 20k
+.model qnl npn(bf=80 rb=100 ccs=2pf tf=0.3ns tr=6ns cje=3pf cjc=2pf
++   va=50)
+.tran 5ns 500ns
+.end

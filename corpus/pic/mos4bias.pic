@@ -1,0 +1,29 @@
+.PS
+# Body effect: M1 (MOS1, VTO 0.7, GAMMA 0.5, PHI 0.6) with its bulk on
+# V3 instead of the source. With VBS = -2 V the threshold rises to
+# 0.7 + 0.5 (sqrt(2.6) - sqrt(0.6)) = 1.119 V, and the saturated drain
+# current at VGS = 2 V falls from 0.845 mA to 0.388 mA. The .dc sweep
+# walks VBS from 0 to -3 V.
+spice = 1
+M1: nmos4((2,1), NMOD W=10u L=1u)
+Vg:  (0.6,1)
+Vd:  M1.D
+Vb:  (3.2,1)
+Vdd: (4.6,2.4)
+
+V1: vsource((4.6,2.4), (4.6,0), DC 5)
+V2: vsource((0.6,1), (0.6,0), DC 2)
+V3: vsource((3.2,1), (3.2,0), DC -2)
+RD: resistor((M1.D.x,2.4), M1.D, 1k)
+
+line from V2.P to M1.G
+line from M1.B to V3.P
+line from RD.P to V1.P
+line from M1.S to (M1.S.x,0)
+line from V2.N to V1.N
+dot at (M1.S.x,0); dot at V3.N
+ground((1.3,0))
+.model NMOD NMOS(LEVEL=1 VTO=0.7 KP=100u GAMMA=0.5 PHI=0.6)
+.op
+.dc V3 0 -3 -1
+.PE

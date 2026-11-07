@@ -25,15 +25,19 @@
 //!
 //! * **refdes = block label**; its first letter picks the card type
 //!   (D-0004 §1), restricted to the D-0019 set `R C L V I D Q M J S W X`
-//!   plus the transmission lines `T` (ideal) and `O` (LTRA);
+//!   plus the transmission lines `T` (ideal) and `O` (LTRA), the
+//!   controlled sources `E F G H` and the mutual inductance `K`
+//!   (D-0026);
 //! * **pins** are `circle invis rad 0` shapes labeled `P`/`N`,
-//!   `C`/`B`/`E`, `D`/`G`/`S`/`B`, `Inp`/`Inm`/`Out`, `Cp`/`Cn`,
-//!   `P1`/`N1`/`P2`/`N2` that
-//!   are direct children of the element block (D-0020 §c);
+//!   `C`/`B`/`E` (+ the optional substrate `S`), `D`/`G`/`S`/`B`,
+//!   `Inp`/`Inm`/`Out`, `Cp`/`Cn`, `P1`/`N1`/`P2`/`N2` that
+//!   are direct children of the element block (D-0020 §c); a `K`
+//!   block has no pins, only a `Mutual` marker;
 //! * **value/model = the macro argument after the pin positions**
-//!   (D-0004 §2: the 3rd of a two-terminal, the 2nd of an element
-//!   centered on an `At` anchor), read verbatim from the call in the
-//!   user's source (`1e-9` stays `1e-9`). The prelude also draws it
+//!   (D-0004 §2: the 3rd of a two-terminal, the 5th of the four-point
+//!   `E`/`G`, the 2nd of an element centered on an `At` anchor; all
+//!   three arguments of a `K`, `L1 L2 k`), read verbatim from the call
+//!   in the user's source (`1e-9` stays `1e-9`). The prelude also draws it
 //!   (the first text shape in the block); that drawing is presentation,
 //!   read only as a fallback when the block has no usable call (an
 //!   inline block, or a wrapper macro whose arguments are not the
@@ -78,12 +82,19 @@ const GROUND_MARKER: &str = "Gnd";
 /// Marker label of the anchor of centered elements, whose value is the
 /// 2nd macro argument instead of the 3rd.
 const ANCHOR_MARKER: &str = "At";
+/// Marker of the prelude's `coupling(L1, L2, k)` block (a `K` card,
+/// which has no pins).
+const COUPLING_MARKER: &str = "Mutual";
 /// Every pin-marker label the prelude uses on elements, plus the
-/// `At` anchor of centered elements.
+/// `At` anchor of centered elements and the coupling marker.
 const ELEMENT_MARKERS: &[&str] = &[
     "P", "N", "Cp", "Cn", "C", "B", "E", "D", "G", "S", "Inp", "Inm", "Out", "P1", "N1", "P2",
-    "N2", "At",
+    "N2", "At", "Mutual",
 ];
+/// Pins of a `Q` drawn with its substrate (`npn4`/`pnp4`).
+const BJT4_PINS: &[&str] = &["C", "B", "E", "S"];
+/// The supported card letters, for messages.
+const LETTERS: &str = "R C L V I D Q M J S W X T O E F G H K";
 
 /// Options for [`extract`].
 #[derive(Debug, Clone, Copy)]
@@ -368,12 +379,14 @@ fn map_span(prelude_lines: u32, file: Option<&str>, line: u32, col: u32, end_col
     }
 }
 
-/// Pins of each supported card letter (D-0019 + `T`/`O`), in card
-/// order.
+/// Pins of each supported card letter (D-0019 + `T`/`O` + D-0026), in
+/// card order. A `Q` may also carry the substrate ([`BJT4_PINS`]); a
+/// `K` has none.
 fn pins_for(letter: char) -> Option<&'static [&'static str]> {
     Some(match letter {
-        'R' | 'C' | 'L' | 'V' | 'I' | 'D' | 'W' => &["P", "N"],
-        'S' => &["P", "N", "Cp", "Cn"],
+        'R' | 'C' | 'L' | 'V' | 'I' | 'D' | 'W' | 'F' | 'H' => &["P", "N"],
+        'S' | 'E' | 'G' => &["P", "N", "Cp", "Cn"],
+        'K' => &[],
         'Q' => &["C", "B", "E"],
         'M' => &["D", "G", "S", "B"],
         'J' => &["D", "G", "S"],
@@ -580,6 +593,8 @@ impl<'a> Extractor<'a> {
                 }
             }
         }
+
+        self.check_references(&elements);
 
         // Named places (D-0004 §3): the user's `Label: position`
         // statements, not those of the prelude, the std library or the
@@ -812,6 +827,29 @@ impl<'a> Extractor<'a> {
             }
         }
 
+        // A Q card's 4th name is the substrate only when it is not a
+        // model name (INP2Q looks it up in the model table).
+        for e in &elements {
+            if e.pins.len() == 4 && e.refdes.to_ascii_uppercase().starts_with('Q') {
+                let sub = &name_of[&roots[e.terms[3]]];
+                let model = e.value.split_whitespace().next().unwrap_or("");
+                if sub.eq_ignore_ascii_case(model) {
+                    let msg = format!(
+                        "`{}`: substrate net `{sub}` has the name of the model; \
+                         SPICE would read it as the model and the next word as the model name",
+                        e.refdes
+                    );
+                    let span = e.span.clone();
+                    self.diag(
+                        PicSeverity::Warning,
+                        PicDiagKind::NodeNameConflict,
+                        msg,
+                        span,
+                    );
+                }
+            }
+        }
+
         // 8. Emit.
         let mut netlist = String::from("* netlist extracted by dune-pic\n");
         let mut map = OverlayMap::default();
@@ -895,8 +933,8 @@ impl<'a> Extractor<'a> {
         index: usize,
     ) -> Option<Element> {
         let d = self.d;
-        let value = self.value(b, ms);
         let Some(refdes) = d.blocks[b].label.clone() else {
+            let value = self.value(b, ms, ' ');
             let at = ms.first().map(|m| m.2).unwrap_or((0.0, 0.0));
             let msg = format!(
                 "element without a label (refdes) at ({:.3}, {:.3}){}; skipped — write `R1: resistor(…)`",
@@ -914,18 +952,33 @@ impl<'a> Extractor<'a> {
         };
         let span = self.block_span(b);
         let letter = refdes.chars().next().unwrap_or(' ').to_ascii_uppercase();
-        let Some(pins) = pins_for(letter) else {
+        let Some(mut pins) = pins_for(letter) else {
             self.diag(
                 PicSeverity::Error,
                 PicDiagKind::UnknownElement,
                 format!(
-                    "`{refdes}`: element letter `{letter}` is not supported \
-                     (R C L V I D Q M J S W X T O); skipped"
+                    "`{refdes}`: element letter `{letter}` is not supported ({LETTERS}); skipped"
                 ),
                 span,
             );
             return None;
         };
+        if letter == 'Q' && ms.iter().any(|m| m.1 == "S") {
+            pins = BJT4_PINS;
+        }
+        if letter == 'K' && !ms.iter().any(|m| m.1 == COUPLING_MARKER) {
+            self.diag(
+                PicSeverity::Error,
+                PicDiagKind::MissingPin,
+                format!(
+                    "`{refdes}`: a `K` element is drawn with `coupling(L1, L2, k)`, \
+                     not this macro; skipped"
+                ),
+                span,
+            );
+            return None;
+        }
+        let value = self.value(b, ms, letter);
         let key = refdes.to_ascii_lowercase();
         if let Some(prev) = seen.get(&key) {
             self.diag(
@@ -996,6 +1049,73 @@ impl<'a> Extractor<'a> {
         })
     }
 
+    /// Elements whose value names other elements: an `F`/`H` must
+    /// start with the refdes of a `V` source (the controlling branch), a
+    /// `K` with the refdes of two `L` elements. A card without them is
+    /// invalid, so these are errors (reported as [`PicDiagKind::MissingValue`]:
+    /// the value lacks what the card needs). An empty value was already
+    /// reported.
+    fn check_references(&mut self, elements: &[Element]) {
+        let letter_of = |name: &str| {
+            elements
+                .iter()
+                .find(|e| e.refdes.eq_ignore_ascii_case(name))
+                .and_then(|e| e.refdes.chars().next())
+                .map(|c| c.to_ascii_uppercase())
+        };
+        for e in elements {
+            let letter = e.refdes.chars().next().unwrap_or(' ').to_ascii_uppercase();
+            let toks: Vec<&str> = e.value.split_whitespace().collect();
+            if toks.is_empty() {
+                continue;
+            }
+            let (want, refs, what): (char, &[&str], &str) = match letter {
+                'F' | 'H' => (
+                    'V',
+                    &toks[..1],
+                    "a controlling voltage source (`Vname gain`)",
+                ),
+                'K' => (
+                    'L',
+                    &toks[..toks.len().min(2)],
+                    "two inductors (`L1, L2, k`)",
+                ),
+                _ => continue,
+            };
+            for r in refs {
+                let problem = match letter_of(r) {
+                    Some(l) if l == want => continue,
+                    Some(_) => format!("`{r}` is not a `{want}` element"),
+                    None if r
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.eq_ignore_ascii_case(&want)) =>
+                    {
+                        format!("no element `{r}` in the figure")
+                    }
+                    None => format!("`{r}` is not a `{want}` refdes"),
+                };
+                self.diag(
+                    PicSeverity::Error,
+                    PicDiagKind::MissingValue,
+                    format!(
+                        "`{}` needs {what}: {problem}; the card is invalid",
+                        e.refdes
+                    ),
+                    e.span.clone(),
+                );
+            }
+            if letter == 'K' && toks.len() < 3 {
+                self.diag(
+                    PicSeverity::Error,
+                    PicDiagKind::MissingValue,
+                    format!("`{}` has no coupling coefficient", e.refdes),
+                    e.span.clone(),
+                );
+            }
+        }
+    }
+
     /// Where block `b` was asked for: its outermost macro call (or its
     /// inline `[`) — in the user's source for every element the figure
     /// writes, even though its shapes point into the prelude.
@@ -1005,7 +1125,10 @@ impl<'a> Extractor<'a> {
 
     /// The value/model of element block `b` (D-0004 §2): the macro
     /// argument after the pin positions — index 1 for elements centered
-    /// on an `At` anchor, 2 otherwise — verbatim from the user's source.
+    /// on an `At` anchor, 4 for the four-point `E`/`G`, 2 otherwise —
+    /// verbatim from the user's source. A `K` (`coupling(L1, L2, k)`)
+    /// takes all three arguments, `L1 L2 k`; its drawing shows only
+    /// `k=…`, so it has no drawn fallback.
     ///
     /// The call is trusted only when its argument is what the prelude
     /// drew (both normalized by pic), which rules out a user wrapper
@@ -1013,27 +1136,49 @@ impl<'a> Extractor<'a> {
     /// the *outermost* call). Fallbacks, in order: rpic's normalized
     /// argument (a call spanning lines, whose text cannot be re-read);
     /// the drawn text (no call — an inline block — or a mismatch).
-    fn value(&self, b: usize, ms: &[(usize, &'a str, Pt)]) -> String {
+    fn value(&self, b: usize, ms: &[(usize, &'a str, Pt)], letter: char) -> String {
+        let coupling = letter == 'K';
         let drawn = self.value_text(b);
-        let k = if ms.iter().any(|m| m.1 == ANCHOR_MARKER) {
-            1
+        let fallback = if coupling {
+            String::new()
         } else {
-            2
+            drawn.clone()
+        };
+        let k = match letter {
+            'E' | 'G' => 4,
+            _ if ms.iter().any(|m| m.1 == ANCHOR_MARKER) => 1,
+            _ => 2,
         };
         let Some(call) = &self.d.blocks[b].call else {
-            return drawn;
+            return fallback;
         };
         let Some(arg) = call.args.get(k) else {
-            return drawn;
+            return fallback;
         };
+        if coupling && call.args.len() != 3 {
+            return fallback;
+        }
         let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         let spliced = unquote(arg);
-        if !drawn.is_empty() && words(spliced) != words(&drawn) {
-            return drawn;
+        let expect = if coupling {
+            format!("k={}", words(spliced))
+        } else {
+            words(spliced)
+        };
+        if !drawn.is_empty() && expect != words(&drawn) {
+            return fallback;
         }
-        match self.raw_args(b, &call.name) {
-            Some(raw) if raw.len() == call.args.len() => unquote(&raw[k]).trim().to_string(),
-            _ => spliced.trim().to_string(),
+        let raw = self
+            .raw_args(b, &call.name)
+            .filter(|raw| raw.len() == call.args.len());
+        let pick = |i: usize| match &raw {
+            Some(raw) => unquote(&raw[i]).trim().to_string(),
+            None => unquote(&call.args[i]).trim().to_string(),
+        };
+        if coupling {
+            (0..3).map(pick).collect::<Vec<_>>().join(" ")
+        } else {
+            pick(k)
         }
     }
 

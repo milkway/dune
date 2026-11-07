@@ -1,0 +1,30 @@
+.PS
+# Voltage-controlled sources in cascade: the 1:2 divider R1/R2 feeds a
+# VCVS (gain 10, loaded by R3), whose output drives a VCCS (1 mS) into
+# RL = 2k. Closed form: v(vx) = vin/2, v(vm) = 5 vin, v(vout) =
+# -1m * 2k * v(vm) = -10 vin.
+spice = 1
+Vin:  (0.3,2)
+Vx:   (1.6,2)
+Vm:   (3,2)
+Vout: (6.6,2)
+
+V1: vsource((0.3,2), (0.3,0), DC 0)
+R1: resistor((0.3,2), (1.6,2), 1k)
+R2: resistor((1.6,2), (1.6,0), 1k)
+E1: vcvs((3,2), (3,0), (2.5,1.2), (2.5,0.8), 10)
+R3: resistor((4.1,2), (4.1,0), 1k)
+G1: vccs((5.5,2), (5.5,0), (5,1.2), (5,0.8), 1m)
+RL: resistor((6.6,2), (6.6,0), 2k)
+
+line from Vx to (2.1,2) then to (2.1,1.2) then to E1.Cp
+line from E1.Cn to (2.1,0.8) then to (2.1,0)
+line from E1.P to R3.P then to (4.6,2) then to (4.6,1.2) then to G1.Cp
+line from G1.Cn to (4.6,0.8) then to (4.6,0)
+line from G1.P to RL.P
+line from V1.N to RL.N
+dot at Vx; dot at R3.P
+dot at R2.N; dot at (2.1,0); dot at E1.N; dot at R3.N; dot at (4.6,0); dot at G1.N
+ground(V1.N)
+.dc V1 -1 1 0.5
+.PE
