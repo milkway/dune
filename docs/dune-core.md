@@ -648,3 +648,21 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   ltra_1/2/3/rc/rg no arm64). Limita o custo; a correção de
   verdade é o trbdf2 (trap+N=10 completa o ltra_3 no linux mas o
   ring persiste, v(5) erra 0.185 V).
+- **`.options ltrafit`** (`Options.ltra_fit`, issue #8): convolução
+  recursiva do LTRA. Núcleos sem o atraso viram somas de
+  exponenciais reais por quadratura Gauss–Legendre graduada da
+  integral exata no corte de ramo (RLC: x=2α·sin²θ; RC: x=y²,
+  janela híbrida RCl²/8); polos reais estáveis por construção;
+  modelo montado no accept do op para o horizonte TSTOP; orçamento
+  1e-6 (máx e L1) por núcleo contra a forma fechada com Bessel
+  precisa, reportado em nota. Estados avançam só em ponto aceito
+  (nunca no estágio γ do TR-BDF2); primeiro segmento exato
+  (coeficientes do C); breakpoints/pnjlim/steplimit/interpolação
+  inalterados; load O(1). Desligada: byte-idêntico nos decks LTRA.
+  Medidas: 24 polos/linha no ltra_3 com fit ≤2,3e-11; ltra_1
+  melhora a margem (0,038 vs 0,061); trbdf2+fit erra 0,99–1,03× o
+  trbdf2 puro na referência fina; 20× na sonda de 20k pontos, 6×
+  no ltra_3 trbdf2, 17× no caso trap+ltrabkrate. Diferença
+  deliberada do modo: com aux==0 o C descarta o 1º segmento
+  atrasado; a recursão o inclui. Sonda corpus/regress/ltrafit.cir
+  (oráculo passa a 76).
