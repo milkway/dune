@@ -35,6 +35,13 @@ impl Circuit {
         if !times_ok {
             return Err(Error::Build(".tran times are inconsistent".into()));
         }
+        if let Some(d) = opts.tmax_divisor
+            && !(d >= 1.0 && d.is_finite())
+        {
+            return Err(Error::Build(format!(
+                "tmax divisor must be a finite number >= 1, got {d}"
+            )));
+        }
         let built = self.build(opts)?;
         let mut notes = built.notes.clone();
         let mut engine = Engine::new(built);

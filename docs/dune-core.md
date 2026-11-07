@@ -666,3 +666,13 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   deliberada do modo: com aux==0 o C descarta o 1º segmento
   atrasado; a recursão o inclui. Sonda corpus/regress/ltrafit.cir
   (oráculo passa a 76).
+- **`Options.tmax_divisor`** (issue #16; argumento de API, não
+  chave de `.options` — o TMAX é parâmetro do cartão `.tran`, e o
+  divisor vale para todo cartão `.tran` do deck): `Some(d)`, d ≥ 1
+  finito, divide o TMAX efetivo (o 4º argumento, ou o default
+  `min(TSTEP, span/50)`); `delmin`, raio de merge de breakpoints e
+  orçamento de passos seguem. Resultado bit-idêntico ao deck com o
+  cartão editado para TMAX/d (teste `tests/tmax_divisor.rs`, rc e
+  rlc). Fora da faixa: `Error::Build` no `.tran`. Exposto nos
+  bindings como `tmaxDivisor` (JS) e `tmax_divisor=` (Python/R) —
+  o "passos finos" do Studio (rpic-studio#19).

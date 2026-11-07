@@ -737,10 +737,15 @@ impl Engine {
         // restored the SPICE2 default min(tstep, span/50), which is
         // what bounds its point density — the oracle's grid
         // (corpus/KNOWN_DIFFS.md).
-        let max_step = match p.tmax {
+        let mut max_step = match p.tmax {
             Some(m) if m > 0.0 => m,
             _ => f64::min(p.tstep, (p.tstop - p.tstart) / 50.0),
         };
+        // Dune's refinement knob (issue #16; validated by
+        // `Circuit::tran`): the run of the deck with TMAX/d on the card.
+        if let Some(d) = opts.tmax_divisor {
+            max_step /= d;
+        }
         self.trbdf2 = opts.method == Method::TrBdf2;
         self.method = if self.trbdf2 {
             Method::Trapezoidal

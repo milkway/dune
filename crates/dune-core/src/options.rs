@@ -97,6 +97,20 @@ pub struct Options {
     /// point, with the newest segment kept exact — O(1) per point.
     /// `false` (default): faithful.
     pub ltra_fit: bool,
+    /// Dune's transient refinement knob (an API argument, not a SPICE
+    /// option: no `.options` card sets it, issue #16). `Some(d)`,
+    /// `d ≥ 1` and finite: every `.tran` runs with its effective
+    /// maximum step divided by `d` — the 4th argument of the card
+    /// when given, else the default `min(TSTEP, (TSTOP−TSTART)/50)`.
+    /// Everything derived from TMAX (`delmin`, the breakpoint merge
+    /// radius, the step budget) follows, so the run is the one the
+    /// deck would give with that card's TMAX edited to `TMAX/d`.
+    /// It is not a `.options` key because TMAX is a parameter of the
+    /// analysis card, and the divisor applies to every `.tran` card of
+    /// the deck whatever TMAX each one carries. Any other value makes
+    /// `.tran` fail with [`Error::Build`](crate::Error::Build).
+    /// `None` (default): the card's TMAX as is.
+    pub tmax_divisor: Option<f64>,
 }
 
 impl Default for Options {
@@ -128,6 +142,7 @@ impl Default for Options {
             max_tran_steps: None,
             ltra_break_rate: None,
             ltra_fit: false,
+            tmax_divisor: None,
         }
     }
 }
