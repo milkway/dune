@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
+  Session,
   extractPic,
   prelude,
   ready,
@@ -117,5 +118,35 @@ assert.equal(tr.plots[0].columns[1].length, 0, 'transferred (detached at the sou
 assert.deepEqual(Array.from(moved.plots[0].columns[1]), before);
 assert.throws(() => simulateTyped('t\nq1 1 1 0\n.op\n.end\n'), (e) => typeof e.kind === 'string');
 assert.throws(() => simulatePicTyped(rc, { snap: -1 }), (e) => e.kind === 'options');
+
+// Session: alter + run is simulate() of the altered deck.
+const sDeck = 'rc\nv1 1 0 dc 1 ac 1 pulse(0 1 0 1u 1u 1m 2m)\nr1 1 2 1k\nc1 2 0 1u\nd1 2 0 dm\n.model dm d\n.op\n.ac dec 3 10 1k\n.tran 20u 1m\n.end\n';
+assert.throws(() => Session.fromDeck('t\nr1 1 0\n.end\n'), (e) => e.kind === 'elaborate');
+const ses = Session.fromDeck(sDeck);
+assert.deepEqual(ses.run(), simulate(sDeck));
+ses.alter('R1', 2200).alter('v1', 'pulse', [0, 2, 0, 1e-6, 1e-6, 1e-3, 2e-3]);
+ses.temp = 50;
+const sAlt = sDeck.replace('r1 1 2 1k', 'r1 1 2 2200').replace('pulse(0 1', 'pulse(0 2').replace('.op', '.options temp=50\n.op');
+assert.deepEqual(ses.run(), simulate(sAlt));
+const st = ses.runTyped();
+assert.ok(st.plots[0].columns[0] instanceof Float64Array);
+assert.equal(ses.param('r1'), 2200);
+assert.deepEqual(Array.from(ses.param('v1', 'pulse')), [0, 2, 0, 1e-6, 1e-6, 1e-3, 2e-3]);
+assert.deepEqual(ses.alterable('c1'), ['capacitance', 'ic']);
+assert.throws(() => ses.alter('r1', 0), (e) => e.kind === 'alter');
+assert.throws(() => ses.alter('v1', 'pulse', ['x']), (e) => e.kind === 'alter');
+assert.throws(() => ses.alter('zz', 1), (e) => e.kind === 'alter');
+ses.warmStart = true;
+ses.alter('r1', 2300).run();
+ses.alter('r1', 2400).run();
+assert.ok(ses.warmStats.hits >= 1, JSON.stringify(ses.warmStats));
+ses.free();
+// From a figure, by refdes.
+const ps = Session.fromPic(rc);
+assert.equal(ps.pic.netlist, ex.netlist);
+ps.alter('C1', 2e-6);
+const psAlt = simulate(ex.netlist.replace('C1 Vout 0 1u', 'C1 Vout 0 2u'));
+assert.deepEqual(ps.run(), psAlt);
+ps.free();
 
 console.log('dune-sim smoke: ok');

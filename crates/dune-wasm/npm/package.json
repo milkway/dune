@@ -26,7 +26,8 @@
   "scripts": {
     "build": "./build.sh",
     "test": "node test/smoke.mjs",
-    "bench": "node test/bench.mjs"
+    "bench": "node test/bench.mjs",
+    "bench:session": "node test/session-bench.mjs"
   },
   "keywords": [
     "spice",
@@ -37,7 +38,7 @@
     "schematic",
     "wasm"
   ],
-  "author": "André Leite <leite@de.ufpe.br>",
+  "author": "Andr\u00e9 Leite <leite@de.ufpe.br>",
   "license": "BSD-3-Clause",
   "repository": {
     "type": "git",

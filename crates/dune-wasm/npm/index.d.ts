@@ -46,6 +46,51 @@ export function simulatePicTyped(src: string, opts?: PicSimOptions | null): Type
  */
 export function renderPic(src: string, opts?: RenderOptions | null): string;
 
+/**
+ * A live circuit for interactive re-solves: parsed, extracted and elaborated
+ * once; {@link Session.alter} changes an element value and
+ * {@link Session.run} re-simulates every analysis card. With
+ * {@link Session.warmStart} off (the default) a run returns exactly what
+ * {@link simulate} returns for the altered deck. Call {@link Session.free}
+ * (or `using`) when done.
+ */
+export class Session {
+  private constructor();
+  /** Open a SPICE3 deck. Throws a {@link SimError}. */
+  static fromDeck(netlist: string, opts?: SimOptions | null): Session;
+  /** Open an rpic figure; elements are altered by their refdes. */
+  static fromPic(src: string, opts?: PicSimOptions | null): Session;
+  /** Set the element's principal value (R, C, L, a source's DC, a gain). */
+  alter(refdes: string, value: number): this;
+  /**
+   * Set a named parameter (ngspice names): `resistance`, `capacitance`,
+   * `inductance`, `ic`, `dc`, `acmag`, `acphase` (degrees), `gain`, `w`, `l`
+   * (meters), `temp` (°C), `area`; or a source's transient function
+   * `pulse` | `sin` | `exp` | `pwl` | `sffm` with the card's arguments.
+   * Throws a {@link SimError} of kind `alter`.
+   */
+  alter(refdes: string, param: string, value: number | number[] | Float64Array): this;
+  /** Current value; `null` when never given (e.g. W left to `.options defw`). */
+  param(refdes: string, param?: string): number | Float64Array | null;
+  /** The parameter names {@link Session.alter} accepts for `refdes`. */
+  alterable(refdes: string): string[];
+  /** Circuit temperature, °C. */
+  temp: number;
+  /**
+   * Continue each operating point from the previous one (off by default):
+   * faster, and equal to a fresh run to the Newton tolerances rather than
+   * bit for bit.
+   */
+  warmStart: boolean;
+  readonly warmStats: { hits: number; misses: number };
+  /** The extraction of a session opened with {@link Session.fromPic}. */
+  readonly pic: PicExtraction | undefined;
+  run(): Rawfile;
+  runTyped(): TypedRawfile;
+  free(): void;
+  [Symbol.dispose](): void;
+}
+
 /** Options of {@link renderPic}: none yet (unknown keys are an error). */
 export interface RenderOptions {}
 
@@ -145,7 +190,7 @@ export interface PicRun extends Rawfile {
 }
 
 export interface SimError extends Error {
-  kind: 'options' | 'parse' | 'elaborate' | 'analysis' | 'pic' | 'internal';
+  kind: 'options' | 'parse' | 'elaborate' | 'analysis' | 'pic' | 'alter' | 'internal';
   diagnostics: Diagnostic[];
   /** `simulatePic` failures after extraction: the extraction, netlist included. */
   pic?: PicExtraction;

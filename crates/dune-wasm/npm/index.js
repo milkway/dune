@@ -90,3 +90,110 @@ export function renderPic(src, opts) {
   ensure();
   return wasm.render_pic(src, opts);
 }
+
+/**
+ * A live circuit for interactive re-solves (sliders): the deck (or figure) is
+ * parsed, extracted and elaborated once; `alter` changes an element value and
+ * `run`/`runTyped` re-simulate every analysis card. With `warmStart` off (the
+ * default) a run returns exactly what `simulate`/`simulateTyped` return for
+ * the altered deck. Call `free()` (or use `using`) when done: the circuit
+ * lives in wasm memory.
+ */
+export class Session {
+  #inner;
+
+  /** @internal — use `Session.fromDeck` / `Session.fromPic`. */
+  constructor(inner) {
+    this.#inner = inner;
+  }
+
+  /** Open a SPICE3 deck (`opts` as `simulate`'s). Throws a `SimError`. */
+  static fromDeck(netlist, opts) {
+    ensure();
+    return new Session(wasm.Session.fromDeck(netlist, opts));
+  }
+
+  /** Open an rpic figure (`opts` as `simulatePic`'s); refdes are the figure's. */
+  static fromPic(src, opts) {
+    ensure();
+    return new Session(wasm.Session.fromPic(src, opts));
+  }
+
+  /**
+   * `alter(refdes, value)` sets the element's principal value (R, C, L, a
+   * source's DC level, a controlled source's gain); `alter(refdes, param,
+   * value)` a named one (`w`, `l`, `temp`, `acmag`, `acphase`, `ic`, `area`,
+   * or `pulse`/`sin`/`exp`/`pwl`/`sffm` with an array of the card's
+   * arguments). Throws a `SimError` of kind `alter`. Returns `this`.
+   */
+  alter(refdes, param, value) {
+    if (value === undefined) {
+      value = param;
+      param = '';
+    }
+    this.#inner.alter(refdes, param, value);
+    return this;
+  }
+
+  /** Current value of a parameter: a number, a `Float64Array`, or `null`. */
+  param(refdes, param = '') {
+    return this.#inner.param(refdes, param);
+  }
+
+  /** The parameter names `alter` accepts for `refdes`. */
+  alterable(refdes) {
+    return this.#inner.alterable(refdes);
+  }
+
+  /** Circuit temperature, °C (`.options temp`). */
+  get temp() {
+    return this.#inner.temp();
+  }
+
+  set temp(celsius) {
+    this.#inner.setTemp(celsius);
+  }
+
+  /**
+   * Continue each operating point from the previous run's (off by default).
+   * Faster for nonlinear circuits; results then match a fresh run to the
+   * Newton tolerances instead of bit for bit.
+   */
+  get warmStart() {
+    return this.#inner.warmStart();
+  }
+
+  set warmStart(on) {
+    this.#inner.setWarmStart(!!on);
+  }
+
+  /** `{ hits, misses }` of the warm start. */
+  get warmStats() {
+    return this.#inner.warmStats();
+  }
+
+  /** The extraction (`{ netlist, diagnostics, map }`) of a figure session. */
+  get pic() {
+    return this.#inner.pic();
+  }
+
+  /** Re-run every analysis card: `simulate`'s result for the current circuit. */
+  run() {
+    return this.#inner.run();
+  }
+
+  /** `run` with typed-array columns, as `simulateTyped`. */
+  runTyped() {
+    return this.#inner.runTyped();
+  }
+
+  /** Release the wasm-side circuit; the session is unusable afterwards. */
+  free() {
+    this.#inner?.free();
+    this.#inner = undefined;
+  }
+
+  [Symbol.dispose]() {
+    this.free();
+  }
+}
