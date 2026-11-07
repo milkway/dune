@@ -9,6 +9,11 @@
 # shows it, and the extractor falls back on it for a block that has no
 # usable call.
 #
+# Shadowing a std macro hides it from the prelude too, so the shadowed
+# symbols draw through rpic 0.16's geometry twins (`__switch`, `__nmos`,
+# `__pmos`, `__njfet`, `__pjfet`, like `__resistor` & co.); only
+# `battery`, which has no twin, keeps a private copy (`__dn_battery`).
+#
 # Pins (D-0020; pic labels must start uppercase):
 #   two-terminals  P N        (P = first point = first SPICE node:
 #                              + of sources, anode of diodes, arrow
@@ -116,8 +121,10 @@ define battery  { [ __dn_val($1,$2,0.25,$3,$4); __dn_battery($1,$2);  __dn_pn($1
 # n+ through the source into n-).
 define isource  { [ __dn_val($1,$2,0.3,$3,$4); current_source($1,$2); __dn_pn($1,$2) ] with .P at $1 }
 
-# std `battery` is a flat statement macro under the same name; keep its
-# geometry reachable under a private name before shadowing it.
+# std `battery` is a flat statement macro under the same name and, unlike
+# switch/nmos/pmos/njfet/pjfet, has no `__battery` twin in rpic 0.16; keep
+# its geometry reachable under a private name before shadowing it
+# (verbatim from rpic-core 0.16.1 std/circuits.pic, BSD-2-Clause).
 define __dn_battery {
   bsx=$1.x; bsy=$1.y; bex=$2.x; bey=$2.y
   bdx=bex-bsx; bdy=bey-bsy; bL=sqrt(bdx*bdx+bdy*bdy)
@@ -250,7 +257,7 @@ define __dn_switch {
   dndx=dnbx-dnax; dndy=dnby-dnay; dnl=sqrt(dndx*dndx+dndy*dndy)
   dnux=dndx/dnl; dnuy=dndy/dnl; dnpx=0-dnuy; dnpy=dnux
   dnmx=(dnax+dnbx)/2; dnmy=(dnay+dnby)/2
-  __dn_switch_geom($1,$2)
+  __switch($1,$2)
 }
 define switch {
   [ __dn_switch($1,$2)
@@ -313,7 +320,7 @@ define nmos {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
     __dn_label($2,$3,dncx+0.26,dncy,ljust)
-    __dn_nmos_geom((dncx,dncy)); __dn_mos_pins
+    __nmos((dncx,dncy)); __dn_mos_pins
     B: circle invis rad 0 at (gSrc_x,gSrc_y)
   ] with .At at $1
 }
@@ -321,7 +328,7 @@ define pmos {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
     __dn_label($2,$3,dncx+0.26,dncy,ljust)
-    __dn_pmos_geom((dncx,dncy))
+    __pmos((dncx,dncy))
     # std pmos ties the body to its TOP lead (named gDrain there): that
     # lead is the source of the drawn symbol, as in a CMOS pull-up.
     S: circle invis rad 0 at (gDrain_x,gDrain_y)
@@ -377,14 +384,14 @@ define njfet {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
     __dn_label($2,$3,dncx+0.26,dncy,ljust)
-    __dn_njfet_geom((dncx,dncy)); __dn_mos_pins
+    __njfet((dncx,dncy)); __dn_mos_pins
   ] with .At at $1
 }
 define pjfet {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
     __dn_label($2,$3,dncx+0.26,dncy,ljust)
-    __dn_pjfet_geom((dncx,dncy)); __dn_mos_pins
+    __pjfet((dncx,dncy)); __dn_mos_pins
   ] with .At at $1
 }
 
@@ -444,74 +451,6 @@ define ltraline { [ __dn_val($1,$2,0.3,$3); __dn_tline($1,$2) ] with .P1 at $1 }
 # --- ground -------------------------------------------------------------------
 # ground(P): node 0 at P (symbol hangs below P).
 define ground { [ dnqx=$1.x; dnqy=$1.y; __ground((dnqx,dnqy)); Gnd: circle invis rad 0 at (dnqx,dnqy) ] with .Gnd at $1 }
-
-# --- private copies of std geometry this prelude shadows -----------------
-# (verbatim from rpic-core 0.12.1–0.13.0 std/circuits.pic, BSD-2-Clause; a
-# shadowing macro cannot call the std one under the same name.)
-define __dn_switch_geom {
-  ssx=$1.x; ssy=$1.y; sex=$2.x; sey=$2.y
-  sdx=sex-ssx; sdy=sey-ssy; sL=sqrt(sdx*sdx+sdy*sdy)
-  sux=sdx/sL; suy=sdy/sL; spx=0-suy; spy=sux
-  sg=0.35; sm=sL/2
-  line from (ssx,ssy) to (ssx+sux*(sm-sg/2),ssy+suy*(sm-sg/2))
-  circle rad 0.025 fill 0 at (ssx+sux*(sm-sg/2),ssy+suy*(sm-sg/2))
-  line from (ssx+sux*(sm-sg/2),ssy+suy*(sm-sg/2)) \
-    to (ssx+sux*(sm+sg*0.15)+spx*0.2,ssy+suy*(sm+sg*0.15)+spy*0.2)
-  circle rad 0.025 fill 0 at (ssx+sux*(sm+sg/2),ssy+suy*(sm+sg/2))
-  line from (ssx+sux*(sm+sg/2),ssy+suy*(sm+sg/2)) to (sex,sey)
-}
-define __dn_nmos_geom {
-  mx=$1.x; my=$1.y
-  line from (mx-0.4,my) to (mx-0.2,my)
-  line from (mx-0.2,my-0.18) to (mx-0.2,my+0.18)
-  line from (mx-0.08,my+0.07) to (mx-0.08,my+0.18)
-  line from (mx-0.08,my-0.055) to (mx-0.08,my+0.055)
-  line from (mx-0.08,my-0.18) to (mx-0.08,my-0.07)
-  line from (mx-0.08,my+0.125) to (mx+0.16,my+0.125)
-  line from (mx+0.16,my+0.125) to (mx+0.16,my+0.36)
-  line from (mx-0.08,my-0.125) to (mx+0.16,my-0.125)
-  line from (mx+0.16,my-0.125) to (mx+0.16,my-0.36)
-  line from (mx+0.16,my-0.125) to (mx+0.16,my)
-  arrow from (mx+0.16,my) to (mx-0.08,my)
-  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
-}
-define __dn_pmos_geom {
-  mx=$1.x; my=$1.y
-  line from (mx-0.4,my) to (mx-0.2,my)
-  line from (mx-0.2,my-0.18) to (mx-0.2,my+0.18)
-  line from (mx-0.08,my+0.07) to (mx-0.08,my+0.18)
-  line from (mx-0.08,my-0.055) to (mx-0.08,my+0.055)
-  line from (mx-0.08,my-0.18) to (mx-0.08,my-0.07)
-  line from (mx-0.08,my+0.125) to (mx+0.16,my+0.125)
-  line from (mx+0.16,my+0.125) to (mx+0.16,my+0.36)
-  line from (mx-0.08,my-0.125) to (mx+0.16,my-0.125)
-  line from (mx+0.16,my-0.125) to (mx+0.16,my-0.36)
-  line from (mx+0.16,my+0.125) to (mx+0.16,my)
-  arrow from (mx-0.08,my) to (mx+0.16,my)
-  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
-}
-define __dn_njfet_geom {
-  mx=$1.x; my=$1.y
-  line from (mx-0.12,my-0.2) to (mx-0.12,my+0.2)
-  line from (mx-0.4,my) to (mx-0.24,my)
-  arrow from (mx-0.24,my) to (mx-0.12,my)
-  line from (mx-0.12,my+0.13) to (mx+0.16,my+0.13)
-  line from (mx+0.16,my+0.13) to (mx+0.16,my+0.36)
-  line from (mx-0.12,my-0.13) to (mx+0.16,my-0.13)
-  line from (mx+0.16,my-0.13) to (mx+0.16,my-0.36)
-  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
-}
-define __dn_pjfet_geom {
-  mx=$1.x; my=$1.y
-  line from (mx-0.12,my-0.2) to (mx-0.12,my+0.2)
-  line from (mx-0.4,my) to (mx-0.28,my)
-  arrow from (mx-0.12,my) to (mx-0.28,my)
-  line from (mx-0.12,my+0.13) to (mx+0.16,my+0.13)
-  line from (mx+0.16,my+0.13) to (mx+0.16,my+0.36)
-  line from (mx-0.12,my-0.13) to (mx+0.16,my-0.13)
-  line from (mx+0.16,my-0.13) to (mx+0.16,my-0.36)
-  gGate_x=mx-0.4; gGate_y=my; gDrain_x=mx+0.16; gDrain_y=my+0.36; gSrc_x=mx+0.16; gSrc_y=my-0.36
-}
 
 # --- rendering ---------------------------------------------------------------
 # rpic estimates text extents, and value labels often sit on the outer
