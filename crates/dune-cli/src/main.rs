@@ -228,6 +228,9 @@ fn run_prints(
             Some("tran") => "Transient Analysis",
             Some("dc") => "DC transfer characteristic",
             Some("ac") => "AC Analysis",
+            // The period in the time domain; the harmonics go to the
+            // rawfile (`-r`).
+            Some("pss") => dune_core::PSS_TIME_PLOT,
             Some(other) => {
                 eprintln!("note: .print {other}: analysis not implemented yet");
                 continue;
