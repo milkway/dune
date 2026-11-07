@@ -38,12 +38,15 @@
 //! the calling thread until it finishes — call it from a Web Worker.
 
 mod schema;
+mod session;
 
 pub use schema::{
     Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, NetOverlayJson,
     OverlayMapJson, PicJson, PicRunJson, PicSimOptions, PlotJson, RawfileJson, RenderOptionsJson,
     ShapeRangeJson, SimError, SimOptions, VariableJson,
 };
+
+pub use session::{JsSession, SimSession};
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -202,7 +205,20 @@ pub fn run_pic(src: &str, opts: &PicSimOptions) -> Result<PicRunJson, SimError> 
 
 /// [`run_pic`] with the plots kept in engine form ([`RunData`]).
 pub fn run_pic_data(src: &str, opts: &PicSimOptions) -> Result<(RunData, PicJson), SimError> {
-    let pic = extract(src, opts.snap)?;
+    let pic = extract_runnable(src, opts.snap)?;
+    match run_includes(&pic.netlist, &opts.includes) {
+        Ok(data) => Ok((data, pic)),
+        Err(mut e) => {
+            e.pic = Some(Box::new(pic));
+            Err(e)
+        }
+    }
+}
+
+/// [`extract`], with extraction errors (any diagnostic of severity
+/// error) turned into a `pic` error carrying the extraction.
+pub(crate) fn extract_runnable(src: &str, snap: Option<f64>) -> Result<PicJson, SimError> {
+    let pic = extract(src, snap)?;
     // dune_pic diagnostics map 1:1, so the severity string decides.
     let first_error = pic
         .diagnostics
@@ -220,13 +236,7 @@ pub fn run_pic_data(src: &str, opts: &PicSimOptions) -> Result<(RunData, PicJson
             pic: Some(Box::new(pic)),
         });
     }
-    match run_includes(&pic.netlist, &opts.includes) {
-        Ok(data) => Ok((data, pic)),
-        Err(mut e) => {
-            e.pic = Some(Box::new(pic));
-            Err(e)
-        }
-    }
+    Ok(pic)
 }
 
 /// `.include` from the in-memory map of [`SimOptions::includes`].
@@ -307,6 +317,56 @@ pub fn column_buffers(p: &Plot) -> Vec<Cow<'_, [f64]>> {
 }
 
 fn run_includes(netlist: &str, includes: &BTreeMap<String, String>) -> Result<RunData, SimError> {
+    let prepared = prepare(netlist, includes)?;
+    let mut solutions: Vec<Solution> = Vec::new();
+    let mut notes = prepared.notes.clone();
+    for analysis in &prepared.analyses {
+        let (sols, analysis_notes) = prepared
+            .circuit
+            .run(analysis, &prepared.options)
+            .map_err(|e| SimError::new("analysis", e.to_string()))?;
+        notes.extend(analysis_notes);
+        solutions.extend(sols);
+    }
+    Ok(prepared.finish(solutions, notes))
+}
+
+/// A deck parsed and elaborated, ready to run: what a fresh run and a
+/// [`session::SimSession`] share up to the first analysis.
+pub(crate) struct Prepared {
+    pub circuit: Circuit,
+    pub options: Options,
+    pub analyses: Vec<dune_netlist::ir::Analysis>,
+    pub title: String,
+    /// Elaboration notes (each run's result starts with them).
+    pub notes: Vec<String>,
+    /// Parser and `.options` warnings.
+    pub diagnostics: Vec<DiagnosticJson>,
+}
+
+impl Prepared {
+    /// A run's [`RunData`] from its plots and notes (the elaboration
+    /// notes first).
+    pub fn finish(&self, solutions: Vec<Solution>, mut notes: Vec<String>) -> RunData {
+        if solutions.is_empty() {
+            notes.push("no analyses in the deck; nothing to do".into());
+        }
+        RunData {
+            plots: solutions
+                .iter()
+                .map(|s| s.to_plot(&self.title, ""))
+                .collect(),
+            notes,
+            diagnostics: self.diagnostics.clone(),
+        }
+    }
+}
+
+/// Parse and elaborate `netlist` (`.include` from `includes`).
+pub(crate) fn prepare(
+    netlist: &str,
+    includes: &BTreeMap<String, String>,
+) -> Result<Prepared, SimError> {
     let parsed = dune_netlist::parse_with_loader(
         Path::new(DECK_NAME),
         netlist.to_string(),
@@ -326,7 +386,7 @@ fn run_includes(netlist: &str, includes: &BTreeMap<String, String>) -> Result<Ru
         });
     }
 
-    let (circuit, mut notes) = Circuit::from_netlist(&parsed.netlist)
+    let (circuit, notes) = Circuit::from_netlist(&parsed.netlist)
         .map_err(|e| SimError::new("elaborate", e.to_string()))?;
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
@@ -336,22 +396,11 @@ fn run_includes(netlist: &str, includes: &BTreeMap<String, String>) -> Result<Ru
             .iter()
             .map(|d| DiagnosticJson::from_diag(d, &parsed.sources)),
     );
-
-    let mut solutions: Vec<Solution> = Vec::new();
-    for analysis in &parsed.netlist.analyses {
-        let (sols, analysis_notes) = circuit
-            .run(analysis, &options)
-            .map_err(|e| SimError::new("analysis", e.to_string()))?;
-        notes.extend(analysis_notes);
-        solutions.extend(sols);
-    }
-    if solutions.is_empty() {
-        notes.push("no analyses in the deck; nothing to do".into());
-    }
-
-    let title = &parsed.netlist.title;
-    Ok(RunData {
-        plots: solutions.iter().map(|s| s.to_plot(title, "")).collect(),
+    Ok(Prepared {
+        circuit,
+        options,
+        analyses: parsed.netlist.analyses.clone(),
+        title: parsed.netlist.title.clone(),
         notes,
         diagnostics,
     })

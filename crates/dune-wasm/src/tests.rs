@@ -525,3 +525,100 @@ fn typed_pic_run_matches_json_run() {
     assert_eq!(err.kind, "pic");
     assert!(err.pic.is_some());
 }
+
+// ---- Session (issue #12) -------------------------------------------
+
+use dune_core::AlterValue;
+
+const RC_AMP: &str = "session deck
+vin 1 0 dc 1 ac 1 pulse(0 1 1u 1u 1u 4u 10u)
+r1 1 2 1k
+c1 2 0 1n
+d1 2 0 dm
+.model dm d is=1e-14
+.options reltol=1e-4
+.temp 27
+.op
+.ac dec 5 1k 1meg
+.tran 0.2u 10u
+.end
+";
+
+/// The session's result is `simulate`'s for the altered deck: the
+/// same JSON, notes and warnings included.
+#[test]
+fn session_run_is_the_fresh_run_of_the_altered_deck() {
+    let mut s = SimSession::open(RC_AMP, &SimOptions::default()).unwrap();
+    assert_eq!(
+        s.run().unwrap().to_json(),
+        run(RC_AMP, &SimOptions::default()).unwrap()
+    );
+    // `.temp` is obsolete: the warning rides along on every run.
+    assert!(!s.run().unwrap().diagnostics.is_empty());
+
+    s.alter("R1", "", AlterValue::Num(2048.0)).unwrap();
+    s.alter(
+        "vin",
+        "pulse",
+        AlterValue::List(vec![0.0, 2.0, 1e-6, 1e-6, 1e-6, 4e-6, 1e-5]),
+    )
+    .unwrap();
+    s.set_temp(50.0).unwrap();
+    let altered = RC_AMP
+        .replace("r1 1 2 1k", "r1 1 2 2048")
+        .replace("pulse(0 1 1u", "pulse(0 2 1u")
+        .replace(".options reltol=1e-4", ".options reltol=1e-4 temp=50");
+    // `1u` and 1e-6 are the same f64 (checked by the equality).
+    let got = s.run().unwrap().to_json();
+    let want = run(&altered, &SimOptions::default()).unwrap();
+    assert_eq!(got, want);
+}
+
+#[test]
+fn session_errors_and_reads() {
+    let mut s = SimSession::open(RC_AMP, &SimOptions::default()).unwrap();
+    let e = s.alter("r9", "", AlterValue::Num(1.0)).unwrap_err();
+    assert_eq!(e.kind, "alter");
+    let e = s.alter("r1", "", AlterValue::Num(0.0)).unwrap_err();
+    assert_eq!(e.kind, "alter");
+    assert_eq!(s.param("r1", "").unwrap(), Some(AlterValue::Num(1e3)));
+    assert_eq!(s.alterable("c1").unwrap(), ["capacitance", "ic"].as_slice());
+    assert!((s.temp() - 27.0).abs() < 1e-12);
+    let e = SimSession::open("t\nr1 1 0\n.end\n", &SimOptions::default())
+        .err()
+        .unwrap();
+    assert_eq!(e.kind, "elaborate");
+    let e = SimSession::open("t\nr1 1 0 1k\n.foo\n.end\n", &SimOptions::default())
+        .err()
+        .unwrap();
+    assert_eq!(e.kind, "parse");
+}
+
+#[test]
+fn pic_session_alters_by_refdes() {
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../corpus/pic/rc.pic"
+    ))
+    .unwrap();
+    let mut s = SimSession::open_pic(&src, &PicSimOptions::default()).unwrap();
+    let (fresh, pic) = run_pic_data(&src, &PicSimOptions::default()).unwrap();
+    assert_eq!(s.pic(), Some(&pic));
+    assert_eq!(s.run().unwrap().to_json(), fresh.to_json());
+    // The figure's refdes, as drawn.
+    s.alter("R1", "resistance", AlterValue::Num(2e3)).unwrap();
+    let altered = pic.netlist.replace("R1 Vin Vout 1k", "R1 Vin Vout 2k");
+    assert_ne!(altered, pic.netlist, "{}", pic.netlist);
+    assert_eq!(
+        s.run().unwrap().to_json(),
+        run(&altered, &SimOptions::default()).unwrap()
+    );
+    // A figure that does not extract is a pic error, as in simulate_pic.
+    let e = SimSession::open_pic(
+        ".PS\nR1: resistor((0,0),(1,0),1k)\n.PE\n",
+        &PicSimOptions::default(),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(e.kind, "pic");
+}
