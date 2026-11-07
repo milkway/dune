@@ -1,18 +1,20 @@
 # dune-pic — extrator de netlist de figuras rpic
 
 Fase 5 (PLAN §2.5; D-0003/D-0004/D-0019/D-0020/D-0021). Depende de
-`rpic-core = "=0.13.0"` (crates.io, zero deps, wasm-friendly) — só
+`rpic-core = "=0.16.1"` (crates.io, zero deps, wasm-friendly) — só
 API pública, como o D-0003 manda. Os três interinos do D-0020
-foram aposentados quando os PRs #414/#415/#416 do rpic-lang saíram
-na release 0.13.0.
+foram aposentados na 0.13.0 (PRs #414/#415/#416), e os shims de
+compat na 0.16.0 (rpic-lang #425 E1/E2): continuações `+` vêm
+dobradas no `Drawing.passthrough` e argumentos crus em
+`MacroCall.raw_args`.
 
 ## Pipeline
 
 1. **Diretivas**: vêm de `Drawing.passthrough` (linhas `.` de
    **coluna 1**, regra do dpic real — indentado é erro de compile,
-   testado). O `compat` restante só blanka e re-anexa as
-   continuações `+` (o pic erra nelas) e fatia os argumentos crus
-   do call-site.
+   testado). As continuações `+` de coluna 1 já vêm dentro da
+   entrada do passthrough (cada linha aparada; `end_line` fecha o
+   span).
 2. Compila prelude (`corpus/pic/spice.pic`, embutido) + figura com o
    rpic (std `circuits: true`; `copy` negado). Exige `spice = 1` nos
    `vars`.
@@ -32,16 +34,19 @@ na release 0.13.0.
 5. **Nomes**: `0` do ground, depois os places, depois `n1, n2…`
    por menor índice de shape (determinístico).
 6. **Emissão**: netlist SPICE3 textual. **Valor/modelo** = o
-   argumento do call-site relido CRU da fonte do usuário no
-   `BlockInfo.span` (o `MacroCall.args` do 0.13 vem normalizado —
-   `1e-9` viraria `0.000000001`; ver D-0021) — com fallback para o
+   argumento do call-site lido CRU de `MacroCall.raw_args` (por
+   argumento; chamada quebrada em linhas também — `2.5e3` fica
+   `2.5e3`), com fallback no normalizado só para argumento ele
+   mesmo quebrado por `\`, e para o
    texto desenhado quando não há call de uma linha só ou um macro
    embrulhador intercepta (guardado por comparação pós-normalização,
    testado). O prelude segue desenhando o valor (apresentação).
    Diretivas na ordem da fonte
    (+ continuações `+`; `.end` do usuário é deduplicado) — passa
-   pelo `dune-netlist` normal. `OverlayMap` dá refdes→`sN..sM` e
-   net→shapes para a sobreposição do Studio (Fase 6).
+   pelo `dune-netlist` normal. `OverlayMap` dá refdes→`sN..sM` +
+   `pins` (nome, rede, ponto do terminal em polegadas pic, no
+   referencial da scene) e net→shapes — nets ligadas pino a pino
+   têm `shapes` vazio e os pins são o alvo de probe (issue #4).
 7. **Diagnósticos** com o span do call-site do usuário
    (`BlockInfo.span` — duplicata aponta a linha do usuário,
    testado): pino solto, net flutuante,
@@ -116,14 +121,12 @@ na release 0.13.0.
   rascunho do std (ex.: `tr`, usada pelo `__bjt` — "macro expansion
   too deep"); prefixe os seus.
 
-## O que restou do `compat` (pós-0.13)
+## Compat
 
-- `split_continuations`: o pic erra em linhas `+` de coluna 1, então
-  elas são blankadas e re-anexadas à diretiva da linha de cima.
-  Sairia se o passthrough do rpic um dia englobasse continuações.
-- `raw_call_args`: fatia `name(…)` por vírgulas de topo (respeitando
-  colchetes/strings) para ler argumentos crus no span — sairia com
-  um campo raw-args no rpic (candidato a PR 4, ver D-0021).
+Nenhum shim desde o rpic-core 0.16.1. Pendente aproveitável: a
+0.16 também trouxe labels em macro flat (E3) e os gêmeos
+`__switch/__nmos/__pmos/__njfet/__pjfet` no std — as cópias
+`__dn_*_geom` do prelude podem virar chamadas a eles (dune#17).
 
 ## Ressalvas conhecidas
 
@@ -131,8 +134,9 @@ na release 0.13.0.
   esquemático fazem assim; endpoint-only tornaria `dot` no meio de
   fio inútil).
 - O prelude carrega cópias verbatim da geometria do std
-  (switch/nmos/pmos/njfet/pjfet/battery, BSD-2) porque macros flat
-  não aceitam label — podem derivar se o std mudar.
+  (switch/nmos/pmos/njfet/pjfet/battery, BSD-2), de quando macro
+  flat não aceitava label; o std 0.16 expõe os gêmeos `__*` —
+  trocar as cópias por eles é o dune#17.
 - `pmos`: o std chama `gDrain` o terminal de cima; o prelude mapeia
   S e B em cima e D embaixo (convenção de símbolo PMOS).
 - `vsource` chama `voltage_source($2,$1)` invertido para o `+`
@@ -157,8 +161,6 @@ na release 0.13.0.
 - No losango horizontal do vcvs/ccvs o "−" sai como barra
   perpendicular ("+ |") — comportamento do `vsource_ctrl`/
   `voltage_source` do std, mantido.
-- A releitura crua assume colunas em caracteres e confere a
-  contagem de argumentos contra a do rpic antes de usar.
 - O `snap` se aplica depois do auto-scale do rpic (`maxpswid`);
   prelude põe `margin = 0.1`.
 
