@@ -746,16 +746,7 @@ impl Engine {
         if let Some(d) = opts.tmax_divisor {
             max_step /= d;
         }
-        self.trbdf2 = opts.method == Method::TrBdf2;
-        self.method = if self.trbdf2 {
-            Method::Trapezoidal
-        } else {
-            opts.method
-        };
-        self.maxord = match opts.method {
-            Method::Trapezoidal | Method::TrBdf2 => 2,
-            Method::Gear => opts.maxord.clamp(1, 6),
-        };
+        self.set_tran_method(opts);
         let planned = ((p.tstop - p.tstart) / p.tstep + 2.0) * self.vars.len() as f64;
         if !(planned.is_finite() && planned <= MAX_OUTPUT_VALUES as f64) {
             return Err(Error::Build(
@@ -772,7 +763,7 @@ impl Engine {
             _ => None,
         };
         let delmin = 1e-9 * max_step;
-        let mut delta = f64::min(p.tstop / 50.0, p.tstep) / 10.0;
+        let delta = f64::min(p.tstop / 50.0, p.tstep) / 10.0;
 
         // Transient operating point.
         self.set_kind(AnKind::TranOp, p.uic);
@@ -782,22 +773,77 @@ impl Engine {
             self.op(opts)?;
         }
 
+        self.tran_loop(
+            opts,
+            &TranLoop {
+                tstart: p.tstart,
+                uic: p.uic,
+                max_step,
+                delmin,
+                delta,
+                save_delta: p.tstop / 50.0,
+                step_budget: opts.tran_step_budget(p.tstop, max_step),
+            },
+            None,
+        )
+    }
+
+    /// The integration method fields of `DCtran`'s setup.
+    fn set_tran_method(&mut self, opts: &Options) {
+        self.trbdf2 = opts.method == Method::TrBdf2;
+        self.method = if self.trbdf2 {
+            Method::Trapezoidal
+        } else {
+            opts.method
+        };
+        self.maxord = match opts.method {
+            Method::Trapezoidal | Method::TrBdf2 => 2,
+            Method::Gear => opts.maxord.clamp(1, 6),
+        };
+    }
+
+    /// `DCtran` after its operating point: the timestep loop, from
+    /// the engine's current time and solution to `final_time`. With
+    /// `log`, every accepted step is recorded (end time, the order it
+    /// was solved at, the `CKTbreak` flag its accept saw) so that
+    /// [`Engine::tran_replay`] can retrace the same grid.
+    fn tran_loop(
+        &mut self,
+        opts: &Options,
+        lp: &TranLoop,
+        mut log: Option<&mut Vec<StepRec>>,
+    ) -> Result<Vec<(f64, Vec<f64>)>, Error> {
+        let max_step = lp.max_step;
+        let delmin = lp.delmin;
+        let mut delta = lp.delta;
         // Switch to transient proper (`MODETRAN | MODEINITTRAN`).
-        self.set_kind(AnKind::Tran, p.uic);
+        self.set_kind(AnKind::Tran, lp.uic);
         self.order = 1;
         self.ag = [0.0; 7];
         self.states.copy01();
         self.delta_old = [max_step; 8];
         self.step_old = [max_step; 8];
         self.delta = delta;
-        let mut save_delta = p.tstop / 50.0;
+        let mut save_delta = lp.save_delta;
         let mut firsttime = true;
         let mut brk = true; // CKTbreak
         let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
         let mut steps: usize = 0;
-        let step_budget = opts.tran_step_budget(p.tstop, max_step);
+        let step_budget = lp.step_budget;
+        // The order the point just computed was solved at (0 before
+        // the first step).
+        let mut solved_order = 0usize;
 
         'next_time: loop {
+            if let Some(log) = log.as_deref_mut()
+                && solved_order > 0
+            {
+                log.push(StepRec {
+                    time: self.time,
+                    order: solved_order,
+                    brk,
+                });
+            }
             // Accept the computed point: device hooks plant
             // breakpoints, stale ones retire.
             self.accept(brk, firsttime, opts)?;
@@ -807,8 +853,8 @@ impl Engine {
             brk = false;
             // Under UIC ngspice omits the t=0 point (the 3f5 dumped
             // the untouched zero vector there — KNOWN_DIFFS.md).
-            let skip = p.uic && self.time == 0.0;
-            if self.time >= p.tstart && !skip {
+            let skip = lp.uic && self.time == 0.0;
+            if self.time >= lp.tstart && !skip {
                 if (rows.len() + 1).saturating_mul(self.vars.len()) > MAX_OUTPUT_VALUES {
                     return Err(Error::Build(
                         "transient produces too many points; refusing".into(),
@@ -833,7 +879,7 @@ impl Engine {
                 if firsttime {
                     // ngspice (not the 3f5): "set a breakpoint to
                     // reduce ringing of current in devices" under UIC.
-                    if p.uic {
+                    if lp.uic {
                         self.set_break(self.step)?;
                     }
                     delta /= 10.0;
@@ -865,14 +911,16 @@ impl Engine {
                     self.step_old[i + 1] = self.step_old[i];
                 }
                 self.step_old[0] = delta;
-                self.tran_trbdf2_point(
+                let restart = self.tran_trbdf2_point(
                     opts,
                     &mut delta,
                     &mut firsttime,
                     delmin,
                     &mut steps,
                     step_budget,
+                    false,
                 )?;
+                solved_order = if restart { 1 } else { 2 };
                 continue 'next_time;
             }
 
@@ -911,6 +959,7 @@ impl Engine {
                     delta /= 8.0;
                     self.order = 1;
                 } else {
+                    solved_order = self.order;
                     if firsttime {
                         firsttime = false;
                         continue 'next_time; // no LTE check on the first point
@@ -947,6 +996,167 @@ impl Engine {
 }
 
 impl Engine {
+    /// The device states the transient operating point would leave
+    /// had it converged on `x0`: load passes in `MODETRANOP |
+    /// MODEINITFLOAT` over the fixed solution `x0` (no solve), repeated
+    /// until no device limits its junction voltages any more (the
+    /// limiting walks state 0 onto `x0`'s voltages in a few passes).
+    /// Charges, junction voltages and every other state-0 quantity
+    /// are then functions of `x0` alone — the shooting state.
+    fn seed_states(&mut self, opts: &Options, x0: &[f64]) -> Result<(), Error> {
+        self.set_kind(AnKind::TranOp, false);
+        self.sol.copy_from_slice(x0);
+        self.sol[0] = 0.0;
+        for _ in 0..SEED_PASSES {
+            let noncon = self.load_all(InitMode::Float, opts, 1.0);
+            if let Some(f) = self.fault.take() {
+                return Err(Error::Build(f.into()));
+            }
+            if !noncon {
+                return Ok(());
+            }
+        }
+        Err(Error::Build(
+            "pss: the device states do not settle on the shooting state".into(),
+        ))
+    }
+
+    /// The setup [`Engine::tran_period`] and [`Engine::tran_replay`]
+    /// share: `DCtran`'s fields for an interval `[t0, t0 + period]`,
+    /// the breakpoint table seeded with the source corners inside it,
+    /// and the device states seeded from `x0`.
+    fn period_setup(&mut self, opts: &Options, run: &PeriodRun, x0: &[f64]) -> Result<(), Error> {
+        self.set_tran_method(opts);
+        let t1 = run.t0 + run.period;
+        self.step = run.tstep;
+        self.final_time = t1;
+        self.time = run.t0;
+        self.breaks = vec![run.t0, t1];
+        self.min_break = 5e-5 * run.max_step;
+        self.slope_break_radius = match opts.ltra_break_rate {
+            Some(n) if n > 0 => Some(f64::max(run.max_step / n as f64, self.min_break)),
+            _ => None,
+        };
+        let mut corners = Vec::new();
+        for d in &self.devices {
+            d.wave_corners(run.t0, t1, run.tstep, t1, &mut corners);
+        }
+        corners.sort_by(f64::total_cmp);
+        for c in corners {
+            if c - run.t0 > self.min_break && t1 - c > self.min_break {
+                self.set_break(c)?;
+            }
+        }
+        self.seed_states(opts, x0)
+    }
+
+    /// `DCtran` over one shooting interval, from the state `x0` at
+    /// `run.t0` instead of an operating point: the full adaptive loop
+    /// (LTE control, breakpoints, TR-BDF2, the step budget), every
+    /// accepted step logged into `log`. Returns the rows from `t0` to
+    /// `t0 + period`.
+    pub fn tran_period(
+        &mut self,
+        opts: &Options,
+        run: &PeriodRun,
+        x0: &[f64],
+        log: &mut Vec<StepRec>,
+    ) -> Result<Vec<(f64, Vec<f64>)>, Error> {
+        self.period_setup(opts, run, x0)?;
+        let max_step = run.max_step;
+        self.tran_loop(
+            opts,
+            &TranLoop {
+                tstart: run.t0,
+                uic: false,
+                max_step,
+                delmin: 1e-9 * max_step,
+                delta: f64::min(run.period / 50.0, run.tstep) / 10.0,
+                save_delta: run.period / 50.0,
+                step_budget: opts.tran_step_budget(run.period, max_step),
+            },
+            Some(log),
+        )
+    }
+
+    /// The shooting interval retraced on a frozen grid: from `x0` at
+    /// `run.t0`, every step of `log` (a [`Engine::tran_period`] log)
+    /// taken at its time and order with no LTE check and no
+    /// breakpoint-driven stepping (device accept hooks still run with
+    /// the logged `CKTbreak` flag). The map `x0 ↦ x(t0 + period)` is
+    /// then a smooth function of `x0`, which is what the shooting
+    /// Jacobian differentiates; an adaptive run would add the noise of
+    /// its step choices. A step whose Newton iteration fails is
+    /// [`Error::IterLim`]. Returns the final solution.
+    pub fn tran_replay(
+        &mut self,
+        opts: &Options,
+        run: &PeriodRun,
+        x0: &[f64],
+        log: &[StepRec],
+    ) -> Result<Vec<f64>, Error> {
+        self.period_setup(opts, run, x0)?;
+        let max_step = run.max_step;
+        self.set_kind(AnKind::Tran, false);
+        self.order = 1;
+        self.ag = [0.0; 7];
+        self.states.copy01();
+        self.delta_old = [max_step; 8];
+        self.step_old = [max_step; 8];
+        self.delta = f64::min(run.period / 50.0, run.tstep) / 10.0;
+        let mut firsttime = true;
+        self.accept(true, true, opts)?;
+        if self.time > self.breaks[0] {
+            self.clr_break();
+        }
+        for rec in log {
+            let delta = rec.time - self.time;
+            if !(delta > 0.0 && delta.is_finite()) {
+                return Err(Error::Build("pss: replayed grid is not increasing".into()));
+            }
+            for i in (0..=5).rev() {
+                self.delta_old[i + 1] = self.delta_old[i];
+            }
+            self.delta_old[0] = delta;
+            self.states.rotate(self.maxord);
+            self.order = rec.order;
+            if self.trbdf2 {
+                for i in (0..=5).rev() {
+                    self.step_old[i + 1] = self.step_old[i];
+                }
+                self.step_old[0] = delta;
+                let mut d = delta;
+                let mut steps = 0usize;
+                self.tran_trbdf2_point(
+                    opts,
+                    &mut d,
+                    &mut firsttime,
+                    0.0,
+                    &mut steps,
+                    usize::MAX,
+                    true,
+                )?;
+            } else {
+                self.time = rec.time;
+                self.delta = delta;
+                self.ag = com_cof(self.method, self.order, delta, &self.delta_old)?;
+                let start = if firsttime {
+                    InitMode::Tran
+                } else {
+                    InitMode::Pred
+                };
+                self.ni_iter(opts, start, opts.itl4, 0.0, 1.0)?;
+                firsttime = false;
+            }
+            self.time = rec.time;
+            self.accept(rec.brk, false, opts)?;
+            if self.time > self.breaks[0] {
+                self.clr_break();
+            }
+        }
+        Ok(self.sol.clone())
+    }
+
     /// One accepted timepoint under `method=trbdf2` (issue #6): the
     /// inner attempt loop of [`Engine::tran`]. On entry the step
     /// history and the state banks have advanced once (as for any
@@ -965,7 +1175,14 @@ impl Engine {
     /// (a stage not converging, or the LTE) undoes that rotation and
     /// restores the solution at `t`, so every retry starts from the
     /// accepted point. The first point skips the LTE check, like
-    /// `DCtran`.
+    /// `DCtran`. Returns whether the accepted step was the order-1
+    /// restart.
+    ///
+    /// `forced` is the grid replay of [`Engine::tran_replay`]: the
+    /// step `h` (and the restart choice, through `order`) is taken as
+    /// given — no LTE check, and a stage that does not converge is
+    /// [`Error::IterLim`] instead of a retry.
+    #[allow(clippy::too_many_arguments)]
     fn tran_trbdf2_point(
         &mut self,
         opts: &Options,
@@ -974,7 +1191,8 @@ impl Engine {
         delmin: f64,
         steps: &mut usize,
         step_budget: usize,
-    ) -> Result<(), Error> {
+        forced: bool,
+    ) -> Result<bool, Error> {
         let t0 = self.time;
         let sol0 = self.sol.clone();
         loop {
@@ -1036,7 +1254,11 @@ impl Engine {
                 if *firsttime {
                     *firsttime = false;
                     self.order = 2;
-                    return Ok(());
+                    return Ok(restart);
+                }
+                if forced {
+                    self.order = 2;
+                    return Ok(restart);
                 }
                 let mut new = h;
                 self.composite = !restart;
@@ -1045,8 +1267,10 @@ impl Engine {
                 *delta = new;
                 if new > 0.9 * h {
                     self.order = 2;
-                    return Ok(());
+                    return Ok(restart);
                 }
+            } else if forced {
+                return Err(Error::IterLim);
             }
             // Rejected: roll back to the accepted point.
             if let Some(old) = saved_old {
@@ -2136,6 +2360,46 @@ pub(crate) struct SweepRef {
     pub stop: f64,
     pub step: f64,
 }
+
+/// The timestep loop's settings ([`Engine::tran_loop`]): the values
+/// `DCtran` computes before its operating point.
+pub(crate) struct TranLoop {
+    /// Rows before this time are not returned.
+    pub tstart: f64,
+    pub uic: bool,
+    pub max_step: f64,
+    pub delmin: f64,
+    /// The first step tried.
+    pub delta: f64,
+    /// `CKTsaveDelta`'s initial value.
+    pub save_delta: f64,
+    pub step_budget: usize,
+}
+
+/// One accepted step of a logged transient: the point's time, the
+/// integration order it was solved at (under TR-BDF2, 1 for the
+/// backward-Euler restart and 2 for the composite step) and the
+/// `CKTbreak` flag its accept saw.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct StepRec {
+    pub time: f64,
+    pub order: usize,
+    pub brk: bool,
+}
+
+/// One shooting interval of `.pss`: a transient over
+/// `[t0, t0 + period]` started from a given state.
+pub(crate) struct PeriodRun {
+    pub t0: f64,
+    pub period: f64,
+    /// The `TSTEP` sources see (default PULSE rise/fall times).
+    pub tstep: f64,
+    pub max_step: f64,
+}
+
+/// How many load passes [`Engine::seed_states`] allows the junction
+/// limiting to walk the device states onto the given solution.
+const SEED_PASSES: usize = 200;
 
 /// `.tran` parameters after validation.
 pub(crate) struct TranParams {

@@ -36,7 +36,29 @@ pub enum Error {
     #[error("transient exceeded {steps} internal steps at t = {time:.6e}")]
     StepLimit { steps: usize, time: f64 },
 
+    /// `.pss`: the shooting iterations did not bring the period
+    /// mismatch `x(t₀+T) − x(t₀)` within tolerance. `residuals` holds
+    /// each iteration's mismatch in units of the tolerance
+    /// ([`Pss::residuals`](crate::Pss::residuals)).
+    #[error(
+        "periodic steady state did not converge in {iterations} shooting iterations \
+         (residual/tolerance per iteration: {})",
+        list_e(.residuals)
+    )]
+    PssConvergence {
+        iterations: usize,
+        residuals: Vec<f64>,
+    },
+
     /// An output selection named a vector the solution does not have.
     #[error("no such vector `{0}`")]
     UnknownVector(String),
+}
+
+/// `1.234e-3, 5.000e-1` — a residual history in an error message.
+fn list_e(v: &[f64]) -> String {
+    v.iter()
+        .map(|r| format!("{r:.3e}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

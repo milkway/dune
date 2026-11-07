@@ -29,6 +29,13 @@ pub(crate) trait Device {
     /// Accepted-timepoint hook; sources plant breakpoints here
     /// (`*acct.c`).
     fn accept(&mut self, _ctx: &mut AcceptCtx) {}
+    /// The corner times of the device's transient waveform inside
+    /// `(t0, t1)` (PULSE corners, PWL vertices), for a transient that
+    /// starts at `t0 > 0` from a given state (the `.pss` shooting
+    /// runs): `VSRCaccept` only plants the next corner when the
+    /// current point sits on one, so the chain must be seeded. The
+    /// default (every device but the V/I sources) has none.
+    fn wave_corners(&self, _t0: f64, _t1: f64, _step: f64, _final_time: f64, _out: &mut Vec<f64>) {}
     /// Remarks about a finished transient run (Dune's opt-in modes
     /// report their error budgets here). Default: none.
     fn tran_notes(&self) -> Vec<String> {
@@ -883,6 +890,12 @@ impl Device for VsourceI {
         }
     }
 
+    fn wave_corners(&self, t0: f64, t1: f64, step: f64, final_time: f64, out: &mut Vec<f64>) {
+        if let Some(w) = &self.wave {
+            w.corners(t0, t1, step, final_time, out);
+        }
+    }
+
     fn set_dc(&mut self, value: f64) {
         self.dc = Some(value);
     }
@@ -1073,6 +1086,12 @@ impl Device for IsourceI {
     fn accept(&mut self, ctx: &mut AcceptCtx) {
         if let Some(w) = &self.wave {
             w.accept(ctx);
+        }
+    }
+
+    fn wave_corners(&self, t0: f64, t1: f64, step: f64, final_time: f64, out: &mut Vec<f64>) {
+        if let Some(w) = &self.wave {
+            w.corners(t0, t1, step, final_time, out);
         }
     }
 

@@ -122,6 +122,53 @@ impl Wave {
         }
     }
 
+    /// The waveform's corners inside `(t0, t1)`: every PULSE corner
+    /// (`TD + k·PER + {0, TR, TR+PW, TR+PW+TF}`, defaults as in
+    /// [`Wave::value`]) and every PWL vertex time — the breakpoints
+    /// [`Wave::accept`] would have planted by `t0` had the transient
+    /// started at 0. At most 4 corners per period are listed, and a
+    /// pulse with more than 10 000 periods in the window lists none
+    /// (the step control then meets its corners unaided).
+    pub(crate) fn corners(&self, t0: f64, t1: f64, step: f64, final_time: f64, out: &mut Vec<f64>) {
+        let inside = |t: f64| t > t0 && t < t1;
+        match self {
+            Wave::Pulse(c) => {
+                let td = arg(c, 2).unwrap_or(0.0);
+                let tr = arg_nz(c, 3, step);
+                let tf = arg_nz(c, 4, step);
+                let pw = arg_nz(c, 5, final_time);
+                let per = arg_nz(c, 6, final_time);
+                let offsets = [0.0, tr, tr + pw, tr + pw + tf];
+                if !(per > 0.0 && per.is_finite()) {
+                    return;
+                }
+                let k0 = ((t0 - td) / per).floor() - 1.0;
+                let k1 = ((t1 - td) / per).ceil() + 1.0;
+                if !(k0.is_finite() && k1.is_finite()) || k1 - k0 > 10_000.0 {
+                    return;
+                }
+                let mut k = k0.max(0.0);
+                while k <= k1 {
+                    for o in offsets {
+                        let t = td + k * per + o;
+                        if inside(t) {
+                            out.push(t);
+                        }
+                    }
+                    k += 1.0;
+                }
+            }
+            Wave::Pwl(c) => {
+                for pair in c.chunks_exact(2) {
+                    if inside(pair[0]) {
+                        out.push(pair[0]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Breakpoint generation at an accepted timepoint
     /// (`VSRCaccept`); only PULSE and PWL make breakpoints in the
     /// 3f5 ("no breakpoints (yet)" for the rest).
