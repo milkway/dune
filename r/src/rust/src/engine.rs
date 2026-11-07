@@ -7,7 +7,8 @@ use std::path::Path;
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    Circuit, MeasureError, Measurement, Method, Options, Solution, SweepParam, measure_all,
+    AlterValue, Circuit, MeasureError, Measurement, Method, Options, Session, Solution, SweepParam,
+    measure_all,
 };
 use dune_netlist::{IncludeLoader, ParseOutcome, Severity};
 use dune_raw::{Data, Plot, Rawfile};
@@ -37,6 +38,7 @@ pub enum OptValue {
 }
 
 /// A diagnostic, rendered with its `file:line:col` span.
+#[derive(Clone)]
 pub struct Diag {
     pub severity: &'static str,
     pub message: String,
@@ -389,14 +391,7 @@ pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput,
         notes.push("no analyses in the deck; nothing to do".into());
     }
 
-    let cards = &netlist.measures;
-    let measures = measure_all(cards, &solutions)
-        .iter()
-        .map(|o| {
-            let m = &cards[o.card];
-            MeasRow::new(&m.name, m.analysis.keyword(), Some(o.plot), &o.result)
-        })
-        .collect();
+    let measures = deck_measures(&netlist.measures, &solutions);
 
     let title = netlist.title.clone();
     Ok(RunOutput {
@@ -406,6 +401,120 @@ pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput,
         notes,
         diagnostics,
     })
+}
+
+/// The deck's `.measure` cards evaluated on a run's plots.
+fn deck_measures(cards: &[dune_netlist::ir::Measure], solutions: &[Solution]) -> Vec<MeasRow> {
+    measure_all(cards, solutions)
+        .iter()
+        .map(|o| {
+            let m = &cards[o.card];
+            MeasRow::new(&m.name, m.analysis.keyword(), Some(o.plot), &o.result)
+        })
+        .collect()
+}
+
+/// A deck kept alive for `spice_alter()` / `spice_rerun()` (issue
+/// #12): [`dune_core::Session`] plus what every run's result carries
+/// (title, elaboration notes, parser warnings, `.measure` cards).
+pub struct LiveSession {
+    session: Session,
+    title: String,
+    notes: Vec<String>,
+    diagnostics: Vec<Diag>,
+    measures: Vec<dune_netlist::ir::Measure>,
+}
+
+/// A refused alteration (kind `alter`; the circuit is unchanged).
+fn alter_failure(e: dune_core::Error) -> Failure {
+    Failure::new("alter", e.to_string())
+}
+
+impl LiveSession {
+    pub fn open(source: Source<'_>, user: &[(String, OptValue)]) -> Result<Self, Failure> {
+        let Prepared {
+            netlist,
+            options,
+            mut diagnostics,
+        } = prepare(source, user)?;
+        let (circuit, notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
+            kind: "elaborate",
+            message: e.to_string(),
+            diagnostics: std::mem::take(&mut diagnostics),
+        })?;
+        Ok(LiveSession {
+            session: Session::new(circuit, options, netlist.analyses.clone()),
+            title: netlist.title.clone(),
+            notes,
+            diagnostics,
+            measures: netlist.measures.clone(),
+        })
+    }
+
+    pub fn alter(&mut self, refdes: &str, param: &str, value: AlterValue) -> Result<(), Failure> {
+        self.session
+            .alter(refdes, param, value)
+            .map_err(alter_failure)
+    }
+
+    pub fn param(&self, refdes: &str, param: &str) -> Result<Option<AlterValue>, Failure> {
+        self.session.param(refdes, param).map_err(alter_failure)
+    }
+
+    pub fn alterable(&self, refdes: &str) -> Result<&'static [&'static str], Failure> {
+        self.session
+            .circuit()
+            .alterable(refdes)
+            .map_err(alter_failure)
+    }
+
+    pub fn set_temp(&mut self, celsius: f64) -> Result<(), Failure> {
+        self.session.set_temp(celsius).map_err(alter_failure)
+    }
+
+    pub fn temp(&self) -> f64 {
+        self.session.temp()
+    }
+
+    pub fn set_warm_start(&mut self, on: bool) {
+        self.session.set_warm_start(on);
+    }
+
+    pub fn warm_start(&self) -> bool {
+        self.session.warm_start()
+    }
+
+    /// `(hits, misses)`.
+    pub fn warm_stats(&self) -> (u64, u64) {
+        let s = self.session.warm_stats();
+        (s.hits, s.misses)
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// Re-run every analysis card: [`run`]'s output for the altered
+    /// deck, the `.measure` cards included.
+    pub fn run(&mut self) -> Result<RunOutput, Failure> {
+        let (solutions, analysis_notes) = self.session.run().map_err(|e| Failure {
+            kind: "analysis",
+            message: e.to_string(),
+            diagnostics: self.diagnostics.clone(),
+        })?;
+        let mut notes = self.notes.clone();
+        notes.extend(analysis_notes);
+        if solutions.is_empty() {
+            notes.push("no analyses in the deck; nothing to do".into());
+        }
+        Ok(RunOutput {
+            measures: deck_measures(&self.measures, &solutions),
+            plots: to_plots(&self.title, &solutions),
+            title: self.title.clone(),
+            notes,
+            diagnostics: self.diagnostics.clone(),
+        })
+    }
 }
 
 /// One run of a sweep: its plots and notes, or why it failed.
@@ -543,6 +652,36 @@ mod tests {
             },
             &[],
         )
+    }
+
+    #[test]
+    fn a_live_session_reruns_as_the_altered_deck() {
+        let inc = BTreeMap::new();
+        let deck = "divider\nv1 1 0 dc 2\nr1 1 2 1k\nr2 2 0 1k\n.op\n.end\n";
+        let src = || Source::Text {
+            text: deck,
+            includes: &inc,
+        };
+        let mut s = LiveSession::open(src(), &[]).ok().unwrap();
+        let v2 = |o: &RunOutput| o.plots[0].0.real_values("v(2)").unwrap()[0];
+        s.alter("r2", "", AlterValue::Num(3e3)).ok().unwrap();
+        let altered = deck.replace("r2 2 0 1k", "r2 2 0 3k");
+        let fresh = run(
+            Source::Text {
+                text: &altered,
+                includes: &inc,
+            },
+            &[],
+        )
+        .ok()
+        .unwrap();
+        assert_eq!(v2(&s.run().ok().unwrap()).to_bits(), v2(&fresh).to_bits());
+        let Err(f) = s.alter("r2", "", AlterValue::Num(0.0)) else {
+            panic!("zero resistance");
+        };
+        assert_eq!(f.kind, "alter");
+        assert_eq!(s.alterable("r1").ok().unwrap(), ["resistance"].as_slice());
+        assert_eq!(s.title(), "divider");
     }
 
     #[test]

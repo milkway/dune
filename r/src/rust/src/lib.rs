@@ -22,7 +22,8 @@ use savvy::{
     RealSexp, Sexp, StringSexp, TypedSexp, savvy,
 };
 
-use engine::{Diag, MeasRow, OptValue, Source, SweepRunOutput};
+use dune_core::AlterValue;
+use engine::{Diag, Failure, MeasRow, OptValue, Source, SweepRunOutput};
 
 fn strings<I, S>(it: I) -> savvy::Result<Sexp>
 where
@@ -258,10 +259,28 @@ fn ffi_run_deck(
         }
     };
 
-    let result = engine::run(source, &user);
+    run_list(engine::run(source, &user))
+}
+
+/// `list(ok = FALSE, message, plots = NULL, notes, diagnostics, kind,
+/// measurements = NULL)`.
+fn failure_list(f: &Failure) -> savvy::Result<Sexp> {
     let mut out = OwnedListSexp::new(7, true)?;
+    out.set_name_and_value(0, "ok", logical(false)?)?;
+    out.set_name_and_value(1, "message", string(&f.message)?)?;
+    out.set_name_and_value(2, "plots", savvy::NullSexp)?;
+    out.set_name_and_value(3, "notes", OwnedStringSexp::new(0)?)?;
+    out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
+    out.set_name_and_value(5, "kind", string(f.kind)?)?;
+    out.set_name_and_value(6, "measurements", savvy::NullSexp)?;
+    Ok(out.into())
+}
+
+/// A run's outcome as the list `ffi_run_deck` returns.
+fn run_list(result: Result<engine::RunOutput, Failure>) -> savvy::Result<Sexp> {
     match result {
         Ok(r) => {
+            let mut out = OwnedListSexp::new(7, true)?;
             out.set_name_and_value(0, "ok", logical(true)?)?;
             out.set_name_and_value(1, "title", string(&r.title)?)?;
             out.set_name_and_value(
@@ -273,18 +292,158 @@ fn ffi_run_deck(
             out.set_name_and_value(4, "diagnostics", diag_list(&r.diagnostics)?)?;
             out.set_name_and_value(5, "kind", savvy::NullSexp)?;
             out.set_name_and_value(6, "measurements", meas_columns(&r.measures)?)?;
+            Ok(out.into())
         }
-        Err(f) => {
-            out.set_name_and_value(0, "ok", logical(false)?)?;
-            out.set_name_and_value(1, "message", string(&f.message)?)?;
-            out.set_name_and_value(2, "plots", savvy::NullSexp)?;
-            out.set_name_and_value(3, "notes", OwnedStringSexp::new(0)?)?;
-            out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
-            out.set_name_and_value(5, "kind", string(f.kind)?)?;
-            out.set_name_and_value(6, "measurements", savvy::NullSexp)?;
+        Err(f) => failure_list(&f),
+    }
+}
+
+/// A live circuit (`spice_session()`, issue #12). Opening never
+/// raises: a deck that fails leaves the failure for `status()`, so the
+/// R side can classify it like `spice_run()` does. Every other method
+/// on a failed session is an R error.
+/// @noRd
+#[savvy]
+struct SpiceSession {
+    live: Result<engine::LiveSession, Failure>,
+}
+
+impl SpiceSession {
+    fn live(&self) -> savvy::Result<&engine::LiveSession> {
+        self.live
+            .as_ref()
+            .map_err(|_| savvy::Error::new("the session failed to open"))
+    }
+
+    fn live_mut(&mut self) -> savvy::Result<&mut engine::LiveSession> {
+        self.live
+            .as_mut()
+            .map_err(|_| savvy::Error::new("the session failed to open"))
+    }
+}
+
+/// `NULL` on success, a failure list otherwise.
+fn outcome(r: Result<(), Failure>) -> savvy::Result<Sexp> {
+    match r {
+        Ok(()) => Ok(savvy::NullSexp.into()),
+        Err(f) => failure_list(&f),
+    }
+}
+
+#[savvy]
+impl SpiceSession {
+    /// Arguments as `ffi_run_deck`'s.
+    fn open(
+        deck: &str,
+        is_path: bool,
+        include_names: StringSexp,
+        include_texts: StringSexp,
+        opt_names: StringSexp,
+        opt_values: ListSexp,
+    ) -> savvy::Result<Self> {
+        let includes = includes_map(&include_names, &include_texts);
+        let user = user_options(&opt_names, opt_values)?;
+        let source = if is_path {
+            Source::Path(Path::new(deck))
+        } else {
+            Source::Text {
+                text: deck,
+                includes: &includes,
+            }
+        };
+        Ok(SpiceSession {
+            live: engine::LiveSession::open(source, &user),
+        })
+    }
+
+    /// `NULL` when the session opened, its failure list otherwise.
+    fn status(&self) -> savvy::Result<Sexp> {
+        match &self.live {
+            Ok(_) => Ok(savvy::NullSexp.into()),
+            Err(f) => failure_list(f),
         }
     }
-    Ok(out.into())
+
+    /// Alter one parameter: `value` is a number (`is_list = FALSE`,
+    /// length 1) or a source function's arguments.
+    fn alter(
+        &mut self,
+        refdes: &str,
+        param: &str,
+        value: RealSexp,
+        is_list: bool,
+    ) -> savvy::Result<Sexp> {
+        let v = if is_list {
+            AlterValue::List(value.to_vec())
+        } else if value.len() == 1 {
+            AlterValue::Num(value.as_slice()[0])
+        } else {
+            return Err(savvy::Error::new("a scalar value must have length 1"));
+        };
+        outcome(self.live_mut()?.alter(refdes, param, v))
+    }
+
+    /// `list(ok, value, is_list)` or a failure list: `value` a double
+    /// vector (length 0 when the parameter was never given).
+    fn param(&self, refdes: &str, param: &str) -> savvy::Result<Sexp> {
+        match self.live()?.param(refdes, param) {
+            Ok(v) => {
+                let (vals, is_list) = match v {
+                    Some(AlterValue::Num(x)) => (vec![x], false),
+                    Some(AlterValue::List(v)) => (v, true),
+                    None => (Vec::new(), false),
+                };
+                let mut out = OwnedListSexp::new(3, true)?;
+                out.set_name_and_value(0, "ok", logical(true)?)?;
+                out.set_name_and_value(1, "value", OwnedRealSexp::try_from_slice(vals)?)?;
+                out.set_name_and_value(2, "is_list", logical(is_list)?)?;
+                Ok(out.into())
+            }
+            Err(f) => failure_list(&f),
+        }
+    }
+
+    /// The parameter names `alter` accepts, or a failure list.
+    fn alterable(&self, refdes: &str) -> savvy::Result<Sexp> {
+        match self.live()?.alterable(refdes) {
+            Ok(names) => strings(names),
+            Err(f) => failure_list(&f),
+        }
+    }
+
+    fn set_temp(&mut self, celsius: f64) -> savvy::Result<Sexp> {
+        outcome(self.live_mut()?.set_temp(celsius))
+    }
+
+    fn temp(&self) -> savvy::Result<Sexp> {
+        Ok(OwnedRealSexp::try_from_scalar(self.live()?.temp())?.into())
+    }
+
+    fn set_warm_start(&mut self, on: bool) -> savvy::Result<()> {
+        self.live_mut()?.set_warm_start(on);
+        Ok(())
+    }
+
+    fn warm_start(&self) -> savvy::Result<Sexp> {
+        logical(self.live()?.warm_start())
+    }
+
+    /// `c(hits, misses)` as doubles.
+    fn warm_stats(&self) -> savvy::Result<Sexp> {
+        let (h, m) = self.live()?.warm_stats();
+        Ok(OwnedRealSexp::try_from_slice([h as f64, m as f64])?.into())
+    }
+
+    fn title(&self) -> savvy::Result<Sexp> {
+        string(self.live()?.title())
+    }
+
+    /// Re-run every analysis card; the list `ffi_run_deck` returns
+    /// (measurements included).
+    fn run(&mut self) -> savvy::Result<Sexp> {
+        let r = self.live_mut()?.run();
+        run_list(r)
+    }
 }
 
 /// Sweep a deck (issue #10): the deck, includes and options as in

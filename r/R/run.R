@@ -43,7 +43,8 @@
 #' Failures are signalled with [cli::cli_abort()] as conditions of class
 #' `spice_error_<kind>` and `spice_error`, where `kind` is the stage
 #' that failed: `"options"`, `"io"` (unreadable deck file), `"parse"`,
-#' `"elaborate"` (building the circuit) or `"analysis"`. Parse errors
+#' `"elaborate"` (building the circuit) or `"analysis"` (and, from
+#' [spice_alter()], `"alter"`). Parse errors
 #' carry the `file:line:col` of the offending card in the message; the
 #' condition's `diagnostics` field holds every diagnostic seen so far.
 #'
@@ -115,6 +116,7 @@ abort_engine <- function(kind, message, diagnostics, call) {
     parse = "The deck has errors.",
     elaborate = "Cannot build the circuit.",
     analysis = "The analysis failed.",
+    alter = "Cannot alter the circuit.",
     "The simulation failed."
   )
   cli::cli_abort(

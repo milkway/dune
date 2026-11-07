@@ -84,4 +84,112 @@ NULL
   invisible(.Call(savvy_ffi_write_raw__impl, `path`, `plots`, `binary`))
 }
 
+### wrapper functions for SpiceSession
+
+`SpiceSession_alter` <- function(self) {
+  function(`refdes`, `param`, `value`, `is_list`) {
+    .Call(savvy_SpiceSession_alter__impl, `self`, `refdes`, `param`, `value`, `is_list`)
+  }
+}
+
+`SpiceSession_alterable` <- function(self) {
+  function(`refdes`) {
+    .Call(savvy_SpiceSession_alterable__impl, `self`, `refdes`)
+  }
+}
+
+`SpiceSession_param` <- function(self) {
+  function(`refdes`, `param`) {
+    .Call(savvy_SpiceSession_param__impl, `self`, `refdes`, `param`)
+  }
+}
+
+`SpiceSession_run` <- function(self) {
+  function() {
+    .Call(savvy_SpiceSession_run__impl, `self`)
+  }
+}
+
+`SpiceSession_set_temp` <- function(self) {
+  function(`celsius`) {
+    .Call(savvy_SpiceSession_set_temp__impl, `self`, `celsius`)
+  }
+}
+
+`SpiceSession_set_warm_start` <- function(self) {
+  function(`on`) {
+    invisible(.Call(savvy_SpiceSession_set_warm_start__impl, `self`, `on`))
+  }
+}
+
+`SpiceSession_status` <- function(self) {
+  function() {
+    .Call(savvy_SpiceSession_status__impl, `self`)
+  }
+}
+
+`SpiceSession_temp` <- function(self) {
+  function() {
+    .Call(savvy_SpiceSession_temp__impl, `self`)
+  }
+}
+
+`SpiceSession_title` <- function(self) {
+  function() {
+    .Call(savvy_SpiceSession_title__impl, `self`)
+  }
+}
+
+`SpiceSession_warm_start` <- function(self) {
+  function() {
+    .Call(savvy_SpiceSession_warm_start__impl, `self`)
+  }
+}
+
+`SpiceSession_warm_stats` <- function(self) {
+  function() {
+    .Call(savvy_SpiceSession_warm_stats__impl, `self`)
+  }
+}
+
+`.savvy_wrap_SpiceSession` <- function(ptr) {
+  e <- new.env(parent = emptyenv())
+  e$.ptr <- ptr
+  e$`alter` <- `SpiceSession_alter`(ptr)
+  e$`alterable` <- `SpiceSession_alterable`(ptr)
+  e$`param` <- `SpiceSession_param`(ptr)
+  e$`run` <- `SpiceSession_run`(ptr)
+  e$`set_temp` <- `SpiceSession_set_temp`(ptr)
+  e$`set_warm_start` <- `SpiceSession_set_warm_start`(ptr)
+  e$`status` <- `SpiceSession_status`(ptr)
+  e$`temp` <- `SpiceSession_temp`(ptr)
+  e$`title` <- `SpiceSession_title`(ptr)
+  e$`warm_start` <- `SpiceSession_warm_start`(ptr)
+  e$`warm_stats` <- `SpiceSession_warm_stats`(ptr)
+
+  class(e) <- c("spice::SpiceSession", "SpiceSession", "savvy_spice__sealed")
+  e
+}
+
+
+#' A live circuit (`spice_session()`, issue #12). Opening never
+#' raises: a deck that fails leaves the failure for `status()`, so the
+#' R side can classify it like `spice_run()` does. Every other method
+#' on a failed session is an R error.
+#' @noRd
+`SpiceSession` <- new.env(parent = emptyenv())
+
+### associated functions for SpiceSession
+
+`SpiceSession`$`open` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`) {
+  .savvy_wrap_SpiceSession(.Call(savvy_SpiceSession_open__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`))
+}
+
+
+class(`SpiceSession`) <- c("spice::SpiceSession__bundle", "savvy_spice__sealed")
+
+#' @export
+`print.spice::SpiceSession__bundle` <- function(x, ...) {
+  cat('spice::SpiceSession\n')
+}
 
