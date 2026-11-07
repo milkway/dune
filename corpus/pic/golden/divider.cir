@@ -1,0 +1,8 @@
+* netlist extracted by dune-pic
+V1 Vs 0 dc 5
+R1 Vs Vdiv 1k
+R2 Vdiv 0 2k
+I1 0 Vi dc 1m
+R3 Vi 0 4.7k
+.op
+.end

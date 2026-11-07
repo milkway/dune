@@ -1,0 +1,21 @@
+.PS
+# basic/divider.cir drawn: a 1k/2k divider on a 5 V source beside a
+# 1 mA current source into 4.7k (two independent loops, one ground).
+# Card order kept; deck nodes 1 Vs, 2 Vdiv, 3 Vi.
+spice = 1
+Vs:   (0.3,2)
+Vdiv: (1.5,2)
+Vi:   (2.8,2)
+
+V1: vsource((0.3,2), (0.3,0), dc 5)
+R1: resistor((0.3,2), (1.5,2), 1k)
+R2: resistor((1.5,2), (1.5,0), 2k)
+I1: isource((2.8,0), (2.8,2), dc 1m)
+R3: resistor((3.8,2), (3.8,0), 4.7k)
+
+line from I1.N to R3.P
+line from V1.N to R3.N
+dot at R2.N; dot at I1.P
+ground((0.9,0))
+.op
+.PE
