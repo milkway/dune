@@ -9,7 +9,7 @@ use crate::span::Span;
 /// A lowercased identifier (device, node, model or subcircuit name).
 pub type Ident = String;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Netlist {
     pub title: String,
     /// Flat element list (subcircuits already expanded).
