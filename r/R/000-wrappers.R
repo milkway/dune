@@ -51,6 +51,31 @@ NULL
   .Call(savvy_ffi_option_names__impl)
 }
 
+#' Extract the netlist of a figure (`spice_pic()`): `src` is a path
+#' when `is_path`, figure text otherwise (with its includes as
+#' parallel name/text vectors); `snap` is `numeric(0)` for the
+#' default. Returns `list(ok, netlist, source, diagnostics,
+#' include_names, include_texts, map)` or `list(ok = FALSE, kind,
+#' message, diagnostics)`.
+#' @noRd
+`ffi_pic_extract` <- function(`src`, `is_path`, `include_names`, `include_texts`, `snap`) {
+  .Call(savvy_ffi_pic_extract__impl, `src`, `is_path`, `include_names`, `include_texts`, `snap`)
+}
+
+#' Render a figure to SVG (`spice_pic_svg()`): `src` as in
+#' `ffi_pic_extract`. Returns `list(ok, svg)` or the failure list.
+#' @noRd
+`ffi_pic_svg` <- function(`src`, `is_path`) {
+  .Call(savvy_ffi_pic_svg__impl, `src`, `is_path`)
+}
+
+#' Whether this build typesets `$...$` figure labels (the `texlabels`
+#' feature).
+#' @noRd
+`ffi_pic_texlabels` <- function() {
+  .Call(savvy_ffi_pic_texlabels__impl)
+}
+
 #' The periodic steady state of a deck (`spice_pss()`): the deck,
 #' includes, options and `tmax_divisor` as in `ffi_run_deck`; then the
 #' `.pss` parameters (`freq` 0 takes the fundamental from the sources,

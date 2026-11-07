@@ -1,5 +1,8 @@
 SEXP savvy_ffi_measure__ffi(SEXP c_arg__plot, SEXP c_arg__scale, SEXP c_arg__names, SEXP c_arg__specs);
 SEXP savvy_ffi_option_names__ffi(void);
+SEXP savvy_ffi_pic_extract__ffi(SEXP c_arg__src, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__snap);
+SEXP savvy_ffi_pic_svg__ffi(SEXP c_arg__src, SEXP c_arg__is_path);
+SEXP savvy_ffi_pic_texlabels__ffi(void);
 SEXP savvy_ffi_pss_deck__ffi(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__freq, SEXP c_arg__tstab, SEXP c_arg__osc_node, SEXP c_arg__points, SEXP c_arg__harmonics, SEXP c_arg__max_iter, SEXP c_arg__steady_coeff, SEXP c_arg__uic);
 SEXP savvy_ffi_read_raw__ffi(SEXP c_arg__path);
 SEXP savvy_ffi_run_deck__ffi(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor);

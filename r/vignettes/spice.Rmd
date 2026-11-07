@@ -122,6 +122,30 @@ r2 2 0 3k
 autoplot(spice_plots(divider)[[1]])
 ```
 
+## Circuits from figures
+
+A schematic drawn in [pic](https://github.com/milkway/rpic-lang) with the
+dune prelude (`resistor()`, `vsource()`, `npn()`, ...; the figure opts in
+with `spice = 1`) is a deck too: `spice_pic()` extracts its netlist -- the
+block labels are the refdes, the wires the nodes -- and `spice_run()` runs
+the extraction. `spice_pic_svg()` draws the figure.
+
+```{r pic}
+fig <- ".PS
+spice = 1
+In: (0,1); Out: (2,1)
+V1: vsource(In, (0,0), DC 5)
+R1: resistor(In, Out, 1k)
+R2: resistor(Out, (2,0), 3k)
+line from R2.N to V1.N; ground(V1.N)
+.op
+.PE"
+p <- spice_pic(fig)
+cat(p$netlist)
+spice_plots(spice_run(p))[[1]]$values[["v(out)"]]
+p$map$pins
+```
+
 ## Exchanging rawfiles
 
 Results write to and read from SPICE3 rawfiles, the format ngspice

@@ -25,6 +25,22 @@ num-complex = "0.4"
 dune-core = { path = "../../../crates/dune-core", features = ["parallel"] }
 dune-netlist = { path = "../../../crates/dune-netlist" }
 dune-raw = { path = "../../../crates/dune-raw" }
+# The figure path (`spice_pic()`, issue #21): only dune-pic's public
+# API, as the CLI uses it.
+dune-pic = { path = "../../../crates/dune-pic" }
+# rpic's `texlabels` math renderer (RaTeX, `rpic-render`'s `math`
+# feature only), registered before `spice_pic_svg()` renders, so a
+# `$...$` label of a `texlabels = 1` figure comes out typeset as in
+# `dune pic --svg`. The `rpic-core` pin must equal dune-pic's: the
+# renderer hook is a static of that crate, and a second rpic-core in
+# the graph would carry its own, unread, hook.
+rpic-core = { version = "=0.16.1", optional = true }
+rpic-render = { version = "=0.16.1", default-features = false, features = ["math"], optional = true }
+
+[features]
+default = ["texlabels"]
+# Typeset `$...$` figure labels (rpic `texlabels`) with RaTeX.
+texlabels = ["dep:rpic-core", "dep:rpic-render"]
 
 [profile.release]
 # A panic is a bug, but it must never take the R session down: with

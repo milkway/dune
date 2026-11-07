@@ -23,7 +23,10 @@ spice_pss(
 \item{deck}{Either the path to a deck file, or the netlist itself as
 a character vector: a single string containing newlines, or one
 element per line. A length-one string without a newline is taken
-as a path. As in SPICE3, the first line of a netlist is its title.}
+as a path. As in SPICE3, the first line of a netlist is its title.
+A \code{spice_pic} (the extraction of a pic figure, \code{\link[=spice_pic]{spice_pic()}}) runs as
+its netlist, with the \code{.include} files that came with the figure; one
+whose diagnostics include an error is refused (\code{spice_error_pic}).}
 
 \item{freq}{The fundamental in Hz; \code{0} (the default) takes it from
 the periodic sources -- the greatest common divisor of their
@@ -59,7 +62,8 @@ conditions, as \verb{.tran ... uic}.}
 vector) mapping the path exactly as written on the card to the
 file's text. Nothing is read from disk for a text deck. A deck
 given as a path resolves \code{.include} on the file system, relative to
-the deck's own directory, and must leave \code{includes} as \code{NULL}.}
+the deck's own directory, and must leave \code{includes} as \code{NULL}; so
+must a \code{spice_pic}.}
 
 \item{options}{\code{NULL} or a named list of simulator options that
 override the deck's \code{.options} card, with the card's names and

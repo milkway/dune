@@ -11,6 +11,7 @@
 //! them.
 
 pub mod engine;
+pub mod pic;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -777,4 +778,267 @@ fn ffi_write_raw(path: &str, plots: ListSexp, binary: bool) -> savvy::Result<()>
         .map(|p| plot_from_r(&ListSexp::try_from(p)?))
         .collect::<savvy::Result<Vec<_>>>()?;
     engine::write_raw(Path::new(path), plots, binary).map_err(savvy::Error::new)
+}
+
+// --- the figure path (issue #21) -----------------------------------
+
+/// A column of optional strings (`NA` for `None`).
+fn opt_strings<'a>(it: impl ExactSizeIterator<Item = Option<&'a str>>) -> savvy::Result<Sexp> {
+    let mut v = OwnedStringSexp::new(it.len())?;
+    for (i, s) in it.enumerate() {
+        match s {
+            Some(s) => v.set_elt(i, s)?,
+            None => v.set_na(i)?,
+        }
+    }
+    Ok(v.into())
+}
+
+/// A column of optional integers (`NA` for `None`).
+fn opt_ints(it: impl ExactSizeIterator<Item = Option<i64>>) -> savvy::Result<Sexp> {
+    let mut v = OwnedIntegerSexp::new(it.len())?;
+    for (i, x) in it.enumerate() {
+        match x {
+            Some(x) => v[i] = x as i32,
+            None => v.set_na(i)?,
+        }
+    }
+    Ok(v.into())
+}
+
+fn reals(v: Vec<f64>) -> savvy::Result<Sexp> {
+    Ok(OwnedRealSexp::try_from_slice(v)?.into())
+}
+
+/// Figure diagnostics as parallel columns (`R/pic.R` makes the tibble).
+fn pic_diag_list(diags: &[pic::PicDiag]) -> savvy::Result<Sexp> {
+    let mut out = OwnedListSexp::new(7, true)?;
+    out.set_name_and_value(0, "severity", strings(diags.iter().map(|d| d.severity))?)?;
+    out.set_name_and_value(1, "kind", strings(diags.iter().map(|d| d.kind))?)?;
+    out.set_name_and_value(
+        2,
+        "message",
+        strings(diags.iter().map(|d| d.message.as_str()))?,
+    )?;
+    out.set_name_and_value(
+        3,
+        "file",
+        opt_strings(diags.iter().map(|d| d.file.as_deref()))?,
+    )?;
+    out.set_name_and_value(
+        4,
+        "line",
+        opt_ints(diags.iter().map(|d| d.line.map(i64::from)))?,
+    )?;
+    out.set_name_and_value(
+        5,
+        "column",
+        opt_ints(diags.iter().map(|d| d.column.map(i64::from)))?,
+    )?;
+    out.set_name_and_value(
+        6,
+        "end_column",
+        opt_ints(diags.iter().map(|d| d.end_column.map(i64::from)))?,
+    )?;
+    Ok(out.into())
+}
+
+/// The overlay map as column lists: `elements` (one row per element),
+/// `pins` and `params` (one row per pin / spelled parameter, keyed by
+/// `refdes`), `nets` (`name` plus a list of shape numbers) and
+/// `canvas`.
+fn pic_map_list(map: &dune_pic::OverlayMap) -> savvy::Result<Sexp> {
+    let els = &map.elements;
+    let mut el = OwnedListSexp::new(10, true)?;
+    el.set_name_and_value(0, "refdes", strings(els.iter().map(|e| e.refdes.as_str()))?)?;
+    el.set_name_and_value(
+        1,
+        "shape_start",
+        opt_ints(els.iter().map(|e| Some(e.shapes.start as i64)))?,
+    )?;
+    el.set_name_and_value(
+        2,
+        "shape_end",
+        opt_ints(els.iter().map(|e| Some(e.shapes.end as i64)))?,
+    )?;
+    el.set_name_and_value(3, "ids", strings(els.iter().map(|e| e.ids()))?)?;
+    el.set_name_and_value(
+        4,
+        "principal",
+        opt_strings(els.iter().map(|e| e.principal.as_deref()))?,
+    )?;
+    el.set_name_and_value(
+        5,
+        "value",
+        opt_strings(
+            els.iter()
+                .map(|e| e.value.as_ref().map(|v| v.text.as_str())),
+        )?,
+    )?;
+    let span = |f: fn(&dune_pic::PicRange) -> u32| {
+        opt_ints(
+            els.iter()
+                .map(move |e| e.value.as_ref().map(|v| i64::from(f(&v.span)))),
+        )
+    };
+    el.set_name_and_value(6, "value_line", span(|r| r.line)?)?;
+    el.set_name_and_value(7, "value_col", span(|r| r.col)?)?;
+    el.set_name_and_value(8, "value_end_line", span(|r| r.end_line)?)?;
+    el.set_name_and_value(9, "value_end_col", span(|r| r.end_col)?)?;
+
+    let pins: Vec<(&str, &dune_pic::PinOverlay)> = els
+        .iter()
+        .flat_map(|e| e.pins.iter().map(move |p| (e.refdes.as_str(), p)))
+        .collect();
+    let mut pn = OwnedListSexp::new(5, true)?;
+    pn.set_name_and_value(0, "refdes", strings(pins.iter().map(|(r, _)| *r))?)?;
+    pn.set_name_and_value(
+        1,
+        "pin",
+        strings(pins.iter().map(|(_, p)| p.name.as_str()))?,
+    )?;
+    pn.set_name_and_value(2, "net", strings(pins.iter().map(|(_, p)| p.net.as_str()))?)?;
+    pn.set_name_and_value(3, "x", reals(pins.iter().map(|(_, p)| p.x).collect())?)?;
+    pn.set_name_and_value(4, "y", reals(pins.iter().map(|(_, p)| p.y).collect())?)?;
+
+    let params: Vec<(&str, &dune_pic::ParamSpanOverlay)> = els
+        .iter()
+        .flat_map(|e| e.params.iter().map(move |p| (e.refdes.as_str(), p)))
+        .collect();
+    let mut pa = OwnedListSexp::new(7, true)?;
+    pa.set_name_and_value(0, "refdes", strings(params.iter().map(|(r, _)| *r))?)?;
+    pa.set_name_and_value(
+        1,
+        "name",
+        strings(params.iter().map(|(_, p)| p.name.as_str()))?,
+    )?;
+    pa.set_name_and_value(
+        2,
+        "text",
+        strings(params.iter().map(|(_, p)| p.text.as_str()))?,
+    )?;
+    let pspan = |f: fn(&dune_pic::PicRange) -> u32| {
+        opt_ints(params.iter().map(move |(_, p)| Some(i64::from(f(&p.span)))))
+    };
+    pa.set_name_and_value(3, "line", pspan(|r| r.line)?)?;
+    pa.set_name_and_value(4, "col", pspan(|r| r.col)?)?;
+    pa.set_name_and_value(5, "end_line", pspan(|r| r.end_line)?)?;
+    pa.set_name_and_value(6, "end_col", pspan(|r| r.end_col)?)?;
+
+    let mut shapes = OwnedListSexp::new(map.nets.len(), false)?;
+    for (i, n) in map.nets.iter().enumerate() {
+        let v: Vec<i32> = n.shapes.iter().map(|&s| s as i32).collect();
+        let col: Sexp = if v.is_empty() {
+            OwnedIntegerSexp::new(0)?.into()
+        } else {
+            OwnedIntegerSexp::try_from_slice(v)?.into()
+        };
+        shapes.set_value(i, col)?;
+    }
+    let mut nets = OwnedListSexp::new(2, true)?;
+    nets.set_name_and_value(
+        0,
+        "name",
+        strings(map.nets.iter().map(|n| n.name.as_str()))?,
+    )?;
+    nets.set_name_and_value(1, "shapes", shapes)?;
+
+    let c = &map.canvas;
+    let mut canvas = OwnedListSexp::new(4, true)?;
+    canvas.set_name_and_value(0, "w", OwnedRealSexp::try_from_scalar(c.w)?)?;
+    canvas.set_name_and_value(1, "h", OwnedRealSexp::try_from_scalar(c.h)?)?;
+    canvas.set_name_and_value(2, "origin", reals(c.origin.to_vec())?)?;
+    canvas.set_name_and_value(3, "rescale", OwnedRealSexp::try_from_scalar(c.rescale)?)?;
+
+    let mut out = OwnedListSexp::new(5, true)?;
+    out.set_name_and_value(0, "elements", el)?;
+    out.set_name_and_value(1, "pins", pn)?;
+    out.set_name_and_value(2, "params", pa)?;
+    out.set_name_and_value(3, "nets", nets)?;
+    out.set_name_and_value(4, "canvas", canvas)?;
+    Ok(out.into())
+}
+
+/// `list(ok = FALSE, kind, message, diagnostics)` of a figure that gave
+/// no netlist or no drawing.
+fn pic_failure_list(f: &pic::PicFailure) -> savvy::Result<Sexp> {
+    let mut out = OwnedListSexp::new(4, true)?;
+    out.set_name_and_value(0, "ok", logical(false)?)?;
+    out.set_name_and_value(1, "kind", string(f.kind)?)?;
+    out.set_name_and_value(2, "message", string(&f.message)?)?;
+    out.set_name_and_value(3, "diagnostics", pic_diag_list(&f.diagnostics)?)?;
+    Ok(out.into())
+}
+
+/// Extract the netlist of a figure (`spice_pic()`): `src` is a path
+/// when `is_path`, figure text otherwise (with its includes as
+/// parallel name/text vectors); `snap` is `numeric(0)` for the
+/// default. Returns `list(ok, netlist, source, diagnostics,
+/// include_names, include_texts, map)` or `list(ok = FALSE, kind,
+/// message, diagnostics)`.
+/// @noRd
+#[savvy]
+fn ffi_pic_extract(
+    src: &str,
+    is_path: bool,
+    include_names: StringSexp,
+    include_texts: StringSexp,
+    snap: RealSexp,
+) -> savvy::Result<Sexp> {
+    let includes = includes_map(&include_names, &include_texts);
+    let source = if is_path {
+        pic::PicSource::Path(Path::new(src))
+    } else {
+        pic::PicSource::Text {
+            text: src,
+            includes: &includes,
+        }
+    };
+    match pic::extract(source, snap.as_slice().first().copied()) {
+        Ok(out) => {
+            let mut l = OwnedListSexp::new(7, true)?;
+            l.set_name_and_value(0, "ok", logical(true)?)?;
+            l.set_name_and_value(1, "netlist", string(&out.netlist)?)?;
+            l.set_name_and_value(2, "source", string(&out.source)?)?;
+            l.set_name_and_value(3, "diagnostics", pic_diag_list(&out.diagnostics)?)?;
+            l.set_name_and_value(4, "include_names", strings(out.includes.keys())?)?;
+            l.set_name_and_value(5, "include_texts", strings(out.includes.values())?)?;
+            l.set_name_and_value(6, "map", pic_map_list(&out.map)?)?;
+            Ok(l.into())
+        }
+        Err(f) => pic_failure_list(&f),
+    }
+}
+
+/// Render a figure to SVG (`spice_pic_svg()`): `src` as in
+/// `ffi_pic_extract`. Returns `list(ok, svg)` or the failure list.
+/// @noRd
+#[savvy]
+fn ffi_pic_svg(src: &str, is_path: bool) -> savvy::Result<Sexp> {
+    let empty = BTreeMap::new();
+    let source = if is_path {
+        pic::PicSource::Path(Path::new(src))
+    } else {
+        pic::PicSource::Text {
+            text: src,
+            includes: &empty,
+        }
+    };
+    match pic::render(source) {
+        Ok(svg) => {
+            let mut l = OwnedListSexp::new(2, true)?;
+            l.set_name_and_value(0, "ok", logical(true)?)?;
+            l.set_name_and_value(1, "svg", string(&svg)?)?;
+            Ok(l.into())
+        }
+        Err(f) => pic_failure_list(&f),
+    }
+}
+
+/// Whether this build typesets `$...$` figure labels (the `texlabels`
+/// feature).
+/// @noRd
+#[savvy]
+fn ffi_pic_texlabels() -> savvy::Result<Sexp> {
+    logical(pic::TEXLABELS)
 }

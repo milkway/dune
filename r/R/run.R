@@ -7,12 +7,16 @@
 #'   a character vector: a single string containing newlines, or one
 #'   element per line. A length-one string without a newline is taken
 #'   as a path. As in SPICE3, the first line of a netlist is its title.
+#'   A `spice_pic` (the extraction of a pic figure, [spice_pic()]) runs as
+#'   its netlist, with the `.include` files that came with the figure; one
+#'   whose diagnostics include an error is refused (`spice_error_pic`).
 #' @param includes For a netlist given as text only: the files its
 #'   `.include` cards may read, as a named list (or named character
 #'   vector) mapping the path exactly as written on the card to the
 #'   file's text. Nothing is read from disk for a text deck. A deck
 #'   given as a path resolves `.include` on the file system, relative to
-#'   the deck's own directory, and must leave `includes` as `NULL`.
+#'   the deck's own directory, and must leave `includes` as `NULL`; so
+#'   must a `spice_pic`.
 #' @param options `NULL` or a named list of simulator options that
 #'   override the deck's `.options` card, with the card's names and
 #'   units (temperatures `temp`/`tnom` in degrees Celsius): `reltol`,
@@ -54,7 +58,8 @@
 #' `"elaborate"` (building the circuit), `"analysis"` or `"pss"` (a
 #' `.pss` card whose shooting did not converge; see [spice_pss()] for
 #' the condition's `iterations` and `residuals` fields) (and, from
-#' [spice_alter()], `"alter"`). Parse errors
+#' [spice_alter()], `"alter"`; for a `spice_pic` with extraction errors,
+#' `"pic"`). Parse errors
 #' carry the `file:line:col` of the offending card in the message; the
 #' condition's `diagnostics` field holds every diagnostic seen so far.
 #'
@@ -88,7 +93,7 @@
 spice_run <- function(deck, includes = NULL, options = NULL, tmax_divisor = NULL) {
   call <- rlang::current_env()
   src <- check_deck(deck, call = call)
-  inc <- check_includes(includes, is_path = src$is_path, call = call)
+  inc <- check_includes(includes, is_path = src$is_path, call = call, pic = src$pic_includes)
   opt <- check_options(options, call = call)
   div <- check_tmax_divisor(tmax_divisor, call = call)
 
@@ -154,6 +159,9 @@ abort_engine <- function(kind, message, diagnostics, call, failure = NULL) {
 }
 
 check_deck <- function(deck, call) {
+  if (inherits(deck, "spice_pic")) {
+    return(pic_deck(deck, call = call))
+  }
   if (!is.character(deck) || length(deck) == 0L || anyNA(deck)) {
     cli::cli_abort(
       "{.arg deck} must be a file path or a character netlist, not {.obj_type_friendly {deck}}.",
@@ -178,7 +186,22 @@ check_deck <- function(deck, call) {
   list(deck = paste(deck, collapse = "\n"), is_path = FALSE)
 }
 
-check_includes <- function(includes, is_path, call) {
+# `pic`: the includes of a `spice_pic` deck (`check_deck()`'s
+# `pic_includes`), which come with the figure.
+check_includes <- function(includes, is_path, call, pic = NULL) {
+  if (!is.null(pic)) {
+    if (!is.null(includes)) {
+      cli::cli_abort(
+        c(
+          "{.arg includes} does not apply to a {.cls spice_pic}.",
+          "i" = "Its {.code .include} files come with the figure: pass them to {.fn spice_pic}."
+        ),
+        class = c("spice_error_input", "spice_error"),
+        call = call
+      )
+    }
+    return(pic)
+  }
   if (is.null(includes)) {
     return(character())
   }

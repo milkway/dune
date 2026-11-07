@@ -43,7 +43,7 @@ spice_session <- function(deck, includes = NULL, options = NULL, warm_start = FA
                           tmax_divisor = NULL) {
   call <- rlang::current_env()
   src <- check_deck(deck, call = call)
-  inc <- check_includes(includes, is_path = src$is_path, call = call)
+  inc <- check_includes(includes, is_path = src$is_path, call = call, pic = src$pic_includes)
   opt <- check_options(options, call = call)
   check_flag(warm_start, "warm_start", call = call)
   div <- check_tmax_divisor(tmax_divisor, call = call)

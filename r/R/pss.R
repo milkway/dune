@@ -115,7 +115,7 @@ spice_pss <- function(deck, freq = 0, tstab = 0, osc_node = NULL, points = 128L,
     pss_abort("{.arg osc_node} must be {.code NULL} or a node name.", call)
   }
   src <- check_deck(deck, call = call)
-  inc <- check_includes(includes, is_path = src$is_path, call = call)
+  inc <- check_includes(includes, is_path = src$is_path, call = call, pic = src$pic_includes)
   opt <- check_options(options, call = call)
   div <- check_tmax_divisor(tmax_divisor, call = call)
 

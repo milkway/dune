@@ -85,7 +85,7 @@ spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
   call <- rlang::current_env()
   .mode <- rlang::arg_match(.mode)
   src <- check_deck(deck, call = call)
-  inc <- check_includes(.includes, is_path = src$is_path, call = call)
+  inc <- check_includes(.includes, is_path = src$is_path, call = call, pic = src$pic_includes)
   opt <- check_options(.options, call = call)
   div <- check_tmax_divisor(.tmax_divisor, call = call)
   threads <- check_threads(.threads, call = call)
