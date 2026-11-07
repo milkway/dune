@@ -1,0 +1,34 @@
+rc pulse train measured
+* written for Dune (.measure vs ngspice-47); not from Berkeley
+v1 in 0 pulse(0 1 1n 1p 1p 4n 10n)
+r1 in out 1k
+c1 out 0 1p
+.tran 10p 30n
+.meas tran trise trig v(out) val=0.1 rise=1 targ v(out) val=0.9 rise=1
+.meas tran tfall trig v(out) val=0.9 fall=2 targ v(out) val=0.1 fall=2
+.meas tran tdly trig v(in) val=0.5 rise=2 targ v(out) val=0.5 rise=2
+.meas tran tat trig at=11n targ v(out) val=0.5 cross=3
+.meas tran tw when v(out)=0.5
+.meas tran tw2 when v(out)=0.5 rise=2
+.meas tran tw3 when v(out)=0.5 fall=last
+.meas tran tw4 when v(out)=0.3 cross=last
+.meas tran tw5 when v(out)=0.5 td=12n
+.meas tran tw6 when v(out)=0.5 from=13n to=25n cross=2
+.meas tran tw7 when v(out)=v(in) cross=2
+.meas tran vat find v(out) at=2.5n
+.meas tran vfind find v(out) when v(in)=0.5 fall=1
+.meas tran ifind find i(v1) when v(out)=0.5 rise=3
+.meas tran vmax max v(out)
+.meas tran vmin min v(out) from=6n to=12n
+.meas tran tmax max_at v(out) from=10n to=20n
+.meas tran tmin min_at v(out) from=4n to=12n
+.meas tran vpp pp v(out) from=10n to=20n
+.meas tran vavg avg v(out)
+.meas tran vavg2 avg v(out) from=5.5n to=17.3n
+.meas tran vrms rms v(out)
+.meas tran vrms2 rms v(out) from=5.5n to=17.3n
+.meas tran vint integ v(out)
+.meas tran vint2 integ v(out) from=5.5n to=17.3n
+.meas tran iint integ i(v1) from=1n to=11n
+.meas tran never when v(out)=5
+.end

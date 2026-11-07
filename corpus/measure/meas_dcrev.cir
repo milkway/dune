@@ -1,0 +1,11 @@
+divider swept backwards and measured
+* written for Dune (.measure vs ngspice-47); not from Berkeley
+v1 in 0 dc 0
+r1 in out 1k
+r2 out 0 3k
+.dc v1 2 -2 -0.1
+.meas dc vx find v(out) at=1.05
+.meas dc vw when v(out)=0.3
+.meas dc vmax max v(out) from=1 to=-1
+.meas dc vavg avg v(out) from=-1.5 to=1.5
+.end

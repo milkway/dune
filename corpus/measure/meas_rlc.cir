@@ -1,0 +1,18 @@
+rlc step ringing measured
+* written for Dune (.measure vs ngspice-47); not from Berkeley
+vin 1 0 pulse(0 1 0 1n 1n 100u 200u)
+r1 1 2 200
+l1 2 3 1m
+c1 3 0 2.5n
+.tran 10n 60u 0 10n
+.meas tran vpeak max v(3)
+.meas tran tpeak max_at v(3)
+.meas tran vvalley min v(3) from=6u to=15u
+.meas tran period trig v(3) val=1 rise=1 targ v(3) val=1 rise=2
+.meas tran period3 trig v(3) val=1 cross=2 targ v(3) val=1 cross=8
+.meas tran tlast when v(3)=1 cross=last
+.meas tran ilfind find i(vin) at=7.5u
+.meas tran vrms rms v(3) from=20u to=60u
+.meas tran vavg avg v(3) from=20u
+.meas tran vpp pp v(3)
+.end

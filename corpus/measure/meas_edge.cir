@@ -1,0 +1,15 @@
+crossing inside the first segment of the window
+* written for Dune (.measure vs ngspice-47); not from Berkeley
+* `first` is a KNOWN_DIFFS entry: ngspice-47 never reports a crossing
+* between the first two points of the window ("out of interval");
+* Dune interpolates it there (0.06). `firstrise` agrees only because
+* the divider is linear (ngspice extrapolates from the next segment).
+v1 in 0 dc 0
+r1 in out 1k
+r2 out 0 1k
+.dc v1 0 2 0.1
+.meas dc first when v(out)=0.03
+.meas dc firstrise when v(out)=0.03 rise=1
+.meas dc second when v(out)=0.08
+.meas dc flat when v(out)=v(out)
+.end

@@ -1,0 +1,25 @@
+rc low-pass bode measured
+* written for Dune (.measure vs ngspice-47); not from Berkeley
+v1 in 0 dc 0 ac 1
+r1 in out 1k
+c1 out 0 159.155n
+r2 out mid 10k
+c2 mid 0 1.59155n
+.ac dec 20 10 1meg
+.meas ac f3db when vdb(out)=-3
+.meas ac f20 when vdb(mid)=-20
+.meas ac f45 when vp(out)=-0.785398
+.meas ac gat find vdb(mid) at=10k
+.meas ac pat find vp(mid) at=10k
+.meas ac mat find vm(out) at=2k
+.meas ac rat find vr(out) at=2k
+.meas ac iat find vi(out) at=2k
+.meas ac vat find v(out) at=2k
+.meas ac pf find vp(mid) when vdb(out)=-10
+.meas ac gmax max vdb(out)
+.meas ac gmin min vm(mid) from=100 to=100k
+.meas ac fmin min_at vp(mid)
+.meas ac gavg avg vm(out) from=10 to=1k
+.meas ac grms rms vm(out) from=10 to=1k
+.meas ac gint integ vm(out) from=100 to=10k
+.end

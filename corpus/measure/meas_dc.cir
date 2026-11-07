@@ -1,0 +1,20 @@
+diode clamp swept and measured
+* written for Dune (.measure vs ngspice-47); not from Berkeley
+v1 in 0 dc 0
+r1 in out 1k
+r2 out 0 1k
+d1 out 0 dmod
+.model dmod d is=1e-14
+.dc v1 -1 2 0.05
+.meas dc vx find v(out) at=1.025
+.meas dc vxw when v(out)=0.55
+.meas dc vxw2 when v(out)=0 cross=1
+.meas dc ix find i(v1) when v(out)=0.5
+.meas dc vmax max v(out)
+.meas dc vmin min v(out) from=0 to=1
+.meas dc vminat min_at v(out)
+.meas dc vavg avg v(out) from=0.5 to=1.5
+.meas dc vint integ v(out) from=0.525 to=1.475
+.meas dc vrms rms v(out) from=-0.5 to=0.5
+.meas dc vpp pp v(out)
+.end

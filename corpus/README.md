@@ -67,3 +67,14 @@ um por linha, `#` comenta. A história de cada entrada fica em
 ## regress/
 
 Um `.cir` mínimo por bug corrigido (regra do `CLAUDE.md`).
+
+## measure/
+
+Decks com cartões `.measure` (issue #11) e, em `measure/golden/`, o
+plot que o ngspice-47 calculou para cada um (`<deck>.raw`) e a saída
+das medidas dele com 15 dígitos (`<deck>.meas`; `FAILED <nome>` para
+as que ele não mede). Gerados por `tools/measure-golden.sh`. **Não**
+são raízes do oráculo (`--ci`): `crates/dune-core/tests/measure_ngspice.rs`
+mede o rawfile do ngspice com a camada do Dune e compara com a
+saída dele — código de medida contra código de medida, nos mesmos
+dados.
