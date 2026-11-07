@@ -560,7 +560,7 @@ fn session_run_is_the_fresh_run_of_the_altered_deck() {
     s.alter(
         "vin",
         "pulse",
-        AlterValue::List(vec![0.0, 2.0, 1e-6, 1e-6, 1e-6, 4e-6, 1e-5]),
+        AlterValue::List(vec![0.0, 2.0, 1e-6, 1e-6, 1e-6, 4e-6, 10.0 * 1e-6]),
     )
     .unwrap();
     s.set_temp(50.0).unwrap();
@@ -568,7 +568,8 @@ fn session_run_is_the_fresh_run_of_the_altered_deck() {
         .replace("r1 1 2 1k", "r1 1 2 2048")
         .replace("pulse(0 1 1u", "pulse(0 2 1u")
         .replace(".options reltol=1e-4", ".options reltol=1e-4 temp=50");
-    // `1u` and 1e-6 are the same f64 (checked by the equality).
+    // The card's doubles: `INPevaluate` reads `10u` as 10 * 1e-6
+    // (not 1e-5; two roundings), `1u` as 1e-6.
     let got = s.run().unwrap().to_json();
     let want = run(&altered, &SimOptions::default()).unwrap();
     assert_eq!(got, want);
