@@ -65,7 +65,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::ops::Range;
 
-use rpic_core::ir::{Drawing, MacroCall, Shape};
+use rpic_core::ir::{Drawing, MacroCall, PlaceInfo, Shape};
 use rpic_core::{CompileOptions, IncludePolicy};
 
 use crate::connect::{Pt, UnionFind, join_geometry};
@@ -248,6 +248,61 @@ pub struct ElementOverlay {
     pub pins: Vec<PinOverlay>,
 }
 
+/// The page frame of the SVG [`render_svg`] draws (issue #19): what
+/// maps a point of the compiled drawing — [`PinOverlay::x`]/`y`, in
+/// pic inches with y up — to SVG user units (the root `viewBox`
+/// space, 96 per inch, y down). Exactly:
+///
+/// ```text
+/// sx = (x + origin[0]) · 96
+/// sy = (h − (y + origin[1])) · 96
+/// ```
+///
+/// ([`Self::to_svg`]). This is rpic's own frame — the `canvas` of its
+/// scene export (`origin` is where the pic origin sits, measured from
+/// the page's lower-left corner; `w`/`h` the page size in inches,
+/// margins and stroke padding included, so the `viewBox` is `0 0 w·96
+/// h·96`), computed here at full precision instead of the scene's six
+/// decimals. Note the signs (`+ origin`) and that `rescale` does not
+/// enter: the drawing's coordinates, pins included, are already past
+/// the whole-picture rescale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasOverlay {
+    /// Page width and height in inches (`viewBox` = `0 0 w·96 h·96`).
+    pub w: f64,
+    pub h: f64,
+    /// The pic origin, in inches from the page's lower-left corner.
+    pub origin: [f64; 2],
+    /// The whole-picture rescale factor (`.PS <width>`, `maxpswid`,
+    /// `maxpsht`; 1 when none) — informational: the shapes and pins
+    /// already carry it.
+    pub rescale: f64,
+}
+
+impl Default for CanvasOverlay {
+    fn default() -> Self {
+        Self {
+            w: 0.0,
+            h: 0.0,
+            origin: [0.0, 0.0],
+            rescale: 1.0,
+        }
+    }
+}
+
+impl CanvasOverlay {
+    /// SVG user units of the drawing point `(x, y)` (pic inches).
+    pub fn to_svg(&self, x: f64, y: f64) -> (f64, f64) {
+        (
+            (x + self.origin[0]) * SVG_PPI,
+            (self.h - (y + self.origin[1])) * SVG_PPI,
+        )
+    }
+}
+
+/// rpic's SVG scale, user units per inch (dpic's `dpPPI`).
+const SVG_PPI: f64 = 96.0;
+
 /// One terminal of an element: where it is drawn and the net it is on.
 ///
 /// Element pins are invisible markers inside the element's own shapes,
@@ -262,7 +317,8 @@ pub struct PinOverlay {
     pub net: String,
     /// The terminal point, in pic inches, in the frame of the compiled
     /// drawing's shapes (y up, after the whole-picture rescale) — the
-    /// frame of rpic's scene, which maps it to SVG pixels.
+    /// frame of rpic's scene; [`OverlayMap::canvas`] maps it to the
+    /// SVG's user units.
     pub x: f64,
     pub y: f64,
 }
@@ -293,6 +349,8 @@ pub struct OverlayMap {
     pub elements: Vec<ElementOverlay>,
     /// Named nets, in order of first appearance (`0` first if present).
     pub nets: Vec<NetOverlay>,
+    /// The frame that maps pins to the SVG of [`render_svg`].
+    pub canvas: CanvasOverlay,
 }
 
 /// The result of [`extract`].
@@ -323,7 +381,7 @@ pub fn render_svg(src: &str, opts: &ExtractOptions) -> Result<String, PicError> 
 
 /// Extract a SPICE3 netlist from a pic figure.
 pub fn extract(src: &str, opts: &ExtractOptions) -> Result<Extraction, PicError> {
-    let c = compile(src, opts)?;
+    let mut c = compile(src, opts)?;
     let marked = c
         .drawing
         .vars
@@ -337,7 +395,61 @@ pub fn extract(src: &str, opts: &ExtractOptions) -> Result<Extraction, PicError>
     } else {
         DEFAULT_SNAP
     };
-    Ok(Extractor::new(src, &c, snap).run())
+    let canvas = canvas_of(&mut c.drawing);
+    let mut ex = Extractor::new(src, &c, snap).run();
+    ex.map.canvas = canvas;
+    Ok(ex)
+}
+
+/// The SVG page frame of `d` ([`CanvasOverlay`]), from rpic's SVG
+/// transform itself: `svg::place_points` maps places through the very
+/// function the emitter draws with, so a probe place at the pic origin
+/// gives the translation exactly; the page size follows rpic's
+/// `canvas_frame` (content bounds — the union of the shapes' SVG bounds
+/// rpic reports per object — or a fixed `canvas`, plus stroke padding
+/// and margins).
+fn canvas_of(d: &mut Drawing) -> CanvasOverlay {
+    let saved = std::mem::take(&mut d.places);
+    d.places.push(PlaceInfo {
+        label: String::new(),
+        at: rpic_core::geom::Point::new(0.0, 0.0),
+        block: None,
+        span: None,
+    });
+    let o = rpic_core::svg::place_points(d)[0];
+    d.places = saved;
+    let (raw_w, raw_h) = match d.canvas {
+        Some(b) if !b.is_empty() => (b.width(), b.height()),
+        Some(_) => (0.0, 0.0),
+        None => {
+            // Object bboxes are in SVG units: (x, y, w, h), y down.
+            let mut lo = (f64::INFINITY, f64::INFINITY);
+            let mut hi = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for g in rpic_core::svg::object_geometries(d) {
+                if let Some((x, y, w, h)) = g.bbox {
+                    lo = (lo.0.min(x), lo.1.min(y));
+                    hi = (hi.0.max(x + w), hi.1.max(y + h));
+                }
+            }
+            if lo.0.is_finite() {
+                ((hi.0 - lo.0) / SVG_PPI, (hi.1 - lo.1) / SVG_PPI)
+            } else {
+                (0.0, 0.0)
+            }
+        }
+    };
+    let pad = d.prelude_thick.max(0.0) / 144.0;
+    let m = d.canvas_margin;
+    let extent = |v: f64| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+    let w = extent(raw_w + 6.0 * pad + m.horizontal());
+    let h = extent(raw_h + 6.0 * pad + m.vertical());
+    // place_points(0, 0) = (ox · 96, (h − oy) · 96).
+    CanvasOverlay {
+        w,
+        h,
+        origin: [o.x / SVG_PPI, h - o.y / SVG_PPI],
+        rescale: d.rescale,
+    }
 }
 
 /// A compiled figure.
