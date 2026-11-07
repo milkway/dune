@@ -60,8 +60,9 @@
 #![forbid(unsafe_code)]
 
 mod connect;
+mod spans;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 
@@ -246,6 +247,83 @@ pub struct ElementOverlay {
     /// The element's terminals, in card order (the nodes of its card);
     /// empty for a `K`, which has none.
     pub pins: Vec<PinOverlay>,
+    /// Where the element's value/model argument is in the user's
+    /// source — the text an editor replaces to write a new value back
+    /// (issue #17).
+    ///
+    /// `Some` only when the card's value is that argument of a call to
+    /// one of the prelude's own element macros (`R1: resistor(A, B,
+    /// 1k)`), written in the user's figure. `None` when there is none
+    /// to point at: an element without a value argument (`vsource(A,
+    /// B)`), a `K` (`coupling(L1, L2, k)` spreads its card over three
+    /// arguments), an inline block, and every element whose outermost
+    /// call is a user wrapper macro — the value then comes from the
+    /// drawn fallback or from a wrapper argument, and neither is a span
+    /// an edit can be trusted to land in. A display text (the argument
+    /// after the value) never changes this: the span stays the value's.
+    pub value: Option<ValueSpanOverlay>,
+    /// The alterable parameters spelled inside [`Self::value`], in
+    /// source order, named as `alter(refdes, param, …)` names them
+    /// (`dune_core::Circuit::alter`): for `V`/`I` sources `dc`,
+    /// `acmag`, `acphase` (each the span of its number only: `AC 1 90`
+    /// gives `acmag` = `1` and `acphase` = `90`) and the transient
+    /// functions `pulse`, `sin`, `exp`, `pwl`, `sffm`, `trnoise`,
+    /// `trrandom` (each the whole spelling, keyword and parentheses
+    /// included: `PULSE(0 5 0 1u 1u 10m 20m)`); for `R`/`C`/`L`/`E`/`G`
+    /// the principal value (the leading number) and `ic` (`IC=…`,
+    /// `C`/`L`); `gain` of an `F`/`H` (`Vname gain`); `area` (the
+    /// number after the model, or `AREA=`) and `temp` (`TEMP=`) of a
+    /// `D`/`Q`/`J`; `w`, `l`, `temp` (`W=`…) of an `M`. Only what is
+    /// spelled is listed (a source with no `DC` field has no `dc`
+    /// entry), and a parameter spelled twice is listed once, at its
+    /// last spelling (the one SPICE keeps). Empty when
+    /// [`Self::value`] is `None`.
+    pub params: Vec<ParamSpanOverlay>,
+    /// The parameter `alter(refdes, value)` (empty parameter name)
+    /// changes for this element's letter: `resistance`, `capacitance`,
+    /// `inductance`, `dc` (`V`/`I`), `gain` (`E`/`F`/`G`/`H`), `area`
+    /// (`D`/`Q`/`J`); `None` for letters `alter` has no principal for
+    /// (`M`, `S`, `W`, `X`, `T`, `O`, `K`). Independent of
+    /// [`Self::value`].
+    pub principal: Option<String>,
+}
+
+/// A range of the user's figure source (never the prelude): 1-based
+/// lines and columns, as the diagnostics' [`PicSpan`], from
+/// `(line, col)` to `(end_line, end_col)`, end exclusive. Columns
+/// count **chars** (Unicode scalar values) from the start of the line —
+/// not bytes, not UTF-16 code units: a JavaScript consumer indexes a
+/// line by code point (`Array.from(line)`), not by `line[i]`, when the
+/// line holds characters outside the BMP. Lines are split at `\n`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PicRange {
+    pub line: u32,
+    pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+}
+
+/// [`ElementOverlay::value`]: the value argument's range and its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueSpanOverlay {
+    /// The range of `text` in the user's source. It spans lines when
+    /// the argument is split by `\` continuations.
+    pub span: PicRange,
+    /// The source text in `span`, verbatim (`4.7k`, `AC 1`, `SIN(0 1
+    /// 1k)`; `\` continuations kept). A quoted argument (`"DX"`) gives
+    /// the range and text inside the quotes — the card's value.
+    pub text: String,
+}
+
+/// One entry of [`ElementOverlay::params`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParamSpanOverlay {
+    /// The `alter` parameter name (`dc`, `acmag`, `pulse`, …).
+    pub name: String,
+    /// Its range in the user's source, inside the value's range.
+    pub span: PicRange,
+    /// The source text in `span`.
+    pub text: String,
 }
 
 /// The page frame of the SVG [`render_svg`] draws (issue #19): what
@@ -460,6 +538,9 @@ struct Compiled {
     directives: Vec<String>,
     /// Lines the prelude occupies ahead of the user source.
     prelude_lines: u32,
+    /// The prelude's own element macros (its `define`s not named
+    /// `__…`): a call to one of these is an element's own call.
+    element_macros: HashSet<String>,
 }
 
 fn compile(src: &str, opts: &ExtractOptions) -> Result<Compiled, PicError> {
@@ -501,10 +582,22 @@ fn compile(src: &str, opts: &ExtractOptions) -> Result<Compiled, PicError> {
         .filter(|l| l.span.file.is_none() && l.span.line > prelude_lines)
         .map(|l| directive_text(&l.text))
         .collect();
+    let element_macros = prelude
+        .lines()
+        .filter_map(|l| l.trim_start().strip_prefix("define"))
+        .filter(|r| r.starts_with(char::is_whitespace))
+        .filter_map(|r| {
+            r.split(|c: char| c.is_whitespace() || c == '{')
+                .find(|w| !w.is_empty())
+        })
+        .filter(|n| !n.starts_with("__"))
+        .map(str::to_string)
+        .collect();
     Ok(Compiled {
         drawing,
         directives,
         prelude_lines,
+        element_macros,
     })
 }
 
@@ -598,6 +691,8 @@ struct Element {
     /// Terminal index of each pin, in card order.
     terms: Vec<usize>,
     value: String,
+    /// The call argument `value` was read from, when it was.
+    value_arg: Option<usize>,
     block: usize,
     /// The element's call site in the user source.
     span: Option<PicSpan>,
@@ -617,6 +712,7 @@ struct Extractor<'a> {
     d: &'a Drawing,
     directives: &'a [String],
     prelude_lines: u32,
+    element_macros: &'a HashSet<String>,
     snap: f64,
     diags: Vec<PicDiagnostic>,
     places: Vec<Place>,
@@ -629,6 +725,7 @@ impl<'a> Extractor<'a> {
             d: &c.drawing,
             directives: &c.directives,
             prelude_lines: c.prelude_lines,
+            element_macros: &c.element_macros,
             snap,
             diags: Vec::new(),
             places: Vec::new(),
@@ -1041,10 +1138,21 @@ impl<'a> Extractor<'a> {
                     y: terms[k].at.1,
                 })
                 .collect();
+            let letter = e.refdes.chars().next().unwrap_or(' ').to_ascii_uppercase();
+            let (value, params) = match e
+                .value_arg
+                .and_then(|k| self.value_span(e.block, k, letter))
+            {
+                Some((v, p)) => (Some(v), p),
+                None => (None, Vec::new()),
+            };
             map.elements.push(ElementOverlay {
                 refdes: e.refdes.clone(),
                 shapes: lo..hi,
                 pins,
+                value,
+                params,
+                principal: spans::principal(letter).map(str::to_string),
             });
         }
         for dir in self.directives {
@@ -1111,7 +1219,7 @@ impl<'a> Extractor<'a> {
     ) -> Option<Element> {
         let d = self.d;
         let Some(refdes) = d.blocks[b].label.clone() else {
-            let value = self.value(b, ms, ' ').unwrap_or_default();
+            let value = self.value(b, ms, ' ').map(|v| v.0).unwrap_or_default();
             let at = ms.first().map(|m| m.2).unwrap_or((0.0, 0.0));
             let msg = format!(
                 "element without a label (refdes) at ({:.3}, {:.3}){}; skipped — write `R1: resistor(…)`",
@@ -1201,7 +1309,7 @@ impl<'a> Extractor<'a> {
             return None;
         }
         seen.insert(key, refdes.clone());
-        let Some(value) = value else {
+        let Some((value, value_arg)) = value else {
             self.diag(
                 PicSeverity::Error,
                 PicDiagKind::MissingValue,
@@ -1217,6 +1325,7 @@ impl<'a> Extractor<'a> {
                 pins,
                 terms: pin_terms,
                 value: String::new(),
+                value_arg: None,
                 block: b,
                 span,
             });
@@ -1241,6 +1350,7 @@ impl<'a> Extractor<'a> {
             pins,
             terms: pin_terms,
             value,
+            value_arg,
             block: b,
             span,
         })
@@ -1345,7 +1455,16 @@ impl<'a> Extractor<'a> {
     /// argument (an argument itself split over lines, see
     /// [`Self::raw_arg`]); the drawn text (no call — an inline block —
     /// or a mismatch).
-    fn value(&self, b: usize, ms: &[(usize, &'a str, Pt)], letter: char) -> Option<String> {
+    ///
+    /// With the value, the index of the call argument it was read from
+    /// (`None` for a fallback and for a `K`), for
+    /// [`ElementOverlay::value`].
+    fn value(
+        &self,
+        b: usize,
+        ms: &[(usize, &'a str, Pt)],
+        letter: char,
+    ) -> Option<(String, Option<usize>)> {
         let coupling = letter == 'K';
         let drawn = self.value_text(b);
         // A drawn display is not the value: nothing to fall back on.
@@ -1353,9 +1472,9 @@ impl<'a> Extractor<'a> {
         let fallback = if shows_display {
             None
         } else if coupling {
-            Some(String::new())
+            Some((String::new(), None))
         } else {
-            Some(drawn.clone())
+            Some((drawn.clone(), None))
         };
         let k = match letter {
             'E' | 'G' => 4,
@@ -1397,9 +1516,9 @@ impl<'a> Extractor<'a> {
         }
         let pick = |i: usize| unquote(&self.raw_arg(call, i)).trim().to_string();
         Some(if coupling {
-            (0..3).map(pick).collect::<Vec<_>>().join(" ")
+            ((0..3).map(pick).collect::<Vec<_>>().join(" "), None)
         } else {
-            pick(k)
+            (pick(k), Some(k))
         })
     }
 
@@ -1419,6 +1538,40 @@ impl<'a> Extractor<'a> {
             }
             _ => call.args[i].clone(),
         }
+    }
+
+    /// [`ElementOverlay::value`] and [`ElementOverlay::params`] of the
+    /// element of block `b` whose value is argument `k` of its call:
+    /// only for a call to one of the prelude's element macros whose
+    /// raw argument is in the user's source.
+    fn value_span(
+        &self,
+        b: usize,
+        k: usize,
+        letter: char,
+    ) -> Option<(ValueSpanOverlay, Vec<ParamSpanOverlay>)> {
+        let call = self.d.blocks[b].call.as_ref()?;
+        if !self.element_macros.contains(&call.name) || call.raw_args.len() != call.args.len() {
+            return None;
+        }
+        let raw = call.raw_args.get(k)?;
+        if raw.span.file.is_some() || raw.span.line <= self.prelude_lines {
+            return None;
+        }
+        let chars: Vec<char> = raw.text.chars().collect();
+        let pos = spans::positions(&chars, raw.span.line - self.prelude_lines, raw.span.col);
+        // The layout must land where rpic says the argument ends;
+        // anything else (a source convention this walk does not
+        // share) gives no span rather than a wrong one.
+        if pos[chars.len()] != (raw.end_line - self.prelude_lines, raw.span.end_col) {
+            return None;
+        }
+        let (a, z) = spans::value_range(&chars);
+        let value = ValueSpanOverlay {
+            span: spans::range(&pos, a, z),
+            text: chars[a..z].iter().collect(),
+        };
+        Some((value, spans::param_overlays(letter, &chars, a, z, &pos)))
     }
 
     /// The first text shape inside block `b` (any depth), lines joined
