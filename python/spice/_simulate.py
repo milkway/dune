@@ -71,6 +71,7 @@ def simulate(
     *,
     includes: Mapping[str, str] | None = None,
     options: Mapping[str, OptionValue] | None = None,
+    tmax_divisor: float | None = None,
 ) -> Result:
     """Parse a SPICE3 deck, build it and run every analysis card in it.
 
@@ -99,6 +100,14 @@ def simulate(
             ``gminsteps``, ``srcsteps``, ``maxord``), ``temp``/``tnom`` in
             degrees Celsius as on the card, ``method`` as ``"trap"`` or
             ``"gear"``, ``noopiter``/``nopage`` as bools.
+        tmax_divisor: Divide the maximum step of every ``.tran`` card -- its
+            TMAX argument, else the default ``min(TSTEP, (TSTOP-TSTART)/50)``
+            -- by this finite number ``>= 1``: the run is, bit for bit, that
+            of the deck with the card's TMAX edited to ``TMAX/tmax_divisor``
+            (with ``options={"trtol": 1}``, the "fine steps" view of a
+            waveform). It is an argument rather than an ``options`` key
+            because TMAX is a parameter of the analysis card, not an engine
+            option. ``None`` (the default) leaves the cards as they are.
 
     Returns:
         The plots of every analysis, the run's notes and its warnings.
@@ -107,8 +116,9 @@ def simulate(
         SpiceError: the deck does not parse, does not build or an analysis
             fails; :attr:`SpiceError.kind` tells which.
         ValueError: an unknown option name (the message lists the valid
-            ones) or an invalid option value; ``includes`` with a deck file.
-        TypeError: an option value of the wrong type.
+            ones) or an invalid option value; a ``tmax_divisor`` below 1 or
+            not finite; ``includes`` with a deck file.
+        TypeError: an option value (or ``tmax_divisor``) of the wrong type.
         OSError: the deck file cannot be read (``FileNotFoundError`` when it
             does not exist).
     """
@@ -119,5 +129,6 @@ def simulate(
             path,
             None if includes is None else dict(includes),
             None if options is None else dict(options),
+            tmax_divisor,
         )
     return Result(native)

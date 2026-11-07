@@ -31,8 +31,9 @@ class WarmStats(NamedTuple):
 class Session:
     """A live circuit: parsed and elaborated once, altered and re-run.
 
-    The deck argument, ``includes`` and ``options`` are those of
-    :func:`simulate`. :meth:`alter` changes one element parameter in place
+    The deck argument, ``includes``, ``options`` and ``tmax_divisor`` are
+    those of :func:`simulate` (:attr:`tmax_divisor` can change between
+    runs). :meth:`alter` changes one element parameter in place
     (the spice3 ``alter`` command, with ngspice's parameter names) and
     :meth:`run` runs every analysis card of the deck again, skipping the
     parse and the elaboration.
@@ -66,6 +67,7 @@ class Session:
         *,
         includes: Mapping[str, str] | None = None,
         options: Mapping[str, OptionValue] | None = None,
+        tmax_divisor: float | None = None,
     ) -> None:
         text, path = _deck_source(netlist, includes)
         with _native_errors():
@@ -74,6 +76,7 @@ class Session:
                 path,
                 None if includes is None else dict(includes),
                 None if options is None else dict(options),
+                tmax_divisor,
             )
 
     @overload
@@ -147,6 +150,24 @@ class Session:
     def temp(self, celsius: float) -> None:
         with _native_errors():
             self._native.set_temp(celsius)
+
+    @property
+    def tmax_divisor(self) -> float | None:
+        """The divisor of every ``.tran`` card's maximum step (``None``: none).
+
+        As the ``tmax_divisor`` argument of :func:`simulate`; assigning it
+        (a finite number ``>= 1``, or ``None``) applies from the next
+        :meth:`run` on, without re-elaborating -- a "fine steps" toggle.
+
+        Raises:
+            ValueError: below 1 or not finite (the value is left as it was).
+            TypeError: not a number.
+        """
+        return self._native.tmax_divisor()
+
+    @tmax_divisor.setter
+    def tmax_divisor(self, d: float | None) -> None:
+        self._native.set_tmax_divisor(d)
 
     @property
     def warm_start(self) -> bool:

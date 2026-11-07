@@ -459,6 +459,46 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
     Ok(out)
 }
 
+/// A `tmax_divisor` argument: `None`, or a finite number >= 1 (bools
+/// refused). It is an argument, not an `options` key: it scales the
+/// TMAX of every `.tran` card, a parameter of the analysis card
+/// rather than an engine option (`Options::tmax_divisor`).
+fn divisor_value(v: Option<&Bound<'_, PyAny>>) -> PyResult<Option<f64>> {
+    let Some(v) = v.filter(|v| !v.is_none()) else {
+        return Ok(None);
+    };
+    if v.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(
+            "tmax_divisor must be a number, not bool",
+        ));
+    }
+    let d: f64 = v
+        .extract()
+        .map_err(|_| PyTypeError::new_err("tmax_divisor must be a number"))?;
+    if !(d >= 1.0 && d.is_finite()) {
+        return Err(PyValueError::new_err(format!(
+            "tmax_divisor must be a finite number >= 1, got {d}"
+        )));
+    }
+    Ok(Some(d))
+}
+
+/// The caller's `options` and `tmax_divisor` as setters, validated
+/// before any parsing work and applied over the deck's `.options`.
+fn overrides_of(
+    options: Option<&Bound<'_, PyDict>>,
+    tmax_divisor: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Vec<Override>> {
+    let mut out = match options {
+        Some(d) => parse_overrides(d)?,
+        None => Vec::new(),
+    };
+    if let Some(d) = divisor_value(tmax_divisor)? {
+        out.push(Box::new(move |o: &mut Options| o.tmax_divisor = Some(d)));
+    }
+    Ok(out)
+}
+
 fn diag_list<'py>(py: Python<'py>, diags: &[Diag]) -> PyResult<Bound<'py, PyList>> {
     let list = PyList::empty(py);
     for d in diags {
@@ -621,7 +661,7 @@ fn _measure<'py>(
     }
 }
 
-/// `_simulate(text, path, includes, options) -> dict`.
+/// `_simulate(text, path, includes, options, tmax_divisor) -> dict`.
 ///
 /// Exactly one of `text` (a deck; `.include` from `includes`) and
 /// `path` (a deck file; `.include` on disk) is given. Returns
@@ -631,21 +671,19 @@ fn _measure<'py>(
 /// [dict]}`. The GIL is
 /// released while the simulation runs.
 #[pyfunction]
-#[pyo3(signature = (text, path, includes, options))]
+#[pyo3(signature = (text, path, includes, options, tmax_divisor=None))]
 fn _simulate<'py>(
     py: Python<'py>,
     text: Option<String>,
     path: Option<PathBuf>,
     includes: Option<BTreeMap<String, String>>,
     options: Option<Bound<'py, PyDict>>,
+    tmax_divisor: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let source = source(text, path, includes)?;
     // Validated before any parsing work; applied over the deck's
     // `.options` inside `run`.
-    let overrides = match &options {
-        Some(d) => parse_overrides(d)?,
-        None => Vec::new(),
-    };
+    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
     let outcome = py.detach(|| guarded(|| run(&source, &overrides)));
 
     outcome_dict(py, outcome)
@@ -712,7 +750,7 @@ impl SessionBase {
     }
 }
 
-/// `_Session(text, path, includes, options)`: a deck parsed and
+/// `_Session(text, path, includes, options, tmax_divisor)`: a deck parsed and
 /// elaborated once, altered and re-run (issue #12). The public
 /// wrapper is `spice.Session`; failures raise `NativeError` with the
 /// kinds of `_simulate`, plus `alter` for a refused alteration.
@@ -729,19 +767,17 @@ fn alter_failure(py: Python<'_>, e: dune_core::Error) -> PyErr {
 #[pymethods]
 impl NativeSession {
     #[new]
-    #[pyo3(signature = (text, path, includes, options))]
+    #[pyo3(signature = (text, path, includes, options, tmax_divisor=None))]
     fn new(
         py: Python<'_>,
         text: Option<String>,
         path: Option<PathBuf>,
         includes: Option<BTreeMap<String, String>>,
         options: Option<Bound<'_, PyDict>>,
+        tmax_divisor: Option<Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let source = source(text, path, includes)?;
-        let overrides = match &options {
-            Some(d) => parse_overrides(d)?,
-            None => Vec::new(),
-        };
+        let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
         let opened = py.detach(|| {
             guarded(|| {
                 let Prepared {
@@ -830,6 +866,18 @@ impl NativeSession {
         self.session.set_warm_start(on);
     }
 
+    /// `set_tmax_divisor(d)`: `None` or a finite number >= 1, for the
+    /// next runs (the circuit is kept).
+    #[pyo3(signature = (d=None))]
+    fn set_tmax_divisor(&mut self, d: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+        self.session.options_mut().tmax_divisor = divisor_value(d.as_ref())?;
+        Ok(())
+    }
+
+    fn tmax_divisor(&self) -> Option<f64> {
+        self.session.options().tmax_divisor
+    }
+
     fn warm_start(&self) -> bool {
         self.session.warm_start()
     }
@@ -857,7 +905,8 @@ impl NativeSession {
     }
 }
 
-/// `_sweep(text, path, includes, options, params, rows, threads) -> dict`.
+/// `_sweep(text, path, includes, options, params, rows, threads,
+/// tmax_divisor) -> dict`.
 ///
 /// The deck as in `_simulate`; `params` are the swept quantities (see
 /// `dune_core::SweepParam`), `rows` one list of values per run,
@@ -867,7 +916,7 @@ impl NativeSession {
 /// "message"}]}`. Bad parameter names or rows raise `ValueError`.
 /// The GIL is released while the runs execute.
 #[pyfunction]
-#[pyo3(signature = (text, path, includes, options, params, rows, threads))]
+#[pyo3(signature = (text, path, includes, options, params, rows, threads, tmax_divisor=None))]
 #[allow(clippy::too_many_arguments)]
 fn _sweep<'py>(
     py: Python<'py>,
@@ -878,12 +927,10 @@ fn _sweep<'py>(
     params: Vec<String>,
     rows: Vec<Vec<f64>>,
     threads: usize,
+    tmax_divisor: Option<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let source = source(text, path, includes)?;
-    let overrides = match &options {
-        Some(d) => parse_overrides(d)?,
-        None => Vec::new(),
-    };
+    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
     let params = params
         .iter()
         .map(|p| SweepParam::parse(p).map_err(|e| PyValueError::new_err(e.to_string())))

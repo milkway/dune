@@ -36,6 +36,7 @@ def sweep(
     includes: Mapping[str, str] | None = None,
     options: Mapping[str, OptionValue] | None = None,
     threads: int = 1,
+    tmax_divisor: float | None = None,
 ) -> SweepResult:
     """Run a SPICE3 deck once per parameter assignment.
 
@@ -75,6 +76,7 @@ def sweep(
             ``0`` uses one per core; ``n`` uses ``n``. Results are identical
             either way -- every run is an independent circuit. The GIL is
             released while the runs execute.
+        tmax_divisor: As in :func:`simulate`, for every run.
 
     Returns:
         A :class:`SweepResult`: one :class:`Result` per run plus tidy frames
@@ -84,7 +86,7 @@ def sweep(
         ValueError: an unknown element or parameter, a parameter given
             twice, unequal lengths in ``"zip"`` mode, a non-finite value, a
             negative ``threads``; and what :func:`simulate` raises for
-            ``options``/``includes``.
+            ``options``/``includes``/``tmax_divisor``.
         SpiceError: the deck does not parse, or a run fails to build or
             simulate (the message names the run and its values).
         OSError: the deck file cannot be read.
@@ -131,6 +133,7 @@ def sweep(
             names,
             rows,
             threads,
+            tmax_divisor,
         )
     except _spice.NativeError as e:
         kind, message, diags = e.args
