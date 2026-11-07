@@ -218,9 +218,24 @@ export interface PicExtraction {
  */
 export interface OverlayMap {
   /** In card order; ids `s{start}` … `s{end-1}`. */
-  elements: { refdes: string; shapes: { start: number; end: number } }[];
+  elements: { refdes: string; shapes: { start: number; end: number }; pins: OverlayPin[] }[];
   /** Named nets (`0` first), with their wires, dots and ground symbols. */
   nets: { name: string; shapes: number[] }[];
+}
+
+/**
+ * One terminal of an element, in card order. Pins are drawn inside the
+ * element, so a net whose elements touch pin to pin has no `shapes` of
+ * its own: probe it at its pins.
+ */
+export interface OverlayPin {
+  /** Prelude pin name: `P`, `N`, `C`, `B`, `E`, `D`, `G`, `S`, `Inp`, `Cp`, `P1`, … */
+  name: string;
+  /** The net it is on (a `name` of {@link OverlayMap.nets}). */
+  net: string;
+  /** Terminal point in pic inches, the frame of rpic's scene (y up). */
+  x: number;
+  y: number;
 }
 
 export interface PicRun extends Rawfile {

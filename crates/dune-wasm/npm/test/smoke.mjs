@@ -34,6 +34,14 @@ assert.equal(ex.netlist, corpus('golden/rc.cir'));
 assert.deepEqual(ex.map.elements.map((e) => e.refdes), ['V1', 'R1', 'C1']);
 assert.equal(typeof ex.map.elements[0].shapes.start, 'number');
 assert.equal(ex.map.nets[0].name, '0');
+// Pins: card order, nets of the map, terminal points in pic inches
+// (R1 runs from Vin (0,1.5) to Vout (2.5,1.5)).
+const r1 = ex.map.elements[1];
+assert.deepEqual(r1.pins.map((p) => [p.name, p.net]), [['P', 'Vin'], ['N', 'Vout']]);
+assert.ok(Math.abs(r1.pins[0].x) < 1e-9 && Math.abs(r1.pins[0].y - 1.5) < 1e-9);
+assert.ok(Math.abs(r1.pins[1].x - 2.5) < 1e-9 && Math.abs(r1.pins[1].y - 1.5) < 1e-9);
+const netNames = new Set(ex.map.nets.map((n) => n.name));
+assert.ok(ex.map.elements.every((e) => e.pins.every((p) => netNames.has(p.net))));
 
 // simulatePic: the RC charges to 5(1 - e^-5) V by 5 ms.
 const run = simulatePic(rc, { snap: 0.001 });

@@ -420,7 +420,9 @@ pub struct PicJson {
 ///
 /// ```json
 /// {
-///   "elements": [ { "refdes": "R1", "shapes": { "start": 12, "end": 19 } }, ... ],
+///   "elements": [ { "refdes": "R1", "shapes": { "start": 12, "end": 19 },
+///                   "pins": [ { "name": "P", "net": "in", "x": 0, "y": 1.5 },
+///                             { "name": "N", "net": "out", "x": 2.5, "y": 1.5 } ] }, ... ],
 ///   "nets": [ { "name": "0", "shapes": [ 30, 31, 32 ] }, { "name": "out", "shapes": [ 27 ] }, ... ]
 /// }
 /// ```
@@ -433,7 +435,14 @@ pub struct PicJson {
 ///
 /// * `elements` — one per emitted card, in card order; `shapes` is
 ///   the element block's half-open range: ids `s{start}` …
-///   `s{end-1}`.
+///   `s{end-1}`; `pins` are its terminals in card order (none for a
+///   `K`): the prelude pin `name` (`P`, `N`, `C`, `B`, `E`, `D`, `G`,
+///   `S`, …), the `net` it is on (a `name` of `nets`) and the terminal
+///   point `x`, `y` in pic inches — the frame of the drawing's shapes
+///   and of rpic's scene (y up), which the scene maps to SVG pixels.
+///   Pins are drawn inside the element, so a net whose elements touch
+///   pin to pin has no `shapes` of its own; its pins are where to probe
+///   it.
 /// * `nets` — named nets in order of first appearance, ground (`0`)
 ///   first when present; `shapes` are the net's wires, junction dots
 ///   and ground symbols, sorted (named places draw nothing, so a net
@@ -450,6 +459,17 @@ pub struct OverlayMapJson {
 pub struct ElementOverlayJson {
     pub refdes: String,
     pub shapes: ShapeRangeJson,
+    pub pins: Vec<PinOverlayJson>,
+}
+
+/// One terminal of an [`ElementOverlayJson`] (mirrors
+/// [`dune_pic::PinOverlay`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PinOverlayJson {
+    pub name: String,
+    pub net: String,
+    pub x: f64,
+    pub y: f64,
 }
 
 /// A half-open range of shape numbers, `{ "start": a, "end": b }`.
@@ -478,6 +498,16 @@ impl From<&OverlayMap> for OverlayMapJson {
                         start: e.shapes.start,
                         end: e.shapes.end,
                     },
+                    pins: e
+                        .pins
+                        .iter()
+                        .map(|p| PinOverlayJson {
+                            name: p.name.clone(),
+                            net: p.net.clone(),
+                            x: p.x,
+                            y: p.y,
+                        })
+                        .collect(),
                 })
                 .collect(),
             nets: m
