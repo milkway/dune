@@ -12,6 +12,7 @@ from typing import cast
 from . import _spice
 from ._errors import Diagnostic, ErrorKind, PssConvergenceError, SpiceError
 from ._result import Result
+from .pic import PicExtraction, _runnable
 
 __all__ = ["OPTION_NAMES", "OptionValue", "simulate"]
 
@@ -23,9 +24,18 @@ OPTION_NAMES: tuple[str, ...] = tuple(_spice.OPTION_NAMES)
 
 
 def _deck_source(
-    netlist: str | os.PathLike[str], includes: Mapping[str, str] | None
-) -> tuple[str | None, str | None]:
-    """``(text, path)`` of a deck argument, with the checks of :func:`simulate`."""
+    netlist: str | os.PathLike[str] | PicExtraction, includes: Mapping[str, str] | None
+) -> tuple[str | None, str | None, dict[str, str] | None]:
+    """``(text, path, includes)`` of a deck argument, with the checks of :func:`simulate`."""
+    if isinstance(netlist, PicExtraction):
+        if includes is not None:
+            raise ValueError(
+                "includes does not apply to a PicExtraction: its .include files "
+                "come with the figure (pass them to spice.pic.extract)"
+            )
+        text, pic_inc = _runnable(netlist)
+        return text, None, pic_inc
+    inc = None if includes is None else dict(includes)
     if isinstance(netlist, str):
         # A str is deck text, never a file name -- but a one-line str
         # that names an existing file is a classic slip that would
@@ -35,7 +45,7 @@ def _deck_source(
                 f"{netlist!r} is deck TEXT here, but it names an existing "
                 "file; pass pathlib.Path(...) to simulate a deck file"
             )
-        return netlist, None
+        return netlist, None, inc
     if isinstance(netlist, os.PathLike):
         if includes is not None:
             raise ValueError(
@@ -44,9 +54,10 @@ def _deck_source(
         path = os.fspath(netlist)
         if not Path(path).exists():
             raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
-        return None, path
+        return None, path, None
     raise TypeError(
-        f"netlist must be a str (deck text) or a path, not {type(netlist).__name__}"
+        f"netlist must be a str (deck text), a path or a spice.pic.PicExtraction, "
+        f"not {type(netlist).__name__}"
     )
 
 
@@ -77,7 +88,7 @@ def _native_errors() -> Iterator[None]:
 
 
 def simulate(
-    netlist: str | os.PathLike[str],
+    netlist: str | os.PathLike[str] | PicExtraction,
     *,
     includes: Mapping[str, str] | None = None,
     options: Mapping[str, OptionValue] | None = None,
@@ -98,11 +109,15 @@ def simulate(
             only, so it never touches the file system, and diagnostics name
             it ``deck.cir``. A :class:`os.PathLike` (e.g.
             :class:`pathlib.Path`) is a deck file; its ``.include`` cards
-            resolve on disk, relative to the including file.
+            resolve on disk, relative to the including file. A
+            :class:`spice.pic.PicExtraction` (:func:`spice.pic.extract`) runs
+            as its netlist, with the ``.include`` files that came with the
+            figure; one whose diagnostics include an error raises
+            :class:`spice.pic.PicError`.
         includes: For a string deck, the files it may ``.include``, keyed by
             the path the card names (resolved relative to the including
             file, the deck being ``deck.cir`` at the root). Not allowed with
-            a deck file.
+            a deck file or a ``PicExtraction``.
         options: Simulator options applied over the deck's own ``.options``
             -- the 3f5 names in :data:`OPTION_NAMES`, matched
             case-insensitively: tolerances and steps as numbers (``reltol``,
@@ -127,7 +142,8 @@ def simulate(
     Raises:
         SpiceError: the deck does not parse, does not build or an analysis
             fails; :attr:`SpiceError.kind` tells which (a ``.pss`` that does
-            not converge raises its subclass :class:`PssConvergenceError`).
+            not converge raises its subclass :class:`PssConvergenceError`; a
+            ``PicExtraction`` with extraction errors, :class:`spice.pic.PicError`).
         ValueError: an unknown option name (the message lists the valid
             ones) or an invalid option value; a ``tmax_divisor`` below 1 or
             not finite; ``includes`` with a deck file.
@@ -135,12 +151,12 @@ def simulate(
         OSError: the deck file cannot be read (``FileNotFoundError`` when it
             does not exist).
     """
-    text, path = _deck_source(netlist, includes)
+    text, path, inc = _deck_source(netlist, includes)
     with _native_errors():
         native = _spice._simulate(
             text,
             path,
-            None if includes is None else dict(includes),
+            inc,
             None if options is None else dict(options),
             tmax_divisor,
         )

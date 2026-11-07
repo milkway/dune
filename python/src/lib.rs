@@ -18,6 +18,8 @@
 //! `TypeError` directly. A Rust panic never crosses the boundary — it
 //! is caught and reported as kind `internal`.
 
+mod pic;
+
 use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -1116,6 +1118,169 @@ fn _sweep<'py>(
     Ok(result)
 }
 
+// --- the figure path (issue #21) -----------------------------------
+
+fn pic_diag_dict<'py>(py: Python<'py>, d: &pic::PicDiag) -> PyResult<Bound<'py, PyDict>> {
+    let o = PyDict::new(py);
+    o.set_item("severity", d.severity)?;
+    o.set_item("kind", d.kind)?;
+    o.set_item("message", &d.message)?;
+    o.set_item("file", &d.file)?;
+    o.set_item("line", d.line)?;
+    o.set_item("column", d.column)?;
+    o.set_item("end_column", d.end_column)?;
+    Ok(o)
+}
+
+fn pic_diag_list<'py>(py: Python<'py>, diags: &[pic::PicDiag]) -> PyResult<Bound<'py, PyList>> {
+    let l = PyList::empty(py);
+    for d in diags {
+        l.append(pic_diag_dict(py, d)?)?;
+    }
+    Ok(l)
+}
+
+fn range_dict<'py>(py: Python<'py>, r: &dune_pic::PicRange) -> PyResult<Bound<'py, PyDict>> {
+    let o = PyDict::new(py);
+    o.set_item("line", r.line)?;
+    o.set_item("col", r.col)?;
+    o.set_item("end_line", r.end_line)?;
+    o.set_item("end_col", r.end_col)?;
+    Ok(o)
+}
+
+/// The overlay map as plain dicts (the `dune-wasm` `OverlayMapJson`
+/// shape); `spice/pic.py` makes the dataclasses.
+fn pic_map_dict<'py>(py: Python<'py>, map: &dune_pic::OverlayMap) -> PyResult<Bound<'py, PyDict>> {
+    let elements = PyList::empty(py);
+    for e in &map.elements {
+        let o = PyDict::new(py);
+        o.set_item("refdes", &e.refdes)?;
+        o.set_item("shapes", (e.shapes.start, e.shapes.end))?;
+        let pins = PyList::empty(py);
+        for p in &e.pins {
+            let d = PyDict::new(py);
+            d.set_item("name", &p.name)?;
+            d.set_item("net", &p.net)?;
+            d.set_item("x", p.x)?;
+            d.set_item("y", p.y)?;
+            pins.append(d)?;
+        }
+        o.set_item("pins", pins)?;
+        match &e.value {
+            Some(v) => {
+                let d = PyDict::new(py);
+                d.set_item("span", range_dict(py, &v.span)?)?;
+                d.set_item("text", &v.text)?;
+                o.set_item("value", d)?;
+            }
+            None => o.set_item("value", py.None())?,
+        }
+        let params = PyList::empty(py);
+        for p in &e.params {
+            let d = PyDict::new(py);
+            d.set_item("name", &p.name)?;
+            d.set_item("span", range_dict(py, &p.span)?)?;
+            d.set_item("text", &p.text)?;
+            params.append(d)?;
+        }
+        o.set_item("params", params)?;
+        o.set_item("principal", &e.principal)?;
+        elements.append(o)?;
+    }
+    let nets = PyList::empty(py);
+    for n in &map.nets {
+        let d = PyDict::new(py);
+        d.set_item("name", &n.name)?;
+        d.set_item("shapes", n.shapes.clone())?;
+        nets.append(d)?;
+    }
+    let c = &map.canvas;
+    let canvas = PyDict::new(py);
+    canvas.set_item("w", c.w)?;
+    canvas.set_item("h", c.h)?;
+    canvas.set_item("origin", (c.origin[0], c.origin[1]))?;
+    canvas.set_item("rescale", c.rescale)?;
+    let out = PyDict::new(py);
+    out.set_item("elements", elements)?;
+    out.set_item("nets", nets)?;
+    out.set_item("canvas", canvas)?;
+    Ok(out)
+}
+
+/// `NativeError(kind, message, diagnostics)` of a figure that gave no
+/// netlist or drawing; the diagnostics are figure diagnostics.
+fn pic_error(py: Python<'_>, f: pic::PicFailure) -> PyErr {
+    match pic_diag_list(py, &f.diagnostics) {
+        Ok(d) => NativeError::new_err((f.kind, f.message, d.unbind())),
+        Err(e) => e,
+    }
+}
+
+/// Run `f`, turning a panic (a bug) into kind `internal`.
+fn pic_guarded<T>(f: impl FnOnce() -> Result<T, pic::PicFailure>) -> Result<T, pic::PicFailure> {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_| {
+        Err(pic::PicFailure {
+            kind: "internal",
+            message: "internal error in the figure extractor (please report)".into(),
+            diagnostics: Vec::new(),
+        })
+    })
+}
+
+/// `_pic_extract(text, path, includes, snap) -> dict`: the extraction
+/// of a figure given as text (with `includes`) or as a file (its
+/// `.include` files read next to it). Returns `{netlist, source,
+/// diagnostics, includes, map}`; a figure with no netlist raises
+/// `NativeError` (kind `pic`, `io`, `options` or `internal`).
+#[pyfunction]
+#[pyo3(signature = (text, path, includes, snap=None))]
+fn _pic_extract<'py>(
+    py: Python<'py>,
+    text: Option<String>,
+    path: Option<PathBuf>,
+    includes: Option<BTreeMap<String, String>>,
+    snap: Option<f64>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let includes = includes.unwrap_or_default();
+    let source = match (&text, &path) {
+        (Some(t), None) => pic::PicSource::Text {
+            text: t,
+            includes: &includes,
+        },
+        (None, Some(p)) => pic::PicSource::Path(p),
+        _ => return Err(PyValueError::new_err("give exactly one of text and path")),
+    };
+    let out = py
+        .detach(|| pic_guarded(|| pic::extract(source, snap)))
+        .map_err(|f| pic_error(py, f))?;
+    let d = PyDict::new(py);
+    d.set_item("netlist", &out.netlist)?;
+    d.set_item("source", &out.source)?;
+    d.set_item("diagnostics", pic_diag_list(py, &out.diagnostics)?)?;
+    d.set_item("includes", &out.includes)?;
+    d.set_item("map", pic_map_dict(py, &out.map)?)?;
+    Ok(d)
+}
+
+/// `_pic_render(text, path) -> str`: the figure's SVG (typeset
+/// `$...$` labels with the `texlabels` feature).
+#[pyfunction]
+#[pyo3(signature = (text, path))]
+fn _pic_render(py: Python<'_>, text: Option<String>, path: Option<PathBuf>) -> PyResult<String> {
+    let empty = BTreeMap::new();
+    let source = match (&text, &path) {
+        (Some(t), None) => pic::PicSource::Text {
+            text: t,
+            includes: &empty,
+        },
+        (None, Some(p)) => pic::PicSource::Path(p),
+        _ => return Err(PyValueError::new_err("give exactly one of text and path")),
+    };
+    py.detach(|| pic_guarded(|| pic::render(source)))
+        .map_err(|f| pic_error(py, f))
+}
+
 /// Run `f`, turning a panic (an engine bug) into kind `internal`.
 fn guarded<T>(f: impl FnOnce() -> Result<T, Failure>) -> Result<T, Failure> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|p| {
@@ -1141,5 +1306,8 @@ fn _spice(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_sweep, m)?)?;
     m.add_function(wrap_pyfunction!(_measure, m)?)?;
     m.add_function(wrap_pyfunction!(_pss, m)?)?;
+    m.add("TEXLABELS", pic::TEXLABELS)?;
+    m.add_function(wrap_pyfunction!(_pic_extract, m)?)?;
+    m.add_function(wrap_pyfunction!(_pic_render, m)?)?;
     Ok(())
 }

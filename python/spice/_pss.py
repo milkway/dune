@@ -10,6 +10,7 @@ from typing import Any
 from . import _spice
 from ._result import Plot, Result
 from ._simulate import OptionValue, _deck_source, _native_errors
+from .pic import PicExtraction
 
 __all__ = ["PSS_FREQ_PLOT", "PSS_TIME_PLOT", "PssResult", "pss"]
 
@@ -91,7 +92,7 @@ def _count(name: str, v: object, low: int, high: int) -> int:
 
 
 def pss(
-    netlist: str | os.PathLike[str],
+    netlist: str | os.PathLike[str] | PicExtraction,
     *,
     freq: float = 0.0,
     tstab: float = 0.0,
@@ -201,12 +202,12 @@ def pss(
         raise TypeError(f"uic must be a bool, not {type(uic).__name__}")
     if osc_node is not None and not isinstance(osc_node, str):
         raise TypeError(f"osc_node must be a str or None, not {type(osc_node).__name__}")
-    text, path = _deck_source(netlist, includes)
+    text, path, inc = _deck_source(netlist, includes)
     with _native_errors():
         native = _spice._pss(
             text,
             path,
-            None if includes is None else dict(includes),
+            inc,
             None if options is None else dict(options),
             tmax_divisor,
             f,

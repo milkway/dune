@@ -15,6 +15,7 @@ from . import _spice
 from ._errors import Diagnostic, ErrorKind, SpiceError
 from ._result import Result
 from ._simulate import OptionValue, _deck_source, _native_errors
+from .pic import PicExtraction
 
 if TYPE_CHECKING:
     import pandas  # type: ignore[import-untyped,unused-ignore]
@@ -29,7 +30,7 @@ RUN_COLUMN = "run"
 
 
 def sweep(
-    netlist: str | os.PathLike[str],
+    netlist: str | os.PathLike[str] | PicExtraction,
     params: Mapping[str, npt.ArrayLike],
     *,
     mode: SweepMode = "grid",
@@ -91,7 +92,7 @@ def sweep(
             simulate (the message names the run and its values).
         OSError: the deck file cannot be read.
     """
-    text, path = _deck_source(netlist, includes)
+    text, path, inc = _deck_source(netlist, includes)
     if mode not in ("grid", "zip"):
         raise ValueError(f"mode must be 'grid' or 'zip', not {mode!r}")
     if isinstance(threads, bool) or not isinstance(threads, int) or threads < 0:
@@ -128,7 +129,7 @@ def sweep(
         native = _spice._sweep(
             text,
             path,
-            None if includes is None else dict(includes),
+            inc,
             None if options is None else dict(options),
             names,
             rows,

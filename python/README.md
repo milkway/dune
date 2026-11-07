@@ -28,6 +28,10 @@ v2 = plot.column("v(2)")  # zero-copy, read-only numpy array
   transmission lines.
 - Results as [polars](https://pola.rs) DataFrames (pandas optional)
   and zero-copy NumPy arrays; complete type annotations (`py.typed`).
+- Schematics as decks: `spice.pic.extract()` reads the netlist of an
+  [rpic](https://github.com/milkway/rpic-lang) figure drawn with the
+  dune prelude, `spice.simulate()` runs it and `spice.pic.render()`
+  draws it as SVG (with typeset `$...$` labels).
 - Faithful netlist semantics: decks that run under `spice3 -b` or
   `ngspice -b` run here, with structured, span-carrying errors.
 

@@ -12,6 +12,7 @@ import numpy.typing as npt
 from . import _spice
 from ._result import Result
 from ._simulate import OptionValue, _deck_source, _native_errors
+from .pic import PicExtraction
 
 __all__ = ["AlterValue", "Session", "WarmStats"]
 
@@ -63,18 +64,18 @@ class Session:
 
     def __init__(
         self,
-        netlist: str | os.PathLike[str],
+        netlist: str | os.PathLike[str] | PicExtraction,
         *,
         includes: Mapping[str, str] | None = None,
         options: Mapping[str, OptionValue] | None = None,
         tmax_divisor: float | None = None,
     ) -> None:
-        text, path = _deck_source(netlist, includes)
+        text, path, inc = _deck_source(netlist, includes)
         with _native_errors():
             self._native = _spice._Session(
                 text,
                 path,
-                None if includes is None else dict(includes),
+                inc,
                 None if options is None else dict(options),
                 tmax_divisor,
             )

@@ -10,7 +10,9 @@ __all__ = ["Diagnostic", "ErrorKind", "PssConvergenceError", "Severity", "SpiceE
 Severity = Literal["error", "warning"]
 """Severity of a :class:`Diagnostic`."""
 
-ErrorKind = Literal["parse", "elaborate", "analysis", "pss", "measure", "alter", "internal"]
+ErrorKind = Literal[
+    "parse", "elaborate", "analysis", "pss", "measure", "alter", "pic", "internal"
+]
 """Stage at which a run failed (:attr:`SpiceError.kind`).
 
 * ``"parse"`` -- the deck has errors (syntax, a missing ``.include``, ...);
@@ -26,6 +28,10 @@ ErrorKind = Literal["parse", "elaborate", "analysis", "pss", "measure", "alter",
   the plot cannot be measured.
 * ``"alter"`` -- :meth:`Session.alter` refused a value (unknown element or
   parameter, a value out of range); the circuit is unchanged.
+* ``"pic"`` -- a pic figure yields no netlist or drawing (rpic rejects it,
+  or it is not marked ``spice = 1``), or an extraction with errors was
+  run; the error is a :class:`spice.pic.PicError`, carrying the figure
+  diagnostics and the ``line``/``column`` of the first error.
 * ``"internal"`` -- a bug in the simulator; please report it with the deck.
 """
 
