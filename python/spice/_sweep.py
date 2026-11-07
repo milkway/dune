@@ -14,7 +14,7 @@ import polars as pl
 from . import _spice
 from ._errors import Diagnostic, ErrorKind, SpiceError
 from ._result import Result
-from ._simulate import OptionValue, _deck_source
+from ._simulate import OptionValue, _deck_source, _native_errors
 
 if TYPE_CHECKING:
     import pandas  # type: ignore[import-untyped,unused-ignore]
@@ -124,7 +124,7 @@ def sweep(
     else:
         rows = [list(r) for r in itertools.product(*(c.tolist() for c in columns))]
 
-    try:
+    with _native_errors():
         native = _spice._sweep(
             text,
             path,
@@ -135,15 +135,6 @@ def sweep(
             threads,
             tmax_divisor,
         )
-    except _spice.NativeError as e:
-        kind, message, diags = e.args
-        if kind == "io":
-            raise OSError(message) from None
-        raise SpiceError(
-            message,
-            kind=cast(ErrorKind, kind),
-            diagnostics=tuple(Diagnostic._from_native(d) for d in diags),
-        ) from None
     keys: list[str] = native["params"]
     for i, run in enumerate(native["runs"]):
         if not run["ok"]:

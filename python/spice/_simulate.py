@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from . import _spice
-from ._errors import Diagnostic, ErrorKind, SpiceError
+from ._errors import Diagnostic, ErrorKind, PssConvergenceError, SpiceError
 from ._result import Result
 
 __all__ = ["OPTION_NAMES", "OptionValue", "simulate"]
@@ -50,20 +50,30 @@ def _deck_source(
     )
 
 
+def _from_native_error(e: _spice.NativeError) -> Exception:
+    """The public exception for a ``NativeError(kind, message, diagnostics[, extra])``."""
+    kind, message, diags = e.args[:3]
+    if kind == "io":
+        return OSError(message)
+    diagnostics = tuple(Diagnostic._from_native(d) for d in diags)
+    if kind == "pss":
+        extra = e.args[3]
+        return PssConvergenceError(
+            message,
+            iterations=int(extra["iterations"]),
+            residuals=tuple(float(r) for r in extra["residuals"]),
+            diagnostics=diagnostics,
+        )
+    return SpiceError(message, kind=cast(ErrorKind, kind), diagnostics=diagnostics)
+
+
 @contextmanager
 def _native_errors() -> Iterator[None]:
     """Turn the native module's ``NativeError`` into :class:`SpiceError`."""
     try:
         yield
     except _spice.NativeError as e:
-        kind, message, diags = e.args
-        if kind == "io":
-            raise OSError(message) from None
-        raise SpiceError(
-            message,
-            kind=cast(ErrorKind, kind),
-            diagnostics=tuple(Diagnostic._from_native(d) for d in diags),
-        ) from None
+        raise _from_native_error(e) from None
 
 
 def simulate(
@@ -76,8 +86,10 @@ def simulate(
     """Parse a SPICE3 deck, build it and run every analysis card in it.
 
     This is what ``spice3 -b`` (or ``dune -b``) runs: each ``.op``, ``.dc``,
-    ``.tran``, ``.ac``, ``.pz``, ``.noise``, ``.disto``, ``.tf`` and
-    ``.sens`` card in deck order, each giving one or more :class:`Plot`.
+    ``.tran``, ``.ac``, ``.pz``, ``.noise``, ``.disto``, ``.tf``, ``.sens``
+    and ``.pss`` card in deck order, each giving one or more :class:`Plot`
+    (for the periodic steady state with its period and shooting history,
+    see :func:`spice.pss`).
     The simulation releases the GIL.
 
     Args:
@@ -114,7 +126,8 @@ def simulate(
 
     Raises:
         SpiceError: the deck does not parse, does not build or an analysis
-            fails; :attr:`SpiceError.kind` tells which.
+            fails; :attr:`SpiceError.kind` tells which (a ``.pss`` that does
+            not converge raises its subclass :class:`PssConvergenceError`).
         ValueError: an unknown option name (the message lists the valid
             ones) or an invalid option value; a ``tmax_divisor`` below 1 or
             not finite; ``includes`` with a deck file.

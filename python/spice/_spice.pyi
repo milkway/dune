@@ -35,6 +35,22 @@ def _measure(
     name: str,
 ) -> dict[str, Any]: ...
 
+def _pss(
+    text: str | None,
+    path: str | Path | None,
+    includes: dict[str, str] | None,
+    options: dict[str, Any] | None,
+    tmax_divisor: float | None,
+    freq: float,
+    tstab: float,
+    osc_node: str | None,
+    points: int,
+    harmonics: int,
+    max_iter: int,
+    steady_coeff: float,
+    uic: bool,
+) -> dict[str, Any]: ...
+
 class _Session:
     def __init__(
         self,

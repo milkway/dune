@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-__all__ = ["Diagnostic", "ErrorKind", "Severity", "SpiceError"]
+__all__ = ["Diagnostic", "ErrorKind", "PssConvergenceError", "Severity", "SpiceError"]
 
 Severity = Literal["error", "warning"]
 """Severity of a :class:`Diagnostic`."""
 
-ErrorKind = Literal["parse", "elaborate", "analysis", "measure", "alter", "internal"]
+ErrorKind = Literal["parse", "elaborate", "analysis", "pss", "measure", "alter", "internal"]
 """Stage at which a run failed (:attr:`SpiceError.kind`).
 
 * ``"parse"`` -- the deck has errors (syntax, a missing ``.include``, ...);
@@ -19,6 +19,9 @@ ErrorKind = Literal["parse", "elaborate", "analysis", "measure", "alter", "inter
   (unknown model, bad device parameter, ...).
 * ``"analysis"`` -- an analysis failed (no convergence, timestep too
   small, singular matrix, ...).
+* ``"pss"`` -- a periodic steady state (:func:`spice.pss`, or a ``.pss``
+  card) did not converge in its shooting iterations; the error is a
+  :class:`PssConvergenceError`, carrying the residual history.
 * ``"measure"`` -- a :func:`spice.measure` specification is malformed, or
   the plot cannot be measured.
 * ``"alter"`` -- :meth:`Session.alter` refused a value (unknown element or
@@ -86,3 +89,38 @@ class SpiceError(Exception):
         self.kind = kind
         self.message = message
         self.diagnostics = diagnostics
+
+
+class PssConvergenceError(SpiceError):
+    """A periodic steady state whose shooting did not converge (kind ``"pss"``).
+
+    Raised by :func:`spice.pss` and by any run of a deck with a ``.pss`` card
+    (:func:`spice.simulate`, :meth:`spice.Session.run`) when ``max_iter``
+    shooting iterations leave the period mismatch ``x(t0+T) - x(t0)`` above
+    tolerance. A :class:`SpiceError` with ``kind == "pss"``, so code that
+    catches :class:`SpiceError` keeps working.
+
+    Attributes:
+        iterations: The shooting iterations run.
+        residuals: The mismatch of each iteration, in units of the
+            convergence tolerance (converged would be ``<= steady_coeff``):
+            what :attr:`spice.PssResult.residuals` holds on success. A
+            residual that stalls well above 1 usually means a non-periodic
+            circuit (an autonomous oscillator, a source that is not a
+            harmonic of ``freq``) or too few ``points``.
+    """
+
+    iterations: int
+    residuals: tuple[float, ...]
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        iterations: int,
+        residuals: tuple[float, ...],
+        diagnostics: tuple[Diagnostic, ...] = (),
+    ) -> None:
+        super().__init__(message, kind="pss", diagnostics=diagnostics)
+        self.iterations = iterations
+        self.residuals = residuals

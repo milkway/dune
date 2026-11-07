@@ -99,7 +99,11 @@ def measure(plot: Plot, spec: str, *, name: str = "measure") -> Measurement:
     measuring; nothing is computed in Python.
 
     Args:
-        plot: A ``.tran``, ``.ac``, ``.dc`` or ``.sp`` plot.
+        plot: A ``.tran``, ``.ac``, ``.dc`` or ``.sp`` plot, or one of the
+            two ``.pss`` plots: the period in time measures as a ``.tran``
+            (``analysis == "tran"``), the complex harmonics as an ``.ac``
+            (``"ac"``; ``find vm(2) at=2k`` is the second harmonic's
+            amplitude).
         spec: The measurement, e.g. ``"when v(2)=0.5 rise=2"``.
         name: The :attr:`Measurement.name` to give the result.
 
@@ -124,6 +128,6 @@ def measure(plot: Plot, spec: str, *, name: str = "measure") -> Measurement:
             name,
         )
     except _spice.NativeError as e:
-        kind, message, _ = e.args
+        kind, message = e.args[:2]
         raise SpiceError(message, kind=kind) from None
     return Measurement._from_native(native)

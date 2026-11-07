@@ -7,10 +7,14 @@
 //! Python objects. Columns move into NumPy arrays without a copy
 //! (`PyArray1::from_vec` adopts the `Vec`'s buffer).
 //!
+//! `_pss` runs the periodic steady state of a deck directly
+//! ([`Circuit::pss`], the call a `.pss` card makes).
+//!
 //! This module is private: the public, typed API is the pure-Python
 //! layer in `spice/`. Errors in the deck or the run raise
 //! `NativeError(kind, message, diagnostics)`, which that layer turns
-//! into `spice.SpiceError`; bad `options` raise `ValueError` /
+//! into `spice.SpiceError` (kind `pss` carries a fourth argument, the
+//! shooting history, and becomes `spice.PssConvergenceError`); bad `options` raise `ValueError` /
 //! `TypeError` directly. A Rust panic never crosses the boundary — it
 //! is caught and reported as kind `internal`.
 
@@ -20,8 +24,8 @@ use std::path::{Path, PathBuf};
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    AlterValue, Circuit, Data, MeasureError, Measurement, Method, Options, Session, Solution,
-    SweepParam, SweepRun, VarType, measure_all,
+    AlterValue, Circuit, Data, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT,
+    PSS_TIME_PLOT, PssParams, Session, Solution, SweepParam, SweepRun, VarType, measure_all,
 };
 use dune_netlist::ir::Netlist;
 use dune_netlist::{Diagnostic, IncludeLoader, ParseOutcome, Severity, SourceMap};
@@ -110,11 +114,14 @@ impl Diag {
 }
 
 /// Why a run failed: `kind` is `io`, `parse`, `elaborate`,
-/// `analysis` or `internal`.
+/// `analysis`, `pss` or `internal`.
 struct Failure {
     kind: &'static str,
     message: String,
     diags: Vec<Diag>,
+    /// For kind `pss` (a `.pss` that did not converge): the shooting
+    /// iterations run and the residual of each.
+    residuals: Option<(usize, Vec<f64>)>,
 }
 
 impl Failure {
@@ -123,6 +130,23 @@ impl Failure {
             kind,
             message: message.into(),
             diags: Vec::new(),
+            residuals: None,
+        }
+    }
+
+    /// An analysis that failed: kind `pss`, with the shooting history,
+    /// for a `.pss` that did not converge; kind `analysis` otherwise.
+    fn analysis(e: dune_core::Error) -> Self {
+        let message = e.to_string();
+        match e {
+            dune_core::Error::PssConvergence {
+                iterations,
+                residuals,
+            } => Failure {
+                residuals: Some((iterations, residuals)),
+                ..Failure::new("pss", message)
+            },
+            _ => Failure::new("analysis", message),
         }
     }
 }
@@ -172,13 +196,18 @@ impl MeasRow {
 }
 
 /// The `.measure` analysis keyword of a plot (`tran`, `ac`, `dc`,
-/// `sp`), `None` for plots that cannot be measured.
-fn plot_analysis(plotname: &str) -> Option<&'static str> {
+/// `sp`) and the plot name the engine measures it under, `None` for
+/// plots that cannot be measured. The `.pss` plots measure as the
+/// analyses they are shaped like: the period in time as a `.tran`, the
+/// complex harmonics (on a frequency scale) as an `.ac`.
+fn plot_analysis(plotname: &str) -> Option<(&'static str, &'static str)> {
     Some(match plotname {
-        "Transient Analysis" => "tran",
-        "AC Analysis" => "ac",
-        "SP Analysis" => "sp",
-        "DC transfer characteristic" => "dc",
+        "Transient Analysis" => ("tran", "Transient Analysis"),
+        "AC Analysis" => ("ac", "AC Analysis"),
+        "SP Analysis" => ("sp", "SP Analysis"),
+        "DC transfer characteristic" => ("dc", "DC transfer characteristic"),
+        PSS_TIME_PLOT => ("tran", "Transient Analysis"),
+        PSS_FREQ_PLOT => ("ac", "AC Analysis"),
         _ => return None,
     })
 }
@@ -242,6 +271,7 @@ fn prepare(source: &Source, overrides: &[Override]) -> Result<Prepared, Failure>
             kind: "parse",
             message: first.render(&parsed.sources),
             diags,
+            residuals: None,
         });
     }
     let mut opt_diags = Vec::new();
@@ -270,9 +300,7 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
 
     let mut solutions = Vec::new();
     for analysis in &netlist.analyses {
-        let (sols, analysis_notes) = circuit
-            .run(analysis, &options)
-            .map_err(|e| Failure::new("analysis", e.to_string()))?;
+        let (sols, analysis_notes) = circuit.run(analysis, &options).map_err(Failure::analysis)?;
         notes.extend(analysis_notes);
         solutions.extend(sols);
     }
@@ -602,9 +630,9 @@ fn _measure<'py>(
     name: String,
 ) -> PyResult<Bound<'py, PyDict>> {
     let fail = |msg: String| NativeError::new_err(("measure", msg, PyList::empty(py).unbind()));
-    let Some(analysis) = plot_analysis(&plotname) else {
+    let Some((analysis, measured_as)) = plot_analysis(&plotname) else {
         return Err(fail(format!(
-            "plot {plotname:?} cannot be measured: measure limited to tran, dc, sp, or ac analysis"
+            "plot {plotname:?} cannot be measured: measure limited to tran, dc, sp, ac or pss analysis"
         )));
     };
     if columns.len() != variables.len() {
@@ -629,7 +657,7 @@ fn _measure<'py>(
         _ => return Err(PyTypeError::new_err("a plot is all real or all complex")),
     };
     let sol = Solution {
-        plotname,
+        plotname: measured_as.to_string(),
         variables: variables
             .into_iter()
             .map(|(n, t)| (n, VarType::from_name(&t)))
@@ -689,10 +717,111 @@ fn _simulate<'py>(
     outcome_dict(py, outcome)
 }
 
+/// A finished `.pss`, still in Rust form.
+struct PssOut {
+    /// The time-domain and frequency-domain plots, with the run's
+    /// notes and diagnostics.
+    output: Output,
+    period: f64,
+    t0: f64,
+    residuals: Vec<f64>,
+}
+
+/// Parse and elaborate the deck, then run [`Circuit::pss`] with `p`
+/// (the deck's own analysis cards are not run).
+fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<PssOut, Failure> {
+    let Prepared {
+        netlist,
+        options,
+        diags,
+    } = prepare(source, overrides)?;
+    let (circuit, mut notes) =
+        Circuit::from_netlist(&netlist).map_err(|e| Failure::new("elaborate", e.to_string()))?;
+    let pss = circuit.pss(&options, p).map_err(Failure::analysis)?;
+    notes.extend(pss.notes);
+    Ok(PssOut {
+        output: Output {
+            title: netlist.title.clone(),
+            solutions: vec![pss.time, pss.spectrum],
+            measures: Vec::new(),
+            notes,
+            diags,
+        },
+        period: pss.period,
+        t0: pss.t0,
+        residuals: pss.residuals,
+    })
+}
+
+/// `_pss(text, path, includes, options, tmax_divisor, freq, tstab,
+/// osc_node, points, harmonics, max_iter, steady_coeff, uic) -> dict`.
+///
+/// The deck as in `_simulate`, its analysis cards ignored; the
+/// periodic steady state per [`PssParams`] (`freq` 0 takes the
+/// fundamental from the sources). Returns `_simulate`'s dict with the
+/// two `.pss` plots (time, then spectrum) plus `"period"`, `"t0"` and
+/// `"residuals"`. A shooting that does not converge raises
+/// `NativeError("pss", message, diagnostics, {"iterations",
+/// "residuals"})`. The GIL is released while it runs.
+#[pyfunction]
+#[pyo3(signature = (text, path, includes, options, tmax_divisor, freq, tstab, osc_node, points, harmonics, max_iter, steady_coeff, uic))]
+#[allow(clippy::too_many_arguments)]
+fn _pss<'py>(
+    py: Python<'py>,
+    text: Option<String>,
+    path: Option<PathBuf>,
+    includes: Option<BTreeMap<String, String>>,
+    options: Option<Bound<'py, PyDict>>,
+    tmax_divisor: Option<Bound<'py, PyAny>>,
+    freq: f64,
+    tstab: f64,
+    osc_node: Option<String>,
+    points: usize,
+    harmonics: usize,
+    max_iter: usize,
+    steady_coeff: f64,
+    uic: bool,
+) -> PyResult<Bound<'py, PyDict>> {
+    let source = source(text, path, includes)?;
+    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
+    let params = PssParams {
+        freq: (freq != 0.0).then_some(freq),
+        tstab,
+        osc_node,
+        points,
+        harmonics,
+        max_iter,
+        steady_coeff,
+        uic,
+    };
+    let outcome = py.detach(|| guarded(|| run_pss(&source, &overrides, &params)));
+    let out = outcome.map_err(|f| native_error(py, f))?;
+    let result = outcome_dict(py, Ok(out.output))?;
+    result.set_item("period", out.period)?;
+    result.set_item("t0", out.t0)?;
+    result.set_item("residuals", out.residuals)?;
+    Ok(result)
+}
+
+/// `NativeError(kind, message, diagnostics)`, with a fourth argument
+/// `{"iterations", "residuals"}` for kind `pss`.
 fn native_error(py: Python<'_>, f: Failure) -> PyErr {
-    match diag_list(py, &f.diags) {
-        Ok(diags) => NativeError::new_err((f.kind, f.message, diags.unbind())),
-        Err(e) => e,
+    let diags = match diag_list(py, &f.diags) {
+        Ok(d) => d.unbind(),
+        Err(e) => return e,
+    };
+    match f.residuals {
+        Some((iterations, residuals)) => {
+            let extra = PyDict::new(py);
+            let set = extra
+                .set_item("iterations", iterations)
+                .and_then(|()| extra.set_item("residuals", residuals));
+            match set {
+                Ok(()) => NativeError::new_err((f.kind, f.message, diags, extra.unbind())),
+                Err(e) => e,
+            }
+        }
+        None => NativeError::new_err((f.kind, f.message, diags)),
     }
 }
 
@@ -895,9 +1024,7 @@ impl NativeSession {
         let NativeSession { session, base } = self;
         let outcome = py.detach(|| {
             guarded(|| {
-                let (solutions, notes) = session
-                    .run()
-                    .map_err(|e| Failure::new("analysis", e.to_string()))?;
+                let (solutions, notes) = session.run().map_err(Failure::analysis)?;
                 Ok(base.finish(solutions, notes))
             })
         });
@@ -1013,5 +1140,6 @@ fn _spice(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSession>()?;
     m.add_function(wrap_pyfunction!(_sweep, m)?)?;
     m.add_function(wrap_pyfunction!(_measure, m)?)?;
+    m.add_function(wrap_pyfunction!(_pss, m)?)?;
     Ok(())
 }
