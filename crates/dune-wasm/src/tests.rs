@@ -762,3 +762,142 @@ fn pic_run_carries_measurements() {
     let t = rows[0]["value"].as_f64().unwrap();
     assert!((t / (1e-3 * 9f64.ln()) - 1.0).abs() < 1e-2, "trise = {t}");
 }
+
+// ---- engine overrides: `options` / `tmaxDivisor` (issue #16) ----
+
+/// Every column of every plot, as bits.
+fn run_bits(d: &RunData) -> Vec<Vec<u64>> {
+    d.plots
+        .iter()
+        .flat_map(|p| {
+            column_buffers(p)
+                .into_iter()
+                .map(|c| c.iter().map(|x| x.to_bits()).collect())
+        })
+        .collect()
+}
+
+/// The overrides on a figure are the deck-side edit, bit for bit:
+/// `.options trtol=1` plus the `.tran` card's TMAX divided by 10.
+#[test]
+fn overrides_are_the_edited_deck_bit_for_bit() {
+    let fine: PicSimOptions =
+        serde_json::from_str(r#"{"options":{"trtol":1},"tmaxDivisor":10}"#).unwrap();
+    for (fig, card, edited) in [
+        // Default TMAX min(20u, 5m/50) = 20u -> 2u.
+        (
+            "rc.pic",
+            ".tran 20u 5m",
+            ".options trtol=1\n.tran 20u 5m 0 2u",
+        ),
+        // Default TMAX min(0.1m, 50m/50) = 0.1m -> 0.01m (a diode).
+        (
+            "rect.pic",
+            ".tran 0.1m 50m",
+            ".options trtol=1\n.tran 0.1m 50m 0 0.01m",
+        ),
+    ] {
+        let src = corpus_pic(fig);
+        let (api, pic) = run_pic_data(&src, &fine).unwrap();
+        assert!(pic.netlist.contains(card), "{fig}: {}", pic.netlist);
+        let deck = pic.netlist.replace(card, edited);
+        let want = run_data(&deck, &SimOptions::default()).unwrap();
+        assert_eq!(run_bits(&api), run_bits(&want), "{fig}");
+        let plain = run_pic_data(&src, &PicSimOptions::default()).unwrap().0;
+        assert!(
+            run_bits(&api)[0].len() > run_bits(&plain)[0].len(),
+            "{fig}: denser"
+        );
+        // Defaults unchanged: no overrides is the plain deck.
+        assert_eq!(
+            run_bits(&plain),
+            run_bits(&run_data(&pic.netlist, &SimOptions::default()).unwrap())
+        );
+    }
+}
+
+#[test]
+fn override_warnings_ride_in_diagnostics() {
+    let opts = r#"{"options":{"trtol":"abc","bogus":1,"reltol":1e-4}}"#;
+    let out: RawfileJson = parse(&simulate_json(DIVIDER, Some(opts)).unwrap());
+    let msgs: Vec<&str> = out.diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(msgs.len(), 2, "{msgs:?}");
+    assert!(msgs.iter().all(|m| m.starts_with("opts.options: ")));
+    assert!(
+        out.diagnostics
+            .iter()
+            .all(|d| d.severity == "warning" && d.line.is_none())
+    );
+    for bad in [
+        r#"{"tmaxDivisor":0.5}"#,
+        r#"{"tmaxDivisor":"x"}"#,
+        r#"{"options":[1]}"#,
+    ] {
+        assert_eq!(
+            simulate_json(DIVIDER, Some(bad)).unwrap_err().kind,
+            "options",
+            "{bad}"
+        );
+    }
+    let e = simulate_pic_json(&corpus_pic("rc.pic"), Some(r#"{"tmaxDivisor":0}"#)).unwrap_err();
+    assert_eq!(e.kind, "options");
+}
+
+/// The Studio's "fine steps" toggle: flipping the overrides on a live
+/// session gives the fresh runs, both ways, without reopening.
+#[test]
+fn session_toggles_overrides_without_reopening() {
+    let src = corpus_pic("rc.pic");
+    let mut s = SimSession::open_pic(&src, &PicSimOptions::default()).unwrap();
+    let plain = s.run().unwrap();
+    let fine_opts: PicSimOptions =
+        serde_json::from_str(r#"{"options":{"trtol":1},"tmaxDivisor":10}"#).unwrap();
+    let fine = run_pic_data(&src, &fine_opts).unwrap().0;
+
+    s.set_options(fine_opts.options.clone());
+    s.set_tmax_divisor(Some(10.0)).unwrap();
+    assert_eq!(run_bits(&s.run().unwrap()), run_bits(&fine));
+    assert_eq!(s.tmax_divisor(), Some(10.0));
+    assert_eq!(s.options(), &fine_opts.options);
+
+    assert_eq!(s.set_tmax_divisor(Some(0.0)).unwrap_err().kind, "options");
+    assert_eq!(
+        s.tmax_divisor(),
+        Some(10.0),
+        "refused divisor changes nothing"
+    );
+
+    s.set_options(serde_json::Map::new());
+    s.set_tmax_divisor(None).unwrap();
+    assert_eq!(run_bits(&s.run().unwrap()), run_bits(&plain));
+
+    // Opening with the overrides is the same as setting them.
+    let mut opened = SimSession::open_pic(&src, &fine_opts).unwrap();
+    assert_eq!(run_bits(&opened.run().unwrap()), run_bits(&fine));
+}
+
+#[test]
+fn session_temp_survives_new_options() {
+    let mut s = SimSession::open(RC_AMP, &SimOptions::default()).unwrap();
+    s.set_temp(50.0).unwrap();
+    let mut o = serde_json::Map::new();
+    o.insert("trtol".into(), 2.into());
+    o.insert("x".into(), serde_json::Value::Null);
+    s.set_options(o);
+    assert!((s.temp() - 50.0).abs() < 1e-12);
+    let d = s.run().unwrap().diagnostics;
+    assert_eq!(
+        d.iter()
+            .filter(|d| d.message.starts_with("opts.options"))
+            .count(),
+        1
+    );
+    s.set_options(serde_json::Map::new());
+    let d = s.run().unwrap().diagnostics;
+    assert_eq!(
+        d.iter()
+            .filter(|d| d.message.starts_with("opts.options"))
+            .count(),
+        0
+    );
+}

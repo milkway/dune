@@ -74,8 +74,23 @@ export class Session {
   param(refdes: string, param?: string): number | Float64Array | null;
   /** The parameter names {@link Session.alter} accepts for `refdes`. */
   alterable(refdes: string): string[];
-  /** Circuit temperature, °C. */
+  /** Circuit temperature, °C; wins over `options.temp` once set. */
   temp: number;
+  /**
+   * {@link SimOptions.options} of the session. Assigning replaces them for the
+   * next runs without reopening (`null` or `{}` restore the deck's options);
+   * invalid entries are warnings in each run's `diagnostics`. Throws a
+   * {@link SimError} of kind `options` when not an object.
+   */
+  get options(): EngineOptions;
+  set options(options: EngineOptions | null | undefined);
+  /**
+   * {@link SimOptions.tmaxDivisor} of the session (`undefined` when unset).
+   * Assign a finite number ≥ 1, or `null`/`undefined` to clear; anything else
+   * throws a {@link SimError} of kind `options` and changes nothing.
+   */
+  get tmaxDivisor(): number | undefined;
+  set tmaxDivisor(d: number | null | undefined);
   /**
    * Continue each operating point from the previous one (off by default):
    * faster, and equal to a fresh run to the Newton tolerances rather than
@@ -96,9 +111,34 @@ export class Session {
 /** Options of {@link renderPic}: none yet (unknown keys are an error). */
 export interface RenderOptions {}
 
+/**
+ * Engine options by `.options` key (case-insensitive): `reltol`, `abstol`,
+ * `vntol`, `gmin`, `itl1`, `itl2`, `itl4`, `gminsteps`, `srcsteps`, `temp` and
+ * `tnom` (°C), `pivtol`, `pivrel`, `noopiter`, `trtol`, `chgtol`, `method`
+ * (`"trap"` | `"gear"` | `"trbdf2"`), `maxord`, `ltrabkrate`, `ltrafit`,
+ * `nopage`, `defl`, `defw`, `defad`, `defas`. A number is taken exactly; a
+ * string as the card's text (`"1u"`); `true` is the bare flag, `false` clears it.
+ */
+export type EngineOptions = Record<string, number | string | boolean>;
+
 export interface SimOptions {
   /** Files the deck may `.include`, by the path its card names. */
   includes?: Record<string, string>;
+  /**
+   * Engine options applied after the deck's `.options` cards, same keys and
+   * units. An invalid entry is a warning in the result's `diagnostics`
+   * (message prefixed `opts.options:`), as a bad `.options` card is — not a
+   * throw.
+   */
+  options?: EngineOptions;
+  /**
+   * Divide every `.tran`'s effective maximum step (the card's TMAX, else
+   * `min(TSTEP, (TSTOP-TSTART)/50)`) by this finite number ≥ 1: the run is the
+   * deck's with the card's TMAX edited to TMAX/d, bit for bit. Not an
+   * `options` key, because TMAX belongs to the analysis card. Out of range
+   * throws a {@link SimError} of kind `options`.
+   */
+  tmaxDivisor?: number | null;
 }
 
 export interface ExtractOptions {

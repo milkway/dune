@@ -12,6 +12,8 @@ use dune_pic::{OverlayMap, PicDiagKind, PicDiagnostic, PicSeverity, PicSpan};
 use dune_raw::{Data, Plot};
 use serde::{Deserialize, Serialize};
 
+use crate::overrides::Overrides;
+
 /// Result of [`crate::simulate_json`]: every plot of the run plus the
 /// messages the run produced along the way.
 ///
@@ -265,10 +267,37 @@ pub struct DiagnosticJson {
 ///   card names (resolved relative to the including file, the deck
 ///   itself being `deck.cir` at the root). There is no file system in
 ///   the browser: an `.include` not in this map is a parse error.
+/// * `options` — engine options applied after the deck's `.options`
+///   cards, with the card's keys and units (`{"trtol": 1, "method":
+///   "gear", "temp": 50}`, temperatures in °C). A number is taken
+///   exactly; a string is read as the card's text would be (`"1u"`);
+///   `true` is the bare flag, `false` clears it. An invalid entry is
+///   a warning in the result's `diagnostics` (message prefixed
+///   `opts.options:`), as an invalid `.options` card is — not a
+///   throw.
+/// * `tmaxDivisor` — a finite number ≥ 1: every `.tran` runs with its
+///   effective maximum step (the card's TMAX, else
+///   `min(TSTEP, span/50)`) divided by it, exactly as if the card
+///   carried `TMAX/d` ([`dune_core::Options::tmax_divisor`]). Not an
+///   `options` key: TMAX is a parameter of the analysis card. Out of
+///   range is an `options` error.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct SimOptions {
     pub includes: BTreeMap<String, String>,
+    pub options: serde_json::Map<String, serde_json::Value>,
+    #[serde(rename = "tmaxDivisor")]
+    pub tmax_divisor: Option<f64>,
+}
+
+impl SimOptions {
+    /// The engine overrides of the run.
+    pub fn overrides(&self) -> Overrides {
+        Overrides {
+            options: self.options.clone(),
+            tmax_divisor: self.tmax_divisor,
+        }
+    }
 }
 
 /// Why a run failed, as carried by the thrown JS error.
@@ -558,13 +587,27 @@ pub struct ExtractOptionsJson {
 /// `simulate`. Unknown keys are an error.
 ///
 /// ```json
-/// { "snap": 0.001, "includes": { "models.lib": "..." } }
+/// { "snap": 0.001, "includes": { "models.lib": "..." },
+///   "options": { "trtol": 1 }, "tmaxDivisor": 10 }
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct PicSimOptions {
     pub snap: Option<f64>,
     pub includes: BTreeMap<String, String>,
+    pub options: serde_json::Map<String, serde_json::Value>,
+    #[serde(rename = "tmaxDivisor")]
+    pub tmax_divisor: Option<f64>,
+}
+
+impl PicSimOptions {
+    /// The engine overrides of the run.
+    pub fn overrides(&self) -> Overrides {
+        Overrides {
+            options: self.options.clone(),
+            tmax_divisor: self.tmax_divisor,
+        }
+    }
 }
 
 /// Options of `render_pic`: none yet, so `{}` (or no argument).

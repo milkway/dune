@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "dune-wasm"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "console_error_panic_hook",
  "dune-core",

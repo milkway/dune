@@ -12,6 +12,7 @@
 use dune_core::{AlterValue, Session, WarmStats};
 use wasm_bindgen::prelude::*;
 
+use crate::overrides::{Overrides, check_divisor};
 use crate::schema::{PicJson, PicSimOptions, SimError, SimOptions};
 use crate::{
     Prepared, RunData, extract_runnable, guarded, js_error, opts_text, parse_options, prepare,
@@ -23,24 +24,52 @@ use crate::{
 pub struct SimSession {
     session: Session,
     /// The deck's parse/elaboration context minus the circuit (moved
-    /// into the session).
+    /// into the session); `base.options` stays the deck's own.
     base: Prepared,
     pic: Option<PicJson>,
+    /// `options` / `tmaxDivisor` of the session (issue #16).
+    overrides: Overrides,
+    /// The last [`SimSession::set_temp`], °C: it wins over the deck's
+    /// and the overrides' `temp`.
+    temp: Option<f64>,
 }
 
 impl SimSession {
-    fn from_prepared(mut base: Prepared, pic: Option<PicJson>) -> Self {
+    fn from_prepared(mut base: Prepared, pic: Option<PicJson>, overrides: Overrides) -> Self {
         let circuit = std::mem::take(&mut base.circuit);
         let session = Session::new(circuit, base.options.clone(), base.analyses.clone());
-        SimSession { session, base, pic }
+        let mut s = SimSession {
+            session,
+            base,
+            pic,
+            overrides,
+            temp: None,
+        };
+        s.retune();
+        s
     }
 
-    /// Parse and elaborate a deck (`opts.includes` as in `simulate`).
+    /// The session's options from scratch: the deck's, the overrides
+    /// on top, then the `set_temp` temperature.
+    fn retune(&mut self) {
+        let (mut options, diags) = self.overrides.apply(&self.base.options);
+        if let Some(t) = self.temp {
+            // `Session::set_temp` validated it; same `+ CTOK`.
+            options.temp = t + dune_core::consts::CTOK;
+        }
+        *self.session.options_mut() = options;
+        self.base.override_diagnostics = diags;
+    }
+
+    /// Parse and elaborate a deck (`opts` as in `simulate`).
     pub fn open(netlist: &str, opts: &SimOptions) -> Result<Self, SimError> {
         guarded(|| {
+            let overrides = opts.overrides();
+            overrides.check()?;
             Ok(SimSession::from_prepared(
                 prepare(netlist, &opts.includes)?,
                 None,
+                overrides,
             ))
         })
     }
@@ -49,9 +78,11 @@ impl SimSession {
     /// `simulate_pic`'s, the extraction riding on them).
     pub fn open_pic(src: &str, opts: &PicSimOptions) -> Result<Self, SimError> {
         guarded(|| {
+            let overrides = opts.overrides();
+            overrides.check()?;
             let pic = extract_runnable(src, opts.snap)?;
             match prepare(&pic.netlist, &opts.includes) {
-                Ok(p) => Ok(SimSession::from_prepared(p, Some(pic))),
+                Ok(p) => Ok(SimSession::from_prepared(p, Some(pic), overrides)),
                 Err(mut e) => {
                     e.pic = Some(Box::new(pic));
                     Err(e)
@@ -89,11 +120,41 @@ impl SimSession {
             .map_err(|e| SimError::new("alter", e.to_string()))
     }
 
-    /// Circuit temperature, °C.
+    /// Circuit temperature, °C. Wins over the deck's and the
+    /// overrides' `temp` from now on.
     pub fn set_temp(&mut self, celsius: f64) -> Result<(), SimError> {
         self.session
             .set_temp(celsius)
-            .map_err(|e| SimError::new("alter", e.to_string()))
+            .map_err(|e| SimError::new("alter", e.to_string()))?;
+        self.temp = Some(celsius);
+        Ok(())
+    }
+
+    /// Replace the `SimOptions.options` overrides (an empty map
+    /// restores the deck's options) for the next runs; the circuit is
+    /// kept. Invalid entries become warnings in each run's
+    /// `diagnostics`, as when opening.
+    pub fn set_options(&mut self, options: serde_json::Map<String, serde_json::Value>) {
+        self.overrides.options = options;
+        self.retune();
+    }
+
+    /// The current `options` overrides.
+    pub fn options(&self) -> &serde_json::Map<String, serde_json::Value> {
+        &self.overrides.options
+    }
+
+    /// Replace `tmaxDivisor` (`None`: the cards' TMAX as is); out of
+    /// range is kind `options` and changes nothing.
+    pub fn set_tmax_divisor(&mut self, d: Option<f64>) -> Result<(), SimError> {
+        check_divisor(d)?;
+        self.overrides.tmax_divisor = d;
+        self.retune();
+        Ok(())
+    }
+
+    pub fn tmax_divisor(&self) -> Option<f64> {
+        self.overrides.tmax_divisor
     }
 
     pub fn temp(&self) -> f64 {
@@ -214,6 +275,46 @@ impl JsSession {
 
     pub fn temp(&self) -> f64 {
         self.0.temp()
+    }
+
+    /// `setOptions(options?)` — replace the `options` overrides
+    /// (`SimOptions.options`; `null`/`undefined`/`{}` restore the
+    /// deck's). Throws kind `options` when `options` is not an object.
+    #[wasm_bindgen(js_name = setOptions)]
+    pub fn set_options(&mut self, options: JsValue) -> Result<(), JsValue> {
+        let map = match opts_text(&options)? {
+            None => serde_json::Map::new(),
+            Some(text) => match serde_json::from_str(&text) {
+                Ok(serde_json::Value::Object(m)) => m,
+                _ => {
+                    return Err(js_error(&SimError::new(
+                        "options",
+                        "bad options: options must be an object",
+                    )));
+                }
+            },
+        };
+        self.0.set_options(map);
+        Ok(())
+    }
+
+    /// `options()` — the current `options` overrides, a plain object.
+    pub fn options(&self) -> JsValue {
+        to_js(self.0.options()).unwrap_or_else(|| js_sys::Object::new().into())
+    }
+
+    /// `setTmaxDivisor(d?)` — replace `tmaxDivisor` (`undefined`/`null`
+    /// clears it). Throws kind `options` unless `d` is a finite number
+    /// ≥ 1.
+    #[wasm_bindgen(js_name = setTmaxDivisor)]
+    pub fn set_tmax_divisor(&mut self, d: Option<f64>) -> Result<(), JsValue> {
+        self.0.set_tmax_divisor(d).map_err(|e| js_error(&e))
+    }
+
+    /// `tmaxDivisor()` — the divisor, or `undefined`.
+    #[wasm_bindgen(js_name = tmaxDivisor)]
+    pub fn tmax_divisor(&self) -> Option<f64> {
+        self.0.tmax_divisor()
     }
 
     #[wasm_bindgen(js_name = setWarmStart)]

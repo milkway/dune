@@ -160,6 +160,34 @@ export class Session {
   }
 
   /**
+   * Engine options applied after the deck's `.options` (`SimOptions.options`):
+   * a plain object, `{}` when none. Assigning replaces them for the next runs
+   * without reopening (`null`/`{}` restore the deck's); invalid entries are
+   * warnings in each run's `diagnostics`. Throws kind `options` for a
+   * non-object.
+   */
+  get options() {
+    return this.#inner.options();
+  }
+
+  set options(options) {
+    this.#inner.setOptions(options);
+  }
+
+  /**
+   * `SimOptions.tmaxDivisor`: every `.tran` runs with its maximum step divided
+   * by it (`undefined` when unset). Assigning a finite number >= 1 sets it,
+   * `null`/`undefined` clears it; anything else throws kind `options`.
+   */
+  get tmaxDivisor() {
+    return this.#inner.tmaxDivisor();
+  }
+
+  set tmaxDivisor(d) {
+    this.#inner.setTmaxDivisor(d ?? undefined);
+  }
+
+  /**
    * Continue each operating point from the previous run's (off by default).
    * Faster for nonlinear circuits; results then match a fresh run to the
    * Newton tolerances instead of bit for bit.

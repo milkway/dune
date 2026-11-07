@@ -192,4 +192,36 @@ assert.equal(pm.length, 1);
 assert.ok(Math.abs(pm[0].value / (Math.log(9) * 1e-3) - 1) < 1e-2, `pic trise = ${pm[0].value}`);
 assert.deepEqual(simulatePicTyped(rcMeas).measurements, pm);
 
+// Engine overrides (issue #16): bit for bit the deck-side edit.
+const fine = { options: { trtol: 1 }, tmaxDivisor: 10 };
+const rcFineDeck = ex.netlist.replace('.tran 20u 5m', '.options trtol=1\n.tran 20u 5m 0 2u');
+const bits = (r) => r.plots.map((p) => p.columns.map((c) => Array.from(new Uint32Array(c.buffer))));
+const rcFine = simulatePicTyped(rc, fine);
+assert.deepEqual(bits(rcFine), bits(simulateTyped(rcFineDeck)));
+assert.ok(rcFine.plots[0].npoints > tr.plots[0].npoints, 'denser');
+assert.deepEqual(simulatePic(rc, fine).plots, simulate(rcFineDeck).plots);
+assert.deepEqual(simulate(rcFineDeck, {}).plots, simulate(ex.netlist, fine).plots);
+assert.deepEqual(simulatePic(rc, {}).plots, simulatePic(rc).plots, 'defaults unchanged');
+const warned = simulate('d\nv1 1 0 1\nr1 1 0 1k\n.op\n.end\n', { options: { trtol: 'abc', bogus: 1 } });
+assert.equal(warned.diagnostics.filter((x) => x.message.startsWith('opts.options: ')).length, 2);
+assert.throws(() => simulate(ex.netlist, { tmaxDivisor: 0.5 }), (e) => e.kind === 'options');
+assert.throws(() => Session.fromPic(rc, { tmaxDivisor: -1 }), (e) => e.kind === 'options');
+// Session: the "fine steps" toggle without reopening.
+const fs2 = Session.fromPic(rc);
+assert.deepEqual(fs2.options, {});
+assert.equal(fs2.tmaxDivisor, undefined);
+fs2.options = { trtol: 1 };
+fs2.tmaxDivisor = 10;
+assert.deepEqual(fs2.options, { trtol: 1 });
+assert.equal(fs2.tmaxDivisor, 10);
+assert.deepEqual(bits(fs2.runTyped()), bits(rcFine));
+assert.throws(() => { fs2.tmaxDivisor = 0; }, (e) => e.kind === 'options');
+assert.throws(() => { fs2.options = 3; }, (e) => e.kind === 'options');
+assert.equal(fs2.tmaxDivisor, 10, 'a refused divisor changes nothing');
+fs2.options = null;
+fs2.tmaxDivisor = null;
+assert.deepEqual(fs2.run(), simulate(ex.netlist));
+assert.deepEqual(fs2.run().plots, simulatePic(rc).plots);
+fs2.free();
+
 console.log('dune-sim smoke: ok');

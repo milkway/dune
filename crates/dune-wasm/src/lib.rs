@@ -22,6 +22,11 @@
 //!   arrays (see [`simulate_typed`]);
 //! * `prelude()` is the embedded pic prelude.
 //!
+//! Every run takes the engine overrides of [`SimOptions`] (issue #16):
+//! `options`, `.options` keys applied after the deck's cards, and
+//! `tmaxDivisor`, which divides each `.tran`'s maximum step
+//! ([`Overrides`]); a `Session` swaps both between runs.
+//!
 //! On failure each throws a JS `Error` whose `message` is the
 //! engine's, parser's or extractor's message, with `kind` and
 //! `diagnostics` properties (and `pic`, for the pic entry points) as
@@ -38,6 +43,7 @@
 //! engine failure is an `Err`). A long-running deck, however, blocks
 //! the calling thread until it finishes — call it from a Web Worker.
 
+mod overrides;
 mod schema;
 mod session;
 
@@ -47,6 +53,7 @@ pub use schema::{
     RenderOptionsJson, ShapeRangeJson, SimError, SimOptions, VariableJson,
 };
 
+pub use overrides::Overrides;
 pub use session::{JsSession, SimSession};
 
 use std::borrow::Cow;
@@ -206,8 +213,9 @@ pub fn run_pic(src: &str, opts: &PicSimOptions) -> Result<PicRunJson, SimError> 
 
 /// [`run_pic`] with the plots kept in engine form ([`RunData`]).
 pub fn run_pic_data(src: &str, opts: &PicSimOptions) -> Result<(RunData, PicJson), SimError> {
+    opts.overrides().check()?;
     let pic = extract_runnable(src, opts.snap)?;
-    match run_includes(&pic.netlist, &opts.includes) {
+    match run_includes(&pic.netlist, &opts.includes, &opts.overrides()) {
         Ok(data) => Ok((data, pic)),
         Err(mut e) => {
             e.pic = Some(Box::new(pic));
@@ -269,7 +277,9 @@ pub fn run(netlist: &str, opts: &SimOptions) -> Result<RawfileJson, SimError> {
 
 /// [`run`] with the plots kept in engine form ([`RunData`]).
 pub fn run_data(netlist: &str, opts: &SimOptions) -> Result<RunData, SimError> {
-    run_includes(netlist, &opts.includes)
+    let overrides = opts.overrides();
+    overrides.check()?;
+    run_includes(netlist, &opts.includes, &overrides)
 }
 
 /// The outcome of a run before its plots become JSON: what the typed
@@ -321,14 +331,20 @@ pub fn column_buffers(p: &Plot) -> Vec<Cow<'_, [f64]>> {
     }
 }
 
-fn run_includes(netlist: &str, includes: &BTreeMap<String, String>) -> Result<RunData, SimError> {
-    let prepared = prepare(netlist, includes)?;
+fn run_includes(
+    netlist: &str,
+    includes: &BTreeMap<String, String>,
+    overrides: &Overrides,
+) -> Result<RunData, SimError> {
+    let mut prepared = prepare(netlist, includes)?;
+    let (options, override_diags) = overrides.apply(&prepared.options);
+    prepared.override_diagnostics = override_diags;
     let mut solutions: Vec<Solution> = Vec::new();
     let mut notes = prepared.notes.clone();
     for analysis in &prepared.analyses {
         let (sols, analysis_notes) = prepared
             .circuit
-            .run(analysis, &prepared.options)
+            .run(analysis, &options)
             .map_err(|e| SimError::new("analysis", e.to_string()))?;
         notes.extend(analysis_notes);
         solutions.extend(sols);
@@ -340,6 +356,7 @@ fn run_includes(netlist: &str, includes: &BTreeMap<String, String>) -> Result<Ru
 /// [`session::SimSession`] share up to the first analysis.
 pub(crate) struct Prepared {
     pub circuit: Circuit,
+    /// The deck's options (its `.options` cards; no overrides).
     pub options: Options,
     pub analyses: Vec<dune_netlist::ir::Analysis>,
     /// The deck's `.measure` cards, evaluated on every run.
@@ -349,6 +366,8 @@ pub(crate) struct Prepared {
     pub notes: Vec<String>,
     /// Parser and `.options` warnings.
     pub diagnostics: Vec<DiagnosticJson>,
+    /// Warnings of the run's `SimOptions.options` (after the deck's).
+    pub override_diagnostics: Vec<DiagnosticJson>,
 }
 
 impl Prepared {
@@ -369,7 +388,12 @@ impl Prepared {
                 .map(|s| s.to_plot(&self.title, ""))
                 .collect(),
             notes,
-            diagnostics: self.diagnostics.clone(),
+            diagnostics: self
+                .diagnostics
+                .iter()
+                .chain(&self.override_diagnostics)
+                .cloned()
+                .collect(),
         }
     }
 }
@@ -416,6 +440,7 @@ pub(crate) fn prepare(
         title: parsed.netlist.title.clone(),
         notes,
         diagnostics,
+        override_diagnostics: Vec::new(),
     })
 }
 
