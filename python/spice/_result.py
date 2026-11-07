@@ -10,6 +10,7 @@ import numpy.typing as npt
 import polars as pl
 
 from ._errors import Diagnostic
+from ._measure import Measurement
 from ._repr import has_preview, plot_html, plot_svg, result_html
 
 if TYPE_CHECKING:
@@ -226,7 +227,7 @@ class Result(Sequence[Plot]):
     iteration work as on a list.
     """
 
-    __slots__ = ("_plots", "diagnostics", "notes", "title")
+    __slots__ = ("_plots", "diagnostics", "measurements", "notes", "title")
 
     title: str
     """The deck's title line."""
@@ -234,12 +235,32 @@ class Result(Sequence[Plot]):
     """Informational remarks from elaboration and from each analysis, in order."""
     diagnostics: list[Diagnostic]
     """Non-fatal parser and ``.options`` diagnostics (warnings)."""
+    measurements: list[Measurement]
+    """The deck's ``.measure`` cards, each evaluated on every plot of its
+    analysis: in plot order, then card order (what ``dune -b`` prints).
+    Failed ones are kept, with :attr:`Measurement.error` set."""
 
     def __init__(self, native: dict[str, Any]) -> None:
         self.title = native["title"]
         self._plots = [Plot(p) for p in native["plots"]]
         self.notes = list(native["notes"])
         self.diagnostics = [Diagnostic._from_native(d) for d in native["diagnostics"]]
+        self.measurements = [Measurement._from_native(m) for m in native["measurements"]]
+
+    def measurement(self, name: str) -> Measurement:
+        """A deck measurement by name (case-insensitive; the first if repeated).
+
+        Raises:
+            KeyError: no ``.measure`` card has that name.
+        """
+        wanted = name.lower()
+        for m in self.measurements:
+            if m.name == wanted:
+                return m
+        raise KeyError(
+            f"no measurement named {name!r}; measurements: "
+            f"{[m.name for m in self.measurements]}"
+        )
 
     @property
     def plots(self) -> list[Plot]:

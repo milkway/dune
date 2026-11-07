@@ -178,6 +178,7 @@ class SweepResult(Sequence[Result]):
                     "title": self.title,
                     "plots": r["plots"],
                     "notes": r["notes"],
+                    "measurements": r["measurements"],
                     "diagnostics": [],
                 }
             )

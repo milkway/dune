@@ -19,11 +19,14 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use dune_core::consts::CTOK;
-use dune_core::{Circuit, Data, Method, Options, Solution, SweepParam, SweepRun};
+use dune_core::{
+    Circuit, Data, MeasureError, Measurement, Method, Options, Solution, SweepParam, SweepRun,
+    VarType, measure_all,
+};
 use dune_netlist::ir::Netlist;
 use dune_netlist::{Diagnostic, IncludeLoader, ParseOutcome, Severity, SourceMap};
 use num_complex::Complex64;
-use numpy::PyArray1;
+use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::create_exception;
 use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -126,8 +129,56 @@ impl Failure {
 struct Output {
     title: String,
     solutions: Vec<Solution>,
+    measures: Vec<MeasRow>,
     notes: Vec<String>,
     diags: Vec<Diag>,
+}
+
+/// One measurement, as plain data (what `spice.Measurement` wraps).
+struct MeasRow {
+    name: String,
+    analysis: &'static str,
+    /// Index of the measured plot in the run (`None` for the direct
+    /// `spice.measure` API).
+    plot: Option<usize>,
+    /// NaN when the measurement failed.
+    value: f64,
+    details: Vec<(&'static str, f64)>,
+    error: Option<String>,
+}
+
+impl MeasRow {
+    fn new(
+        name: &str,
+        analysis: &'static str,
+        plot: Option<usize>,
+        r: &Result<Measurement, MeasureError>,
+    ) -> Self {
+        let (value, details, error) = match r {
+            Ok(m) => (m.value, m.detail.pairs(), None),
+            Err(e) => (f64::NAN, Vec::new(), Some(e.describe())),
+        };
+        MeasRow {
+            name: name.to_string(),
+            analysis,
+            plot,
+            value,
+            details,
+            error,
+        }
+    }
+}
+
+/// The `.measure` analysis keyword of a plot (`tran`, `ac`, `dc`,
+/// `sp`), `None` for plots that cannot be measured.
+fn plot_analysis(plotname: &str) -> Option<&'static str> {
+    Some(match plotname {
+        "Transient Analysis" => "tran",
+        "AC Analysis" => "ac",
+        "SP Analysis" => "sp",
+        "DC transfer characteristic" => "dc",
+        _ => return None,
+    })
 }
 
 /// Where the deck comes from.
@@ -226,9 +277,19 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
     if solutions.is_empty() {
         notes.push("no analyses in the deck; nothing to do".into());
     }
+    // `.measure` cards: pure post-processing of the plots.
+    let cards = &netlist.measures;
+    let measures = measure_all(cards, &solutions)
+        .iter()
+        .map(|o| {
+            let m = &cards[o.card];
+            MeasRow::new(&m.name, m.analysis.keyword(), Some(o.plot), &o.result)
+        })
+        .collect();
     Ok(Output {
         title: netlist.title.clone(),
         solutions,
+        measures,
         notes,
         diags,
     })
@@ -239,6 +300,8 @@ struct SweepOut {
     title: String,
     keys: Vec<String>,
     runs: Vec<SweepRun>,
+    /// The deck's `.measure` cards, evaluated on every run.
+    measures: Vec<dune_netlist::ir::Measure>,
     diags: Vec<Diag>,
 }
 
@@ -265,6 +328,7 @@ fn run_sweep(
         title: netlist.title.clone(),
         keys: params.iter().map(SweepParam::key).collect(),
         runs,
+        measures: netlist.measures.clone(),
         diags,
     })
 }
@@ -457,13 +521,107 @@ fn source(
     }
 }
 
+fn meas_dict<'py>(py: Python<'py>, m: &MeasRow) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("name", &m.name)?;
+    d.set_item("analysis", m.analysis)?;
+    d.set_item("plot", m.plot)?;
+    d.set_item("value", m.value)?;
+    let details = PyDict::new(py);
+    for (k, v) in &m.details {
+        details.set_item(*k, *v)?;
+    }
+    d.set_item("details", details)?;
+    d.set_item("error", &m.error)?;
+    Ok(d)
+}
+
+/// `_measure(plotname, variables, scale, columns, spec, name) -> dict`.
+///
+/// Rebuild one plot from its parts (the columns are copied out of
+/// NumPy) and evaluate the measurement `spec` — a `.measure` body
+/// such as `"trig v(1) val=0.5 rise=1 targ v(2) val=0.5 rise=1"` —
+/// on it. A malformed `spec` raises `NativeError("measure", …)`; a
+/// measurement that does not happen comes back with `error` set.
+#[pyfunction]
+#[pyo3(signature = (plotname, variables, scale, columns, spec, name))]
+fn _measure<'py>(
+    py: Python<'py>,
+    plotname: String,
+    variables: Vec<(String, String)>,
+    scale: Option<usize>,
+    columns: Vec<Bound<'py, PyAny>>,
+    spec: String,
+    name: String,
+) -> PyResult<Bound<'py, PyDict>> {
+    let fail = |msg: String| NativeError::new_err(("measure", msg, PyList::empty(py).unbind()));
+    let Some(analysis) = plot_analysis(&plotname) else {
+        return Err(fail(format!(
+            "plot {plotname:?} cannot be measured: measure limited to tran, dc, sp, or ac analysis"
+        )));
+    };
+    if columns.len() != variables.len() {
+        return Err(PyValueError::new_err("one column per variable is needed"));
+    }
+    let mut real = Vec::new();
+    let mut complex = Vec::new();
+    for c in &columns {
+        if let Ok(a) = c.extract::<PyReadonlyArray1<'py, f64>>() {
+            real.push(a.as_array().iter().copied().collect::<Vec<f64>>());
+        } else if let Ok(a) = c.extract::<PyReadonlyArray1<'py, Complex64>>() {
+            complex.push(a.as_array().iter().copied().collect::<Vec<Complex64>>());
+        } else {
+            return Err(PyTypeError::new_err(
+                "columns must be 1-D float64 or complex128 arrays",
+            ));
+        }
+    }
+    let data = match (real.is_empty(), complex.is_empty()) {
+        (_, true) => Data::Real(real),
+        (true, false) => Data::Complex(complex),
+        _ => return Err(PyTypeError::new_err("a plot is all real or all complex")),
+    };
+    let sol = Solution {
+        plotname,
+        variables: variables
+            .into_iter()
+            .map(|(n, t)| (n, VarType::from_name(&t)))
+            .collect(),
+        data,
+        scale,
+    };
+    let func = match dune_netlist::parse_measure_body(&spec) {
+        Ok((f, _warnings)) => f,
+        Err(e) => {
+            return Err(fail(format!(
+                "{} (at column {} of {spec:?})",
+                e.message,
+                e.start + 1
+            )));
+        }
+    };
+    let result = py.detach(|| {
+        catch_unwind(AssertUnwindSafe(|| sol.measure(&func)))
+            .map_err(|_| "internal error in the measurement (please report)".to_string())
+    });
+    match result {
+        Ok(r) => meas_dict(py, &MeasRow::new(&name, analysis, None, &r)),
+        Err(msg) => Err(NativeError::new_err((
+            "internal",
+            msg,
+            PyList::empty(py).unbind(),
+        ))),
+    }
+}
+
 /// `_simulate(text, path, includes, options) -> dict`.
 ///
 /// Exactly one of `text` (a deck; `.include` from `includes`) and
 /// `path` (a deck file; `.include` on disk) is given. Returns
 /// `{"title", "plots": [{"title", "plotname", "variables": [(name,
 /// type)], "scale": int | None, "complex": bool, "columns":
-/// [ndarray]}], "notes": [str], "diagnostics": [dict]}`. The GIL is
+/// [ndarray]}], "measurements": [dict], "notes": [str], "diagnostics":
+/// [dict]}`. The GIL is
 /// released while the simulation runs.
 #[pyfunction]
 #[pyo3(signature = (text, path, includes, options))]
@@ -492,6 +650,11 @@ fn _simulate<'py>(
                 plots.append(plot_dict(py, &out.title, s)?)?;
             }
             result.set_item("plots", plots)?;
+            let measures = PyList::empty(py);
+            for m in &out.measures {
+                measures.append(meas_dict(py, m)?)?;
+            }
+            result.set_item("measurements", measures)?;
             result.set_item("notes", out.notes)?;
             result.set_item("diagnostics", diag_list(py, &out.diags)?)?;
             Ok(result)
@@ -510,7 +673,7 @@ fn _simulate<'py>(
 /// `dune_core::SweepParam`), `rows` one list of values per run,
 /// `threads` 1 for the sequential path, 0 for one per core. Returns
 /// `{"title", "params": [canonical key], "diagnostics": [dict],
-/// "runs": [{"ok": True, "plots", "notes"} | {"ok": False, "kind",
+/// "runs": [{"ok": True, "plots", "measurements", "notes"} | {"ok": False, "kind",
 /// "message"}]}`. Bad parameter names or rows raise `ValueError`.
 /// The GIL is released while the runs execute.
 #[pyfunction]
@@ -557,6 +720,13 @@ fn _sweep<'py>(
         match run.outcome {
             Ok(o) => {
                 d.set_item("ok", true)?;
+                let measures = PyList::empty(py);
+                for r in measure_all(&out.measures, &o.solutions) {
+                    let m = &out.measures[r.card];
+                    let row = MeasRow::new(&m.name, m.analysis.keyword(), Some(r.plot), &r.result);
+                    measures.append(meas_dict(py, &row)?)?;
+                }
+                d.set_item("measurements", measures)?;
                 let plots = PyList::empty(py);
                 for s in o.solutions {
                     plots.append(plot_dict(py, &out.title, s)?)?;
@@ -604,5 +774,6 @@ fn _spice(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("NativeError", m.py().get_type::<NativeError>())?;
     m.add_function(wrap_pyfunction!(_simulate, m)?)?;
     m.add_function(wrap_pyfunction!(_sweep, m)?)?;
+    m.add_function(wrap_pyfunction!(_measure, m)?)?;
     Ok(())
 }

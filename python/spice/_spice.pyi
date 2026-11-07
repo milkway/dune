@@ -23,3 +23,12 @@ def _sweep(
     rows: list[list[float]],
     threads: int,
 ) -> dict[str, Any]: ...
+
+def _measure(
+    plotname: str,
+    variables: list[tuple[str, str]],
+    scale: int | None,
+    columns: list[Any],
+    spec: str,
+    name: str,
+) -> dict[str, Any]: ...
