@@ -42,7 +42,8 @@
 #'   * `params`: a tibble with `run` (the run index, from 1) and one
 #'     double column per swept parameter, named in canonical form
 #'     (`"r1"`, `"@m1[w]"`, `"temp"`);
-#'   * `runs`: a list of `spice_result`, one per run;
+#'   * `runs`: a list of `spice_result`, one per run (each with the
+#'     deck's `.measure` cards evaluated in its `measurements`);
 #'   * `diagnostics`: the deck's parser warnings, as in [spice_run()].
 #'
 #'   [spice_tidy()] turns it into one long tibble.

@@ -98,3 +98,11 @@ def test_measure_rawfile_of_ngspice(corpus: Path) -> None:
         m = spice.measure(tran, body, name=name)
         assert m.value == res.measurement(name).value
         assert math.isclose(m.value, expect[name], rel_tol=1e-4), name
+
+
+def test_sweep_runs_carry_their_measurements() -> None:
+    # tau = R*C: the 10-90 % rise time scales with r1.
+    sw = spice.sweep(RC, {"r1": [1e3, 2e3]})
+    rises = [run.measurement("trise").value for run in sw]
+    assert math.isclose(rises[0], 1e-9 * math.log(9), rel_tol=1e-4)
+    assert math.isclose(rises[1] / rises[0], 2.0, rel_tol=1e-3)

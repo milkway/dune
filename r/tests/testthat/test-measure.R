@@ -73,3 +73,11 @@ test_that("malformed measurements and unmeasurable plots are classed errors", {
   expect_error(spice_measure(tran, 1), class = "spice_error_input")
   expect_error(spice_measure(list(), "max v(1)"), class = "spice_error_input")
 })
+
+test_that("every sweep run carries its measurements", {
+  # tau = R*C: the 10-90 % rise time scales with r1.
+  sw <- spice_sweep(rc_step, r1 = c(1e3, 2e3))
+  rise <- vapply(sw$runs, function(r) r$measurements$value[[1]], double(1))
+  expect_equal(rise[[1]], 1e-9 * log(9), tolerance = 1e-4)
+  expect_equal(rise[[2]] / rise[[1]], 2, tolerance = 1e-3)
+})
