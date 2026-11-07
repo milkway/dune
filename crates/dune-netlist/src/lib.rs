@@ -16,6 +16,7 @@ pub mod span;
 
 mod dot;
 mod elem;
+mod meas;
 mod param;
 mod parse;
 mod scan;
@@ -23,6 +24,7 @@ mod subckt;
 
 pub use deck::{Deck, IncludeLoader};
 pub use diag::{Diagnostic, Severity};
+pub use meas::{MeasSyntaxError, MeasWarning, parse_measure_body};
 pub use parse::{ParseOutcome, parse_file, parse_str, parse_with_loader};
 pub use span::{FileId, Location, SourceMap, Span};
 

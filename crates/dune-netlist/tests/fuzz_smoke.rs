@@ -108,6 +108,14 @@ fn pathological_shapes_terminate() {
     parse(format!("t\nr1 1 0 1k\n{}", "+ 1\n".repeat(5000)));
     // A card with a huge number and absurd exponent.
     parse("t\nr1 1 0 9e999999999\nc1 1 0 1e-999999999\n.end\n".into());
+    // Measurement cards cut at every byte.
+    let meas = ".meas tran d trig v(1,2) val= 0.5 rise=last targ v(3)=v(4) fall=2 \u{e9}";
+    for cut in 0..meas.len() {
+        if meas.is_char_boundary(cut) {
+            parse(format!("t\nr1 1 0 1k\n{}\n.end\n", &meas[..cut]));
+        }
+    }
+    parse(format!("t\n.meas ac x when {}\n.end\n", "= ".repeat(500)));
     // Many nested subcircuit scopes never closed.
     parse(format!("t\n{}.end\n", ".subckt s a b\n".repeat(200)));
 }

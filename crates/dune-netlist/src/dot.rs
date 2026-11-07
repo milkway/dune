@@ -97,6 +97,17 @@ pub(crate) fn parse_dot(
         ".save" => dot_save(&mut ctx, nl, span),
         ".four" | ".fourier" => dot_four(&mut ctx, nl, span),
         ".width" => dot_width(&mut ctx, nl, span),
+        ".measure" | ".meas" => {
+            let card = ctx.card;
+            if let Some(m) = crate::meas::parse_measure_card(
+                &card.text,
+                span,
+                &|s, e| card.span_of(s, e),
+                ctx.diags,
+            ) {
+                nl.measures.push(m);
+            }
+        }
         ".temp" => ctx.warn(span, ".temp card obsolete - use .options temp and tnom"),
         ".lib" => ctx.err(span, ".lib is not supported yet (use .include)"),
         _ => return false,

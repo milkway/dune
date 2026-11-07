@@ -22,6 +22,9 @@ pub struct Netlist {
     pub outputs: Vec<Output>,
     /// `.ic` and `.nodeset` entries.
     pub node_inits: Vec<NodeInit>,
+    /// `.measure` / `.meas` cards (ngspice grammar; pure
+    /// post-processing, never part of the simulation).
+    pub measures: Vec<Measure>,
     /// `.control` … `.endc` lines, verbatim and uninterpreted.
     pub control: Vec<String>,
     /// `.width out=N`: print column width (the `in=` half only ever
@@ -407,4 +410,141 @@ pub enum NodeInitKind {
     Ic,
     /// `.nodeset`: initial guess only.
     Nodeset,
+}
+
+/// One `.measure` card (ngspice-47 `com_measure2.c` grammar — the
+/// 3f5 has none, so ngspice is the contract here; see
+/// `docs/dune-measure.md`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Measure {
+    /// Which plot the card measures.
+    pub analysis: MeasAnalysis,
+    /// Result name (lowercased, like every deck identifier).
+    pub name: Ident,
+    /// The measurement itself.
+    pub func: MeasFunc,
+    /// The function keyword as written, lowercased (`trig`, `when`,
+    /// `avg`…), for ngspice-style messages.
+    pub keyword: String,
+    /// The card text as written (continuations joined).
+    pub text: String,
+    pub span: Span,
+}
+
+/// The analysis a `.measure` card applies to (`chkAnalysisType`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasAnalysis {
+    Tran,
+    Ac,
+    Dc,
+    /// ngspice's `.sp` (measured like `.ac`).
+    Sp,
+}
+
+impl MeasAnalysis {
+    /// The card keyword (`tran`, `ac`, `dc`, `sp`).
+    pub fn keyword(self) -> &'static str {
+        match self {
+            MeasAnalysis::Tran => "tran",
+            MeasAnalysis::Ac => "ac",
+            MeasAnalysis::Dc => "dc",
+            MeasAnalysis::Sp => "sp",
+        }
+    }
+}
+
+/// What a `.measure` computes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MeasFunc {
+    /// `TRIG … TARG …` (also spelled `DELAY`): `targ − trig`.
+    Delay { trig: MeasTrig, targ: MeasTrig },
+    /// `WHEN out=val|out2`: the scale value of a crossing.
+    When(MeasCross),
+    /// `FIND out AT=x` / `FIND out WHEN …`: the interpolated value.
+    Find { var: OutVar, at: MeasPoint },
+    /// `DERIV out AT=x` / `DERIV out WHEN …`: d(out)/d(scale) —
+    /// a Dune extension; ngspice-47 parses it but reports
+    /// "currently not supported".
+    Deriv { var: OutVar, at: MeasPoint },
+    /// `AVG|MIN|MAX|MIN_AT|MAX_AT|PP|RMS|INTEG out FROM= TO=`.
+    Stat {
+        stat: MeasStat,
+        var: OutVar,
+        window: MeasWindow,
+    },
+}
+
+/// One side of a `TRIG … TARG …` delay.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MeasTrig {
+    /// `TRIG AT=x`: a fixed scale value.
+    At(f64),
+    /// `TRIG out VAL=v RISE|FALL|CROSS=n …`.
+    Cross(MeasCross),
+}
+
+/// Where `FIND`/`DERIV` evaluate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MeasPoint {
+    At(f64),
+    When(MeasCross),
+}
+
+/// A level crossing: `out` against a constant or a second vector.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeasCross {
+    pub var: OutVar,
+    pub level: MeasLevel,
+    pub edge: MeasEdge,
+    pub window: MeasWindow,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MeasLevel {
+    Value(f64),
+    /// `WHEN v(a)=v(b)`.
+    Var(OutVar),
+}
+
+/// Which crossing counts (`RISE=`, `FALL=`, `CROSS=`; the last one
+/// given wins, as in `measure_parse_stdParams`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasEdge {
+    /// None given: the first crossing either way.
+    Any,
+    Rise(MeasCount),
+    Fall(MeasCount),
+    Cross(MeasCount),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasCount {
+    /// The n-th (1-based).
+    Nth(u32),
+    /// `=LAST` (or a bare `LAST`, which means `CROSS=LAST`).
+    Last,
+}
+
+/// `TD=`, `FROM=`, `TO=` as given (`None` = not on the card; the
+/// per-analysis defaults are applied by the evaluator, like ngspice).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MeasWindow {
+    pub td: Option<f64>,
+    pub from: Option<f64>,
+    pub to: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeasStat {
+    Min,
+    Max,
+    /// The scale value of the minimum.
+    MinAt,
+    /// The scale value of the maximum.
+    MaxAt,
+    /// Peak to peak.
+    Pp,
+    Avg,
+    Rms,
+    Integ,
 }

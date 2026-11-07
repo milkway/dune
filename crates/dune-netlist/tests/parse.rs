@@ -401,3 +401,57 @@ fn subckt_bomb_is_bounded() {
     );
     assert!(out.netlist.elements.len() <= 1 << 20);
 }
+
+#[test]
+fn measure_cards_parse_with_continuations() {
+    let nl = clean(
+        "meas\n\
+         v1 1 0 pulse(0 1 1n)\n\
+         r1 1 2 1k\n\
+         c1 2 0 1p\n\
+         .tran 10p 10n\n\
+         .meas tran tdelay trig v(1) val=0.5 rise=1\n\
+         + targ v(2) val=0.5 rise=1\n\
+         .measure AC f3db WHEN vdb(2)=-3\n\
+         .meas dc vmax MAX v(2) from=0 to=1\n\
+         .end\n",
+    );
+    assert_eq!(nl.measures.len(), 3);
+    let m = &nl.measures[0];
+    assert_eq!(m.analysis, MeasAnalysis::Tran);
+    assert_eq!(m.name, "tdelay");
+    assert_eq!(m.keyword, "trig");
+    assert!(matches!(m.func, MeasFunc::Delay { .. }));
+    assert_eq!(nl.measures[1].analysis, MeasAnalysis::Ac);
+    assert!(matches!(nl.measures[1].func, MeasFunc::When(_)));
+    assert!(matches!(
+        nl.measures[2].func,
+        MeasFunc::Stat {
+            stat: MeasStat::Max,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn malformed_measure_cards_are_errors_with_spans() {
+    let deck = "meas\nr1 1 0 1k\n.op\n.meas tran x max v(1) bogus=1\n.meas op y max v(1)\n.meas tran\n.end\n";
+    let out = parse_str("test.cir", deck);
+    let errs: Vec<String> = out
+        .diags
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.render(&out.sources))
+        .collect();
+    assert_eq!(errs.len(), 3, "{errs:#?}");
+    // Points at the bad word, not the whole card.
+    assert!(errs[0].starts_with("test.cir:4:23:"), "{}", errs[0]);
+    assert!(errs[0].contains("no such parameter"), "{}", errs[0]);
+    assert!(
+        errs[1].contains("unrecognized analysis type `op`"),
+        "{}",
+        errs[1]
+    );
+    assert!(errs[2].contains("needs a result name"), "{}", errs[2]);
+    assert!(out.netlist.measures.is_empty());
+}
