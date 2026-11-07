@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use dune_core::consts::CTOK;
-use dune_core::{Circuit, Method, Options, Solution, SweepParam};
+use dune_core::{
+    Circuit, MeasureError, Measurement, Method, Options, Solution, SweepParam, measure_all,
+};
 use dune_netlist::{IncludeLoader, ParseOutcome, Severity};
 use dune_raw::{Data, Plot, Rawfile};
 
@@ -66,8 +68,108 @@ pub struct RunOutput {
     /// `Solution`'s (`None` for the operating point, `.tf`, `.pz`…),
     /// which a rawfile cannot carry.
     pub plots: Vec<(Plot, Option<usize>)>,
+    /// The deck's `.measure` cards, each on every plot of its
+    /// analysis (plot order, then card order).
+    pub measures: Vec<MeasRow>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<Diag>,
+}
+
+/// One measurement as plain data (a row of the R tibble).
+pub struct MeasRow {
+    pub name: String,
+    pub analysis: &'static str,
+    /// Index of the measured plot in the run; `None` for
+    /// `spice_measure()`.
+    pub plot: Option<usize>,
+    /// NaN when the measurement failed.
+    pub value: f64,
+    /// ngspice's extra numbers by label (`trig targ at with from to`).
+    pub details: Vec<(&'static str, f64)>,
+    pub error: Option<String>,
+}
+
+impl MeasRow {
+    fn new(
+        name: &str,
+        analysis: &'static str,
+        plot: Option<usize>,
+        r: &Result<Measurement, MeasureError>,
+    ) -> Self {
+        let (value, details, error) = match r {
+            Ok(m) => (m.value, m.detail.pairs(), None),
+            Err(e) => (f64::NAN, Vec::new(), Some(e.describe())),
+        };
+        MeasRow {
+            name: name.to_string(),
+            analysis,
+            plot,
+            value,
+            details,
+            error,
+        }
+    }
+
+    /// The value of one detail label, NaN when absent.
+    pub fn detail(&self, label: &str) -> f64 {
+        self.details
+            .iter()
+            .find(|(k, _)| *k == label)
+            .map_or(f64::NAN, |(_, v)| *v)
+    }
+}
+
+/// The `.measure` analysis keyword of a plot.
+fn plot_analysis(plotname: &str) -> Option<&'static str> {
+    Some(match plotname {
+        "Transient Analysis" => "tran",
+        "AC Analysis" => "ac",
+        "SP Analysis" => "sp",
+        "DC transfer characteristic" => "dc",
+        _ => return None,
+    })
+}
+
+/// `spice_measure()`: evaluate `(name, spec)` measurement bodies on
+/// one plot (`scale` its 0-based scale index). Err is a message for
+/// a malformed spec or an unmeasurable plot.
+pub fn measure_plot(
+    plot: Plot,
+    scale: Option<usize>,
+    specs: &[(String, String)],
+) -> Result<Vec<MeasRow>, String> {
+    let Some(analysis) = plot_analysis(&plot.name) else {
+        return Err(format!(
+            "plot \"{}\" cannot be measured: measure limited to tran, dc, sp, or ac analysis",
+            plot.name
+        ));
+    };
+    let mut funcs = Vec::with_capacity(specs.len());
+    for (name, spec) in specs {
+        let (f, _warnings) = dune_netlist::parse_measure_body(spec).map_err(|e| {
+            format!(
+                "`{name}`: {} (at column {} of \"{spec}\")",
+                e.message,
+                e.start + 1
+            )
+        })?;
+        funcs.push(f);
+    }
+    let sol = Solution {
+        plotname: plot.name,
+        variables: plot
+            .variables
+            .into_iter()
+            .map(|v| (v.name, v.vtype))
+            .collect(),
+        data: plot.data,
+        scale,
+    };
+    Ok(specs
+        .iter()
+        .zip(&funcs)
+        .map(|((name, _), f)| MeasRow::new(name, analysis, None, &sol.measure(f)))
+        .collect())
 }
 
 /// The option names `apply_options` accepts, in `Options` field order
@@ -287,8 +389,18 @@ pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput,
         notes.push("no analyses in the deck; nothing to do".into());
     }
 
+    let cards = &netlist.measures;
+    let measures = measure_all(cards, &solutions)
+        .iter()
+        .map(|o| {
+            let m = &cards[o.card];
+            MeasRow::new(&m.name, m.analysis.keyword(), Some(o.plot), &o.result)
+        })
+        .collect();
+
     let title = netlist.title.clone();
     Ok(RunOutput {
+        measures,
         plots: to_plots(&title, &solutions),
         title,
         notes,
@@ -300,6 +412,8 @@ pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput,
 pub enum SweepRunOutput {
     Ok {
         plots: Vec<(Plot, Option<usize>)>,
+        /// The deck's `.measure` cards on this run's plots.
+        measures: Vec<MeasRow>,
         notes: Vec<String>,
     },
     Failed {
@@ -354,6 +468,13 @@ pub fn sweep(
         .map(|r| match r.outcome {
             Ok(o) => SweepRunOutput::Ok {
                 plots: to_plots(&title, &o.solutions),
+                measures: measure_all(&netlist.measures, &o.solutions)
+                    .iter()
+                    .map(|m| {
+                        let c = &netlist.measures[m.card];
+                        MeasRow::new(&c.name, c.analysis.keyword(), Some(m.plot), &m.result)
+                    })
+                    .collect(),
                 notes: o.notes,
             },
             Err(e) => SweepRunOutput::Failed {

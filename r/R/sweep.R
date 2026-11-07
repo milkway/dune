@@ -130,7 +130,7 @@ spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
         call = call
       )
     }
-    runs[[i]] <- new_spice_result(out$title, r$plots, r$notes, diagnostics[0, ])
+    runs[[i]] <- new_spice_result(out$title, r$plots, r$notes, diagnostics[0, ], r$measurements)
   }
   structure(
     list(title = out$title, params = tab, runs = runs, diagnostics = diagnostics),

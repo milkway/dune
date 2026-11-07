@@ -39,6 +39,11 @@ SEXP handle_result(SEXP res_) {
     return (SEXP)res;
 }
 
+SEXP savvy_ffi_measure__impl(SEXP c_arg__plot, SEXP c_arg__scale, SEXP c_arg__names, SEXP c_arg__specs) {
+    SEXP res = savvy_ffi_measure__ffi(c_arg__plot, c_arg__scale, c_arg__names, c_arg__specs);
+    return handle_result(res);
+}
+
 SEXP savvy_ffi_option_names__impl(void) {
     SEXP res = savvy_ffi_option_names__ffi();
     return handle_result(res);
@@ -66,6 +71,7 @@ SEXP savvy_ffi_write_raw__impl(SEXP c_arg__path, SEXP c_arg__plots, SEXP c_arg__
 
 
 static const R_CallMethodDef CallEntries[] = {
+    {"savvy_ffi_measure__impl", (DL_FUNC) &savvy_ffi_measure__impl, 4},
     {"savvy_ffi_option_names__impl", (DL_FUNC) &savvy_ffi_option_names__impl, 0},
     {"savvy_ffi_read_raw__impl", (DL_FUNC) &savvy_ffi_read_raw__impl, 1},
     {"savvy_ffi_run_deck__impl", (DL_FUNC) &savvy_ffi_run_deck__impl, 6},

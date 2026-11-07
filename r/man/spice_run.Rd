@@ -41,7 +41,11 @@ the plot names (\code{"Transient Analysis"}, ...) made unique with
 \code{\link[=make.unique]{make.unique()}} when an analysis appears twice;
 \item \code{notes}: non-fatal remarks from the engine;
 \item \code{diagnostics}: a tibble (\code{severity}, \code{message}) of the parser's
-warnings, each message prefixed with its \code{file:line:col}.
+warnings, each message prefixed with its \code{file:line:col};
+\item \code{measurements}: the deck's \code{.measure} cards (ngspice grammar),
+each evaluated on every plot of its analysis, as the tibble
+\code{\link[=spice_measure]{spice_measure()}} returns (zero rows without \code{.measure} cards).
+Failed measurements are rows with \code{error} set.
 }
 }
 \description{

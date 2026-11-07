@@ -22,7 +22,7 @@ use savvy::{
     RealSexp, Sexp, StringSexp, TypedSexp, savvy,
 };
 
-use engine::{Diag, OptValue, Source, SweepRunOutput};
+use engine::{Diag, MeasRow, OptValue, Source, SweepRunOutput};
 
 fn strings<I, S>(it: I) -> savvy::Result<Sexp>
 where
@@ -154,6 +154,86 @@ fn user_options(names: &StringSexp, values: ListSexp) -> savvy::Result<Vec<(Stri
     Ok(user)
 }
 
+/// Measurements as parallel columns (see `R/measure.R`):
+/// `plot` is 1-based (`NA` for `spice_measure()`), absent details
+/// and failed values are `NA`, `error` is `NA` on success.
+fn meas_columns(rows: &[MeasRow]) -> savvy::Result<Sexp> {
+    const DETAILS: [&str; 6] = ["trig", "targ", "at", "with", "from", "to"];
+    let mut out = OwnedListSexp::new(5 + DETAILS.len(), true)?;
+    out.set_name_and_value(0, "name", strings(rows.iter().map(|r| r.name.as_str()))?)?;
+    out.set_name_and_value(1, "analysis", strings(rows.iter().map(|r| r.analysis))?)?;
+    let mut plot = OwnedIntegerSexp::new(rows.len())?;
+    for (i, r) in rows.iter().enumerate() {
+        match r.plot {
+            Some(p) => plot[i] = p as i32 + 1,
+            None => plot.set_na(i)?,
+        }
+    }
+    out.set_name_and_value(2, "plot", plot)?;
+    let reals = |f: &dyn Fn(&MeasRow) -> f64| -> savvy::Result<Sexp> {
+        let mut v = OwnedRealSexp::new(rows.len())?;
+        for (i, r) in rows.iter().enumerate() {
+            let x = f(r);
+            if x.is_nan() {
+                v.set_na(i)?;
+            } else {
+                v[i] = x;
+            }
+        }
+        Ok(v.into())
+    };
+    out.set_name_and_value(3, "value", reals(&|r| r.value)?)?;
+    for (k, label) in DETAILS.iter().enumerate() {
+        out.set_name_and_value(4 + k, label, reals(&|r| r.detail(label))?)?;
+    }
+    let mut err = OwnedStringSexp::new(rows.len())?;
+    for (i, r) in rows.iter().enumerate() {
+        match &r.error {
+            Some(e) => err.set_elt(i, e)?,
+            None => err.set_na(i)?,
+        }
+    }
+    out.set_name_and_value(4 + DETAILS.len(), "error", err)?;
+    Ok(out.into())
+}
+
+/// Measure one plot (a list as `plot_to_r` makes; `scale` 1-based,
+/// 0 for none) with `.measure` bodies `specs` named `names`:
+/// `list(ok, message, measurements)`.
+/// @noRd
+#[savvy]
+fn ffi_measure(
+    plot: ListSexp,
+    scale: i32,
+    names: StringSexp,
+    specs: StringSexp,
+) -> savvy::Result<Sexp> {
+    let p = plot_from_r(&plot)?;
+    let scale = usize::try_from(scale)
+        .ok()
+        .and_then(|s| s.checked_sub(1))
+        .filter(|&s| s < p.variables.len());
+    let specs: Vec<(String, String)> = names
+        .iter()
+        .zip(specs.iter())
+        .map(|(n, s)| (n.to_string(), s.to_string()))
+        .collect();
+    let mut out = OwnedListSexp::new(3, true)?;
+    match engine::measure_plot(p, scale, &specs) {
+        Ok(rows) => {
+            out.set_name_and_value(0, "ok", logical(true)?)?;
+            out.set_name_and_value(1, "message", savvy::NullSexp)?;
+            out.set_name_and_value(2, "measurements", meas_columns(&rows)?)?;
+        }
+        Err(m) => {
+            out.set_name_and_value(0, "ok", logical(false)?)?;
+            out.set_name_and_value(1, "message", string(&m)?)?;
+            out.set_name_and_value(2, "measurements", savvy::NullSexp)?;
+        }
+    }
+    Ok(out.into())
+}
+
 /// Run a deck. `deck` is a path when `is_path`, netlist text
 /// otherwise; includes are parallel name/text vectors (text decks
 /// only); options are names plus a list of length-1 values.
@@ -179,7 +259,7 @@ fn ffi_run_deck(
     };
 
     let result = engine::run(source, &user);
-    let mut out = OwnedListSexp::new(6, true)?;
+    let mut out = OwnedListSexp::new(7, true)?;
     match result {
         Ok(r) => {
             out.set_name_and_value(0, "ok", logical(true)?)?;
@@ -192,6 +272,7 @@ fn ffi_run_deck(
             out.set_name_and_value(3, "notes", strings(&r.notes)?)?;
             out.set_name_and_value(4, "diagnostics", diag_list(&r.diagnostics)?)?;
             out.set_name_and_value(5, "kind", savvy::NullSexp)?;
+            out.set_name_and_value(6, "measurements", meas_columns(&r.measures)?)?;
         }
         Err(f) => {
             out.set_name_and_value(0, "ok", logical(false)?)?;
@@ -200,6 +281,7 @@ fn ffi_run_deck(
             out.set_name_and_value(3, "notes", OwnedStringSexp::new(0)?)?;
             out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
             out.set_name_and_value(5, "kind", string(f.kind)?)?;
+            out.set_name_and_value(6, "measurements", savvy::NullSexp)?;
         }
     }
     Ok(out.into())
@@ -210,7 +292,7 @@ fn ffi_run_deck(
 /// column-major matrix (one row per run, one column per parameter),
 /// `threads` 1 for the sequential path, 0 for one per core. Returns
 /// `list(ok, title, params, runs, diagnostics, kind, message)`; each
-/// run is `list(ok, plots, notes)` or `list(ok = FALSE, kind,
+/// run is `list(ok, plots, notes, measurements)` or `list(ok = FALSE, kind,
 /// message)`.
 /// @noRd
 #[savvy]
@@ -256,9 +338,13 @@ fn ffi_sweep_deck(
             out.set_name_and_value(2, "params", strings(&r.params)?)?;
             let mut runs = OwnedListSexp::new(r.runs.len(), false)?;
             for (i, run) in r.runs.iter().enumerate() {
-                let mut item = OwnedListSexp::new(3, true)?;
+                let mut item = OwnedListSexp::new(4, true)?;
                 match run {
-                    SweepRunOutput::Ok { plots, notes } => {
+                    SweepRunOutput::Ok {
+                        plots,
+                        measures,
+                        notes,
+                    } => {
                         item.set_name_and_value(0, "ok", logical(true)?)?;
                         item.set_name_and_value(
                             1,
@@ -266,11 +352,13 @@ fn ffi_sweep_deck(
                             plots_to_r(plots.iter().map(|(p, s)| (p, *s)))?,
                         )?;
                         item.set_name_and_value(2, "notes", strings(notes)?)?;
+                        item.set_name_and_value(3, "measurements", meas_columns(measures)?)?;
                     }
                     SweepRunOutput::Failed { kind, message } => {
                         item.set_name_and_value(0, "ok", logical(false)?)?;
                         item.set_name_and_value(1, "kind", string(kind)?)?;
                         item.set_name_and_value(2, "message", string(message)?)?;
+                        item.set_name_and_value(3, "measurements", savvy::NullSexp)?;
                     }
                 }
                 runs.set_value(i, item)?;

@@ -37,6 +37,14 @@ NULL
   stop(class, " cannot be modified", call. = FALSE)
 }
 
+#' Measure one plot (a list as `plot_to_r` makes; `scale` 1-based,
+#' 0 for none) with `.measure` bodies `specs` named `names`:
+#' `list(ok, message, measurements)`.
+#' @noRd
+`ffi_measure` <- function(`plot`, `scale`, `names`, `specs`) {
+  .Call(savvy_ffi_measure__impl, `plot`, `scale`, `names`, `specs`)
+}
+
 #' The option names `ffi_run_deck` accepts.
 #' @noRd
 `ffi_option_names` <- function() {
@@ -63,7 +71,7 @@ NULL
 #' column-major matrix (one row per run, one column per parameter),
 #' `threads` 1 for the sequential path, 0 for one per core. Returns
 #' `list(ok, title, params, runs, diagnostics, kind, message)`; each
-#' run is `list(ok, plots, notes)` or `list(ok = FALSE, kind,
+#' run is `list(ok, plots, notes, measurements)` or `list(ok = FALSE, kind,
 #' message)`.
 #' @noRd
 `ffi_sweep_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `params`, `values`, `threads`) {

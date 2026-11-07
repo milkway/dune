@@ -33,7 +33,11 @@
 #'     [make.unique()] when an analysis appears twice;
 #'   * `notes`: non-fatal remarks from the engine;
 #'   * `diagnostics`: a tibble (`severity`, `message`) of the parser's
-#'     warnings, each message prefixed with its `file:line:col`.
+#'     warnings, each message prefixed with its `file:line:col`;
+#'   * `measurements`: the deck's `.measure` cards (ngspice grammar),
+#'     each evaluated on every plot of its analysis, as the tibble
+#'     [spice_measure()] returns (zero rows without `.measure` cards).
+#'     Failed measurements are rows with `error` set.
 #'
 #' @section Errors:
 #' Failures are signalled with [cli::cli_abort()] as conditions of class
@@ -84,10 +88,10 @@ spice_run <- function(deck, includes = NULL, options = NULL) {
   if (!isTRUE(out$ok)) {
     abort_engine(out$kind, out$message, diagnostics, call = call)
   }
-  new_spice_result(out$title, out$plots, out$notes, diagnostics)
+  new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements)
 }
 
-new_spice_result <- function(title, raw_plots, notes, diagnostics) {
+new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements = NULL) {
   plots <- lapply(raw_plots, new_spice_plot)
   labels <- make.unique(vapply(plots, `[[`, "", "plotname"))
   for (i in seq_along(plots)) plots[[i]]$label <- labels[[i]]
@@ -97,7 +101,8 @@ new_spice_result <- function(title, raw_plots, notes, diagnostics) {
       title = title,
       plots = plots,
       notes = as.character(notes),
-      diagnostics = diagnostics
+      diagnostics = diagnostics,
+      measurements = measurements_tibble(measurements, labels)
     ),
     class = "spice_result"
   )
@@ -263,6 +268,12 @@ print.spice_result <- function(x, ...) {
   }
   if (length(x$notes) > 0L) {
     out <- c(out, cli::format_inline("{length(x$notes)} note{?s}:"), bullets("i", x$notes))
+  }
+  nm <- if (is.null(x$measurements)) 0L else nrow(x$measurements)
+  if (nm > 0L) {
+    m <- x$measurements
+    shown <- ifelse(is.na(m$error), format(m$value, digits = 6), paste("failed:", m$error))
+    out <- c(out, cli::format_inline("{nm} measurement{?s}:"), bullets("*", paste(m$name, "=", shown)))
   }
   nd <- nrow(x$diagnostics)
   if (nd > 0L) {
