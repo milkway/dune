@@ -19,7 +19,7 @@ dobradas no `Drawing.passthrough` e argumentos crus em
    rpic (std `circuits: true`; `copy` negado). Exige `spice = 1` nos
    `vars`.
 3. Colhe blocos rotulados (label = refdes; 1ª letra = cartão, só
-   R C L V I D Q M J S W X T O E F G H K — o K não tem pinos, só o
+   R C L V I D Q M J Z S W X T O E F G H K — o K não tem pinos, só o
    marcador `Mutual`), marcadores de pino invisíveis, blocos
    `ground()` (nó 0), **places nomeados** (`Vout: (2.5,1.5)` —
    D-0004 §3 como desenhado; `Drawing.places`, só os da fonte do
@@ -62,7 +62,8 @@ dobradas no `Drawing.passthrough` e argumentos crus em
 
 - Pinos: 2-terminais `P`/`N` (P = 1º ponto e 1º nó: + de fonte,
   anodo, cauda da seta); Q `C/B/E`; J `D/G/S`; M `D/G/S/B` (B
-  desenhado amarrado ao S); X `Inp/Inm/Out`; S `P/N/Cp/Cn`; W
+  desenhado amarrado ao S); Z `D/G/S` (como J); X `Inp/Inm/Out` (opamp)
+  ou `P1…PN` (subcircuito genérico, ordem do `.subckt`); S `P/N/Cp/Cn`; W
   `P/N` com valor `Vctl modelo`; T/O `P1/N1/P2/N2` (porta 1 +/−,
   porta 2 +/−, a ordem do cartão `T1 p1 n1 p2 n2 Z0=50 TD=1n`);
   E/G `P/N/Cp/Cn` (4 pontos, ganho no 5º argumento — o par de
@@ -86,10 +87,48 @@ dobradas no `Drawing.passthrough` e argumentos crus em
 - Macros do prelude: resistor, capacitor, inductor, diode, vsource,
   acsource, battery, isource, vcvs, vccs, cccs, ccvs, coupling,
   switch, cswitch, npn, pnp, npn4, pnp4, nmos, pmos, nmos4, pmos4,
-  njfet, pjfet, opamp, tline, ltraline, ground. (O `node()`
+  njfet, pjfet, nmes, pmes, opamp, subckt2…subckt7, tline, ltraline,
+  ground. (O `node()`
   interino saiu — nomes de nó são places.)
 - Valor desenhado na figura (acima do elemento horizontal, à
   esquerda do vertical) — é o que o extrator lê.
+
+## Subcircuito genérico (X) e MESFET (Z) — 5ª onda
+
+- **`subckt2(P1, P2, nome)` … `subckt7(P1, …, P7, nome)`**: instância
+  `X` de um `.subckt` com N pinos nos N pontos do usuário, na ordem do
+  cartão (`X1 P1 … PN nome`); pinos `P1…PN`. A aridade vai no nome da
+  macro — é o mecanismo do pic de Kernighan (D-0004: argumentos de
+  macro, sem dialeto): o nome do subcircuito continua sendo "o
+  argumento depois dos pontos", como em todo elemento, e 7 pinos +
+  nome + display enchem exatamente os `$1..$9` do pic clássico. A
+  alternativa variádica (`$+` do dpic, que o rpic tem) obrigaria o
+  nome a vir **antes** dos pontos — quebraria a regra do valor e
+  tornaria o display opcional ambíguo. Display (D-0026) vale.
+- Desenho: o retângulo gerado pelos pontos (mínimo 0,6 × 0,4", crescido
+  em torno do centro) — pontos no contorno são pinos na borda, como
+  numa folha hierárquica; ponha-os lá. Nome (ou display) no centro; o
+  número de cada pino em `fontsize 7`, por dentro, recuado da(s)
+  borda(s) em que está (canto: das duas).
+- Extrator: `X` com marcadores `P1…PN` consecutivos é o genérico
+  (valor = argumento N); sem eles, segue o opamp (`Inp/Inm/Out`,
+  valor = 2º). As duas formas convivem na mesma figura (testado);
+  as 27 figuras anteriores dão SVG, netlist, OverlayMap e
+  diagnósticos idênticos byte a byte antes/depois da mudança no
+  prelude. `principal` = `None`; o span de write-back é o nome.
+- **`nmes(At, modelo)` / `pmes(At, modelo)`** → cartão `Z D G S
+  modelo [area]`, pinos `D/G/S` como o JFET. Glifo: o corpo do JFET do
+  std (`__njfet/__pjfet`, barra de canal e seta de polaridade no
+  gate) com a **marca Schottky da IEEE 315** na barra de canal — os
+  dois ganchos que distinguem o diodo Schottky do de junção, aqui
+  distinguindo gate metal-semicondutor de gate p-n. A seta fica: é a
+  polaridade NMF/PMF que o modelo exige. Os ganchos saem para fora
+  (simetria de ponto, como no diodo): para dentro encostariam nos
+  terminais de dreno e fonte. Não há símbolo de MESFET normatizado
+  (IEEE 315 não tem; livros de GaAs usam o do JFET), então a escolha é
+  a menor marca legível que separa Z de J. Write-back: `principal` =
+  `area`, parâmetro `area` (posicional ou `AREA=`; o MES não tem
+  `temp`).
 
 ## Write-back de valores e frame do SVG (issues #17, #19)
 
@@ -116,13 +155,13 @@ fonte pic, cada `ElementOverlay` traz:
   (só o número: `AC 1 90` → `1` e `90`) e `pulse`/`sin`/`exp`/`pwl`/
   `sffm`/`trnoise`/`trrandom` (a grafia inteira, palavra e parênteses);
   R/C/L/E/G o principal (número inicial) e `ic` (`IC=`, C/L); F/H
-  `gain`; D/Q/J `area` (número após o modelo ou `AREA=`) e `temp`;
+  `gain`; D/Q/J `area` (número após o modelo ou `AREA=`) e `temp`; Z `area`;
   M `w`, `l`, `temp`. Só o que está grafado; repetido → a última
   grafia. Parse sobre o texto cru (`spans.rs`), offsets em chars →
   posições absolutas pelo início do argumento.
 - `principal: Option<String>` — o que `alter(refdes, value)` muda, por
   letra (`resistance`, `capacitance`, `inductance`, `dc`, `gain`,
-  `area`; `None` em M S W X T O K).
+  `area`, também Z; `None` em M S W X T O K).
 
 `OverlayMap.canvas: CanvasOverlay {w, h, origin, rescale}` é o frame
 do SVG do `render_svg`/`renderPic`, com a fórmula exata
@@ -153,7 +192,8 @@ corpus, e o header da scene bate a 5e-7.
   "G₁"; o cartão continua com o PULSE completo. Aceitam display: os
   2-terminais com valor (R C L D, v/ac/i-source, battery, cccs,
   ccvs), vcvs/vccs (6º argumento) e os centrados em `At`
-  (npn/pnp/npn4/pnp4, nmos/pmos/nmos4/pmos4, njfet/pjfet, opamp).
+  (npn/pnp/npn4/pnp4, nmos/pmos/nmos4/pmos4, njfet/pjfet, nmes/pmes,
+  opamp) e as caixas `subckt2…7` (argumento depois do nome).
   coupling, chaves e linhas ficam de fora.
 - Todo bloco que desenha display carrega o marcador reservado
   `Disp`. O extrator só reconhece display quando a chamada mais
@@ -201,7 +241,7 @@ flat (E3) não são usadas — os elementos continuam blocos rotulados.
 - `PRELUDE` usa `include_str!` com caminho fora do crate
   (`corpus/pic/spice.pic`) — `cargo package` do dune-pic falharia;
   irrelevante enquanto não publicamos o crate.
-- Op-amp emite `X` mas o corpo `.subckt` não cabe em linhas `.`
+- `X` (opamp ou `subcktN`) emite o cartão, mas o corpo `.subckt` não cabe em linhas `.`
   (linhas de corpo não começam com `.`) — precisa de `.include`,
   resolvido relativo à figura. Testado em `opamp.pic` +
   `opamp_ideal.sub` (ganho fechado com A finito a 1e-5).
@@ -250,11 +290,20 @@ plot, complexas em re/im, exigindo worst==0; mapeamentos nos
 cabeçalhos dos .pic). Pega de desenho: figuras grandes precisam
 de `maxpswid = 12` — o auto-encolhimento do rpic reduz a
 geometria mas não o texto, e os rótulos colidem. Descartados com
-razão: bridge (o deck não é ponte), mos6inv (corpo .subckt de 18
-MOS não cabe em linhas `.` e só o opamp tem macro X),
-mes_amp (sem macro Z no prelude), mosamp2/schmitt (grandes
+razão: bridge (o deck não é ponte), mosamp2/schmitt (grandes
 demais). Fora do `--ci` do oráculo nesta leva (75 inalterado) —
 entrará quando as figuras ganharem goldens ngspice próprios.
+5ª onda (final da issue #5): **mos6inv** (as 4 células NDINV como
+`subckt6`; o corpo `.SUBCKT` e os seis `.MODEL` do deck, verbatim, em
+`corpus/pic/mos6inv_sub.sub` via `.include` — como o opamp) e
+**mes_amp** (`nmes`), ambas bit a bit (worst == 0) contra
+`spice3f5/examples/mos6inv.cir` e `regress/mes_amp.cir`. O mos6inv
+tem 13 redes de um pino só, de propósito: as saídas internas de cada
+estágio (nós 11…43 do deck, impressos pelo `.PRINT`) e a saída final
+não carregam nada fora do subcircuito — viram pontos de teste e o
+`DanglingPin` (warning) é esperado; o teste exige exatamente essas
+13 e nada mais (`check_dangling`). Mapeamento: 1 `In`, 2…5 `N2…N5`,
+11…43 `N11…N43`, 100 `Vp`.
 
 ## Rótulos `$...$` (texlabels, issue #7)
 
