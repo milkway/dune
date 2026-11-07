@@ -243,3 +243,45 @@ rtlinv** — as figuras dos decks de Berkeley, cuja simulação bate
 Previews visuais revisados (regra do
 CLAUDE.md). Fora do `--ci` do oráculo nesta leva (75 inalterado) —
 entrará quando as figuras ganharem goldens ngspice próprios.
+
+## Rótulos `$...$` (texlabels, issue #7)
+
+O rpic tipografa um rótulo **inteiro** entre `$...$` (`"$T_1$"`,
+`"$V_{CC}$"`) quando duas coisas valem: a figura liga a extensão
+(`texlabels = 1` na fonte — o dune-pic não liga por default) e o
+processo registrou um renderer em
+`rpic_core::set_math_renderer` (gancho global, primeira chamada
+vence). Sem renderer, sem `texlabels = 1`, com `$` no meio do texto
+ou com TeX inválido, o rótulo sai **literal** (`$T_1$` no desenho) —
+a figura nunca falha por causa disso. Só apresentação: o netlist é o
+mesmo nos dois casos (o valor vem cru do call-site; o guard do
+display compara o texto, que não muda).
+
+| superfície | `$...$` | por quê |
+|---|---|---|
+| `dune pic --svg OUT.svg` (dune-cli) | **tipografado** | feature `texlabels` (default) registra o `rpic_render::math::render_math` (RaTeX, glifos KaTeX embutidos como `<path>` num `<svg>` aninhado) no topo do `main` |
+| dune-cli com `--no-default-features` | literal | sem `rpic-render` no grafo |
+| `dune_pic::render_svg` como biblioteca | literal, a menos que o chamador registre | o dune-pic não depende de `rpic-render` (wasm-friendly, zero deps) |
+| `dune-sim` (wasm: `renderPic`, galeria, painel do Studio) | literal | nada registrado; custo medido abaixo |
+| pacotes Python/R | — | ainda não têm caminho de figura (`spice_pic`/`spice.pic` não existem); quando ganharem, é uma linha de registro + a mesma feature |
+
+`dune-cli` fixa `rpic-core = "=0.16.1"` igual ao do dune-pic: o
+gancho é um `static` do crate, e um segundo `rpic-core` no grafo
+teria o seu próprio, que ninguém leria. Testes em
+`crates/dune-cli/tests/texlabels.rs`: o SVG da CLI tem um `<svg x=`
+por rótulo de math e nenhum literal; o caminho puro (o processo de
+teste, que não registra nada — o mesmo código do wasm) mantém o
+literal; netlist idêntico; e o SVG de toda figura do corpus sem
+`texlabels` é byte a byte o do caminho puro.
+
+**wasm32 (medido 2026-11-07, rpic-render 0.16.1 só com `math`):**
+compila para `wasm32-unknown-unknown` sem ajuste e tipografa no Node
+(3 fragmentos aninhados na figura do teste). Custo no `.wasm` do
+pacote (`build.sh`, `wasm-opt -Oz`): 2 408 952 → 5 553 173 B
+(+3,14 MB, 2,3×); gzip -9 856 KB → 2 013 KB (+1,16 MB); brotli 11
+620 KB → 1 460 KB. Antes do `wasm-opt`, o acréscimo é ~1,45 MB de
+dados (fontes KaTeX, tabelas Unicode/métricas) e ~2,06 MB de código,
+dos quais ~0,74 MB é a família `regex` (regex-automata, regex-syntax,
+aho-corasick, fancy-regex, regex-lite, puxadas pelo `ratex-parser`),
+0,42 MB `ratex-parser`, 0,17 MB `ratex-layout`, 0,12 MB `ttf-parser`.
+Não ligado no `dune-sim` nesta leva (decisão pendente; rpic-lang#449).
