@@ -241,7 +241,19 @@ rtlinv** — as figuras dos decks de Berkeley, cuja simulação bate
 **bit a bit** (diferença 0) com os decks originais; candidatas
 óbvias a entrar no `--ci` quando ganharem goldens ngspice próprios.
 Previews visuais revisados (regra do
-CLAUDE.md). Fora do `--ci` do oráculo nesta leva (75 inalterado) —
+CLAUDE.md). 4ª onda (issue #5): 13 figuras novas — divider,
+depsrc (E/G/F/H), dc2src, acrlc, lck, truic, trrlc, trpwl,
+acdiode, dfwd, jfet_amp, mos3_inv, rca3040 (11 BJTs) — TODAS
+simulando bit a bit como o deck original (helper
+`same_as_deck(nome, deck, mapa)` compara toda coluna de todo
+plot, complexas em re/im, exigindo worst==0; mapeamentos nos
+cabeçalhos dos .pic). Pega de desenho: figuras grandes precisam
+de `maxpswid = 12` — o auto-encolhimento do rpic reduz a
+geometria mas não o texto, e os rótulos colidem. Descartados com
+razão: bridge (o deck não é ponte), mos6inv (corpo .subckt de 18
+MOS não cabe em linhas `.` e só o opamp tem macro X),
+mes_amp (sem macro Z no prelude), mosamp2/schmitt (grandes
+demais). Fora do `--ci` do oráculo nesta leva (75 inalterado) —
 entrará quando as figuras ganharem goldens ngspice próprios.
 
 ## Rótulos `$...$` (texlabels, issue #7)
