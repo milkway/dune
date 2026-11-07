@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use Dune, please cite it using this metadata."
+title: "Dune: Berkeley's SPICE3f5 circuit simulator, reborn in Rust"
+type: software
+authors:
+  - family-names: Leite
+    given-names: "André"
+    affiliation: "Universidade Federal de Pernambuco"
+    email: leite@castlab.org
+    orcid: "https://orcid.org/0000-0002-4718-9766"
+repository-code: "https://github.com/milkway/dune"
+url: "https://milkway.github.io/dune/"
+license: BSD-3-Clause
+version: 0.1.0
+date-released: 2026-11-08
+keywords:
+  - SPICE
+  - circuit simulation
+  - electronic design automation
+  - Rust
+  - WebAssembly
+references:
+  - type: software
+    title: "SPICE3 Version 3f5"
+    authors:
+      - name: "The Regents of the University of California (T. Quarles et al.)"
+    year: 1993
