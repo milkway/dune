@@ -91,6 +91,60 @@ dobradas no `Drawing.passthrough` e argumentos crus em
 - Valor desenhado na figura (acima do elemento horizontal, à
   esquerda do vertical) — é o que o extrator lê.
 
+## Write-back de valores e frame do SVG (issues #17, #19)
+
+Para editores (o Studio) que escrevem o valor de um slider de volta na
+fonte pic, cada `ElementOverlay` traz:
+
+- `value: Option<ValueSpanOverlay>` — `{span: PicRange, text}` do
+  argumento de valor/modelo **na fonte do usuário**. `PicRange` =
+  `line, col, end_line, end_col`, 1-based como os diagnósticos, fim
+  exclusivo, **coluna em chars** (code points; o JS indexa com
+  `Array.from(linha)`, não por unidade UTF-16). Argumento quebrado por
+  `\` dá span multi-linha com o texto verbatim; argumento entre aspas
+  (`"DX"`) dá o miolo. Só sai `Some` quando a chamada mais externa é
+  um macro de elemento do próprio prelude (os `define` do prelude que
+  não começam com `__`) e o argumento cru está na fonte do usuário —
+  wrapper do usuário (mesmo um que repassa o valor), bloco inline,
+  `K` (três argumentos) e fallback do desenho dão `None`: não há span
+  confiável. O display (argumento depois do valor) não mexe no span.
+  Defesa extra: a caminhada de chars tem que cair exatamente no
+  `end_line/end_col` que o rpic reporta, senão `None`.
+- `params: Vec<ParamSpanOverlay>` — `{name, span, text}` dos
+  parâmetros alteráveis grafados dentro do valor, com os nomes do
+  `alter` (`dune_core::Circuit::alter`): V/I `dc`, `acmag`, `acphase`
+  (só o número: `AC 1 90` → `1` e `90`) e `pulse`/`sin`/`exp`/`pwl`/
+  `sffm`/`trnoise`/`trrandom` (a grafia inteira, palavra e parênteses);
+  R/C/L/E/G o principal (número inicial) e `ic` (`IC=`, C/L); F/H
+  `gain`; D/Q/J `area` (número após o modelo ou `AREA=`) e `temp`;
+  M `w`, `l`, `temp`. Só o que está grafado; repetido → a última
+  grafia. Parse sobre o texto cru (`spans.rs`), offsets em chars →
+  posições absolutas pelo início do argumento.
+- `principal: Option<String>` — o que `alter(refdes, value)` muda, por
+  letra (`resistance`, `capacitance`, `inductance`, `dc`, `gain`,
+  `area`; `None` em M S W X T O K).
+
+`OverlayMap.canvas: CanvasOverlay {w, h, origin, rescale}` é o frame
+do SVG do `render_svg`/`renderPic`, com a fórmula exata
+
+```text
+sx = (x + origin[0]) · 96        sy = (h − (y + origin[1])) · 96
+```
+
+(`CanvasOverlay::to_svg`). Derivada do `svg.rs` do rpic-core 0.16.1:
+`Svg::p` mapeia `(x − west + 2·pad + m.left, north − y + pad + m.top)
+· 96`, e a scene publica `origin = (2·pad + m.left − west, h − north −
+pad − m.top)`. O `rescale` **não entra** (as coordenadas, pins
+incluídos, já são pós-rescale) e o sinal é `+origin` — a fórmula
+chutada na issue estava errada nos dois pontos. A scene arredonda a 6
+casas; aqui a translação vem de `svg::place_points` com um place-sonda
+na origem (a mesma função com que o SVG desenha) e `w/h` repetem o
+`canvas_frame` (união dos bboxes de `object_geometries`, ou o
+`canvas` fixo, + padding + margens). Testes: todo pin cai num endpoint
+de stroke do SVG a 1e-6 (rc, margens + `linethick`, `.PS 1.3`,
+`canvas from … to …`), viewBox = `w·96 × h·96` nas 14 figuras do
+corpus, e o header da scene bate a 5e-7.
+
 ## Display (rótulo curto no desenho)
 
 - Argumento opcional **depois** do valor/modelo: quando não vazio, o
