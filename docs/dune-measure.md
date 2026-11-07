@@ -30,7 +30,8 @@ dune-core     Solution::measure(&MeasFunc) -> Result<Measurement, MeasureError>
         │
         ├── dune-cli   formato de saída do ngspice (measure.rs, só aqui)
         ├── dune-py    Result.measurements / spice.measure → Measurement
-        └── dune-r     res$measurements / spice_measure() → tibble
+        ├── dune-r     res$measurements / spice_measure() → tibble
+        └── dune-wasm  measurements em simulate*/Session.run (issue #14)
 ```
 
 Um número, uma fonte: o valor impresso pelo CLI é o mesmo `f64` que o
@@ -138,11 +139,28 @@ Um bloco por plot medido.
   (descendente). Réguas justificadas no próprio teste.
 - **CLI**: formato contra linhas capturadas do ngspice-47.
 
+## No wasm (issue #14, dune-sim 0.3.1)
+
+`Rawfile`/`TypedRawfile` (logo `simulate`, `simulateTyped`,
+`simulatePic*`, `Session.run`/`runTyped`) carregam `measurements`: as
+linhas do Python, `{name, analysis, plot, value, details, error?}`
+(`MeasurementJson` em `crates/dune-wasm/src/schema.rs`), calculadas em
+`Prepared::finish` — a sessão remede a cada run. Mapeamento de
+ausência, fixo e documentado no `index.d.ts`:
+
+- `value`: sempre presente; `null` quando a medida falha (o `nan` do
+  Python) ou não é finita (mesma regra das `columns`).
+- `details`: sempre um objeto, `{}` em falhas/`WHEN`/`FIND`/`DERIV`;
+  chaves na ordem do ngspice (`trig` antes de `targ` — serialização
+  própria, o mapa do serde_json ordenaria).
+- `error`: **ausente** no sucesso (o `None` do Python); a linha falhou
+  exatamente quando tem a chave.
+- `measurements`: sempre presente, `[]` sem cartões `.measure`.
+
 ## Pendências
 
 - `PARAM=`/`EXPR` (medidas sobre medidas; precisa de avaliador de
   expressões — o `.param` do netlist é só constante).
 - THD/`.four` (a issue menciona THD; é outra análise).
-- Medidas no `dune-wasm` (o resultado JSON ainda não as carrega).
 - Entrar no `--ci` do oráculo (comparar a saída `.meas` do ngspice
   por deck).

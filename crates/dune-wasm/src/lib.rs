@@ -5,8 +5,9 @@
 //!
 //! * `simulate(netlist, opts?)` parses the deck with `dune-netlist`,
 //!   builds it with [`Circuit::from_netlist`], runs every analysis card
-//!   in deck order (exactly what `dune -b` runs) and returns the plots
-//!   as a JS object of shape [`RawfileJson`];
+//!   in deck order (exactly what `dune -b` runs) and returns the plots,
+//!   with the deck's `.measure` results evaluated on them
+//!   ([`MeasurementJson`]), as a JS object of shape [`RawfileJson`];
 //! * `extract_pic(src, opts?)` extracts the SPICE deck of an rpic
 //!   figure with [`dune_pic::extract`] (embedded prelude) and returns
 //!   it with its diagnostics and overlay map ([`PicJson`]);
@@ -41,9 +42,9 @@ mod schema;
 mod session;
 
 pub use schema::{
-    Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, NetOverlayJson,
-    OverlayMapJson, PicJson, PicRunJson, PicSimOptions, PlotJson, RawfileJson, RenderOptionsJson,
-    ShapeRangeJson, SimError, SimOptions, VariableJson,
+    Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, MeasurementJson,
+    NetOverlayJson, OverlayMapJson, PicJson, PicRunJson, PicSimOptions, PlotJson, RawfileJson,
+    RenderOptionsJson, ShapeRangeJson, SimError, SimOptions, VariableJson,
 };
 
 pub use session::{JsSession, SimSession};
@@ -277,6 +278,8 @@ pub fn run_data(netlist: &str, opts: &SimOptions) -> Result<RunData, SimError> {
 pub struct RunData {
     /// One per analysis result, in deck order (as [`RawfileJson::plots`]).
     pub plots: Vec<Plot>,
+    /// The deck's `.measure` results (as [`RawfileJson::measurements`]).
+    pub measurements: Vec<MeasurementJson>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<DiagnosticJson>,
 }
@@ -286,6 +289,7 @@ impl RunData {
     pub fn to_json(&self) -> RawfileJson {
         RawfileJson {
             plots: self.plots.iter().map(PlotJson::from).collect(),
+            measurements: self.measurements.clone(),
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
         }
@@ -296,6 +300,7 @@ impl RunData {
     pub fn header_json(&self) -> RawfileJson {
         RawfileJson {
             plots: self.plots.iter().map(PlotJson::header).collect(),
+            measurements: self.measurements.clone(),
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
         }
@@ -337,6 +342,8 @@ pub(crate) struct Prepared {
     pub circuit: Circuit,
     pub options: Options,
     pub analyses: Vec<dune_netlist::ir::Analysis>,
+    /// The deck's `.measure` cards, evaluated on every run.
+    pub measures: Vec<dune_netlist::ir::Measure>,
     pub title: String,
     /// Elaboration notes (each run's result starts with them).
     pub notes: Vec<String>,
@@ -346,12 +353,17 @@ pub(crate) struct Prepared {
 
 impl Prepared {
     /// A run's [`RunData`] from its plots and notes (the elaboration
-    /// notes first).
+    /// notes first), with the deck's `.measure` cards evaluated on it.
     pub fn finish(&self, solutions: Vec<Solution>, mut notes: Vec<String>) -> RunData {
         if solutions.is_empty() {
             notes.push("no analyses in the deck; nothing to do".into());
         }
+        let measurements = dune_core::measure::measure_all(&self.measures, &solutions)
+            .iter()
+            .map(|o| MeasurementJson::from_outcome(&self.measures[o.card], o.plot, &o.result))
+            .collect();
         RunData {
+            measurements,
             plots: solutions
                 .iter()
                 .map(|s| s.to_plot(&self.title, ""))
@@ -400,6 +412,7 @@ pub(crate) fn prepare(
         circuit,
         options,
         analyses: parsed.netlist.analyses.clone(),
+        measures: parsed.netlist.measures.clone(),
         title: parsed.netlist.title.clone(),
         notes,
         diagnostics,

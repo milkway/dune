@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 /// ```json
 /// {
 ///   "plots": [ PlotJson, ... ],
+///   "measurements": [ MeasurementJson, ... ],
 ///   "notes": [ "string", ... ],
 ///   "diagnostics": [ DiagnosticJson, ... ]
 /// }
@@ -26,6 +27,10 @@ use serde::{Deserialize, Serialize};
 /// * `plots` — one per analysis result, in deck order (a `.noise`
 ///   with a summary contributes two, a `.disto` up to four — the same
 ///   plots, in the same order, as the CLI's rawfile).
+/// * `measurements` — the deck's `.measure` cards evaluated on the
+///   run's plots ([`MeasurementJson`]): each card against every plot
+///   of its analysis, in plot order then card order (what `dune -b`
+///   prints). Empty when the deck has no `.measure` card.
 /// * `notes` — informational messages from elaboration and from each
 ///   analysis (`note: …` lines on the CLI's stderr), in order.
 /// * `diagnostics` — the non-fatal parser and `.options`
@@ -33,8 +38,117 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawfileJson {
     pub plots: Vec<PlotJson>,
+    #[serde(default)]
+    pub measurements: Vec<MeasurementJson>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<DiagnosticJson>,
+}
+
+/// One `.measure` result: the flat row Python's `Result.measurements`
+/// (`spice.Measurement`) and R's `res$measurements` carry (D-0029).
+///
+/// ```json
+/// { "name": "trise", "analysis": "tran", "plot": 0,
+///   "value": 2.1972e-9,
+///   "details": { "trig": 1.105e-10, "targ": 2.3077e-9 } }
+/// { "name": "never", "analysis": "tran", "plot": 0,
+///   "value": null, "details": {}, "error": "out of interval (WHEN)" }
+/// ```
+///
+/// * `name` — the result name, lowercased as on the card.
+/// * `analysis` — `tran`, `ac`, `dc` or `sp` (the card's first word).
+/// * `plot` — index of the measured plot in `plots`.
+/// * `value` — the result (a time for `WHEN` and `TRIG/TARG`, a value
+///   for `FIND`/`MIN`/`AVG`…, the scale value for `MIN_AT`/`MAX_AT`).
+///   Always present: `null` when the measurement failed (Python's
+///   `nan`) and, as in `columns`, for a non-finite result.
+/// * `details` — the extra numbers ngspice prints beside it, by its
+///   labels and in its order: `trig`/`targ`, `at`, `with`, `from`/`to`.
+///   Always present; `{}` for `WHEN`, `FIND`, `DERIV` and failures.
+/// * `error` — why the measurement failed (`out of interval (WHEN)`,
+///   an unknown vector…). **Absent** on success (Python's `None`): a
+///   row is a failure exactly when it has the key.
+///
+/// A failed measurement is a row, never a thrown error.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementJson {
+    pub name: String,
+    pub analysis: String,
+    pub plot: usize,
+    pub value: Option<f64>,
+    #[serde(with = "ordered_map")]
+    pub details: Vec<(String, Option<f64>)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl MeasurementJson {
+    /// The row of one card evaluated on plot `plot`.
+    pub(crate) fn from_outcome(
+        card: &dune_netlist::ir::Measure,
+        plot: usize,
+        r: &Result<dune_core::measure::Measurement, dune_core::measure::MeasureError>,
+    ) -> Self {
+        let (value, details, error) = match r {
+            Ok(m) => (
+                finite(m.value),
+                m.detail
+                    .pairs()
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), finite(v)))
+                    .collect(),
+                None,
+            ),
+            Err(e) => (None, Vec::new(), Some(e.describe())),
+        };
+        MeasurementJson {
+            name: card.name.clone(),
+            analysis: card.analysis.keyword().to_string(),
+            plot,
+            value,
+            details,
+            error,
+        }
+    }
+}
+
+/// `(key, value)` pairs as a JSON object, in their order (serde_json's
+/// own map would sort the keys: `targ` before `trig`).
+mod ordered_map {
+    use serde::de::{MapAccess, Visitor};
+    use serde::ser::SerializeMap;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        pairs: &[(String, Option<f64>)],
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut m = s.serialize_map(Some(pairs.len()))?;
+        for (k, v) in pairs {
+            m.serialize_entry(k, v)?;
+        }
+        m.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<(String, Option<f64>)>, D::Error> {
+        struct Pairs;
+        impl<'de> Visitor<'de> for Pairs {
+            type Value = Vec<(String, Option<f64>)>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object of numbers")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut a: A) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::new();
+                while let Some(entry) = a.next_entry()? {
+                    out.push(entry);
+                }
+                Ok(out)
+            }
+        }
+        d.deserialize_map(Pairs)
+    }
 }
 
 /// One plot, mirroring [`dune_raw::Plot`] (the 3f5 `struct plot`).
@@ -382,7 +496,8 @@ impl From<&OverlayMap> for OverlayMapJson {
 /// level) plus the extraction under `pic`.
 ///
 /// ```json
-/// { "plots": [...], "notes": [...], "diagnostics": [...], "pic": PicJson }
+/// { "plots": [...], "measurements": [...], "notes": [...], "diagnostics": [...],
+///   "pic": PicJson }
 /// ```
 ///
 /// The top-level `diagnostics` are the netlist parser's and

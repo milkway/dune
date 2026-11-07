@@ -623,3 +623,142 @@ fn pic_session_alters_by_refdes() {
     .unwrap();
     assert_eq!(e.kind, "pic");
 }
+
+// ---- .measure results (issue #14) ----------------------------------
+
+/// An RC step: v(out) = 1 − e^{−(t−1n)/τ}, so the 10–90 % rise time
+/// is τ·ln 9 exactly (τ = 1 ns).
+const RC_MEAS: &str = "rc measured
+v1 in 0 pulse(0 1 1n 1p 1p 20n 40n)
+r1 in out 1k
+c1 out 0 1p
+.tran 10p 15n
+.meas tran trise trig v(out) val=0.1 rise=1 targ v(out) val=0.9 rise=1
+.meas tran vmax max v(out)
+.meas tran tw when v(out)=0.5
+.meas tran never when v(out)=5
+.meas ac nothing find v(out) at=1k
+.end
+";
+
+fn meas<'a>(raw: &'a RawfileJson, name: &str) -> &'a MeasurementJson {
+    raw.measurements
+        .iter()
+        .find(|m| m.name == name)
+        .unwrap_or_else(|| panic!("no measurement {name}"))
+}
+
+#[test]
+fn measurements_are_flat_rows() {
+    let raw = run(RC_MEAS, &SimOptions::default()).unwrap();
+    // The `.meas ac` card has no ac plot to measure: no row.
+    let names: Vec<&str> = raw.measurements.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["trise", "vmax", "tw", "never"]);
+    let tau = 1e3 * 1e-12;
+    let m = meas(&raw, "trise");
+    assert_eq!((m.analysis.as_str(), m.plot, &m.error), ("tran", 0, &None));
+    let v = m.value.unwrap();
+    assert!((v / (tau * 9f64.ln()) - 1.0).abs() < 1e-3, "trise = {v}");
+    let keys: Vec<&str> = m.details.iter().map(|(k, _)| k.as_str()).collect();
+    assert_eq!(keys, ["trig", "targ"]);
+    let (trig, targ) = (m.details[0].1.unwrap(), m.details[1].1.unwrap());
+    assert_eq!(targ - trig, v);
+    assert!(meas(&raw, "tw").details.is_empty());
+    let never = meas(&raw, "never");
+    assert_eq!(never.value, None);
+    assert!(never.details.is_empty());
+    assert_eq!(never.error.as_deref(), Some("out of interval (WHEN)"));
+}
+
+/// The wire shape: `value` and `details` always there (`null` / `{}`
+/// on failure), `error` only on failure, `details` in ngspice order.
+#[test]
+fn measurement_wire_shape() {
+    let text = simulate_json(RC_MEAS, None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let rows = v["measurements"].as_array().unwrap();
+    let keys = |r: &serde_json::Value| -> Vec<String> {
+        let mut k: Vec<String> = r.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    assert_eq!(
+        keys(&rows[0]),
+        ["analysis", "details", "name", "plot", "value"]
+    );
+    assert_eq!(
+        keys(&rows[3]),
+        ["analysis", "details", "error", "name", "plot", "value"]
+    );
+    assert!(rows[3]["value"].is_null());
+    assert_eq!(rows[3]["details"], serde_json::json!({}));
+    // Key order of `details` survives on the wire (trig before targ).
+    let i = text.find("\"trig\":").unwrap();
+    let j = text.find("\"targ\":").unwrap();
+    assert!(i < j, "{text}");
+    // Round trip (values to 1 ulp-ish: serde_json's default float
+    // parsing is not correctly rounded; JS's `JSON.parse` is).
+    let back = parse(&text).measurements;
+    let orig = run(RC_MEAS, &SimOptions::default()).unwrap().measurements;
+    assert_eq!(back.len(), orig.len());
+    for (a, b) in back.iter().zip(&orig) {
+        assert_eq!(
+            (&a.name, &a.error, a.details.len()),
+            (&b.name, &b.error, b.details.len())
+        );
+        let close = |x: Option<f64>, y: Option<f64>| match (x, y) {
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-15 * y.abs(),
+            (x, y) => x == y,
+        };
+        assert!(close(a.value, b.value), "{a:?} vs {b:?}");
+    }
+    // A deck without `.measure` cards: an empty array, never absent.
+    let v: serde_json::Value =
+        serde_json::from_str(&simulate_json(DIVIDER, None).unwrap()).unwrap();
+    assert_eq!(v["measurements"], serde_json::json!([]));
+}
+
+/// The typed variants' header carries the same rows.
+#[test]
+fn typed_header_carries_measurements() {
+    let data = run_data(RC_MEAS, &SimOptions::default()).unwrap();
+    assert_eq!(data.header_json().measurements, data.to_json().measurements);
+    assert_eq!(data.measurements.len(), 4);
+    let text = serde_json::to_string(&data.header_json()).unwrap();
+    assert!(
+        text.contains("\"measurements\":[{\"name\":\"trise\""),
+        "{text}"
+    );
+}
+
+/// Every run of a session re-measures: R doubled → τ and trise doubled.
+#[test]
+fn session_run_remeasures() {
+    let mut s = SimSession::open(RC_MEAS, &SimOptions::default()).unwrap();
+    let first = s.run().unwrap();
+    assert_eq!(
+        first.to_json(),
+        run(RC_MEAS, &SimOptions::default()).unwrap()
+    );
+    let t1 = meas(&first.to_json(), "trise").value.unwrap();
+    s.alter("r1", "", AlterValue::Num(2e3)).unwrap();
+    let t2 = meas(&s.run().unwrap().to_json(), "trise").value.unwrap();
+    assert!((t2 / t1 - 2.0).abs() < 1e-3, "{t1} -> {t2}");
+}
+
+/// A figure's `.meas` line is measured; the rows sit at the top level
+/// of the pic result, beside `pic`.
+#[test]
+fn pic_run_carries_measurements() {
+    let src = corpus_pic("rc.pic").replace(
+        ".tran 20u 5m\n",
+        ".tran 20u 5m\n.meas tran trise trig v(vout) val=0.5 rise=1 targ v(vout) val=4.5 rise=1\n",
+    );
+    let text = simulate_pic_json(&src, None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(v["pic"].is_object());
+    let rows = v["measurements"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{text}");
+    let t = rows[0]["value"].as_f64().unwrap();
+    assert!((t / (1e-3 * 9f64.ln()) - 1.0).abs() < 1e-2, "trise = {t}");
+}
