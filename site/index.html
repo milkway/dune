@@ -106,6 +106,8 @@
   .c-card { color: #4ad6a0; }
   .scope svg { display: block; width: 100%; height: auto; }
   .plot-grid line { stroke: var(--grid); stroke-width: 1; }
+  /* the scope card keeps its dark bg in light mode; keep its grid dark too */
+  .scope .plot-grid line { stroke: #342918; }
   .plot-axis { fill: #8d7f63; font: 10.5px ui-monospace, Menlo, monospace; }
   .tr1 { fill: none; stroke: var(--trace-1); stroke-width: 2; }
   .tr2 { fill: none; stroke: var(--trace-2); stroke-width: 1.6; opacity: .85; }
@@ -185,6 +187,7 @@
       <a href="#fidelity">Fidelity</a>
       <a href="#coverage">Coverage</a>
       <a href="#figures">Figures</a>
+      <a href="examples/">Examples</a>
       <a href="#install">Install</a>
       <a href="https://github.com/milkway/dune">GitHub</a>
     </nav>
@@ -208,6 +211,7 @@
         </div>
         <div class="cta">
           <a class="btn primary" href="#install">Get started</a>
+          <a class="btn" href="examples/">Examples</a>
           <a class="btn" href="https://github.com/milkway/dune">GitHub</a>
           <a class="btn" href="https://github.com/milkway/dune/blob/main/corpus/KNOWN_DIFFS.md">Known differences</a>
         </div>
