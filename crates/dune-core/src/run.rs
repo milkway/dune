@@ -10,6 +10,7 @@ use crate::circuit::Circuit;
 use crate::dc::DcSweep;
 use crate::error::Error;
 use crate::options::Options;
+use crate::pss::PssParams;
 use crate::pz::{PzInput, PzWhich};
 use crate::sens::SensAc;
 use crate::solution::Solution;
@@ -17,14 +18,15 @@ use crate::tf::OutputVar;
 
 impl Circuit {
     /// Run one analysis card (`.op`, `.dc`, `.tran`, `.ac`, `.pz`,
-    /// `.noise`, `.disto`, `.tf`, `.sens`, and ngspice's `.sp`) as
+    /// `.noise`, `.disto`, `.tf`, `.sens`, ngspice's `.sp`, and `.pss`) as
     /// `spice3 -b` (`ngspice -b` for `.sp`) would.
     ///
     /// Returns the plots in rawfile order with their 3f5/ngspice
     /// plotnames — one for most analyses; `.noise` gives the density
     /// plot plus, when the band has more than one frequency, the
-    /// integrated totals; `.disto` gives 2 or 3 plots — and the
-    /// analysis' notes (non-fatal remarks the caller may show).
+    /// integrated totals; `.disto` gives 2 or 3 plots; `.pss` the
+    /// period and its harmonics — and the analysis' notes (non-fatal
+    /// remarks the caller may show).
     ///
     /// A `.tf`/`.sens` output that is not `V(..)`/`I(..)` is an
     /// [`Error::Build`]; engine failures pass through unchanged.
@@ -164,6 +166,37 @@ impl Circuit {
                     *donoise,
                 )?;
                 (vec![sp.solution], sp.notes)
+            }
+            Analysis::Pss {
+                freq,
+                tstab,
+                osc_node,
+                points,
+                harmonics,
+                sc_iter,
+                steady_coeff,
+                uic,
+                ..
+            } => {
+                let d = PssParams::default();
+                // ngspice reads the counts as IF_INTEGER (truncated).
+                let count = |v: Option<f64>, default: usize| match v {
+                    Some(v) if v.is_finite() && v >= 0.0 => v.trunc().min(1e9) as usize,
+                    Some(_) => 0,
+                    None => default,
+                };
+                let p = PssParams {
+                    freq: (*freq != 0.0).then_some(*freq),
+                    tstab: *tstab,
+                    osc_node: Some(osc_node.clone()),
+                    points: count(*points, d.points),
+                    harmonics: count(*harmonics, d.harmonics),
+                    max_iter: count(*sc_iter, d.max_iter),
+                    steady_coeff: steady_coeff.unwrap_or(d.steady_coeff),
+                    uic: *uic,
+                };
+                let pss = self.pss(opts, &p)?;
+                (vec![pss.time, pss.spectrum], pss.notes)
             }
             Analysis::Tf { outvar, insrc, .. } => {
                 let tf = self.tf(opts, &output_var(outvar)?, insrc)?;

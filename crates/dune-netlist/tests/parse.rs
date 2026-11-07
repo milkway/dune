@@ -455,3 +455,43 @@ fn malformed_measure_cards_are_errors_with_spans() {
     assert!(errs[2].contains("needs a result name"), "{}", errs[2]);
     assert!(out.netlist.measures.is_empty());
 }
+
+#[test]
+fn pss_card_in_ngspice_order() {
+    let nl = clean(
+        "pss\n\
+         v1 1 0 sin(0 1 1k)\n\
+         r1 1 2 1k\n\
+         c1 2 0 1u\n\
+         .pss 1k 5m 2 256 8 30 0.5 uic\n\
+         .pss 0 0 2\n\
+         .end\n",
+    );
+    assert!(matches!(
+        &nl.analyses[0],
+        Analysis::Pss { freq, tstab, osc_node, points: Some(p), harmonics: Some(h),
+            sc_iter: Some(i), steady_coeff: Some(c), uic: true, .. }
+            if *freq == 1e3 && *tstab == 5e-3 && osc_node == "2"
+                && *p == 256.0 && *h == 8.0 && *i == 30.0 && *c == 0.5
+    ));
+    assert!(matches!(
+        &nl.analyses[1],
+        Analysis::Pss { freq, points: None, harmonics: None, sc_iter: None,
+            steady_coeff: None, uic: false, .. } if *freq == 0.0
+    ));
+    let errs = errors("t\nr1 1 0 1\n.pss 1k\n.end\n");
+    assert!(
+        errs.iter().any(|e| e.contains("stabilization time")),
+        "{errs:?}"
+    );
+    let errs = errors("t\nr1 1 0 1\n.pss 1k 0\n.end\n");
+    assert!(
+        errs.iter().any(|e| e.contains("oscillation node")),
+        "{errs:?}"
+    );
+    let errs = errors("t\nr1 1 0 1\n.pss 1k 0 1 64 8 10 1 2 3\n.end\n");
+    assert!(
+        errs.iter().any(|e| e.contains("unknown parameter")),
+        "{errs:?}"
+    );
+}

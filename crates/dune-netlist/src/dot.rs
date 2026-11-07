@@ -89,6 +89,7 @@ pub(crate) fn parse_dot(
         ".sens" => dot_sens(&mut ctx, nl, span),
         ".tf" => dot_tf(&mut ctx, nl, span),
         ".sp" => dot_sp(&mut ctx, nl, span),
+        ".pss" => dot_pss(&mut ctx, nl, span),
         ".options" | ".option" | ".opt" => dot_options(&mut ctx, nl),
         ".ic" => dot_nodeinit(&mut ctx, nl, NodeInitKind::Ic),
         ".nodeset" => dot_nodeinit(&mut ctx, nl, NodeInitKind::Nodeset),
@@ -219,6 +220,67 @@ fn dot_sp(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
         fstart,
         fstop,
         donoise,
+        span,
+    });
+}
+
+/// `.pss FREQ TSTAB OSCNODE <POINTS <HARMS <SCITER <STEADYCOEFF>>>>
+/// <UIC>` (ngspice-47 `dot_pss`, `inp2dot.c`): the same positional
+/// fields, the trailing ones optional here (ngspice requires them all
+/// and reads a missing one as garbage). `UIC` may close the card.
+fn dot_pss(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
+    let mut sc = Scanner::new(ctx.card);
+    sc.next_tok();
+    let (Some(freq), Some(tstab)) = (
+        ctx.value_req(&mut sc, "fundamental frequency"),
+        ctx.value_req(&mut sc, "stabilization time"),
+    ) else {
+        return;
+    };
+    let Some(node) = sc.next_tok() else {
+        ctx.err(
+            span,
+            ".pss needs an oscillation node (ngspice's OSCNODE field)",
+        );
+        return;
+    };
+    let osc_node = node.lc();
+    let mut fields = [None; 4];
+    let names = [
+        "points",
+        "harmonics",
+        "shooting iterations",
+        "steady coefficient",
+    ];
+    let mut uic = false;
+    let mut k = 0;
+    while let Some(tok) = sc.peek_tok() {
+        let tspan = sc.span(&tok);
+        if tok.eq_ic("uic") {
+            sc.next_tok();
+            uic = true;
+            continue;
+        }
+        if uic || k == fields.len() {
+            sc.next_tok();
+            ctx.err(tspan, format!("unknown parameter ({}) on .pss", tok.lc()));
+            continue;
+        }
+        fields[k] = ctx.value_req(&mut sc, names[k]);
+        if fields[k].is_none() {
+            sc.next_tok();
+        }
+        k += 1;
+    }
+    nl.analyses.push(Analysis::Pss {
+        freq,
+        tstab,
+        osc_node,
+        points: fields[0],
+        harmonics: fields[1],
+        sc_iter: fields[2],
+        steady_coeff: fields[3],
+        uic,
         span,
     });
 }
@@ -655,7 +717,7 @@ fn dot_print_plot(ctx: &mut DotCtx, nl: &mut Netlist, span: Span, kind: OutputKi
     let atype = ctx.card.text[flds[1].0..flds[1].1].to_ascii_lowercase();
     if !matches!(
         atype.as_str(),
-        "dc" | "ac" | "tran" | "noise" | "disto" | "pz"
+        "dc" | "ac" | "tran" | "noise" | "disto" | "pz" | "pss"
     ) {
         let s = ctx.card.span_of(flds[1].0, flds[1].1);
         ctx.err(s, format!("unknown analysis type `{atype}`"));

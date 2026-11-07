@@ -309,6 +309,22 @@ pub enum Analysis {
         donoise: bool,
         span: Span,
     },
+    /// `.pss FREQ TSTAB OSCNODE <POINTS <HARMS <SCITER <STEADYCOEFF>>>>
+    /// <UIC>` — the periodic steady state, in ngspice-47's positional
+    /// grammar (`inp2dot.c` `dot_pss`; there every field up to
+    /// STEADYCOEFF is required). `FREQ = 0` asks Dune to take the
+    /// fundamental from the periodic sources.
+    Pss {
+        freq: f64,
+        tstab: f64,
+        osc_node: Ident,
+        points: Option<f64>,
+        harmonics: Option<f64>,
+        sc_iter: Option<f64>,
+        steady_coeff: Option<f64>,
+        uic: bool,
+        span: Span,
+    },
     /// `.tf OUTVAR INSRC`
     Tf {
         outvar: OutVar,
