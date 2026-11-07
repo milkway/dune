@@ -69,6 +69,12 @@ Como no `spice3 -b`: com `-r` o resultado vai para o rawfile e os
 `.print` não são renderizados; sem `-r`, os `.print` saem no stdout
 (e um deck `.op` sem `.print` ainda lista seus valores).
 
+## Medidas (`.measure`)
+
+A mesma cadeia vale para as medidas escalares: `Solution::measure`
+(dune-core) → `Measurement`, renderizado no formato do ngspice só no
+CLI; os bindings recebem os números. Ver `docs/dune-measure.md`.
+
 ## Pendências
 
 - `.plot` (gráficos ASCII do `ft_agraf`) — aviso e sugestão de
