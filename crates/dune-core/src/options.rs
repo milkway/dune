@@ -251,6 +251,13 @@ impl Options {
                 // phases (output formatting, statistics, devices).
                 "itl3" | "itl5" | "acct" | "list" | "nomod" | "node" | "opts" | "bypass"
                 | "badmos3" | "keepopinfo" => {}
+                // `spiceif.c`'s `obsolete[]`: SPICE2 artifacts (lvlcod
+                // generated machine code for the solver) that must
+                // never do anything — the 3f5 words it "is obsolete".
+                "limpts" | "limtim" | "lvlcod" => diags.push(Diagnostic::warning(
+                    format!("option {} is an obsolete SPICE2 option; ignored", p.name),
+                    p.span,
+                )),
                 other => diags.push(Diagnostic::warning(
                     format!("option {other} is not implemented yet; ignored"),
                     p.span,
