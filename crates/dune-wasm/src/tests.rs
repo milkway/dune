@@ -901,3 +901,70 @@ fn session_temp_survives_new_options() {
         0
     );
 }
+
+// ---- .pss (issue #13, D-0032) --------------------------------------
+
+/// A `.pss` deck needs no API of its own here: `simulate` returns its
+/// two plots on the normal path — the period real, like a `.tran`, the
+/// harmonics as `[re, im]` pairs, like an `.ac` — and their values
+/// are those of a direct `Circuit::pss` call.
+#[test]
+fn pss_plots_travel_like_tran_and_ac() {
+    let deck = "rc pss\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.pss 1k 5m 2 128 10\n.end\n";
+    let json = simulate_json(deck, None).unwrap();
+    let raw = parse(&json);
+    assert_eq!(raw.plots.len(), 2);
+    let (t, f) = (&raw.plots[0], &raw.plots[1]);
+    assert_eq!(t.plotname, dune_core::PSS_TIME_PLOT);
+    assert_eq!(t.flags, "real");
+    assert_eq!(t.variables[0].vtype, "time");
+    assert_eq!(t.npoints, 129);
+    assert_eq!(f.plotname, dune_core::PSS_FREQ_PLOT);
+    assert_eq!(f.flags, "complex");
+    assert_eq!(f.variables[0].vtype, "frequency");
+    assert_eq!(f.npoints, 10);
+    assert!(json.contains("[[[0.0,0.0],[1000.0,0.0]"), "frequency pairs");
+    assert!(raw.notes.iter().any(|n| n.starts_with("pss: ")));
+
+    // The engine's own call, as spice.pss / spice_pss make it.
+    let parsed = dune_netlist::parse_str("deck.cir", deck);
+    let (circuit, _) = Circuit::from_netlist(&parsed.netlist).unwrap();
+    let mut opts = Options::default();
+    opts.apply(&parsed.netlist.options, &mut Vec::new());
+    let pss = circuit
+        .pss(
+            &opts,
+            &dune_core::PssParams {
+                freq: Some(1e3),
+                tstab: 5e-3,
+                osc_node: Some("2".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let typed = run_data(deck, &SimOptions::default()).unwrap();
+    for (got, want) in typed.plots.iter().zip([&pss.time, &pss.spectrum]) {
+        assert_eq!(*got, want.to_plot("rc pss", ""));
+    }
+    let i = f.variables.iter().position(|v| v.name == "v(2)").unwrap();
+    let Columns::Complex(cols) = &f.columns else {
+        panic!("the spectrum is complex")
+    };
+    let [re, im] = cols[i][1];
+    let h1 = pss.spectrum.column_complex("v(2)").unwrap()[1];
+    assert_eq!((re, im), (Some(h1.re), Some(h1.im)));
+}
+
+/// A shooting that does not converge fails as any analysis does (kind
+/// `analysis`; the history is in the message).
+#[test]
+fn pss_convergence_failure_is_an_analysis_error() {
+    let deck = "rc pss\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.pss 1k 5m 2 128 10 1\n.end\n";
+    let err = simulate_json(deck, None).unwrap_err();
+    assert_eq!(err.kind, "analysis");
+    assert!(
+        err.message.contains("did not converge in 1 shooting"),
+        "{}",
+        err.message
+    );
+}

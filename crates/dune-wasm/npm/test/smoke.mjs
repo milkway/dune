@@ -113,6 +113,9 @@ for (const [k, tp] of ty.plots.entries()) {
     assert.deepEqual(Array.from(col), flat);
   }
 }
+// .pss: the period real (like .tran), the harmonics [re, im] pairs (like .ac).
+const pss = simulate('rc\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.pss 1k 5m 2 128 10\n.end\n');
+assert.deepEqual(pss.plots.map((p) => [p.flags, p.npoints, p.columns[1][1].length]), [['real', 129, undefined], ['complex', 10, 2]]);
 // Own buffers: transferable, and they survive later calls (memory growth).
 const tr = simulatePicTyped(rc);
 assert.equal(tr.pic.netlist, ex.netlist);

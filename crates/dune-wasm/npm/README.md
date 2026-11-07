@@ -44,6 +44,12 @@ await ready(wasmUrl);
   mirror the SPICE rawfile: `variables` (first = scale) and `columns`
   (numbers, or `[re, im]` pairs in complex plots; NaN/±inf as `null`).
   `includes` maps `.include` paths to file text (there is no file system).
+  A `.pss` card gives two plots on this same path: the period
+  (`Time Domain Periodic Steady State Analysis`, real, like a `.tran`) and
+  its complex harmonics (`Frequency Domain Periodic Steady State Analysis`,
+  `[re, im]` pairs, like an `.ac`); a shooting that does not converge
+  throws kind `analysis`. Python's `spice.pss()` and R's `spice_pss()` run
+  the same engine call with the period and shooting history attached.
   `measurements` holds the deck's `.measure` results — the rows Python's
   `Result.measurements` and R's `res$measurements` carry, one per card and
   measured plot:
