@@ -676,3 +676,117 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   rlc). Fora da faixa: `Error::Build` no `.tran`. Exposto nos
   bindings como `tmaxDivisor` (JS) e `tmax_divisor=` (Python/R) —
   o "passos finos" do Studio (rpic-studio#19).
+
+## Regime permanente periódico — `.pss` (issue #13, trilha 4 de D-0028)
+
+Análise nova, sem contrato 3f5. O ngspice-47 tem um `.pss`
+(`analysis/dcpss.c`, Perticaroli/Lannutti, `--enable-pss`, ativo no
+binário do Homebrew), mas o algoritmo é uma **busca de oscilador
+livre**: roda o transiente e, a cada ciclo, re-estima a frequência
+pela derivada do vetor solução perto do mínimo de
+`|x(t) − x(t_ref)|`; nunca resolve `x(T) = x(0)`, e todos os
+exemplos dele (`examples/pss/`) são osciladores. Num circuito
+excitado ele desafina do estímulo: medido no ngspice-47 com os decks
+de `corpus/pss/` — RC a 1 kHz sai em 750 Hz, RLC a 1,5 kHz em
+1406 Hz, trem de pulsos de 1 MHz em 936 kHz; só o retificador cai no
+estímulo (50,000002 kHz). O Dune mantém o **cartão e os nomes de
+plot do ngspice** e troca o método.
+
+**Cartão** (`dot_pss` do `inp2dot.c`, mesma ordem posicional):
+`.pss FREQ TSTAB OSCNODE <POINTS <HARMS <SCITER <STEADYCOEFF>>>> <UIC>`.
+No ngspice tudo até STEADYCOEFF é obrigatório (o que falta vira lixo);
+no Dune o rabo é opcional (defaults 128, 10, 50, 1). `FREQ = 0`
+colhe a fundamental das fontes (MDC das frequências: SIN/SFFM com
+frequência explícita, PULSE `1/PER`; EXP/PWL/PULSE sem PER assentam
+em constante e não contam; SIN amortecido ou sem frequência é erro).
+`OSCNODE` é conferido e reportado (reservado aos autônomos).
+`HARMS` conta o DC, como no ngspice. Semântica do STEADYCOEFF difere
+(ver convergência). `Circuit::pss(&Options, &PssParams) -> Pss`.
+
+**Método — shooting–Newton matrix-free.** `Φ(x₀)` = estado em
+`t₀+T` do transiente que parte de `x₀` em `t₀`; resolve-se
+`F(x₀) = Φ(x₀) − x₀ = 0` por Newton, `(I − Φ′)δ = Φ(x₀) − x₀`. A
+monodromia `Φ′` nunca é montada: GMRES (sem restart, MGS com
+reortogonalização) sobre as incógnitas escaladas `x_i/tol_i` pede só
+produtos `Φ′v`, cada um uma diferença direcional de dois transientes
+(Telichevesky–Kundert–White 1995). Escolhas:
+
+- **Diferenças vs sensibilidade direta**: a sensibilidade exigiria
+  de cada dispositivo `∂estado/∂x` do histórico (o que o C não
+  tem); as diferenças reusam o transiente inteiro sem tocar
+  dispositivo. Custo por passo de Newton: 1 transiente adaptativo +
+  1 replay de base + k replays (k ≈ modos lentos + 1, contra n de um
+  jacobiano denso por diferenças). Linear converge em 1 passo.
+- **Grade congelada**: o resíduo vem de um transiente adaptativo
+  (LTE, breakpoints, trap/gear/trbdf2, orçamento D-0022 — o
+  `tran_loop` de sempre, só que partindo de `x₀`), cujos passos
+  aceitos são registrados (tempo, ordem, flag `CKTbreak`). Os
+  produtos `Φ′v` refazem essa grade (`Engine::tran_replay`, sem LTE
+  nem escolha de passo): uma corrida adaptativa perturbada escolheria
+  outros passos e o ruído do controle de passo, dividido por ε,
+  destruiria a derivada. Os replays apertam RELTOL/VNTOL/ABSTOL por
+  1e-3 (o erro de Newton por passo também seria amplificado); se um
+  replay não converge, o passo de Newton é refeito com as
+  tolerâncias do deck. ε = 1e-2 tolerâncias. Passo de Newton que não
+  reduz o resíduo é cortado à metade até 4×.
+- **Estado de partida**: cada corrida é um engine novo (históricos de
+  dispositivo limpos); `seed_states` faz passes de load em
+  `MODETRANOP|MODEINITFLOAT` sobre `x₀` fixo, sem solve, até nenhum
+  dispositivo limitar junção — cargas, `vd` etc. viram funções de
+  `x₀`, como o `.op` deixaria. O vetor MNA inteiro é o estado do
+  shooting; as componentes algébricas saem sozinhas (coluna de `Φ′`
+  nula). O primeiro passo é o BE de `MODEINITTRAN`, como no `.tran`.
+- **Intervalo**: `t₀` = primeiro múltiplo de T em ou após TSTAB (pelo
+  menos 1 período de estabilização, `.tran` normal, com UIC se
+  pedido); quinas de PULSE/PWL dentro de `(t₀, t₀+T)` semeiam a
+  tabela de breakpoints (`Device::wave_corners`: o `VSRCaccept` só
+  planta a próxima quina quando o ponto já está numa). TSTEP = T/POINTS
+  (default de TR/TF do PULSE), TMAX = min(TSTEP, T/50): **POINTS é o
+  botão de exatidão** (o erro medido é a fase do trapezoidal,
+  (ωh)²/12).
+
+**Convergência**: `max_i |x_i(t₀+T) − x_i(t₀)| / tol_i ≤ STEADYCOEFF`,
+`tol_i = RELTOL·pico_i + VNTOL` (nós) ou `+ ABSTOL` (ramos), `pico_i`
+o maior `|x_i|` no período — o `NIconvTest` com a escala do sinal
+(o `x_i(t₀)` de uma senoide pode ser ~0). No ngspice o STEADYCOEFF
+multiplica `TRTOL·(RELTOL·excursão + VNTOL)` de outro teste; aqui é
+só a escala do critério (1 = tolerâncias SPICE). Falha =
+`Error::PssConvergence { iterations, residuals }` com o histórico;
+toda corrida bem-sucedida deixa nota com o histórico, contagem de
+transientes e dimensões do GMRES.
+
+**Saída**: dois plots com os nomes do ngspice —
+`Time Domain Periodic Steady State Analysis` (escala `time`,
+POINTS+1 linhas equiespaçadas de `t₀` a `t₀+T`, interpoladas da grade
+aceita por Lagrange cúbica sem atravessar breakpoint) e
+`Frequency Domain Periodic Steady State Analysis` (escala
+`frequency`, HARMS linhas `k·f`). O espectro do Dune é **complexo**
+(`X_0` média; `x(t) = X_0 + Σ Re(X_k e^{jkωt})`, a convenção de
+fasor do `.ac`, fase referida a t=0): `mag()` dele é o plot real do
+ngspice, que só escreve magnitudes. `.print pss` imprime o plot do
+tempo.
+
+**Validação** (`crates/dune-core/tests/pss.rs`, decks e goldens em
+`corpus/pss/`, `tools/pss-golden.sh`; fora do `--ci`, que segue em
+76):
+
+| Deck | Referência | Resultado |
+|---|---|---|
+| `pss_rc` (RC 1 kHz, ωRC=2π) | forma fechada `|H| sin(ωt+∠H)` | default: erro máx 2,0e-4 da amplitude, X₁ 2,0e-4 (= (2π/128)²/12); resíduo 4,2 → 3,9e-10 (1 Newton, GMRES dim 1). RELTOL 1e-7 + 1024 pts: 3,1e-6 (= (2π/1024)²/12). gear 8,0e-4; trbdf2 9,7e-5 |
+| `pss_rlc` (Q=10, τ=2 ms, parte a 1 período) | forma fechada | resíduo 360 → 4,7e-6 (1 Newton); erro 6,1e-4 default, 3,8e-5 apertado (fase do trap ×Q perto da ressonância) |
+| `pss_rect` (trdiode) | cauda de `.tran` 200 períodos | vs ngspice: 4,06 mV em v(2) (régua D-0010 59 mV); vs `.tran` do Dune no mesmo passo: 0,40 mV; ambos apertados: 12 µV. Resíduo 3,9 → 4,5e-3 |
+| `pss_rect` | `.pss` do ngspice-47 (único deck em que ele acha o estímulo) | harmônicos: máx \|Δ\| 9,0e-5 V em v(2) (DC 4,037315 vs 4,037225; H1 0,1272230 vs 0,1272195); i(vin) 1,4e-6 A |
+| `pss_pulse` (pulsos TD=0,3 µs, grampo a diodo) | cauda de `.tran` 300 períodos | vs ngspice: 0,40 mV v(2), 17 µV v(3) (réguas 25/17 mV); resíduo 374 → 3,2e-3 |
+
+Rawfile e stdout dos 83 decks do corpus (examples, basic, regress,
+measure) **byte-idênticos** ao main com o refactor do `DCtran`
+(`tran_loop` extraído; log de passos opcional).
+
+**Limitações/pendências**: osciladores autônomos (período
+incógnito — shooting com T como incógnita + condição de fase no
+OSCNODE, ver relatório da issue); linhas de transmissão recusadas
+(`Error::Unsupported`: o estado é o histórico da linha — com
+`ltrafit` a parte recursiva é finita, mas o atraso não; exigiria pôr
+o histórico/estados no vetor do shooting); chaves com histerese
+semeiam o estado pelo controle (dentro da banda pode escolher o ramo
+errado); ruído transiente fica para a outra leva da issue #13.
