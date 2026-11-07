@@ -4,11 +4,16 @@
 //! 3f5; without it, `.print` cards render in the spice3 column
 //! format (`print.rs`). Every analysis card runs through
 //! `Circuit::run`, the dispatch the oracle and the wasm build share.
+//! `.measure` cards print their results in ngspice's format
+//! (`measure.rs`) after the analyses, in both modes — unlike
+//! `ngspice -b -r`, which refuses measurements next to a rawfile;
+//! a measurement never changes what is simulated or written.
 //! `dune pic FIGURE.pic` extracts the netlist of an rpic figure
 //! (`dune-pic`); `dune pic --run` simulates it the same way.
 
 #![forbid(unsafe_code)]
 
+mod measure;
 mod print;
 
 use std::path::{Path, PathBuf};
@@ -153,6 +158,16 @@ fn run_deck(
     if solutions.is_empty() {
         eprintln!("note: no analyses in the deck; nothing to do");
         return Ok(());
+    }
+
+    // `.measure`: pure post-processing of the plots, printed before
+    // any `.print` output, as `ngspice -b` does.
+    let measures = &parsed.netlist.measures;
+    if !measures.is_empty() {
+        let outcomes = dune_core::measure_all(measures, &solutions);
+        let (out, err) = measure::render(measures, &solutions, &outcomes);
+        eprint!("{err}");
+        print!("{out}");
     }
 
     match rawfile {
