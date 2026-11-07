@@ -1,0 +1,22 @@
+LTRA recursive convolution (ltrafit): RLC and RC lines, 300 ns history
+* Gate of Dune's opt-in recursive mode (issue #8): ngspice-47 runs the
+* faithful coefficient walk (it ignores the unknown option), Dune the
+* exponential-sum recursion. Mismatched loads keep both lines
+* reflecting for the whole run, the load capacitors make the
+* integration method matter (tests/ltra_fit.rs reruns it under
+* method=trbdf2); 3000+ accepted points exercise the snapshot
+* pruning; R/2L*TSTOP = 3.3 reaches the h1' tail.
+v1 1 0 pulse(0 4 1ns 1ns 1ns 20ns 40ns)
+rs 1 2 10
+o1 2 0 3 0 rlcline
+rl 3 0 100
+cl 3 0 2pF
+rs2 1 4 10
+o2 4 0 5 0 rcline
+rl2 5 0 100
+cl2 5 0 2pF
+.model rlcline ltra r=0.2 l=9.13e-9 c=3.65e-12 len=24
+.model rcline ltra r=0.2 l=0 c=3.65e-12 len=24
+.options ltrafit
+.tran 0.1ns 300ns
+.end
