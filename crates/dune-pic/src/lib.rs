@@ -26,16 +26,18 @@
 //! * **refdes = block label**; its first letter picks the card type
 //!   (D-0004 §1), restricted to the D-0019 set `R C L V I D Q M J S W X`
 //!   plus the transmission lines `T` (ideal) and `O` (LTRA), the
-//!   controlled sources `E F G H` and the mutual inductance `K`
-//!   (D-0026);
+//!   controlled sources `E F G H`, the mutual inductance `K`
+//!   (D-0026) and the MESFET `Z`;
 //! * **pins** are `circle invis rad 0` shapes labeled `P`/`N`,
 //!   `C`/`B`/`E` (+ the optional substrate `S`), `D`/`G`/`S`/`B`,
-//!   `Inp`/`Inm`/`Out`, `Cp`/`Cn`, `P1`/`N1`/`P2`/`N2` that
+//!   `Inp`/`Inm`/`Out` (the op-amp `X`), `P1` … `PN` (a generic `X`
+//!   of N nodes), `Cp`/`Cn`, `P1`/`N1`/`P2`/`N2` that
 //!   are direct children of the element block (D-0020 §c); a `K`
 //!   block has no pins, only a `Mutual` marker;
 //! * **value/model = the macro argument after the pin positions**
 //!   (D-0004 §2: the 3rd of a two-terminal, the 5th of the four-point
-//!   `E`/`G`, the 2nd of an element centered on an `At` anchor; all
+//!   `E`/`G`, the (N+1)th of a generic `X` of N pins, the 2nd of an
+//!   element centered on an `At` anchor; all
 //!   three arguments of a `K`, `L1 L2 k`), read verbatim from the call
 //!   in the user's source (`1e-9` stays `1e-9`). The prelude also draws it
 //!   (the first text shape in the block); that drawing is presentation,
@@ -89,10 +91,13 @@ const COUPLING_MARKER: &str = "Mutual";
 /// `At` anchor of centered elements and the coupling marker.
 const ELEMENT_MARKERS: &[&str] = &[
     "P", "N", "Cp", "Cn", "C", "B", "E", "D", "G", "S", "Inp", "Inm", "Out", "P1", "N1", "P2",
-    "N2", "At", "Mutual",
+    "N2", "P3", "P4", "P5", "P6", "P7", "At", "Mutual",
 ];
 /// Pins of a `Q` drawn with its substrate (`npn4`/`pnp4`).
 const BJT4_PINS: &[&str] = &["C", "B", "E", "S"];
+/// Pins of a generic subcircuit instance (`subckt2` … `subckt7`, an
+/// `X` card with N nodes): the first N of these, in card order.
+const SUBCKT_PINS: &[&str] = &["P1", "P2", "P3", "P4", "P5", "P6", "P7"];
 /// Marker of a block whose drawn text is a display, not the value.
 const DISPLAY_MARKER: &str = "Disp";
 /// Prelude macros that take an optional display text after the
@@ -121,10 +126,18 @@ const DISPLAY_MACROS: &[&str] = &[
     "pmos4",
     "njfet",
     "pjfet",
+    "nmes",
+    "pmes",
     "opamp",
+    "subckt2",
+    "subckt3",
+    "subckt4",
+    "subckt5",
+    "subckt6",
+    "subckt7",
 ];
 /// The supported card letters, for messages.
-const LETTERS: &str = "R C L V I D Q M J S W X T O E F G H K";
+const LETTERS: &str = "R C L V I D Q M J Z S W X T O E F G H K";
 
 /// Options for [`extract`].
 #[derive(Debug, Clone, Copy)]
@@ -273,7 +286,7 @@ pub struct ElementOverlay {
     /// the principal value (the leading number) and `ic` (`IC=…`,
     /// `C`/`L`); `gain` of an `F`/`H` (`Vname gain`); `area` (the
     /// number after the model, or `AREA=`) and `temp` (`TEMP=`) of a
-    /// `D`/`Q`/`J`; `w`, `l`, `temp` (`W=`…) of an `M`. Only what is
+    /// `D`/`Q`/`J`; `area` of a `Z`; `w`, `l`, `temp` (`W=`…) of an `M`. Only what is
     /// spelled is listed (a source with no `DC` field has no `dc`
     /// entry), and a parameter spelled twice is listed once, at its
     /// last spelling (the one SPICE keeps). Empty when
@@ -282,7 +295,7 @@ pub struct ElementOverlay {
     /// The parameter `alter(refdes, value)` (empty parameter name)
     /// changes for this element's letter: `resistance`, `capacitance`,
     /// `inductance`, `dc` (`V`/`I`), `gain` (`E`/`F`/`G`/`H`), `area`
-    /// (`D`/`Q`/`J`); `None` for letters `alter` has no principal for
+    /// (`D`/`Q`/`J`/`Z`); `None` for letters `alter` has no principal for
     /// (`M`, `S`, `W`, `X`, `T`, `O`, `K`). Independent of
     /// [`Self::value`].
     pub principal: Option<String>,
@@ -389,7 +402,7 @@ const SVG_PPI: f64 = 96.0;
 #[derive(Debug, Clone, PartialEq)]
 pub struct PinOverlay {
     /// The pin's prelude name (`P`, `N`, `C`, `B`, `E`, `D`, `G`, `S`,
-    /// `Inp`, `Cp`, `P1`, …; D-0020).
+    /// `Inp`, `Cp`, `P1`, …; D-0020; `P1` … `PN` on a generic `X`).
     pub name: String,
     /// The node name on the card, as in [`NetOverlay::name`].
     pub net: String,
@@ -647,7 +660,7 @@ fn pins_for(letter: char) -> Option<&'static [&'static str]> {
         'K' => &[],
         'Q' => &["C", "B", "E"],
         'M' => &["D", "G", "S", "B"],
-        'J' => &["D", "G", "S"],
+        'J' | 'Z' => &["D", "G", "S"],
         'X' => &["Inp", "Inm", "Out"],
         'T' | 'O' => &["P1", "N1", "P2", "N2"],
         _ => return None,
@@ -1251,6 +1264,12 @@ impl<'a> Extractor<'a> {
         if letter == 'Q' && ms.iter().any(|m| m.1 == "S") {
             pins = BJT4_PINS;
         }
+        if letter == 'X' {
+            let n = subckt_arity(ms);
+            if n > 0 {
+                pins = &SUBCKT_PINS[..n];
+            }
+        }
         if letter == 'K' && !ms.iter().any(|m| m.1 == COUPLING_MARKER) {
             self.diag(
                 PicSeverity::Error,
@@ -1432,7 +1451,8 @@ impl<'a> Extractor<'a> {
 
     /// The value/model of element block `b` (D-0004 §2): the macro
     /// argument after the pin positions — index 1 for elements centered
-    /// on an `At` anchor, 4 for the four-point `E`/`G`, 2 otherwise —
+    /// on an `At` anchor, 4 for the four-point `E`/`G`, N for a generic
+    /// `X` of N pins, 2 otherwise —
     /// verbatim from the user's source. A `K` (`coupling(L1, L2, k)`)
     /// takes all three arguments, `L1 L2 k`; its drawing shows only
     /// `k=…`, so it has no drawn fallback.
@@ -1476,9 +1496,12 @@ impl<'a> Extractor<'a> {
         } else {
             Some((drawn.clone(), None))
         };
+        let arity = if letter == 'X' { subckt_arity(ms) } else { 0 };
         let k = match letter {
             'E' | 'G' => 4,
             _ if ms.iter().any(|m| m.1 == ANCHOR_MARKER) => 1,
+            // A generic subcircuit: the name follows its N points.
+            'X' if arity > 0 => arity,
             _ => 2,
         };
         let Some(call) = &self.d.blocks[b].call else {
@@ -1594,6 +1617,17 @@ impl<'a> Extractor<'a> {
             .find(|p| p.label.eq_ignore_ascii_case(label))
             .and_then(|p| p.span.clone())
     }
+}
+
+/// The number of pins of a generic subcircuit block (`P1` … `PN`, the
+/// markers of `subckt2` … `subckt7`): how many of [`SUBCKT_PINS`] it
+/// carries in a row from `P1`; 0 for any other `X` (the op-amp's
+/// `Inp`/`Inm`/`Out`).
+fn subckt_arity(ms: &[(usize, &str, Pt)]) -> usize {
+    SUBCKT_PINS
+        .iter()
+        .take_while(|p| ms.iter().any(|m| m.1 == **p))
+        .count()
 }
 
 /// A lone string argument splices as its content (pic's

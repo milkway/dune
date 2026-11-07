@@ -30,15 +30,18 @@
 #   nmos/pmos (M)  D G S B    (B drawn tied to S; pmos has S on top)
 #   nmos4/pmos4(M) D G S B    (B its own stub)
 #   njfet/pjfet(J) D G S
+#   nmes/pmes (Z)  D G S
 #   opamp (X)      Inp Inm Out (subcircuit pin order)
+#   subckt2..7 (X) P1 ... PN  (`.subckt` node order)
 #   tline (T),     P1 N1 P2 N2 (port 1 +/-, port 2 +/-: card order)
 #   ltraline (O)
 #
 # Display text: every two-terminal element with a value (resistor,
 # capacitor, inductor, diode, vsource, acsource, battery, isource,
-# cccs, ccvs), the four-point vcvs/vccs and the centered devices (npn,
-# pnp, npn4, pnp4, nmos, pmos, nmos4, pmos4, njfet, pjfet, opamp:
-# `M1: nmos(At, NMOD W=4u L=1u, "T₁")`) take one optional argument
+# cccs, ccvs), the four-point vcvs/vccs, the centered devices (npn,
+# pnp, npn4, pnp4, nmos, pmos, nmos4, pmos4, njfet, pjfet, nmes, pmes,
+# opamp) and the subcircuit boxes (subckt2..subckt7) -- e.g.
+# `M1: nmos(At, NMOD W=4u L=1u, "T₁")` -- take one optional argument
 # after the value/model, a display text drawn INSTEAD of it:
 # `V1: vsource(In, (0,0), PULSE(0 5 0 1u 1u 10m 20m), "Vin")` draws
 # `Vin` and still emits `V1 In 0 PULSE(0 5 0 1u 1u 10m 20m)`. Empty or
@@ -395,6 +398,27 @@ define pjfet {
   ] with .At at $1
 }
 
+# nmes(C, model) / pmes(C, model): MESFET (Z card), gate left, drain up;
+# pins D G S like the JFET (`Z1 D G S model [area]`). The JFET body
+# (std `__njfet`/`__pjfet`: channel bar, polarity arrow on the gate)
+# with the Schottky marker of IEEE 315 on the channel bar: the two
+# hooks that tell a Schottky diode from a junction one, here telling a
+# metal-semiconductor gate from a p-n gate. The arrow stays: it is the
+# NMF/PMF polarity, which the model card needs.
+define __dn_mes {
+  dncx=$1.x; dncy=$1.y
+  At: circle invis rad 0 at (dncx,dncy)
+  __dn_label($3,$4,dncx+0.26,dncy,ljust)
+  if $2 == 0 then { __njfet((dncx,dncy)) } else { __pjfet((dncx,dncy)) }
+  # (hooks turned outward, point-symmetric like the diode's: inward
+  # they would touch the drain and source leads)
+  line from (dncx-0.12,dncy+0.2) to (dncx-0.18,dncy+0.2) then to (dncx-0.18,dncy+0.26)
+  line from (dncx-0.12,dncy-0.2) to (dncx-0.06,dncy-0.2) then to (dncx-0.06,dncy-0.26)
+  __dn_mos_pins
+}
+define nmes { [ __dn_mes($1, 0, $2, $3) ] with .At at $1 }
+define pmes { [ __dn_mes($1, 1, $2, $3) ] with .At at $1 }
+
 # --- op-amp as a subcircuit instance (X card) ----------------------------
 # opamp(C, subckt): inverting input on top; pins Inp Inm Out in the
 # order the X card lists them (`.subckt NAME inp inm out`).
@@ -407,6 +431,94 @@ define opamp {
     Inm: circle invis rad 0 at (gIm_x,gIm_y)
     Out: circle invis rad 0 at (gY_x,gY_y)
   ] with .At at $1
+}
+
+# --- generic subcircuit instance (X card) ---------------------------------
+# subckt2(P1, P2, name) ... subckt7(P1, ..., P7, name): an instance of
+# `.subckt name n1 ... nN` with its N pins at the user's N points, in
+# card order (`X1 P1 ... PN name`); pins P1 ... PN. The arity is in the
+# macro name, so the name is, as everywhere, the argument after the
+# points, and seven pins + name + display fill Kernighan pic's $1..$9.
+# The body is the rectangle spanned by the points (at least 0.6 x 0.4
+# in, grown about its center), so points on the outline are pins on the
+# border, as in a hierarchical sheet: put them there. The name (or the
+# display) is centered; each pin's number is written small, inside,
+# next to it.
+define __dn_xfirst { dnxl=$1.x; dnxr=dnxl; dnyb=$1.y; dnyt=dnyb }
+define __dn_xgrow {
+  dnt=$1.x; if dnt < dnxl then { dnxl=dnt }; if dnt > dnxr then { dnxr=dnt }
+  dnt=$1.y; if dnt < dnyb then { dnyb=dnt }; if dnt > dnyt then { dnyt=dnt }
+}
+define __dn_xbox {
+  # $1 the subcircuit name, $2 the optional display.
+  if dnxr-dnxl < 0.6 then { dnt=(dnxl+dnxr)/2; dnxl=dnt-0.3; dnxr=dnt+0.3 }
+  if dnyt-dnyb < 0.4 then { dnt=(dnyb+dnyt)/2; dnyb=dnt-0.2; dnyt=dnt+0.2 }
+  __dn_label($1,$2,(dnxl+dnxr)/2,(dnyb+dnyt)/2,)
+  line from (dnxl,dnyb) to (dnxl,dnyt) then to (dnxr,dnyt) then to (dnxr,dnyb) \
+    then to (dnxl,dnyb)
+}
+define __dn_xpin {
+  # $1 the pin point, $2 its number: inside the box, stepped in from
+  # each edge the pin is on (both, at a corner).
+  dnt=$1.x; dnu=$1.y; dnv=dnu
+  if dnyt-dnu < 0.001 then { dnv=dnu-0.08 } else { if dnu-dnyb < 0.001 then { dnv=dnu+0.08 } }
+  if dnt-dnxl < 0.001 then {
+    "$2" ljust fontsize 7 at (dnt+0.05,dnv)
+  } else { if dnxr-dnt < 0.001 then {
+    "$2" rjust fontsize 7 at (dnt-0.05,dnv)
+  } else {
+    "$2" fontsize 7 at (dnt,dnv)
+  } }
+}
+define subckt2 {
+  [ __dn_xfirst($1); __dn_xgrow($2); __dn_xbox($3,$4)
+    __dn_xpin($1,1); __dn_xpin($2,2)
+    P1: circle invis rad 0 at $1; P2: circle invis rad 0 at $2
+  ] with .P1 at $1
+}
+define subckt3 {
+  [ __dn_xfirst($1); __dn_xgrow($2); __dn_xgrow($3); __dn_xbox($4,$5)
+    __dn_xpin($1,1); __dn_xpin($2,2); __dn_xpin($3,3)
+    P1: circle invis rad 0 at $1; P2: circle invis rad 0 at $2
+    P3: circle invis rad 0 at $3
+  ] with .P1 at $1
+}
+define subckt4 {
+  [ __dn_xfirst($1); __dn_xgrow($2); __dn_xgrow($3); __dn_xgrow($4); __dn_xbox($5,$6)
+    __dn_xpin($1,1); __dn_xpin($2,2); __dn_xpin($3,3); __dn_xpin($4,4)
+    P1: circle invis rad 0 at $1; P2: circle invis rad 0 at $2
+    P3: circle invis rad 0 at $3; P4: circle invis rad 0 at $4
+  ] with .P1 at $1
+}
+define subckt5 {
+  [ __dn_xfirst($1); __dn_xgrow($2); __dn_xgrow($3); __dn_xgrow($4); __dn_xgrow($5)
+    __dn_xbox($6,$7)
+    __dn_xpin($1,1); __dn_xpin($2,2); __dn_xpin($3,3); __dn_xpin($4,4); __dn_xpin($5,5)
+    P1: circle invis rad 0 at $1; P2: circle invis rad 0 at $2
+    P3: circle invis rad 0 at $3; P4: circle invis rad 0 at $4
+    P5: circle invis rad 0 at $5
+  ] with .P1 at $1
+}
+define subckt6 {
+  [ __dn_xfirst($1); __dn_xgrow($2); __dn_xgrow($3); __dn_xgrow($4); __dn_xgrow($5)
+    __dn_xgrow($6); __dn_xbox($7,$8)
+    __dn_xpin($1,1); __dn_xpin($2,2); __dn_xpin($3,3); __dn_xpin($4,4); __dn_xpin($5,5)
+    __dn_xpin($6,6)
+    P1: circle invis rad 0 at $1; P2: circle invis rad 0 at $2
+    P3: circle invis rad 0 at $3; P4: circle invis rad 0 at $4
+    P5: circle invis rad 0 at $5; P6: circle invis rad 0 at $6
+  ] with .P1 at $1
+}
+define subckt7 {
+  [ __dn_xfirst($1); __dn_xgrow($2); __dn_xgrow($3); __dn_xgrow($4); __dn_xgrow($5)
+    __dn_xgrow($6); __dn_xgrow($7); __dn_xbox($8,$9)
+    __dn_xpin($1,1); __dn_xpin($2,2); __dn_xpin($3,3); __dn_xpin($4,4); __dn_xpin($5,5)
+    __dn_xpin($6,6); __dn_xpin($7,7)
+    P1: circle invis rad 0 at $1; P2: circle invis rad 0 at $2
+    P3: circle invis rad 0 at $3; P4: circle invis rad 0 at $4
+    P5: circle invis rad 0 at $5; P6: circle invis rad 0 at $6
+    P7: circle invis rad 0 at $7
+  ] with .P1 at $1
 }
 
 # --- transmission lines (T, O) -------------------------------------------

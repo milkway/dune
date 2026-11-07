@@ -187,7 +187,7 @@ fn element_errors() {
     let e = ex("V1: vsource((0,1),(0,0))
 R1: resistor((0,1),(1,1))
 R1: resistor((0,1),(1,1),5)
-Z1: resistor((0,1),(1,1),5)
+Y1: resistor((0,1),(1,1),5)
 Q1: resistor((0,1),(1,1),5)
 resistor((0,1),(1,1),7k)
 line from (1,1) to (0,0); ground((0,0))");
@@ -955,4 +955,98 @@ V1: vsource((4,2),(4,0), 1); line from (3.16,2) to (4,2); line from (4,0) to (3.
     assert_eq!(d.severity, PicSeverity::Error);
     assert!(cards(&e)[0].starts_with("Q1 "));
     assert!(!cards(&e)[0].contains("T₁"));
+}
+
+#[test]
+fn generic_subckt_pins_follow_card_order() {
+    // subckt2 .. subckt7: N points, then the name; pins P1 .. PN.
+    let e = ex("X1: subckt2((0,1), (1.2,1), TWOPORT)
+X2: subckt5((2,1), (2.3,0.6), (2.6,0.6), (2.9,1), (2.45,1.4), FIVE)
+X3: subckt7((4,1), (4,0.6), (4.4,0.6), (4.8,0.6), (5.2,0.6), (5.2,1), (4.6,1.4), SEVEN)
+In: X1.P1
+line from X1.P2 to X2.P1
+V2: vsource((0,1), (0,0), 2); line from (0,0) to (5.2,0); ground((0,0))
+line from X2.P2 to (2.3,0); line from X2.P3 to (2.6,0)
+line from X2.P4 to X3.P1; line from X2.P5 to (2.45,1.8) then to (4.6,1.8) then to X3.P7
+line from X3.P2 to (4,0); line from X3.P3 to (4.4,0); line from X3.P4 to (4.8,0)
+line from X3.P5 to (5.2,0); line from X3.P6 to (5.6,1)
+V1: vsource((5.6,1), (5.6,0), 1); line from (5.2,0) to (5.6,0)");
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    let c = cards(&e);
+    assert_eq!(c[0], "X1 In n1 TWOPORT");
+    assert_eq!(c[1], "X2 n1 0 0 n2 n3 FIVE");
+    assert_eq!(c[2], "X3 n2 0 0 0 0 n4 n3 SEVEN");
+    let names: Vec<String> = pins_of(&e, "X3").into_iter().map(|p| p.0).collect();
+    assert_eq!(names, ["P1", "P2", "P3", "P4", "P5", "P6", "P7"]);
+    // The pins sit on the user's points.
+    let p = pins_of(&e, "X2");
+    assert_eq!((p[4].2, p[4].3), (2.45, 1.4));
+    assert!(e.map.elements[0].principal.is_none());
+}
+
+#[test]
+fn generic_subckt_and_opamp_coexist() {
+    let body = "X1: opamp((2,1), OA)
+X2: subckt3((3,1.5), (3,0.5), (4,1), BUF, \"B₁\")
+line from X1.Out to (2.6,1) then to (2.6,1.5) then to X2.P1
+line from X1.Inp to (1,0.5); line from X1.Inm to (1,1.5)
+line from X2.P2 to (3,0); line from X2.P3 to (4.5,1)
+line from (1,0.5) to (1,0) then to (3,0); ground((1,0))
+V1: vsource((1,1.5), (0.5,1.5), 1); R1: resistor((4.5,1), (4.5,0), 1k)
+line from (0.5,1.5) to (0.5,0) then to (1,0); line from (3,0) to (4.5,0)";
+    let e = ex(body);
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    let c = cards(&e);
+    assert_eq!(c[0], "X1 0 n1 n2 OA");
+    // The display is drawn, the subcircuit name stays on the card.
+    assert_eq!(c[1], "X2 n2 0 n3 BUF");
+    let texts = drawn_texts(body);
+    assert!(texts.iter().any(|t| t == "B₁"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "BUF"), "{texts:?}");
+    // Pin numbers are drawn inside the box.
+    for n in ["1", "2", "3"] {
+        assert!(texts.iter().any(|t| t == n), "{n}: {texts:?}");
+    }
+    let names: Vec<String> = pins_of(&e, "X1").into_iter().map(|p| p.0).collect();
+    assert_eq!(names, ["Inp", "Inm", "Out"]);
+}
+
+#[test]
+fn subckt_box_spans_the_pins() {
+    // Two pins one beside the other: the box grows to 0.6 x 0.4 about
+    // their middle, the pins stay on its outline.
+    let svg = render_svg(
+        ".PS\nspice = 1\nX1: subckt2((0,0), (1,0), TWO)\n.PE\n",
+        &ExtractOptions::default(),
+    )
+    .unwrap();
+    assert!(svg.contains(">TWO<"), "{svg}");
+    let e = ex("X1: subckt2((0,0), (0,0.1), TWO)");
+    let p = pins_of(&e, "X1");
+    assert_eq!((p[0].2, p[0].3, p[1].2, p[1].3), (0.0, 0.0, 0.0, 0.1));
+}
+
+#[test]
+fn mesfet_is_a_z_card_with_jfet_pins() {
+    let body = "Z1: nmes((2,1), ZN 2, \"T₁\")
+Z2: pmes((4,1), ZP)
+line from Z1.D to (2.16,2) then to (4.16,2); line from Z2.D to (4.16,2)
+line from Z1.G to (1.6,0); line from Z2.G to (3.6,0)
+line from Z1.S to (2.16,0); line from Z2.S to (4.16,0)
+V1: vsource((5,2), (5,0), 3); line from (4.16,2) to (5,2)
+line from (1.6,0) to (5,0); ground((1.6,0))
+.model ZN NMF
+.model ZP PMF";
+    let e = ex(body);
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    let c = cards(&e);
+    assert_eq!(c[0], "Z1 n1 0 0 ZN 2");
+    assert_eq!(c[1], "Z2 n1 0 0 ZP");
+    let names: Vec<String> = pins_of(&e, "Z1").into_iter().map(|p| p.0).collect();
+    assert_eq!(names, ["D", "G", "S"]);
+    assert_eq!(e.map.elements[0].principal.as_deref(), Some("area"));
+    let texts = drawn_texts(body);
+    assert!(texts.iter().any(|t| t == "T₁") && texts.iter().any(|t| t == "ZP"));
+    let parsed = dune_netlist::parse_str("z.cir", &e.netlist);
+    assert!(parsed.is_clean(), "{:?}", parsed.diags);
 }

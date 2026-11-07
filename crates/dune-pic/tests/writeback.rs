@@ -330,3 +330,30 @@ line from (5.16,2) to (8,2); line from (2,0) to (8,0); ground((2,0)); ground((9,
     let (_, after) = rewrite(&src, "M1", Some("w"), "2u");
     assert!(after.ends_with("NM W=2u L=1u"), "{after}");
 }
+
+#[test]
+fn subckt_and_mesfet_value_spans() {
+    // The subcircuit name after the N points is the X card's value;
+    // the MESFET's area is its alterable parameter.
+    let src = fig("X1: subckt3((0,1), (0,0), (1,0.5), BUF, \"B₁\")
+Z1: nmes((3,1), ZN 2)
+line from X1.P3 to Z1.G; line from Z1.D to (3.16,2) then to (0,2) then to X1.P1
+line from X1.P2 to (0,-0.5) then to (3.16,-0.5) then to Z1.S; ground((0,-0.5))
+.model ZN NMF");
+    let e = ex(&src);
+    let x = elem(&e, "X1");
+    assert_eq!(x.value.as_ref().unwrap().text, "BUF");
+    assert!(x.params.is_empty() && x.principal.is_none());
+    let z = elem(&e, "Z1");
+    assert_eq!(z.principal.as_deref(), Some("area"));
+    let p: Vec<String> = z
+        .params
+        .iter()
+        .map(|p| format!("{}={}", p.name, p.text))
+        .collect();
+    assert_eq!(p, ["area=2"]);
+    let (_, after) = rewrite(&src, "Z1", Some("area"), "3");
+    assert!(after.ends_with("ZN 3"), "{after}");
+    let (_, after) = rewrite(&src, "X1", None, "BUF2");
+    assert!(after.ends_with("BUF2"), "{after}");
+}

@@ -20,7 +20,7 @@ pub(crate) fn principal(letter: char) -> Option<&'static str> {
         'L' => "inductance",
         'V' | 'I' => "dc",
         'E' | 'F' | 'G' | 'H' => "gain",
-        'D' | 'Q' | 'J' => "area",
+        'D' | 'Q' | 'J' | 'Z' => "area",
         _ => return None,
     })
 }
@@ -270,6 +270,13 @@ pub(crate) fn params(
             }
             keywords(chars, &toks, &["area", "temp"], &mut out);
         }
+        'Z' => {
+            // `model [area]`; a MESFET has no `temp` (`alterable`).
+            if let Some(n) = num(1) {
+                push(&mut out, "area", n);
+            }
+            keywords(chars, &toks, &["area"], &mut out);
+        }
         'M' => keywords(chars, &toks, &["w", "l", "temp"], &mut out),
         _ => {}
     }
@@ -382,6 +389,8 @@ mod tests {
             names('M', "NM W = 1e-6 L=1u"),
             [("w", "1e-6".into()), ("l", "1u".into())]
         );
+        assert_eq!(names('Z', "ZN 2 TEMP=50"), [("area", "2".into())]);
+        assert_eq!(names('Z', "ZN AREA=1.5"), [("area", "1.5".into())]);
         assert_eq!(names('X', "OPAMP"), []);
         assert_eq!(names('R', "{rval}"), []);
     }
