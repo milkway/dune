@@ -51,7 +51,9 @@
 #' Failures are signalled with [cli::cli_abort()] as conditions of class
 #' `spice_error_<kind>` and `spice_error`, where `kind` is the stage
 #' that failed: `"options"`, `"io"` (unreadable deck file), `"parse"`,
-#' `"elaborate"` (building the circuit) or `"analysis"` (and, from
+#' `"elaborate"` (building the circuit), `"analysis"` or `"pss"` (a
+#' `.pss` card whose shooting did not converge; see [spice_pss()] for
+#' the condition's `iterations` and `residuals` fields) (and, from
 #' [spice_alter()], `"alter"`). Parse errors
 #' carry the `file:line:col` of the offending card in the message; the
 #' condition's `diagnostics` field holds every diagnostic seen so far.
@@ -99,7 +101,7 @@ spice_run <- function(deck, includes = NULL, options = NULL, tmax_divisor = NULL
     message = out$diagnostics$message
   )
   if (!isTRUE(out$ok)) {
-    abort_engine(out$kind, out$message, diagnostics, call = call)
+    abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
   new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements)
 }
@@ -121,23 +123,34 @@ new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements 
   )
 }
 
-abort_engine <- function(kind, message, diagnostics, call) {
+# `failure` is the Rust side's failure list; for kind `pss` its
+# shooting history (`iterations`, `residuals`) rides on the condition.
+abort_engine <- function(kind, message, diagnostics, call, failure = NULL) {
   what <- switch(kind,
     options = "Invalid simulator options.",
     io = "Cannot read the deck.",
     parse = "The deck has errors.",
     elaborate = "Cannot build the circuit.",
     analysis = "The analysis failed.",
+    pss = "The periodic steady state did not converge.",
     alter = "Cannot alter the circuit.",
     "The simulation failed."
   )
-  cli::cli_abort(
+  extra <- list()
+  if (identical(kind, "pss") && !is.null(failure)) {
+    extra <- list(
+      iterations = as.integer(failure$iterations),
+      residuals = as.double(failure$residuals)
+    )
+  }
+  rlang::inject(cli::cli_abort(
     c(what, "x" = "{message}"),
     class = c(paste0("spice_error_", kind), "spice_error"),
     kind = kind,
     diagnostics = diagnostics,
+    !!!extra,
     call = call
-  )
+  ))
 }
 
 check_deck <- function(deck, call) {

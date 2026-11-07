@@ -49,6 +49,11 @@ SEXP savvy_ffi_option_names__impl(void) {
     return handle_result(res);
 }
 
+SEXP savvy_ffi_pss_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__freq, SEXP c_arg__tstab, SEXP c_arg__osc_node, SEXP c_arg__points, SEXP c_arg__harmonics, SEXP c_arg__max_iter, SEXP c_arg__steady_coeff, SEXP c_arg__uic) {
+    SEXP res = savvy_ffi_pss_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor, c_arg__freq, c_arg__tstab, c_arg__osc_node, c_arg__points, c_arg__harmonics, c_arg__max_iter, c_arg__steady_coeff, c_arg__uic);
+    return handle_result(res);
+}
+
 SEXP savvy_ffi_read_raw__impl(SEXP c_arg__path) {
     SEXP res = savvy_ffi_read_raw__ffi(c_arg__path);
     return handle_result(res);
@@ -143,6 +148,7 @@ SEXP savvy_SpiceSession_warm_stats__impl(SEXP self__) {
 static const R_CallMethodDef CallEntries[] = {
     {"savvy_ffi_measure__impl", (DL_FUNC) &savvy_ffi_measure__impl, 4},
     {"savvy_ffi_option_names__impl", (DL_FUNC) &savvy_ffi_option_names__impl, 0},
+    {"savvy_ffi_pss_deck__impl", (DL_FUNC) &savvy_ffi_pss_deck__impl, 15},
     {"savvy_ffi_read_raw__impl", (DL_FUNC) &savvy_ffi_read_raw__impl, 1},
     {"savvy_ffi_run_deck__impl", (DL_FUNC) &savvy_ffi_run_deck__impl, 7},
     {"savvy_ffi_sweep_deck__impl", (DL_FUNC) &savvy_ffi_sweep_deck__impl, 10},

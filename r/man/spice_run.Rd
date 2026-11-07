@@ -66,7 +66,9 @@ card in deck order, exactly as \code{spice3 -b} (and \code{dune -b}) would.
 Failures are signalled with \code{\link[cli:cli_abort]{cli::cli_abort()}} as conditions of class
 \verb{spice_error_<kind>} and \code{spice_error}, where \code{kind} is the stage
 that failed: \code{"options"}, \code{"io"} (unreadable deck file), \code{"parse"},
-\code{"elaborate"} (building the circuit) or \code{"analysis"} (and, from
+\code{"elaborate"} (building the circuit), \code{"analysis"} or \code{"pss"} (a
+\code{.pss} card whose shooting did not converge; see \code{\link[=spice_pss]{spice_pss()}} for
+the condition's \code{iterations} and \code{residuals} fields) (and, from
 \code{\link[=spice_alter]{spice_alter()}}, \code{"alter"}). Parse errors
 carry the \code{file:line:col} of the offending card in the message; the
 condition's \code{diagnostics} field holds every diagnostic seen so far.

@@ -186,7 +186,7 @@ spice_rerun <- function(session) {
     message = out$diagnostics$message
   )
   if (!isTRUE(out$ok)) {
-    abort_engine(out$kind, out$message, diagnostics, call = call)
+    abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
   new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements)
 }
@@ -343,5 +343,5 @@ abort_failure <- function(failed, call) {
     severity = failed$diagnostics$severity,
     message = failed$diagnostics$message
   )
-  abort_engine(failed$kind, failed$message, diagnostics, call = call)
+  abort_engine(failed$kind, failed$message, diagnostics, call = call, failure = failed)
 }

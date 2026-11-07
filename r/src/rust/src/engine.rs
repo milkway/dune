@@ -7,8 +7,8 @@ use std::path::Path;
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    AlterValue, Circuit, MeasureError, Measurement, Method, Options, Session, Solution, SweepParam,
-    measure_all,
+    AlterValue, Circuit, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT, PSS_TIME_PLOT,
+    PssParams, Session, Solution, SweepParam, measure_all,
 };
 use dune_netlist::{IncludeLoader, ParseOutcome, Severity};
 use dune_raw::{Data, Plot, Rawfile};
@@ -46,11 +46,15 @@ pub struct Diag {
 
 /// A failure, with the stage it happened at (the same `kind`s as the
 /// `dune-wasm` `SimError`: `options|parse|elaborate|analysis`, plus
-/// `io` for an unreadable root deck).
+/// `io` for an unreadable root deck and `pss` for a periodic steady
+/// state that did not converge).
 pub struct Failure {
     pub kind: &'static str,
     pub message: String,
     pub diagnostics: Vec<Diag>,
+    /// For kind `pss`: the shooting iterations run and the residual of
+    /// each.
+    pub residuals: Option<(usize, Vec<f64>)>,
 }
 
 impl Failure {
@@ -59,6 +63,27 @@ impl Failure {
             kind,
             message: message.into(),
             diagnostics: Vec::new(),
+            residuals: None,
+        }
+    }
+
+    /// An analysis that failed, with the diagnostics seen so far: kind
+    /// `pss` with the shooting history for a `.pss` that did not
+    /// converge, kind `analysis` otherwise.
+    fn analysis(e: dune_core::Error, diagnostics: Vec<Diag>) -> Self {
+        let message = e.to_string();
+        let (kind, residuals) = match e {
+            dune_core::Error::PssConvergence {
+                iterations,
+                residuals,
+            } => ("pss", Some((iterations, residuals))),
+            _ => ("analysis", None),
+        };
+        Failure {
+            kind,
+            message,
+            diagnostics,
+            residuals,
         }
     }
 }
@@ -121,13 +146,18 @@ impl MeasRow {
     }
 }
 
-/// The `.measure` analysis keyword of a plot.
-fn plot_analysis(plotname: &str) -> Option<&'static str> {
+/// The `.measure` analysis keyword of a plot and the plot name the
+/// engine measures it under. The `.pss` plots measure as the analyses
+/// they are shaped like: the period in time as a `.tran`, the complex
+/// harmonics (on a frequency scale) as an `.ac`.
+fn plot_analysis(plotname: &str) -> Option<(&'static str, &'static str)> {
     Some(match plotname {
-        "Transient Analysis" => "tran",
-        "AC Analysis" => "ac",
-        "SP Analysis" => "sp",
-        "DC transfer characteristic" => "dc",
+        "Transient Analysis" => ("tran", "Transient Analysis"),
+        "AC Analysis" => ("ac", "AC Analysis"),
+        "SP Analysis" => ("sp", "SP Analysis"),
+        "DC transfer characteristic" => ("dc", "DC transfer characteristic"),
+        PSS_TIME_PLOT => ("tran", "Transient Analysis"),
+        PSS_FREQ_PLOT => ("ac", "AC Analysis"),
         _ => return None,
     })
 }
@@ -140,9 +170,9 @@ pub fn measure_plot(
     scale: Option<usize>,
     specs: &[(String, String)],
 ) -> Result<Vec<MeasRow>, String> {
-    let Some(analysis) = plot_analysis(&plot.name) else {
+    let Some((analysis, measured_as)) = plot_analysis(&plot.name) else {
         return Err(format!(
-            "plot \"{}\" cannot be measured: measure limited to tran, dc, sp, or ac analysis",
+            "plot \"{}\" cannot be measured: measure limited to tran, dc, sp, ac or pss analysis",
             plot.name
         ));
     };
@@ -158,7 +188,7 @@ pub fn measure_plot(
         funcs.push(f);
     }
     let sol = Solution {
-        plotname: plot.name,
+        plotname: measured_as.to_string(),
         variables: plot
             .variables
             .into_iter()
@@ -358,6 +388,7 @@ fn prepare(
             kind: "parse",
             message: first.render(&parsed.sources),
             diagnostics,
+            residuals: None,
         });
     }
 
@@ -397,18 +428,15 @@ pub fn run(
     } = prepare(source, user, tmax_divisor)?;
 
     let (circuit, mut notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
-        kind: "elaborate",
-        message: e.to_string(),
         diagnostics: std::mem::take(&mut diagnostics),
+        ..Failure::new("elaborate", e.to_string())
     })?;
 
     let mut solutions: Vec<Solution> = Vec::new();
     for analysis in &netlist.analyses {
-        let (sols, analysis_notes) = circuit.run(analysis, &options).map_err(|e| Failure {
-            kind: "analysis",
-            message: e.to_string(),
-            diagnostics: std::mem::take(&mut diagnostics),
-        })?;
+        let (sols, analysis_notes) = circuit
+            .run(analysis, &options)
+            .map_err(|e| Failure::analysis(e, std::mem::take(&mut diagnostics)))?;
         notes.extend(analysis_notes);
         solutions.extend(sols);
     }
@@ -439,6 +467,52 @@ fn deck_measures(cards: &[dune_netlist::ir::Measure], solutions: &[Solution]) ->
         .collect()
 }
 
+/// What [`pss`] produced: [`run`]'s output with the two `.pss` plots
+/// (time, then spectrum), plus the period and the shooting history.
+pub struct PssOutput {
+    pub run: RunOutput,
+    pub period: f64,
+    pub t0: f64,
+    pub residuals: Vec<f64>,
+}
+
+/// `spice_pss()`: parse and elaborate the deck (options as in [`run`]),
+/// then run [`Circuit::pss`] with `p`. The deck's own analysis cards
+/// are not run; a shooting that does not converge is kind `pss`.
+pub fn pss(
+    source: Source<'_>,
+    user: &[(String, OptValue)],
+    tmax_divisor: Option<f64>,
+    p: &PssParams,
+) -> Result<PssOutput, Failure> {
+    let Prepared {
+        netlist,
+        options,
+        mut diagnostics,
+    } = prepare(source, user, tmax_divisor)?;
+    let (circuit, mut notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
+        diagnostics: std::mem::take(&mut diagnostics),
+        ..Failure::new("elaborate", e.to_string())
+    })?;
+    let pss = circuit
+        .pss(&options, p)
+        .map_err(|e| Failure::analysis(e, std::mem::take(&mut diagnostics)))?;
+    notes.extend(pss.notes);
+    let title = netlist.title.clone();
+    Ok(PssOutput {
+        run: RunOutput {
+            measures: Vec::new(),
+            plots: to_plots(&title, &[pss.time, pss.spectrum]),
+            title,
+            notes,
+            diagnostics,
+        },
+        period: pss.period,
+        t0: pss.t0,
+        residuals: pss.residuals,
+    })
+}
+
 /// A deck kept alive for `spice_alter()` / `spice_rerun()` (issue
 /// #12): [`dune_core::Session`] plus what every run's result carries
 /// (title, elaboration notes, parser warnings, `.measure` cards).
@@ -467,9 +541,8 @@ impl LiveSession {
             mut diagnostics,
         } = prepare(source, user, tmax_divisor)?;
         let (circuit, notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
-            kind: "elaborate",
-            message: e.to_string(),
             diagnostics: std::mem::take(&mut diagnostics),
+            ..Failure::new("elaborate", e.to_string())
         })?;
         Ok(LiveSession {
             session: Session::new(circuit, options, netlist.analyses.clone()),
@@ -538,11 +611,10 @@ impl LiveSession {
     /// Re-run every analysis card: [`run`]'s output for the altered
     /// deck, the `.measure` cards included.
     pub fn run(&mut self) -> Result<RunOutput, Failure> {
-        let (solutions, analysis_notes) = self.session.run().map_err(|e| Failure {
-            kind: "analysis",
-            message: e.to_string(),
-            diagnostics: self.diagnostics.clone(),
-        })?;
+        let (solutions, analysis_notes) = self
+            .session
+            .run()
+            .map_err(|e| Failure::analysis(e, self.diagnostics.clone()))?;
         let mut notes = self.notes.clone();
         notes.extend(analysis_notes);
         if solutions.is_empty() {
@@ -608,11 +680,7 @@ pub fn sweep(
     } else {
         dune_core::sweep_parallel(&netlist, &options, &params, rows, threads)
     }
-    .map_err(|e| Failure {
-        kind: "sweep",
-        message: e.to_string(),
-        diagnostics: Vec::new(),
-    })?;
+    .map_err(|e| Failure::new("sweep", e.to_string()))?;
     let title = netlist.title.clone();
     let runs = runs
         .into_iter()
@@ -787,6 +855,60 @@ mod tests {
             panic!("expected a sweep error");
         };
         assert_eq!(f.kind, "sweep");
+    }
+
+    const RC: &str = "rc\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.end\n";
+
+    fn rc_pss(max_iter: usize) -> Result<PssOutput, Failure> {
+        let inc = BTreeMap::new();
+        let p = PssParams {
+            freq: Some(1e3),
+            tstab: 5e-3,
+            osc_node: Some("2".into()),
+            max_iter,
+            ..PssParams::default()
+        };
+        pss(
+            Source::Text {
+                text: RC,
+                includes: &inc,
+            },
+            &[],
+            None,
+            &p,
+        )
+    }
+
+    #[test]
+    fn pss_is_the_card() {
+        let out = rc_pss(50).ok().unwrap();
+        let card = text(&RC.replace(".end", ".pss 1k 5m 2 128 10\n.end"))
+            .ok()
+            .unwrap();
+        assert_eq!(out.run.notes, card.notes);
+        assert_eq!(out.run.plots.len(), 2);
+        for ((a, sa), (b, sb)) in out.run.plots.iter().zip(&card.plots) {
+            assert_eq!((a.name.as_str(), sa), (b.name.as_str(), sb));
+            assert_eq!(a, b);
+        }
+        assert_eq!(out.period, 1e-3);
+        assert!(out.residuals.len() == 2 && out.residuals[1] <= 1.0);
+    }
+
+    #[test]
+    fn pss_failure_carries_the_history() {
+        let Err(f) = rc_pss(1) else {
+            panic!("one iteration cannot converge");
+        };
+        assert_eq!(f.kind, "pss");
+        let (n, r) = f.residuals.unwrap();
+        assert!(n == 1 && r.len() == 1 && r[0] > 1.0);
+        // The same through the card.
+        let Err(card) = text(&RC.replace(".end", ".pss 1k 5m 2 128 10 1\n.end")) else {
+            panic!("one iteration cannot converge");
+        };
+        assert_eq!(card.kind, "pss");
+        assert_eq!(card.residuals.unwrap().1, r);
     }
 
     #[test]

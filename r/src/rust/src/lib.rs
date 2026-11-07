@@ -22,7 +22,7 @@ use savvy::{
     RealSexp, Sexp, StringSexp, TypedSexp, savvy,
 };
 
-use dune_core::AlterValue;
+use dune_core::{AlterValue, PssParams};
 use engine::{Diag, Failure, MeasRow, OptValue, Source, SweepRunOutput};
 
 fn strings<I, S>(it: I) -> savvy::Result<Sexp>
@@ -271,9 +271,10 @@ fn ffi_run_deck(
 }
 
 /// `list(ok = FALSE, message, plots = NULL, notes, diagnostics, kind,
-/// measurements = NULL)`.
+/// measurements = NULL, iterations, residuals)`; the last two are the
+/// shooting history for kind `pss`, `NULL` otherwise.
 fn failure_list(f: &Failure) -> savvy::Result<Sexp> {
-    let mut out = OwnedListSexp::new(7, true)?;
+    let mut out = OwnedListSexp::new(9, true)?;
     out.set_name_and_value(0, "ok", logical(false)?)?;
     out.set_name_and_value(1, "message", string(&f.message)?)?;
     out.set_name_and_value(2, "plots", savvy::NullSexp)?;
@@ -281,26 +282,110 @@ fn failure_list(f: &Failure) -> savvy::Result<Sexp> {
     out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
     out.set_name_and_value(5, "kind", string(f.kind)?)?;
     out.set_name_and_value(6, "measurements", savvy::NullSexp)?;
+    match &f.residuals {
+        Some((iterations, residuals)) => {
+            out.set_name_and_value(
+                7,
+                "iterations",
+                OwnedRealSexp::try_from_scalar(*iterations as f64)?,
+            )?;
+            out.set_name_and_value(8, "residuals", OwnedRealSexp::try_from_slice(residuals)?)?;
+        }
+        None => {
+            out.set_name_and_value(7, "iterations", savvy::NullSexp)?;
+            out.set_name_and_value(8, "residuals", savvy::NullSexp)?;
+        }
+    }
     Ok(out.into())
 }
 
 /// A run's outcome as the list `ffi_run_deck` returns.
 fn run_list(result: Result<engine::RunOutput, Failure>) -> savvy::Result<Sexp> {
     match result {
-        Ok(r) => {
-            let mut out = OwnedListSexp::new(7, true)?;
-            out.set_name_and_value(0, "ok", logical(true)?)?;
-            out.set_name_and_value(1, "title", string(&r.title)?)?;
-            out.set_name_and_value(
-                2,
-                "plots",
-                plots_to_r(r.plots.iter().map(|(p, s)| (p, *s)))?,
+        Ok(r) => Ok(ok_list(&r, 0)?.into()),
+        Err(f) => failure_list(&f),
+    }
+}
+
+/// The 7 fields of a successful run, in a list with room for `extra`
+/// more after them.
+fn ok_list(r: &engine::RunOutput, extra: usize) -> savvy::Result<OwnedListSexp> {
+    let mut out = OwnedListSexp::new(7 + extra, true)?;
+    out.set_name_and_value(0, "ok", logical(true)?)?;
+    out.set_name_and_value(1, "title", string(&r.title)?)?;
+    out.set_name_and_value(
+        2,
+        "plots",
+        plots_to_r(r.plots.iter().map(|(p, s)| (p, *s)))?,
+    )?;
+    out.set_name_and_value(3, "notes", strings(&r.notes)?)?;
+    out.set_name_and_value(4, "diagnostics", diag_list(&r.diagnostics)?)?;
+    out.set_name_and_value(5, "kind", savvy::NullSexp)?;
+    out.set_name_and_value(6, "measurements", meas_columns(&r.measures)?)?;
+    Ok(out)
+}
+
+/// The periodic steady state of a deck (`spice_pss()`): the deck,
+/// includes, options and `tmax_divisor` as in `ffi_run_deck`; then the
+/// `.pss` parameters (`freq` 0 takes the fundamental from the sources,
+/// `osc_node` `""` for none). Returns `ffi_run_deck`'s list with the
+/// two plots plus `period`, `t0` and `residuals`, or its failure list
+/// (kind `pss` with `iterations` and `residuals` when the shooting did
+/// not converge).
+/// @noRd
+#[savvy]
+#[allow(clippy::too_many_arguments)]
+fn ffi_pss_deck(
+    deck: &str,
+    is_path: bool,
+    include_names: StringSexp,
+    include_texts: StringSexp,
+    opt_names: StringSexp,
+    opt_values: ListSexp,
+    tmax_divisor: RealSexp,
+    freq: f64,
+    tstab: f64,
+    osc_node: &str,
+    points: i32,
+    harmonics: i32,
+    max_iter: i32,
+    steady_coeff: f64,
+    uic: bool,
+) -> savvy::Result<Sexp> {
+    let includes = includes_map(&include_names, &include_texts);
+    let user = user_options(&opt_names, opt_values)?;
+    let count = |name: &str, v: i32| {
+        usize::try_from(v).map_err(|_| savvy::Error::new(format!("`{name}` must not be negative")))
+    };
+    let params = PssParams {
+        freq: (freq != 0.0).then_some(freq),
+        tstab,
+        osc_node: (!osc_node.is_empty()).then(|| osc_node.to_string()),
+        points: count("points", points)?,
+        harmonics: count("harmonics", harmonics)?,
+        max_iter: count("max_iter", max_iter)?,
+        steady_coeff,
+        uic,
+    };
+    let source = if is_path {
+        Source::Path(Path::new(deck))
+    } else {
+        Source::Text {
+            text: deck,
+            includes: &includes,
+        }
+    };
+    match engine::pss(source, &user, divisor(&tmax_divisor), &params) {
+        Ok(out) => {
+            let mut list = ok_list(&out.run, 3)?;
+            list.set_name_and_value(7, "period", OwnedRealSexp::try_from_scalar(out.period)?)?;
+            list.set_name_and_value(8, "t0", OwnedRealSexp::try_from_scalar(out.t0)?)?;
+            list.set_name_and_value(
+                9,
+                "residuals",
+                OwnedRealSexp::try_from_slice(out.residuals)?,
             )?;
-            out.set_name_and_value(3, "notes", strings(&r.notes)?)?;
-            out.set_name_and_value(4, "diagnostics", diag_list(&r.diagnostics)?)?;
-            out.set_name_and_value(5, "kind", savvy::NullSexp)?;
-            out.set_name_and_value(6, "measurements", meas_columns(&r.measures)?)?;
-            Ok(out.into())
+            Ok(list.into())
         }
         Err(f) => failure_list(&f),
     }

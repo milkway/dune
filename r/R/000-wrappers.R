@@ -51,6 +51,18 @@ NULL
   .Call(savvy_ffi_option_names__impl)
 }
 
+#' The periodic steady state of a deck (`spice_pss()`): the deck,
+#' includes, options and `tmax_divisor` as in `ffi_run_deck`; then the
+#' `.pss` parameters (`freq` 0 takes the fundamental from the sources,
+#' `osc_node` `""` for none). Returns `ffi_run_deck`'s list with the
+#' two plots plus `period`, `t0` and `residuals`, or its failure list
+#' (kind `pss` with `iterations` and `residuals` when the shooting did
+#' not converge).
+#' @noRd
+`ffi_pss_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `freq`, `tstab`, `osc_node`, `points`, `harmonics`, `max_iter`, `steady_coeff`, `uic`) {
+  .Call(savvy_ffi_pss_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `freq`, `tstab`, `osc_node`, `points`, `harmonics`, `max_iter`, `steady_coeff`, `uic`)
+}
+
 #' Read a rawfile: `list(plots, warnings)`. The 3f5 reader takes the
 #' first vector of each plot as its scale; so do we.
 #' @noRd
