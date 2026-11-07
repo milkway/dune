@@ -3,6 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+    # site/ has its own pages workflow; without this, a site-only push
+    # starts a CI run whose concurrency group cancels the previous one
+    # mid-flight, and the cancelled run paints the badge "failing".
+    paths-ignore:
+      - "site/**"
   pull_request:
   workflow_dispatch:
 
