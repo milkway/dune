@@ -1,8 +1,11 @@
 name: CI
 
+# No per-push CI: every push is validated locally first (fmt, clippy,
+# tests, oracle --ci, wasm), and private-repo minutes are metered.
+# Run on demand (Actions tab / `gh workflow run CI`) — mainly for the
+# x86_64 oracle pass — and on pull requests, before a release.
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
   pull_request:
 
 # A newer push supersedes the queued/running CI of older commits.
