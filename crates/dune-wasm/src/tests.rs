@@ -206,6 +206,52 @@ fn extract_pic_rc_shape() {
     assert!(v["map"]["nets"][0]["shapes"].is_array());
     // Ground net draws its wire and ground symbol.
     assert!(!pic.map.nets[0].shapes.is_empty());
+    // Write-back spans (issue #17) and the SVG frame (issue #19).
+    let r1 = &v["map"]["elements"][1];
+    assert_eq!(r1["value"]["text"], "1k");
+    assert_eq!(
+        r1["value"]["span"],
+        serde_json::json!({"line": 6, "col": 25, "end_line": 6, "end_col": 27})
+    );
+    assert_eq!(r1["principal"], "resistance");
+    assert_eq!(r1["params"][0]["name"], "resistance");
+    let v1 = &v["map"]["elements"][0];
+    assert_eq!(v1["params"][0]["name"], "pulse");
+    assert_eq!(v1["params"][0]["text"], "PULSE(0 5 0 1u 1u 10m 20m)");
+    let keys: Vec<&str> = v["map"]["canvas"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, ["h", "origin", "rescale", "w"]);
+    assert_eq!(v["map"]["canvas"]["origin"].as_array().unwrap().len(), 2);
+    // A pin through the documented formula lands on the SVG's numbers.
+    let c = &pic.map.canvas;
+    let p = &pic.map.elements[1].pins[0];
+    let (sx, sy) = (
+        (p.x + c.origin[0]) * 96.0,
+        (c.h - (p.y + c.origin[1])) * 96.0,
+    );
+    let svg = render_pic_svg(&corpus_pic("rc.pic"), None).unwrap();
+    let pt = format!("{},{}", fmt6(sx), fmt6(sy));
+    assert!(svg.contains(&pt), "{pt}");
+    // No value span: a `K`, a wrapper.
+    let src = "spice = 1\nL1: inductor((0,0),(1,0),1m); L2: inductor((1,0),(2,0),1m)\n\
+               K1: coupling(L1, L2, 0.5); ground((0,0)); ground((2,0))\n";
+    let k: serde_json::Value = serde_json::from_str(&extract_pic_json(src, None).unwrap()).unwrap();
+    assert!(k["map"]["elements"][2]["value"].is_null());
+    assert!(k["map"]["elements"][2]["principal"].is_null());
+    assert_eq!(k["map"]["elements"][2]["params"], serde_json::json!([]));
+}
+
+/// rpic's SVG number format (six decimals, no trailing zeros).
+fn fmt6(x: f64) -> String {
+    let mut s = format!("{:.6}", (x * 1e6).round() / 1e6);
+    while s.contains('.') && (s.ends_with('0') || s.ends_with('.')) {
+        s.pop();
+    }
+    s
 }
 
 /// rc.pic end to end: extract, run the `.tran`, check the RC charge

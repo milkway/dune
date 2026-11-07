@@ -258,9 +258,95 @@ export interface PicExtraction {
  */
 export interface OverlayMap {
   /** In card order; ids `s{start}` … `s{end-1}`. */
-  elements: { refdes: string; shapes: { start: number; end: number }; pins: OverlayPin[] }[];
+  elements: OverlayElement[];
   /** Named nets (`0` first), with their wires, dots and ground symbols. */
   nets: { name: string; shapes: number[] }[];
+  /** The frame of {@link renderPic}'s SVG: maps pins to its user units. */
+  canvas: OverlayCanvas;
+}
+
+/** One emitted element (card order). */
+export interface OverlayElement {
+  refdes: string;
+  shapes: { start: number; end: number };
+  pins: OverlayPin[];
+  /**
+   * Where the element's value/model argument is in the USER's source — the
+   * text to replace to write a new value back (`1k`, `DC 5 AC 1`,
+   * `SIN(0 1 1k)`; a quoted argument gives the range inside the quotes).
+   * Unchanged by a display text (the argument after the value). `null` when
+   * there is no span to trust: no value argument, a `K` (`coupling`), an
+   * inline block, or an element whose outermost call is a user wrapper macro
+   * (its value comes from the drawing or from a wrapper argument).
+   */
+  value: OverlayValueSpan | null;
+  /**
+   * The alterable parameters spelled inside `value`, in source order, named
+   * as `Session.alter(refdes, param, …)` takes them:
+   * - `V`/`I`: `dc`, `acmag`, `acphase` — the number only (`AC 1 90` →
+   *   `acmag` = `1`, `acphase` = `90`); `pulse`, `sin`, `exp`, `pwl`, `sffm`,
+   *   `trnoise`, `trrandom` — the whole spelling, keyword and parentheses
+   *   included (`PULSE(0 5 0 1u 1u 10m 20m)`);
+   * - `R`/`C`/`L`/`E`/`G`: the principal (leading number); `ic` (`IC=`, C/L);
+   * - `F`/`H`: `gain` (`Vname gain`); `D`/`Q`/`J`: `area`, `temp`;
+   *   `M`: `w`, `l`, `temp` (`W=…`).
+   * Only what is spelled is listed (no `DC` field → no `dc` entry); empty when
+   * `value` is `null`.
+   */
+  params: OverlayParamSpan[];
+  /**
+   * The parameter `Session.alter(refdes, value)` changes: `resistance`,
+   * `capacitance`, `inductance`, `dc` (V/I), `gain` (E/F/G/H), `area`
+   * (D/Q/J); `null` for letters without one (M, S, W, X, T, O, K).
+   */
+  principal: string | null;
+}
+
+/**
+ * A range of the user's figure source: 1-based, end exclusive, like the
+ * diagnostics. Columns count Unicode **code points**, not UTF-16 units:
+ * index a line with `Array.from(line)` (or a code-point walk), not
+ * `line[i]`, when it may hold characters outside the BMP. Lines split at `\n`.
+ * A value split by `\` continuations spans lines (`end_line > line`).
+ */
+export interface SourceRange {
+  line: number;
+  col: number;
+  end_line: number;
+  end_col: number;
+}
+
+export interface OverlayValueSpan {
+  span: SourceRange;
+  /** The source text in `span`, verbatim (`\` continuations kept). */
+  text: string;
+}
+
+export interface OverlayParamSpan {
+  /** `alter` parameter name: `dc`, `acmag`, `acphase`, `pulse`, `resistance`, … */
+  name: string;
+  span: SourceRange;
+  text: string;
+}
+
+/**
+ * The page frame of {@link renderPic}'s SVG (rpic's scene `canvas`, at full
+ * precision). A pin `(x, y)` (pic inches, y up) is at SVG user units
+ *
+ *     sx = (x + origin[0]) * 96
+ *     sy = (h - (y + origin[1])) * 96
+ *
+ * exactly; the `viewBox` is `0 0 w*96 h*96`. Note `+ origin`, and that
+ * `rescale` does not enter: pins are already past the whole-picture rescale.
+ */
+export interface OverlayCanvas {
+  /** Page width and height in inches, margins and stroke padding included. */
+  w: number;
+  h: number;
+  /** The pic origin, in inches from the page's lower-left corner. */
+  origin: [number, number];
+  /** Whole-picture rescale (`.PS <width>`, `maxpswid`/`maxpsht`); 1 if none. Informational. */
+  rescale: number;
 }
 
 /**
@@ -273,7 +359,7 @@ export interface OverlayPin {
   name: string;
   /** The net it is on (a `name` of {@link OverlayMap.nets}). */
   net: string;
-  /** Terminal point in pic inches, the frame of rpic's scene (y up). */
+  /** Terminal point in pic inches, the frame of rpic's scene (y up); {@link OverlayMap.canvas} maps it to the SVG. */
   x: number;
   y: number;
 }

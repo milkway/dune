@@ -48,9 +48,10 @@ mod schema;
 mod session;
 
 pub use schema::{
-    Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, MeasurementJson,
-    NetOverlayJson, OverlayMapJson, PicJson, PicRunJson, PicSimOptions, PlotJson, RawfileJson,
-    RenderOptionsJson, ShapeRangeJson, SimError, SimOptions, VariableJson,
+    CanvasJson, Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, MeasurementJson,
+    NetOverlayJson, OverlayMapJson, ParamSpanJson, PicJson, PicRunJson, PicSimOptions, PlotJson,
+    RawfileJson, RenderOptionsJson, ShapeRangeJson, SimError, SimOptions, SourceRangeJson,
+    ValueSpanJson, VariableJson,
 };
 
 pub use overrides::Overrides;

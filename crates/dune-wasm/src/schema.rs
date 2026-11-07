@@ -452,9 +452,14 @@ pub struct PicJson {
 ///   "elements": [ { "refdes": "R1", "shapes": { "start": 12, "end": 19 },
 ///                   "pins": [ { "name": "P", "net": "in", "x": 0, "y": 1.5 },
 ///                             { "name": "N", "net": "out", "x": 2.5, "y": 1.5 } ] }, ... ],
-///   "nets": [ { "name": "0", "shapes": [ 30, 31, 32 ] }, { "name": "out", "shapes": [ 27 ] }, ... ]
+///   "nets": [ { "name": "0", "shapes": [ 30, 31, 32 ] }, { "name": "out", "shapes": [ 27 ] }, ... ],
+///   "canvas": { "w": 3.38, "h": 2.20, "origin": [0.62, 0.35], "rescale": 1 }
 /// }
 /// ```
+///
+/// Each element also carries `value`, `params` and `principal` (see
+/// [`ElementOverlayJson`]), for editors that write a value back into
+/// the figure source.
 ///
 /// Shape numbers are indices into the drawing rpic compiles from the
 /// figure **with the dune prelude** (`spice.pic` after rpic's circuit
@@ -477,18 +482,102 @@ pub struct PicJson {
 ///   and ground symbols, sorted (named places draw nothing, so a net
 ///   that is only pins has an empty list). `name` is the node name in
 ///   the netlist, i.e. the `x` of the `v(x)` result vectors.
+/// * `canvas` — the frame of `render_pic`'s SVG
+///   ([`dune_pic::CanvasOverlay`]): a pin `(x, y)` is at SVG user units
+///   `sx = (x + origin[0]) · 96`, `sy = (h − (y + origin[1])) · 96`,
+///   exactly (`viewBox` = `0 0 w·96 h·96`; `rescale` is informational,
+///   the pins already carry it).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct OverlayMapJson {
     pub elements: Vec<ElementOverlayJson>,
     pub nets: Vec<NetOverlayJson>,
+    #[serde(default)]
+    pub canvas: CanvasJson,
 }
 
-/// One element of [`OverlayMapJson`].
+/// [`OverlayMapJson::canvas`] (mirrors [`dune_pic::CanvasOverlay`]).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CanvasJson {
+    pub w: f64,
+    pub h: f64,
+    pub origin: [f64; 2],
+    pub rescale: f64,
+}
+
+impl Default for CanvasJson {
+    fn default() -> Self {
+        let c = dune_pic::CanvasOverlay::default();
+        CanvasJson {
+            w: c.w,
+            h: c.h,
+            origin: c.origin,
+            rescale: c.rescale,
+        }
+    }
+}
+
+/// One element of [`OverlayMapJson`] (mirrors
+/// [`dune_pic::ElementOverlay`]).
+///
+/// * `value` — `{ "span": SourceRangeJson, "text": "1k" }`: where the
+///   value/model argument is in the user's source, `null` when there is
+///   no trustworthy one (no value argument, a `K`, an inline block, a
+///   wrapper macro's call). A display text never moves it.
+/// * `params` — `[{ "name": "acmag", "span": …, "text": "1" }, …]`:
+///   the alterable parameters spelled inside `value`, named as
+///   `alter(refdes, param, …)` takes them; a scalar covers its number
+///   only, a transient function (`pulse`, `sin`, …) its whole spelling.
+/// * `principal` — the parameter `alter(refdes, value)` changes
+///   (`resistance`, `capacitance`, `inductance`, `dc`, `gain`, `area`),
+///   `null` for letters without one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ElementOverlayJson {
     pub refdes: String,
     pub shapes: ShapeRangeJson,
     pub pins: Vec<PinOverlayJson>,
+    #[serde(default)]
+    pub value: Option<ValueSpanJson>,
+    #[serde(default)]
+    pub params: Vec<ParamSpanJson>,
+    #[serde(default)]
+    pub principal: Option<String>,
+}
+
+/// A range of the user's figure source (mirrors
+/// [`dune_pic::PicRange`]): 1-based, end exclusive, columns in chars
+/// (Unicode code points, not UTF-16 units).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRangeJson {
+    pub line: u32,
+    pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+}
+
+/// [`ElementOverlayJson::value`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValueSpanJson {
+    pub span: SourceRangeJson,
+    pub text: String,
+}
+
+/// One entry of [`ElementOverlayJson::params`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParamSpanJson {
+    pub name: String,
+    pub span: SourceRangeJson,
+    pub text: String,
+}
+
+impl From<&dune_pic::PicRange> for SourceRangeJson {
+    fn from(r: &dune_pic::PicRange) -> Self {
+        SourceRangeJson {
+            line: r.line,
+            col: r.col,
+            end_line: r.end_line,
+            end_col: r.end_col,
+        }
+    }
 }
 
 /// One terminal of an [`ElementOverlayJson`] (mirrors
@@ -537,6 +626,20 @@ impl From<&OverlayMap> for OverlayMapJson {
                             y: p.y,
                         })
                         .collect(),
+                    value: e.value.as_ref().map(|v| ValueSpanJson {
+                        span: (&v.span).into(),
+                        text: v.text.clone(),
+                    }),
+                    params: e
+                        .params
+                        .iter()
+                        .map(|p| ParamSpanJson {
+                            name: p.name.clone(),
+                            span: (&p.span).into(),
+                            text: p.text.clone(),
+                        })
+                        .collect(),
+                    principal: e.principal.clone(),
                 })
                 .collect(),
             nets: m
@@ -547,6 +650,12 @@ impl From<&OverlayMap> for OverlayMapJson {
                     shapes: n.shapes.clone(),
                 })
                 .collect(),
+            canvas: CanvasJson {
+                w: m.canvas.w,
+                h: m.canvas.h,
+                origin: m.canvas.origin,
+                rescale: m.canvas.rescale,
+            },
         }
     }
 }

@@ -40,6 +40,12 @@ const r1 = ex.map.elements[1];
 assert.deepEqual(r1.pins.map((p) => [p.name, p.net]), [['P', 'Vin'], ['N', 'Vout']]);
 assert.ok(Math.abs(r1.pins[0].x) < 1e-9 && Math.abs(r1.pins[0].y - 1.5) < 1e-9);
 assert.ok(Math.abs(r1.pins[1].x - 2.5) < 1e-9 && Math.abs(r1.pins[1].y - 1.5) < 1e-9);
+// Write-back span of R1's value (`R1: resistor(Vin, Vout, 1k)`, line 6).
+assert.equal(r1.value.text, '1k');
+assert.deepEqual(r1.value.span, { line: 6, col: 25, end_line: 6, end_col: 27 });
+assert.equal(r1.principal, 'resistance');
+assert.equal(ex.map.elements[0].params[0].name, 'pulse');
+assert.equal(typeof ex.map.canvas.origin[0], 'number');
 const netNames = new Set(ex.map.nets.map((n) => n.name));
 assert.ok(ex.map.elements.every((e) => e.pins.every((p) => netNames.has(p.net))));
 
@@ -90,6 +96,14 @@ for (const e of ex.map.elements) {
   for (let n = e.shapes.start; n < e.shapes.end; n++) assert.ok(svg.includes(`id="s${n}"`), `s${n}`);
 }
 for (const n of ex.map.nets.flatMap((x) => x.shapes)) assert.ok(svg.includes(`id="s${n}"`), `net s${n}`);
+// The canvas maps R1.P onto the SVG (a stroke endpoint, six decimals).
+{
+  const { origin, h } = ex.map.canvas;
+  const f = (v) => String(Math.round(v * 1e6) / 1e6);
+  const p = r1.pins[0];
+  const pt = `${f((p.x + origin[0]) * 96)},${f((h - (p.y + origin[1])) * 96)}`;
+  assert.ok(svg.includes(pt), pt);
+}
 assert.match(renderPic('.PS\nR1: resistor((0,0),(1,0),1k)\n.PE\n'), /<svg/, 'unmarked figures render');
 assert.throws(() => renderPic('.PS\nline from (0,0) to\n.PE\n'), (e) => e.kind === 'pic' && e.diagnostics[0].kind === 'compile');
 assert.throws(() => renderPic(rc, { snap: 1 }), (e) => e.kind === 'options');
