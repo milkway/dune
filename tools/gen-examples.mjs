@@ -8,7 +8,8 @@
 // Deterministic: no dates, no randomness, fixed ordering — two runs on
 // the same tree write the same bytes. Every number on the page comes
 // from `simulate`/`simulatePic`; nothing is hand-written.
-import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -44,11 +45,18 @@ for (const l of read(join(CORPUS, 'XFAIL')).split('\n')) {
   xfail.set(stem, { plotname, margin, flags, reason: rest.join('|') });
 }
 
+/** Tracked files only: the page documents the committed corpus (what CI
+ *  validates), not work in progress sitting in the working tree. */
+const tracked = (pattern) =>
+  execFileSync('git', ['ls-files', '-z', '--', pattern], { cwd: ROOT })
+    .toString()
+    .split('\0')
+    .filter(Boolean);
+
 const cirs = (dir) =>
-  readdirSync(join(CORPUS, dir))
-    .filter((f) => f.toLowerCase().endsWith('.cir'))
-    .sort()
-    .map((f) => `${dir}/${f}`);
+  tracked(`corpus/${dir}/*.cir`)
+    .map((p) => p.slice('corpus/'.length))
+    .sort();
 
 const regress = cirs('regress');
 const groups = [
@@ -647,6 +655,23 @@ function picHtml(file) {
 
 const sections = [];
 const toc = [];
+
+// Figures first: they carry the full story (source, schematic, netlist,
+// simulation), so they open the page.
+const picFiles = tracked('corpus/pic/*.pic')
+  .map((p) => p.split('/').pop())
+  .filter((f) => f !== 'spice.pic')
+  .sort();
+const picItems = picFiles.map(picHtml);
+stats.byGroup.pic = picItems.length;
+const picGroup = { id: 'pic', name: 'Figures (pic)' };
+toc.push({ g: picGroup, items: picItems });
+sections.push(
+  `<section id="pic"><div class="wrap"><h2>Figures (pic) <span class="count">${picItems.length}</span></h2>` +
+    `<p class="sub">Schematics in rpic's pic language (<code>corpus/pic/</code>): the source, the figure Dune renders from it, the netlist its extractor derives, and the simulation of that netlist. <code>corpus/pic/spice.pic</code> is the prelude itself, not a figure.</p>` +
+    `${picItems.map((i) => i.html).join('')}</div></section>`,
+);
+
 groups.forEach((g, gi) => {
   const items = g.files.filter((f) => !skip.has(f)).map((f) => exampleHtml(f, g.id));
   stats.byGroup[g.id] = items.length;
@@ -656,23 +681,10 @@ groups.forEach((g, gi) => {
     .join('');
   toc.push({ g, items });
   sections.push(
-    `<section id="${g.id}"${gi % 2 ? ' class="alt"' : ''}><div class="wrap"><h2>${esc(g.name)} <span class="count">${items.length}</span></h2>` +
+    `<section id="${g.id}"${gi % 2 ? '' : ' class="alt"'}><div class="wrap"><h2>${esc(g.name)} <span class="count">${items.length}</span></h2>` +
       `<p class="sub">${esc(g.blurb)}</p>${skipNote}${items.map((i) => i.html).join('')}</div></section>`,
   );
 });
-
-const picFiles = readdirSync(join(CORPUS, 'pic'))
-  .filter((f) => f.endsWith('.pic') && f !== 'spice.pic')
-  .sort();
-const picItems = picFiles.map(picHtml);
-stats.byGroup.pic = picItems.length;
-const picGroup = { id: 'pic', name: 'Figures (pic)' };
-toc.push({ g: picGroup, items: picItems });
-sections.push(
-  `<section id="pic"${groups.length % 2 ? ' class="alt"' : ''}><div class="wrap"><h2>Figures (pic) <span class="count">${picItems.length}</span></h2>` +
-    `<p class="sub">Schematics in rpic's pic language (<code>corpus/pic/</code>): the source, the figure Dune renders from it, the netlist its extractor derives, and the simulation of that netlist. <code>corpus/pic/spice.pic</code> is the prelude itself, not a figure.</p>` +
-    `${picItems.map((i) => i.html).join('')}</div></section>`,
-);
 
 const indexHtml = read(join(ROOT, 'site/index.html'));
 const baseCss = indexHtml.match(/<style>([\s\S]*?)<\/style>/)[1];
@@ -730,7 +742,7 @@ const extraCss = `
   }
 `;
 
-const navLinks = [...groups, picGroup].map((g) => `<a href="#${g.id}">${esc(g.name.split(' ')[0])}</a>`).join('\n      ');
+const navLinks = [picGroup, ...groups].map((g) => `<a href="#${g.id}">${esc(g.name.split(' ')[0])}</a>`).join('\n      ');
 const tocHtml = toc
   .map(
     ({ g, items }) =>
