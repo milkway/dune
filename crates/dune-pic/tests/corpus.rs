@@ -575,3 +575,264 @@ fn rtlinv_figure_simulates_like_the_berkeley_deck() {
         ],
     );
 }
+
+// --- 4th wave: figures of the basic/ decks, rca3040 and device probes --------
+
+/// Every column of every plot of the deck at `deck` (relative to
+/// `corpus/`) against the figure's, the deck's node names translated
+/// through `nodes` (deck node, figure place); currents and anything
+/// unmapped keep their name. The figures keep the deck's card order
+/// and pin order, so the matrices are the same and the results agree
+/// to roundoff (in practice: bit for bit). Returns the largest
+/// absolute difference seen.
+fn same_as_deck(name: &str, deck: &str, nodes: &[(&str, &str)]) -> f64 {
+    let fig = check(name);
+    let deck = run_deck(&corpus("").join("..").join(deck));
+    assert_eq!(fig.len(), deck.len(), "{name}: plot count");
+    let rename = |v: &str| -> String {
+        if let Some(n) = v.strip_prefix("v(").and_then(|r| r.strip_suffix(')'))
+            && let Some((_, p)) = nodes.iter().find(|(d, _)| d.eq_ignore_ascii_case(n))
+        {
+            return format!("v({p})");
+        }
+        v.to_string()
+    };
+    let mut worst = 0.0f64;
+    for (f, d) in fig.iter().zip(&deck) {
+        assert_eq!(f.plotname, d.plotname, "{name}");
+        assert_eq!(
+            f.variables.len(),
+            d.variables.len(),
+            "{name}: {}",
+            f.plotname
+        );
+        for (dv, _) in &d.variables {
+            let fv = rename(dv);
+            let pairs: Vec<(f64, f64)> = match (d.column(dv), f.column(&fv)) {
+                (Some(a), Some(b)) => {
+                    assert_eq!(a.len(), b.len(), "{name} {}: {dv}", f.plotname);
+                    a.iter().copied().zip(b.iter().copied()).collect()
+                }
+                _ => {
+                    let a = d.column_complex(dv).unwrap();
+                    let b = f.column_complex(&fv).unwrap_or_else(|| {
+                        panic!("{name} {}: no `{fv}` for deck `{dv}`", f.plotname)
+                    });
+                    assert_eq!(a.len(), b.len(), "{name} {}: {dv}", f.plotname);
+                    a.iter()
+                        .zip(b)
+                        .flat_map(|(x, y)| [(x.re, y.re), (x.im, y.im)])
+                        .collect()
+                }
+            };
+            for (k, (x, y)) in pairs.into_iter().enumerate() {
+                assert!(
+                    (x - y).abs() <= 1e-9 * x.abs().max(1e-3),
+                    "{name} {} {dv} vs {fv} [{k}]: {x} vs {y}",
+                    f.plotname
+                );
+                worst = worst.max((x - y).abs());
+            }
+        }
+    }
+    worst
+}
+
+#[test]
+fn divider_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck(
+        "divider",
+        "basic/divider.cir",
+        &[("1", "vs"), ("2", "vdiv"), ("3", "vi")],
+    );
+    assert_eq!(worst, 0.0);
+    let op = &check("divider")[0];
+    assert!((col(op, "v(vdiv)")[0] - 10.0 / 3.0).abs() < 1e-9);
+    assert!((col(op, "v(vi)")[0] - 4.7).abs() < 1e-9);
+}
+
+#[test]
+fn depsrc_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck(
+        "depsrc",
+        "basic/depsrc.cir",
+        &[
+            ("1", "vc"),
+            ("2", "ve"),
+            ("3", "vg"),
+            ("4", "vf"),
+            ("5", "vh"),
+        ],
+    );
+    assert_eq!(worst, 0.0);
+    // i(v1) = -2 mA; E: 2.5 * 2; G: 1m * 2 into 2k; F: 10 i(v1) into
+    // 100; H: -500 i(v1).
+    let op = &check("depsrc")[0];
+    for (node, want) in [
+        ("v(ve)", 5.0),
+        ("v(vg)", 4.0),
+        ("v(vf)", -2.0),
+        ("v(vh)", 1.0),
+    ] {
+        let got = col(op, node)[0];
+        assert!((got - want).abs() < 1e-9, "{node} = {got}");
+    }
+}
+
+#[test]
+fn dc2src_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck(
+        "dc2src",
+        "basic/dc2src.cir",
+        &[("1", "v1n"), ("2", "v2n"), ("3", "vx"), ("4", "vout")],
+    );
+    assert_eq!(worst, 0.0);
+    // Millman: v(vx) = (2 v1 + v2) / 5, v(vout) = -1.5 v(vx).
+    let s = &check("dc2src")[0];
+    let (v1, v2) = (col(s, "v(v1n)"), col(s, "v(v2n)"));
+    assert_eq!(v1.len(), 5 * 5);
+    for k in 0..v1.len() {
+        let vx = (2.0 * v1[k] + v2[k]) / 5.0;
+        assert!((col(s, "v(vx)")[k] - vx).abs() < 1e-9);
+        assert!((col(s, "v(vout)")[k] + 1.5 * vx).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn acrlc_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck(
+        "acrlc",
+        "basic/acrlc.cir",
+        &[
+            ("1", "in"),
+            ("2", "pri"),
+            ("3", "sec"),
+            ("4", "vc"),
+            ("5", "vout"),
+        ],
+    );
+    assert_eq!(worst, 0.0);
+}
+
+#[test]
+fn lck_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck(
+        "lck",
+        "basic/lck.cir",
+        &[("1", "vs"), ("2", "vl"), ("3", "sec")],
+    );
+    assert_eq!(worst, 0.0);
+    // At dc the coils short and the capacitors open.
+    let op = &check("lck")[0];
+    assert!((col(op, "v(vl)")[0] - 3.0).abs() < 1e-9);
+    assert!(col(op, "v(sec)")[0].abs() < 1e-9);
+}
+
+#[test]
+fn truic_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck("truic", "basic/truic.cir", &[("1", "vc"), ("2", "vl")]);
+    assert_eq!(worst, 0.0);
+    // uic starts from the stored state (C1 at 2 V, L1 at 1 mA); as in
+    // ngspice, no t = 0 point is emitted, so the first one sits just
+    // off it.
+    let s = &check("truic")[0];
+    assert!(col(s, "time")[0] > 0.0);
+    assert!((col(s, "v(vc)")[0] - 2.0).abs() < 1e-3);
+    assert!((col(s, "i(l1)")[0] - 1e-3).abs() < 1e-4);
+}
+
+#[test]
+fn trrlc_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck(
+        "trrlc",
+        "basic/trrlc.cir",
+        &[("1", "in"), ("2", "vr"), ("3", "vout")],
+    );
+    assert_eq!(worst, 0.0);
+}
+
+#[test]
+fn trpwl_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck(
+        "trpwl",
+        "basic/trpwl.cir",
+        &[("1", "in1"), ("2", "out1"), ("3", "in2"), ("4", "out2")],
+    );
+    assert_eq!(worst, 0.0);
+}
+
+#[test]
+fn acdiode_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck("acdiode", "basic/acdiode.cir", &[("1", "va")]);
+    assert_eq!(worst, 0.0);
+}
+
+#[test]
+fn dfwd_figure_simulates_like_the_basic_deck() {
+    let worst = same_as_deck("dfwd", "basic/dfwd.cir", &[("1", "va"), ("2", "vk")]);
+    assert_eq!(worst, 0.0);
+}
+
+#[test]
+fn jfet_amp_figure_simulates_like_the_regress_deck() {
+    let worst = same_as_deck(
+        "jfet_amp",
+        "regress/jfet_amp.cir",
+        &[
+            ("1", "vp"),
+            ("2", "vg"),
+            ("3", "vd"),
+            ("4", "vs"),
+            ("5", "in"),
+        ],
+    );
+    assert_eq!(worst, 0.0);
+}
+
+#[test]
+fn mos3_inv_figure_simulates_like_the_regress_deck() {
+    let worst = same_as_deck(
+        "mos3_inv",
+        "regress/mos3_inv.cir",
+        &[
+            ("1", "vp"),
+            ("2", "in"),
+            ("3", "out1"),
+            ("4", "out2"),
+            ("5", "ain"),
+            ("6", "vg"),
+            ("7", "vd"),
+            ("8", "vs"),
+        ],
+    );
+    assert_eq!(worst, 0.0);
+}
+
+#[test]
+fn rca3040_figure_simulates_like_the_berkeley_deck() {
+    let worst = same_as_deck(
+        "rca3040",
+        "spice3f5/examples/rca3040.cir",
+        &[
+            ("1", "in"),
+            ("2", "vp"),
+            ("3", "vn"),
+            ("5", "ba"),
+            ("6", "bb"),
+            ("7", "tail"),
+            ("8", "bias"),
+            ("9", "vt"),
+            ("10", "ca"),
+            ("11", "cb"),
+            ("12", "vcas"),
+            ("13", "vd"),
+            ("14", "oa"),
+            ("15", "ob"),
+            ("16", "out"),
+            ("17", "outb"),
+            ("30", "b1"),
+            ("31", "b2"),
+        ],
+    );
+    assert_eq!(worst, 0.0);
+}

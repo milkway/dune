@@ -164,7 +164,8 @@ fn canvas_matches_rpic_scene_header() {
 fn canvas_of_every_corpus_figure() {
     for f in [
         "bandpass", "bjtamp", "ccprobe", "cmosinv", "diffpair", "mos4bias", "opamp", "rc", "rect",
-        "rlc", "rtlinv", "tline", "tuned", "vcamp",
+        "rlc", "rtlinv", "tline", "tuned", "vcamp", "acdiode", "acrlc", "dc2src", "depsrc", "dfwd",
+        "divider", "jfet_amp", "lck", "mos3_inv", "rca3040", "trpwl", "trrlc", "truic",
     ] {
         let src = corpus(&format!("{f}.pic"));
         let e = ex(&src);
