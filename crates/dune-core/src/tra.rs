@@ -268,6 +268,10 @@ impl TraI {
 }
 
 impl Device for TraI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     /// `TRAinfo` has no `DEVdisto`: the line is linear.
     fn disto_setup(&mut self, _ctx: &DistoSetupCtx) -> Result<(), &'static str> {
         Ok(())
@@ -361,8 +365,8 @@ impl Device for TraI {
             },
             _ => {}
         }
-        ctx.rhs[self.br1] += self.input1;
-        ctx.rhs[self.br2] += self.input2;
+        ctx.add_rhs(self.br1, self.input1);
+        ctx.add_rhs(self.br2, self.input2);
     }
 
     /// `TRAtrunc`: when a wave's slope changes, do not step past the

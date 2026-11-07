@@ -13,7 +13,8 @@ default = ["solver-faer"]
 # `p3-sparse` branch until xingo is published (D-0013).
 solver-faer = ["dep:faer"]
 # `sweep_parallel`: the runs of a sweep over a rayon thread pool
-# (issue #10). Native only — off by default and never enabled for
+# (issue #10); `Options::load_threads`: the per-iteration device load
+# over one (issue #9, lever 1). Native only — off by default and never enabled for
 # wasm32 (dune-wasm runs `sweep` sequentially).
 parallel = ["dep:rayon"]
 
@@ -28,3 +29,7 @@ faer = { version = "0.24", optional = true, default-features = false, features =
     "std",
     "linalg",
 ] }
+
+[[example]]
+name = "parload_bench"
+required-features = ["parallel"]

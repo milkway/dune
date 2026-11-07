@@ -321,6 +321,10 @@ fn junction_charge(
 }
 
 impl crate::devices::Device for Bsim3I {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         let (d, g, s, b) = (self.drain, self.gate, self.source, self.bulk);
         let (dp, sp) = (self.d_p, self.s_p);
@@ -407,9 +411,13 @@ impl crate::devices::Device for Bsim3I {
     /// bypass (`NOBYPASS`-equivalent, like every Dune device).
     #[allow(clippy::too_many_lines)]
     fn load(&mut self, ctx: &mut LoadCtx) {
-        let model = Arc::clone(&self.model);
-        let mt = Arc::clone(&self.mt);
-        let pp = Arc::clone(&self.pp);
+        // Borrow the shared model cards, never clone the `Arc`s: a
+        // refcount bump per load is an atomic on a cache line every
+        // instance of the model shares, which serializes the parallel
+        // load (issue #9).
+        let model: &Bsim3Model = &self.model;
+        let mt: &Bsim3MTemp = &self.mt;
+        let pp: &Bsim3Size = &self.pp;
         let typ = model.type_();
         let st = self.st;
 
@@ -491,7 +499,7 @@ impl crate::devices::Device for Bsim3I {
 
         // Source/drain junction diode DC model.
         let nvtm = mt.vtm * model.jct_emission_coeff;
-        let (src_sat, drn_sat) = sat_currents(&mt, &self.g);
+        let (src_sat, drn_sat) = sat_currents(mt, &self.g);
         (self.gbs, self.cbs) = junction(
             src_sat,
             vbs,
@@ -526,7 +534,7 @@ impl crate::devices::Device for Bsim3I {
             vbs_m = vbd;
         }
 
-        let ev = evaluate(&model, &mt, &pp, &self.it, vds_m, vgs_m, vbs_m, charges);
+        let ev = evaluate(model, mt, pp, &self.it, vds_m, vgs_m, vbs_m, charges);
         if let Some(q) = ev.qinv {
             self.qinv = q;
         }
@@ -803,10 +811,10 @@ impl crate::devices::Device for Bsim3I {
         }
 
         let m = self.g.m;
-        ctx.rhs[self.gate] -= m * ceqqg;
-        ctx.rhs[self.bulk] -= m * (ceqbs + ceqbd + ceqqb);
-        ctx.rhs[self.d_p] += m * (ceqbd - cdreq - ceqqd);
-        ctx.rhs[self.s_p] += m * (cdreq + ceqbs + ceqqg + ceqqb + ceqqd);
+        ctx.add_rhs(self.gate, -(m * ceqqg));
+        ctx.add_rhs(self.bulk, -(m * (ceqbs + ceqbd + ceqqb)));
+        ctx.add_rhs(self.d_p, m * (ceqbd - cdreq - ceqqd));
+        ctx.add_rhs(self.s_p, m * (cdreq + ceqbs + ceqqg + ceqqb + ceqqd));
 
         // Load y matrix (the NQS `T1·ddxpart` terms are zero).
         let gdpr = self.drain_conductance;

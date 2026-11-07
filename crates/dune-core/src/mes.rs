@@ -251,6 +251,10 @@ impl MesI {
 }
 
 impl crate::devices::Device for MesI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.n.alloc(mb);
     }

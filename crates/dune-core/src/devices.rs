@@ -12,7 +12,7 @@ use crate::srcfn::Wave;
 use crate::trnoise::NoiseWave;
 
 /// A device instance bound to matrix positions and state slots.
-pub(crate) trait Device {
+pub(crate) trait Device: Send {
     /// Reserve matrix positions (`*setup.c`); state offsets are
     /// assigned at build time so coupled devices can reference each
     /// other's states.
@@ -23,6 +23,19 @@ pub(crate) trait Device {
     /// inductor fluxes, then mutuals, then integrates — see
     /// `indload.c`).
     fn load_late(&mut self, _ctx: &mut LoadCtx) {}
+    /// Whether [`load`](Device::load) may run on a worker of the
+    /// parallel load (issue #9): it must touch only its own fields,
+    /// the state offsets it allocated at build time (its window —
+    /// `Built::state_ranges`) and the stamp sink, and its stamps must
+    /// not depend on the order it runs in relative to other devices
+    /// beyond that. Opt-in per type after an audit of its load; a
+    /// device that writes another device's states (the mutual
+    /// inductor, `MUTload` adding into both inductors' flux) keeps
+    /// the default and loads in place, in device order.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    fn par_load(&self) -> bool {
+        false
+    }
     /// Timestep limiting from local truncation error (`*trunc.c`).
     fn trunc(&self, _t: &TerrCtx, _time_step: &mut f64) {}
     /// AC small-signal stamps (`*acld.c`). Default: no AC presence.
@@ -198,6 +211,10 @@ const RES_MODEL_SENS: &[&str] = &[
 ];
 
 impl Device for ResistorI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
@@ -307,6 +324,10 @@ impl CapacitorI {
 }
 
 impl Device for CapacitorI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
@@ -350,8 +371,8 @@ impl Device for CapacitorI {
             ctx.add(self.slots[1], geq);
             ctx.add(self.slots[2], -geq);
             ctx.add(self.slots[3], -geq);
-            ctx.rhs[self.pos] -= ceq;
-            ctx.rhs[self.neg] += ceq;
+            ctx.add_rhs(self.pos, -ceq);
+            ctx.add_rhs(self.neg, ceq);
         } else {
             // Transient operating point: just record the charge.
             ctx.states.set(0, self.q, self.capac * vcap);
@@ -456,6 +477,10 @@ impl InductorI {
 }
 
 impl Device for InductorI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
@@ -498,7 +523,7 @@ impl Device for InductorI {
             req = r;
             veq = v;
         }
-        ctx.rhs[self.br] += veq;
+        ctx.add_rhs(self.br, veq);
         if ctx.mode == InitMode::Tran {
             let v0 = ctx.states.get(0, self.flux + 1);
             ctx.states.set(1, self.flux + 1, v0);
@@ -846,6 +871,10 @@ fn ac_parts(ac: Option<(f64, f64)>) -> (f64, f64) {
 }
 
 impl Device for VsourceI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
@@ -875,8 +904,8 @@ impl Device for VsourceI {
         if let Some(p) = &self.port {
             p.stamp(|sl, v| ctx.add(sl, v));
         }
-        let v = source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
-        ctx.rhs[self.branch.br] += v;
+let v = source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
+        ctx.add_rhs(self.branch.br, v);
     }
 
     /// `VSRCacLoad` (ngspice-47, RFSPICE): under `.sp` every V
@@ -1050,6 +1079,10 @@ impl IsourceI {
 }
 
 impl Device for IsourceI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, _: &mut MatrixBuilder) {}
@@ -1072,9 +1105,9 @@ impl Device for IsourceI {
     }
 
     fn load(&mut self, ctx: &mut LoadCtx) {
-        let v = self.m * source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
-        ctx.rhs[self.pos] -= v;
-        ctx.rhs[self.neg] += v;
+let v = self.m * source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
+        ctx.add_rhs(self.pos, -v);
+        ctx.add_rhs(self.neg, v);
     }
 
     /// `ISRCacLoad`. The 3f5 adds the AC stimulus with the polarity
@@ -1160,6 +1193,10 @@ impl VcvsI {
 }
 
 impl Device for VcvsI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
@@ -1225,6 +1262,10 @@ impl VccsI {
 }
 
 impl Device for VccsI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
@@ -1297,6 +1338,10 @@ impl CccsI {
 }
 
 impl Device for CccsI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
@@ -1356,6 +1401,10 @@ impl CcvsI {
 }
 
 impl Device for CcvsI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     disto_linear!();
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {

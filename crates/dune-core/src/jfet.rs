@@ -525,9 +525,9 @@ pub(crate) fn fet3_finish(
     let ceqgd = typ * (op.cgd - op.ggd * op.vgd);
     let ceqgs = typ * ((op.cg - op.cgd) - op.ggs * op.vgs);
     let cdreq = typ * ((op.cd + op.cgd) - op.gds * vds - op.gm * op.vgs);
-    ctx.rhs[n.gate] += -ceqgs - ceqgd;
-    ctx.rhs[n.d_p] += -cdreq + ceqgd;
-    ctx.rhs[n.s_p] += cdreq + ceqgs;
+    ctx.add_rhs(n.gate, -ceqgs - ceqgd);
+    ctx.add_rhs(n.d_p, -cdreq + ceqgd);
+    ctx.add_rhs(n.s_p, cdreq + ceqgs);
 
     let (gm, gds, ggs, ggd) = (op.gm, op.gds, op.ggs, op.ggd);
     ctx.add(n.s[D_DP], -gdpr);
@@ -644,6 +644,10 @@ impl JfetI {
 }
 
 impl crate::devices::Device for JfetI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         self.n.alloc(mb);
     }

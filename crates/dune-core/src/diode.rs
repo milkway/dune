@@ -356,6 +356,10 @@ impl DiodeI {
 }
 
 impl crate::devices::Device for DiodeI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     /// `DIOconvTest`: predicted vs computed junction current,
     /// evaluated at the previous solution (`CKTrhsOld`).
     fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {
@@ -514,8 +518,8 @@ impl crate::devices::Device for DiodeI {
         ctx.states.set(0, st + CONDUCT, gd);
 
         let cdeq = cd - gd * vd;
-        ctx.rhs[self.neg] += cdeq;
-        ctx.rhs[self.pos_prime] -= cdeq;
+        ctx.add_rhs(self.neg, cdeq);
+        ctx.add_rhs(self.pos_prime, -cdeq);
 
         let gspr = self.t.gspr;
         ctx.add(self.slots[0], gspr);

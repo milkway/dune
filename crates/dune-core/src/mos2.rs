@@ -1703,6 +1703,10 @@ impl Mos2I {
 }
 
 impl crate::devices::Device for Mos2I {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     /// `Mos2convTest`: predicted vs computed drain and bulk
     /// currents, evaluated at the fresh solution (`CKTrhs`).
     fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {
@@ -2065,10 +2069,10 @@ impl crate::devices::Device for Mos2I {
         self.cd = cd;
         self.cbs = cbs;
         self.cbd = cbd;
-        ctx.rhs[self.gate] -= typ * (ceqgs + ceqgb + ceqgd);
-        ctx.rhs[self.bulk] -= ceqbs + ceqbd - typ * ceqgb;
-        ctx.rhs[self.d_p] += ceqbd - cdreq + typ * ceqgd;
-        ctx.rhs[self.s_p] += cdreq + ceqbs + typ * ceqgs;
+        ctx.add_rhs(self.gate, -(typ * (ceqgs + ceqgb + ceqgd)));
+        ctx.add_rhs(self.bulk, -(ceqbs + ceqbd - typ * ceqgb));
+        ctx.add_rhs(self.d_p, ceqbd - cdreq + typ * ceqgd);
+        ctx.add_rhs(self.s_p, cdreq + ceqbs + typ * ceqgs);
 
         // Load the Y matrix.
         let gdpr = self.t.drain_conductance;

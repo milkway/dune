@@ -1709,6 +1709,10 @@ impl LtraI {
 }
 
 impl Device for LtraI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     /// `LTRAinfo` has no `DEVdisto`: the line is linear.
     fn disto_setup(&mut self, _ctx: &DistoSetupCtx) -> Result<(), &'static str> {
         Ok(())
@@ -1814,8 +1818,8 @@ impl Device for LtraI {
         if ctx.is_dc() {
             self.gmin = ctx.gmin;
             self.load_dc(ctx);
-            ctx.rhs[self.br1] += self.input1;
-            ctx.rhs[self.br2] += self.input2;
+            ctx.add_rhs(self.br1, self.input1);
+            ctx.add_rhs(self.br2, self.input2);
             return;
         }
         if self.times.is_empty() {
@@ -1875,8 +1879,8 @@ impl Device for LtraI {
 
         if self.p.case == LtraCase::Rg {
             self.load_dc(ctx);
-            ctx.rhs[self.br1] += self.input1;
-            ctx.rhs[self.br2] += self.input2;
+            ctx.add_rhs(self.br1, self.input1);
+            ctx.add_rhs(self.br2, self.input2);
             return;
         }
 
@@ -1962,8 +1966,8 @@ impl Device for LtraI {
             }
         }
 
-        ctx.rhs[self.br1] += self.input1;
-        ctx.rhs[self.br2] += self.input2;
+        ctx.add_rhs(self.br1, self.input1);
+        ctx.add_rhs(self.br2, self.input2);
     }
 
     /// `LTRAtrunc`: the delay ceiling (`STEPLIMIT`, or a derivative

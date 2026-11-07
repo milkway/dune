@@ -39,6 +39,8 @@ mod mosdisto;
 mod noise;
 mod op;
 mod options;
+#[cfg(feature = "parallel")]
+mod parload;
 mod pss;
 mod pz;
 mod run;

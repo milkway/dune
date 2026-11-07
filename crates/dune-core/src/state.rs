@@ -22,14 +22,9 @@ impl States {
         self.banks[bank][idx]
     }
 
-    #[inline]
+    #[cfg(test)]
     pub fn set(&mut self, bank: usize, idx: usize, v: f64) {
         self.banks[bank][idx] = v;
-    }
-
-    #[inline]
-    pub fn add(&mut self, bank: usize, idx: usize, v: f64) {
-        self.banks[bank][idx] += v;
     }
 
     /// The state rotation in `dctran.c`: the oldest useful bank is
@@ -72,6 +67,74 @@ impl States {
     pub fn copy01(&mut self) {
         let (b0, rest) = self.banks.split_first_mut().expect("banks");
         rest[0].copy_from_slice(b0);
+    }
+}
+
+/// Mutable access to the state banks a load may touch: all of them
+/// ([`States::view`]), or one worker's window of offsets
+/// ([`States::split_views`]) under the parallel load.
+///
+/// Offsets stay global (a device indexes with the base it was given
+/// at build time); the view subtracts its own start. An offset
+/// outside the window is an out-of-bounds panic, never a silent read
+/// of another worker's cells.
+pub(crate) struct StateView<'a> {
+    banks: [&'a mut [f64]; NUM_BANKS],
+    base: usize,
+}
+
+impl StateView<'_> {
+    #[inline]
+    pub fn get(&self, bank: usize, idx: usize) -> f64 {
+        self.banks[bank][idx - self.base]
+    }
+
+    #[inline]
+    pub fn set(&mut self, bank: usize, idx: usize, v: f64) {
+        self.banks[bank][idx - self.base] = v;
+    }
+
+    #[inline]
+    pub fn add(&mut self, bank: usize, idx: usize, v: f64) {
+        self.banks[bank][idx - self.base] += v;
+    }
+}
+
+impl States {
+    /// A view of every offset of every bank.
+    pub fn view(&mut self) -> StateView<'_> {
+        let mut it = self.banks.iter_mut();
+        StateView {
+            banks: std::array::from_fn(|_| it.next().expect("NUM_BANKS banks").as_mut_slice()),
+            base: 0,
+        }
+    }
+
+    /// Disjoint views of the windows `bounds[k]..bounds[k + 1]` of
+    /// every bank (`bounds` nondecreasing, at most the bank length).
+    /// The borrow checker sees the windows as separate slices, so the
+    /// views can go to different threads.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub fn split_views(&mut self, bounds: &[usize]) -> Vec<StateView<'_>> {
+        let k = bounds.len().saturating_sub(1);
+        let mut per: Vec<Vec<&mut [f64]>> = (0..k).map(|_| Vec::with_capacity(NUM_BANKS)).collect();
+        for bank in self.banks.iter_mut() {
+            let mut rest: &mut [f64] = &mut bank[bounds[0]..bounds[k]];
+            for (w, slot) in bounds.windows(2).zip(per.iter_mut()) {
+                let (head, tail) = std::mem::take(&mut rest).split_at_mut(w[1] - w[0]);
+                slot.push(head);
+                rest = tail;
+            }
+        }
+        per.into_iter()
+            .zip(bounds)
+            .map(|(banks, &base)| StateView {
+                banks: banks
+                    .try_into()
+                    .unwrap_or_else(|_| unreachable!("NUM_BANKS banks")),
+                base,
+            })
+            .collect()
     }
 }
 

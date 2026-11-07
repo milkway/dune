@@ -242,6 +242,10 @@ impl SwitchInst {
 }
 
 impl crate::devices::Device for SwitchInst {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     // `DEVdisto` is NULL for both switches (`switf.h`/`cswitf.h`).
     fn disto_setup(&mut self, _ctx: &crate::disto::DistoSetupCtx) -> Result<(), &'static str> {
         Ok(())

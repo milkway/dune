@@ -762,6 +762,10 @@ impl Bsim1I {
 }
 
 impl crate::devices::Device for Bsim1I {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         let (d, g, s, b) = (self.drain, self.gate, self.source, self.bulk);
         let (dp, sp) = (self.d_p, self.s_p);
@@ -1203,10 +1207,10 @@ impl crate::devices::Device for Bsim1I {
             xrev = 1.0;
             cdreq = -typ * (cdrain + gds * vds - gm * vgd - gmbs * vbd);
         }
-        ctx.rhs[self.gate] -= ceqqg;
-        ctx.rhs[self.bulk] -= ceqbs + ceqbd + ceqqb;
-        ctx.rhs[self.d_p] += ceqbd - cdreq - ceqqd;
-        ctx.rhs[self.s_p] += cdreq + ceqbs + ceqqg + ceqqb + ceqqd;
+        ctx.add_rhs(self.gate, -ceqqg);
+        ctx.add_rhs(self.bulk, -(ceqbs + ceqbd + ceqqb));
+        ctx.add_rhs(self.d_p, ceqbd - cdreq - ceqqd);
+        ctx.add_rhs(self.s_p, cdreq + ceqbs + ceqqg + ceqqb + ceqqd);
 
         // Load the Y matrix.
         let gdpr = t.drain_conductance;

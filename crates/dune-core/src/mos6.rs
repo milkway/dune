@@ -542,6 +542,10 @@ impl Mos6I {
 }
 
 impl crate::devices::Device for Mos6I {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     /// `MOS6convTest` (same shape as MOS1's).
     fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {
         let typ = self.t.type_;
@@ -957,10 +961,10 @@ impl crate::devices::Device for Mos6I {
         self.cd = cd;
         self.cbs = cbs;
         self.cbd = cbd;
-        ctx.rhs[self.gate] -= typ * (ceqgs + ceqgb + ceqgd);
-        ctx.rhs[self.bulk] -= ceqbs + ceqbd - typ * ceqgb;
-        ctx.rhs[self.d_p] += ceqbd - cdreq + typ * ceqgd;
-        ctx.rhs[self.s_p] += cdreq + ceqbs + typ * ceqgs;
+        ctx.add_rhs(self.gate, -(typ * (ceqgs + ceqgb + ceqgd)));
+        ctx.add_rhs(self.bulk, -(ceqbs + ceqbd - typ * ceqgb));
+        ctx.add_rhs(self.d_p, ceqbd - cdreq + typ * ceqgd);
+        ctx.add_rhs(self.s_p, cdreq + ceqbs + typ * ceqgs);
 
         // Load the Y matrix.
         let gdpr = t.drain_conductance;

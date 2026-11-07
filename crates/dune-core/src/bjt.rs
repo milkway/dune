@@ -520,6 +520,10 @@ impl BjtI {
 }
 
 impl crate::devices::Device for BjtI {
+    fn par_load(&self) -> bool {
+        true
+    }
+
     /// `BJTconvTest`: predicted vs computed collector and base
     /// currents, evaluated at the previous solution (`CKTrhsOld`).
     fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {
@@ -1025,11 +1029,11 @@ impl crate::devices::Device for BjtI {
         let ceqbe = typ * (cc + cb - vbe * (gm + go + gpi) + vbc * (go - geqcb));
         let ceqbc = typ * (-cc + vbe * (gm + go) - vbc * (gmu + go));
 
-        ctx.rhs[self.base] += -ceqbx;
-        ctx.rhs[self.col_p] += ceqcs + ceqbx + ceqbc;
-        ctx.rhs[self.base_p] += -ceqbe - ceqbc;
-        ctx.rhs[self.emit_p] += ceqbe;
-        ctx.rhs[self.subst] += -ceqcs;
+        ctx.add_rhs(self.base, -ceqbx);
+        ctx.add_rhs(self.col_p, ceqcs + ceqbx + ceqbc);
+        ctx.add_rhs(self.base_p, -ceqbe - ceqbc);
+        ctx.add_rhs(self.emit_p, ceqbe);
+        ctx.add_rhs(self.subst, -ceqcs);
 
         // Load the Y matrix.
         ctx.add(self.s[COL_COL], gcpr);

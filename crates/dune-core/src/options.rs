@@ -119,6 +119,18 @@ pub struct Options {
     /// `docs/dune-core.md` §Ruído transiente); ngspice's
     /// `seed=random` (a clock seed) is refused with a warning.
     pub seed: u64,
+    /// Worker threads for the per-iteration device load (issue #9,
+    /// lever 1; an API argument, not a SPICE option). `1` (default):
+    /// the sequential load, exactly the 3f5's `CKTload`. `0`: one
+    /// thread per core. `n > 1`: the devices are split into
+    /// contiguous runs evaluated on `n` threads, and their stamps are
+    /// replayed into the matrix in device order, so every result is
+    /// bit-identical to `1` whatever the count. It only pays on
+    /// circuits with many expensive devices (MOS/BSIM); see
+    /// `docs/perf.md` for the measured break-even. Needs the
+    /// `parallel` feature (native builds); without it (and on
+    /// `wasm32`) the value is ignored and the load is sequential.
+    pub load_threads: usize,
 }
 
 impl Default for Options {
@@ -150,6 +162,7 @@ impl Default for Options {
             max_tran_steps: None,
             ltra_break_rate: None,
             ltra_fit: false,
+            load_threads: 1,
             tmax_divisor: None,
             seed: 1,
         }

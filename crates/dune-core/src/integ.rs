@@ -132,7 +132,7 @@ pub(crate) fn com_cof(
 /// current lives at `q + 1`), update `state0[q+1]` and return
 /// `(geq, ceq)`.
 pub(crate) fn integrate(
-    st: &mut States,
+    st: &mut crate::state::StateView,
     ag: &[f64; 7],
     order: usize,
     method: Method,
@@ -322,7 +322,7 @@ mod tests {
         let ag = com_cof(Method::Trapezoidal, 1, 1.0, &d).unwrap();
         st.set(1, 0, 0.0); // old charge
         st.set(0, 0, 1.0); // new charge = C*v
-        let (geq, ceq) = integrate(&mut st, &ag, 1, Method::Trapezoidal, 1.0, 0);
+        let (geq, ceq) = integrate(&mut st.view(), &ag, 1, Method::Trapezoidal, 1.0, 0);
         assert_eq!(geq, 1.0);
         assert_eq!(st.get(0, 1), 1.0); // current
         assert_eq!(ceq, 0.0);
@@ -339,10 +339,10 @@ mod tests {
         st.set(0, 1, -lambda);
         let solve = |st: &mut States, ag: &[f64; 7], order, method| {
             st.set(0, 0, 0.0);
-            let (_, ceq) = integrate(st, ag, order, method, 1.0, 0);
+            let (_, ceq) = integrate(&mut st.view(), ag, order, method, 1.0, 0);
             let q = -ceq / (ag[0] + lambda);
             st.set(0, 0, q);
-            integrate(st, ag, order, method, 1.0, 0);
+            integrate(&mut st.view(), ag, order, method, 1.0, 0);
         };
         let d1 = TRBDF2_GAMMA * h;
         st.rotate(2);

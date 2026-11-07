@@ -841,6 +841,12 @@ pub(crate) struct Built {
     pub ports: Vec<PortInfo>,
     /// Total device state slots (`CKTnumStates`).
     pub num_states: usize,
+    /// Per device (same order as `devices`), the window of state
+    /// offsets it allocated: `[start, end)`, nondecreasing in device
+    /// order. The parallel load hands each worker the union of its
+    /// devices' windows.
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    pub state_ranges: Vec<(usize, usize)>,
     /// Diode temperature-adjust notes etc., surfaced by the caller.
     pub notes: Vec<String>,
     /// The circuit's warm-start channel (see [`Circuit::warm`]).
@@ -869,8 +875,10 @@ impl Circuit {
         let mut branches: HashMap<String, Var> = HashMap::new();
         let mut st = crate::state::StateAlloc::new();
         let mut state_base: Vec<usize> = Vec::with_capacity(self.specs.len());
+        let mut state_ranges: Vec<(usize, usize)> = Vec::with_capacity(self.specs.len());
         let mut inductors: HashMap<String, (usize, f64)> = HashMap::new(); // name → (flux, L)
         for spec in &self.specs {
+            let first = st.total();
             state_base.push(match spec {
                 Spec::Bjt(_) => st.alloc(crate::bjt::BJT_NUM_STATES),
                 Spec::Mos1(_) => st.alloc(crate::mos1::MOS1_NUM_STATES),
@@ -892,6 +900,7 @@ impl Circuit {
                 Spec::SwitchV(_) | Spec::SwitchI(_) => st.alloc(crate::switch::SW_NUM_STATES),
                 _ => 0,
             });
+            state_ranges.push((first, st.total()));
             let node_names: &[String] = match spec {
                 Spec::Bjt(s) => &s.nodes,
                 Spec::Mos1(s) => &s.nodes,
@@ -1675,6 +1684,7 @@ impl Circuit {
             sources,
             ports,
             num_states,
+            state_ranges,
             notes,
             warm: self.warm.share(),
         })

@@ -14,7 +14,8 @@ use crate::error::Error;
 use crate::integ::{Method, TerrCtx, com_cof};
 use crate::linalg::{LinalgError, LinearSolver};
 use crate::matrix::{
-    AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, NoiseCtx, PzCtx, Slot, Var,
+    AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, LoadEnv, MatrixBuilder, NoiseCtx, PzCtx, Slot,
+    StampSink, Var,
 };
 use crate::options::Options;
 use crate::state::States;
@@ -121,6 +122,13 @@ pub(crate) struct Engine {
     /// The session warm-start channel (empty outside a
     /// [`Session`](crate::Session) with warm starts on).
     warm: crate::session::WarmSlot,
+    /// Per device, its window of state offsets (`Built::state_ranges`).
+    #[cfg(feature = "parallel")]
+    state_ranges: Vec<(usize, usize)>,
+    /// The parallel load (`Options::load_threads != 1`), built at the
+    /// first load that asks for it.
+    #[cfg(feature = "parallel")]
+    par: Option<crate::parload::ParLoad>,
 }
 
 impl Engine {
@@ -134,6 +142,8 @@ impl Engine {
             sources,
             num_states,
             warm,
+            #[cfg(feature = "parallel")]
+            state_ranges,
             ..
         } = built;
         let n = vars.len() - 1;
@@ -180,6 +190,10 @@ impl Engine {
             slope_break_radius: None,
             fault: None,
             warm,
+            #[cfg(feature = "parallel")]
+            state_ranges,
+            #[cfg(feature = "parallel")]
+            par: None,
         }
     }
 
@@ -202,37 +216,86 @@ impl Engine {
         } else {
             0.0
         };
-        let mut ctx = LoadCtx {
-            values: &mut self.values,
-            rhs: &mut self.rhs,
-            sol: &self.sol,
+        let sol = &self.sol;
+        let (kind, uic, time, step, final_time) =
+            (self.kind, self.uic, self.time, self.step, self.final_time);
+        let (ag, order, method, delta) = (self.ag, self.order, self.method, self.delta);
+        let env = LoadEnv {
+            sol,
             mode,
-            kind: self.kind,
-            uic: self.uic,
-            time: self.time,
-            step: self.step,
-            final_time: self.final_time,
+            kind,
+            uic,
+            time,
+            step,
+            final_time,
             gmin: opts.gmin,
             reltol: opts.reltol,
             abstol: opts.abstol,
             srcfact,
-            noncon: false,
-            states: &mut self.states,
-            ag: self.ag,
-            order: self.order,
-            method: self.method,
+            ag,
+            order,
+            method,
             pred_xfact,
-            delta: self.delta,
-            fault: None,
+            delta,
         };
-        for d in &mut self.devices {
-            d.load(&mut ctx);
+
+        // The parallel load (issue #9): same stamps, same order of
+        // summation — see `parload`.
+        #[cfg(feature = "parallel")]
+        let par_done = if opts.load_threads != 1 {
+            if self.par.as_ref().map(|p| p.requested()) != Some(opts.load_threads) {
+                self.par = crate::parload::ParLoad::new(
+                    opts.load_threads,
+                    &self.devices,
+                    &self.state_ranges,
+                );
+            }
+            self.par.as_mut().map(|par| {
+                crate::parload::load(
+                    par,
+                    &mut self.devices,
+                    &self.state_ranges,
+                    &mut self.states,
+                    &mut self.values,
+                    &mut self.rhs,
+                    &env,
+                )
+            })
+        } else {
+            None
+        };
+        #[cfg(not(feature = "parallel"))]
+        let par_done: Option<(bool, Option<&'static str>)> = None;
+
+        let (mut noncon, mut fault) = match par_done {
+            Some(done) => done,
+            None => {
+                let sink = StampSink::Direct {
+                    values: &mut self.values,
+                    rhs: &mut self.rhs,
+                };
+                let mut ctx = env.ctx(sink, self.states.view());
+                for d in &mut self.devices {
+                    d.load(&mut ctx);
+                }
+                (ctx.noncon, ctx.fault)
+            }
+        };
+        {
+            let sink = StampSink::Direct {
+                values: &mut self.values,
+                rhs: &mut self.rhs,
+            };
+            let mut ctx = env.ctx(sink, self.states.view());
+            ctx.noncon = noncon;
+            ctx.fault = fault;
+            for d in &mut self.devices {
+                d.load_late(&mut ctx);
+            }
+            noncon = ctx.noncon;
+            fault = ctx.fault;
         }
-        for d in &mut self.devices {
-            d.load_late(&mut ctx);
-        }
-        let noncon = ctx.noncon;
-        self.fault = ctx.fault;
+        self.fault = fault;
 
         // Nodesets hold during INITJCT/INITFIX of DC solutions;
         // `.ic` nodes hold throughout the transient operating point
@@ -2185,8 +2248,10 @@ impl Engine {
             let mut values = vec![0.0; engine.values.len()];
             let mut rhs = vec![0.0; engine.rhs.len()];
             let mut ctx = LoadCtx {
-                values: &mut values,
-                rhs: &mut rhs,
+                sink: StampSink::Direct {
+                    values: &mut values,
+                    rhs: &mut rhs,
+                },
                 sol: &load_at,
                 mode: InitMode::Float,
                 kind: AnKind::DcOp,
@@ -2199,7 +2264,7 @@ impl Engine {
                 abstol: opts.abstol,
                 srcfact: 1.0,
                 noncon: false,
-                states: &mut engine.states,
+                states: engine.states.view(),
                 ag: [0.0; 7],
                 order: 1,
                 method: engine.method,

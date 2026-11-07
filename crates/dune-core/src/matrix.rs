@@ -102,10 +102,13 @@ pub(crate) enum AnKind {
 /// Everything a device sees while loading for one Newton iteration
 /// (the `CKTload` environment).
 pub(crate) struct LoadCtx<'a> {
-    /// Matrix values, slot-indexed; `[0]` is trash.
-    pub values: &'a mut [f64],
-    /// Right-hand side, var-indexed; `[0]` is trash.
-    pub rhs: &'a mut [f64],
+    /// Where the stamps go: the matrix values and right-hand side
+    /// themselves, or a worker's log under the parallel load. The
+    /// sink is write-only on purpose — a device load can only add
+    /// into the matrix/RHS ([`LoadCtx::add`], [`LoadCtx::add_rhs`]),
+    /// never read what other devices stamped, which is what lets the
+    /// parallel load replay the stamps in device order bit for bit.
+    pub sink: StampSink<'a>,
     /// Previous solution (`CKTrhsOld`), var-indexed, `[0] == 0`.
     pub sol: &'a [f64],
     pub mode: InitMode,
@@ -128,8 +131,9 @@ pub(crate) struct LoadCtx<'a> {
     pub srcfact: f64,
     /// Set by devices that limited (`CKTnoncon`).
     pub noncon: bool,
-    /// Device state banks.
-    pub states: &'a mut crate::state::States,
+    /// Device state banks: the whole set, or under the parallel load
+    /// only the offsets of the worker's own devices.
+    pub states: crate::state::StateView<'a>,
     /// Integration coefficients (`CKTag`), order and method; only
     /// meaningful when `kind == Tran`.
     pub ag: [f64; 7],
@@ -161,9 +165,127 @@ pub(crate) enum InitMode {
     Smsig,
 }
 
+/// Everything of a [`LoadCtx`] but the sink and the states: the
+/// iteration's fixed inputs, shared by every worker of the parallel
+/// load.
+#[derive(Clone, Copy)]
+pub(crate) struct LoadEnv<'a> {
+    pub sol: &'a [f64],
+    pub mode: InitMode,
+    pub kind: AnKind,
+    pub uic: bool,
+    pub time: f64,
+    pub step: f64,
+    pub final_time: f64,
+    pub gmin: f64,
+    pub reltol: f64,
+    pub abstol: f64,
+    pub srcfact: f64,
+    pub ag: [f64; 7],
+    pub order: usize,
+    pub method: crate::integ::Method,
+    pub pred_xfact: f64,
+    pub delta: f64,
+}
+
+impl<'a> LoadEnv<'a> {
+    /// A fresh context (no `noncon`, no fault) over `sink` and
+    /// `states`.
+    pub fn ctx<'s>(&self, sink: StampSink<'s>, states: crate::state::StateView<'s>) -> LoadCtx<'s>
+    where
+        'a: 's,
+    {
+        LoadCtx {
+            sink,
+            sol: self.sol,
+            mode: self.mode,
+            kind: self.kind,
+            uic: self.uic,
+            time: self.time,
+            step: self.step,
+            final_time: self.final_time,
+            gmin: self.gmin,
+            reltol: self.reltol,
+            abstol: self.abstol,
+            srcfact: self.srcfact,
+            noncon: false,
+            states,
+            ag: self.ag,
+            order: self.order,
+            method: self.method,
+            pred_xfact: self.pred_xfact,
+            delta: self.delta,
+            fault: None,
+        }
+    }
+}
+
+/// The destination of a load's stamps (see [`LoadCtx::sink`]).
+pub(crate) enum StampSink<'a> {
+    /// Straight into the matrix values (slot-indexed, `[0]` trash)
+    /// and the right-hand side (var-indexed, `[0]` trash).
+    Direct {
+        values: &'a mut [f64],
+        rhs: &'a mut [f64],
+    },
+    /// Into a log, replayed later in order by [`StampLog::replay`].
+    #[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+    Record(&'a mut StampLog),
+}
+
+/// The stamps of a run of devices, in the order they were made: one
+/// list for the matrix, one for the RHS. Replaying the logs of
+/// consecutive device runs in run order performs exactly the
+/// floating-point additions the sequential load performs, in the same
+/// order per position — so the result is bit-identical.
+///
+/// Aligned to 128 bytes (a cache-line pair on Apple Silicon/x86): the
+/// workers' logs sit side by side in one `Vec`, and every stamp bumps
+/// a log's `len` — unpadded, neighbouring workers would false-share.
+#[derive(Default)]
+#[repr(align(128))]
+pub(crate) struct StampLog {
+    pub values: Vec<(usize, f64)>,
+    pub rhs: Vec<(usize, f64)>,
+}
+
+#[cfg_attr(not(feature = "parallel"), allow(dead_code))]
+impl StampLog {
+    pub fn clear(&mut self) {
+        self.values.clear();
+        self.rhs.clear();
+    }
+
+    /// `values[slot] += v`, `rhs[var] += v` for every stamp, in order.
+    pub fn replay(&self, values: &mut [f64], rhs: &mut [f64]) {
+        for &(k, v) in &self.values {
+            values[k] += v;
+        }
+        for &(k, v) in &self.rhs {
+            rhs[k] += v;
+        }
+    }
+}
+
 impl LoadCtx<'_> {
+    /// Stamp `v` into matrix slot `s` (`*(here->XXXptr) += v`).
+    #[inline]
     pub fn add(&mut self, s: Slot, v: f64) {
-        self.values[s.0] += v;
+        match &mut self.sink {
+            StampSink::Direct { values, .. } => values[s.0] += v,
+            StampSink::Record(log) => log.values.push((s.0, v)),
+        }
+    }
+
+    /// Stamp `v` into the RHS at `var` (`*(ckt->CKTrhs + var) += v`;
+    /// the C's `-=` is `add_rhs(var, -v)`, which IEEE arithmetic
+    /// makes the same operation exactly).
+    #[inline]
+    pub fn add_rhs(&mut self, var: Var, v: f64) {
+        match &mut self.sink {
+            StampSink::Direct { rhs, .. } => rhs[var] += v,
+            StampSink::Record(log) => log.rhs.push((var, v)),
+        }
     }
 
     /// The C's `MODEDC` composite mask.
@@ -173,7 +295,7 @@ impl LoadCtx<'_> {
 
     /// `NIintegrate` against the current coefficients.
     pub fn integrate(&mut self, cap: f64, q: usize) -> (f64, f64) {
-        crate::integ::integrate(self.states, &self.ag, self.order, self.method, cap, q)
+        crate::integ::integrate(&mut self.states, &self.ag, self.order, self.method, cap, q)
     }
 
     /// `DEVpred` (`devsup.c`): extrapolate a state linearly from the
