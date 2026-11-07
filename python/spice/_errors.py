@@ -10,7 +10,7 @@ __all__ = ["Diagnostic", "ErrorKind", "Severity", "SpiceError"]
 Severity = Literal["error", "warning"]
 """Severity of a :class:`Diagnostic`."""
 
-ErrorKind = Literal["parse", "elaborate", "analysis", "measure", "internal"]
+ErrorKind = Literal["parse", "elaborate", "analysis", "measure", "alter", "internal"]
 """Stage at which a run failed (:attr:`SpiceError.kind`).
 
 * ``"parse"`` -- the deck has errors (syntax, a missing ``.include``, ...);
@@ -21,6 +21,8 @@ ErrorKind = Literal["parse", "elaborate", "analysis", "measure", "internal"]
   small, singular matrix, ...).
 * ``"measure"`` -- a :func:`spice.measure` specification is malformed, or
   the plot cannot be measured.
+* ``"alter"`` -- :meth:`Session.alter` refused a value (unknown element or
+  parameter, a value out of range); the circuit is unchanged.
 * ``"internal"`` -- a bug in the simulator; please report it with the deck.
 """
 

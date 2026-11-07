@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    Circuit, Data, MeasureError, Measurement, Method, Options, Solution, SweepParam, SweepRun,
-    VarType, measure_all,
+    AlterValue, Circuit, Data, MeasureError, Measurement, Method, Options, Session, Solution,
+    SweepParam, SweepRun, VarType, measure_all,
 };
 use dune_netlist::ir::Netlist;
 use dune_netlist::{Diagnostic, IncludeLoader, ParseOutcome, Severity, SourceMap};
@@ -72,6 +72,7 @@ const OPTION_NAMES: [&str; 24] = [
 ];
 
 /// A parser/options diagnostic with its position resolved.
+#[derive(Clone)]
 struct Diag {
     severity: &'static str,
     message: String,
@@ -278,14 +279,7 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
         notes.push("no analyses in the deck; nothing to do".into());
     }
     // `.measure` cards: pure post-processing of the plots.
-    let cards = &netlist.measures;
-    let measures = measure_all(cards, &solutions)
-        .iter()
-        .map(|o| {
-            let m = &cards[o.card];
-            MeasRow::new(&m.name, m.analysis.keyword(), Some(o.plot), &o.result)
-        })
-        .collect();
+    let measures = deck_measures(&netlist.measures, &solutions);
     Ok(Output {
         title: netlist.title.clone(),
         solutions,
@@ -293,6 +287,17 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
         notes,
         diags,
     })
+}
+
+/// The deck's `.measure` cards evaluated on a run's plots.
+fn deck_measures(cards: &[dune_netlist::ir::Measure], solutions: &[Solution]) -> Vec<MeasRow> {
+    measure_all(cards, solutions)
+        .iter()
+        .map(|o| {
+            let m = &cards[o.card];
+            MeasRow::new(&m.name, m.analysis.keyword(), Some(o.plot), &o.result)
+        })
+        .collect()
 }
 
 /// A finished sweep, still in Rust form.
@@ -641,6 +646,21 @@ fn _simulate<'py>(
     };
     let outcome = py.detach(|| guarded(|| run(&source, &overrides)));
 
+    outcome_dict(py, outcome)
+}
+
+fn native_error(py: Python<'_>, f: Failure) -> PyErr {
+    match diag_list(py, &f.diags) {
+        Ok(diags) => NativeError::new_err((f.kind, f.message, diags.unbind())),
+        Err(e) => e,
+    }
+}
+
+/// A run's outcome as `_simulate`'s result dict, or a `NativeError`.
+fn outcome_dict<'py>(
+    py: Python<'py>,
+    outcome: Result<Output, Failure>,
+) -> PyResult<Bound<'py, PyDict>> {
     match outcome {
         Ok(out) => {
             let result = PyDict::new(py);
@@ -659,11 +679,179 @@ fn _simulate<'py>(
             result.set_item("diagnostics", diag_list(py, &out.diags)?)?;
             Ok(result)
         }
-        Err(f) => Err(NativeError::new_err((
-            f.kind,
-            f.message,
-            diag_list(py, &f.diags)?.unbind(),
-        ))),
+        Err(f) => Err(native_error(py, f)),
+    }
+}
+
+/// What every run's result of a session carries besides its plots.
+struct SessionBase {
+    title: String,
+    /// Elaboration notes (each result starts with them).
+    notes: Vec<String>,
+    diags: Vec<Diag>,
+    /// The deck's `.measure` cards, evaluated on every run.
+    measures: Vec<dune_netlist::ir::Measure>,
+}
+
+impl SessionBase {
+    fn finish(&self, solutions: Vec<Solution>, analysis_notes: Vec<String>) -> Output {
+        let mut notes = self.notes.clone();
+        notes.extend(analysis_notes);
+        if solutions.is_empty() {
+            notes.push("no analyses in the deck; nothing to do".into());
+        }
+        Output {
+            title: self.title.clone(),
+            measures: deck_measures(&self.measures, &solutions),
+            solutions,
+            notes,
+            diags: self.diags.clone(),
+        }
+    }
+}
+
+/// `_Session(text, path, includes, options)`: a deck parsed and
+/// elaborated once, altered and re-run (issue #12). The public
+/// wrapper is `spice.Session`; failures raise `NativeError` with the
+/// kinds of `_simulate`, plus `alter` for a refused alteration.
+#[pyclass(name = "_Session", module = "spice._spice")]
+struct NativeSession {
+    session: Session,
+    base: SessionBase,
+}
+
+fn alter_failure(py: Python<'_>, e: dune_core::Error) -> PyErr {
+    native_error(py, Failure::new("alter", e.to_string()))
+}
+
+#[pymethods]
+impl NativeSession {
+    #[new]
+    #[pyo3(signature = (text, path, includes, options))]
+    fn new(
+        py: Python<'_>,
+        text: Option<String>,
+        path: Option<PathBuf>,
+        includes: Option<BTreeMap<String, String>>,
+        options: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
+        let source = source(text, path, includes)?;
+        let overrides = match &options {
+            Some(d) => parse_overrides(d)?,
+            None => Vec::new(),
+        };
+        let opened = py.detach(|| {
+            guarded(|| {
+                let Prepared {
+                    netlist,
+                    options,
+                    diags,
+                } = prepare(&source, &overrides)?;
+                let (circuit, notes) = Circuit::from_netlist(&netlist)
+                    .map_err(|e| Failure::new("elaborate", e.to_string()))?;
+                Ok(NativeSession {
+                    session: Session::new(circuit, options, netlist.analyses.clone()),
+                    base: SessionBase {
+                        title: netlist.title.clone(),
+                        notes,
+                        diags,
+                        measures: netlist.measures.clone(),
+                    },
+                })
+            })
+        });
+        opened.map_err(|f| native_error(py, f))
+    }
+
+    /// `alter(refdes, param, value)`: `value` a float or a sequence of
+    /// floats (a source function's arguments).
+    fn alter(
+        &mut self,
+        py: Python<'_>,
+        refdes: &str,
+        param: &str,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let v = if value.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err("value must be a number, not bool"));
+        } else if let Ok(x) = value.extract::<f64>() {
+            AlterValue::Num(x)
+        } else if let Ok(v) = value.extract::<Vec<f64>>() {
+            AlterValue::List(v)
+        } else {
+            return Err(PyTypeError::new_err(
+                "value must be a number or a sequence of numbers",
+            ));
+        };
+        self.session
+            .alter(refdes, param, v)
+            .map_err(|e| alter_failure(py, e))
+    }
+
+    /// `param(refdes, param)`: a float, a list of floats or `None`.
+    fn param<'py>(
+        &self,
+        py: Python<'py>,
+        refdes: &str,
+        param: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self
+            .session
+            .param(refdes, param)
+            .map_err(|e| alter_failure(py, e))?
+        {
+            Some(AlterValue::Num(x)) => Ok(x.into_pyobject(py)?.into_any()),
+            Some(AlterValue::List(v)) => Ok(PyList::new(py, v)?.into_any()),
+            None => Ok(py.None().into_bound(py)),
+        }
+    }
+
+    fn alterable(&self, py: Python<'_>, refdes: &str) -> PyResult<Vec<&'static str>> {
+        self.session
+            .circuit()
+            .alterable(refdes)
+            .map(|p| p.to_vec())
+            .map_err(|e| alter_failure(py, e))
+    }
+
+    fn set_temp(&mut self, py: Python<'_>, celsius: f64) -> PyResult<()> {
+        self.session
+            .set_temp(celsius)
+            .map_err(|e| alter_failure(py, e))
+    }
+
+    fn temp(&self) -> f64 {
+        self.session.temp()
+    }
+
+    fn set_warm_start(&mut self, on: bool) {
+        self.session.set_warm_start(on);
+    }
+
+    fn warm_start(&self) -> bool {
+        self.session.warm_start()
+    }
+
+    /// `(hits, misses)`.
+    fn warm_stats(&self) -> (u64, u64) {
+        let s = self.session.warm_stats();
+        (s.hits, s.misses)
+    }
+
+    /// Re-run every analysis card: `_simulate`'s dict (measurements
+    /// included) for the current circuit. The GIL is released while
+    /// it runs.
+    fn run<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let NativeSession { session, base } = self;
+        let outcome = py.detach(|| {
+            guarded(|| {
+                let (solutions, notes) = session
+                    .run()
+                    .map_err(|e| Failure::new("analysis", e.to_string()))?;
+                Ok(base.finish(solutions, notes))
+            })
+        });
+        outcome_dict(py, outcome)
     }
 }
 
@@ -773,6 +961,7 @@ fn _spice(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("OPTION_NAMES", OPTION_NAMES.to_vec())?;
     m.add("NativeError", m.py().get_type::<NativeError>())?;
     m.add_function(wrap_pyfunction!(_simulate, m)?)?;
+    m.add_class::<NativeSession>()?;
     m.add_function(wrap_pyfunction!(_sweep, m)?)?;
     m.add_function(wrap_pyfunction!(_measure, m)?)?;
     Ok(())

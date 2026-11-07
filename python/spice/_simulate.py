@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import errno
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import cast
 
@@ -19,6 +20,50 @@ OptionValue = float | int | bool | str
 
 OPTION_NAMES: tuple[str, ...] = tuple(_spice.OPTION_NAMES)
 """Every key :func:`simulate` accepts in ``options`` (the 3f5 ``.options`` names)."""
+
+
+def _deck_source(
+    netlist: str | os.PathLike[str], includes: Mapping[str, str] | None
+) -> tuple[str | None, str | None]:
+    """``(text, path)`` of a deck argument, with the checks of :func:`simulate`."""
+    if isinstance(netlist, str):
+        # A str is deck text, never a file name -- but a one-line str
+        # that names an existing file is a classic slip that would
+        # otherwise simulate an empty deck titled with the path.
+        if "\n" not in netlist and Path(netlist).is_file():
+            raise ValueError(
+                f"{netlist!r} is deck TEXT here, but it names an existing "
+                "file; pass pathlib.Path(...) to simulate a deck file"
+            )
+        return netlist, None
+    if isinstance(netlist, os.PathLike):
+        if includes is not None:
+            raise ValueError(
+                "includes applies to a netlist string; a deck file resolves .include on disk"
+            )
+        path = os.fspath(netlist)
+        if not Path(path).exists():
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
+        return None, path
+    raise TypeError(
+        f"netlist must be a str (deck text) or a path, not {type(netlist).__name__}"
+    )
+
+
+@contextmanager
+def _native_errors() -> Iterator[None]:
+    """Turn the native module's ``NativeError`` into :class:`SpiceError`."""
+    try:
+        yield
+    except _spice.NativeError as e:
+        kind, message, diags = e.args
+        if kind == "io":
+            raise OSError(message) from None
+        raise SpiceError(
+            message,
+            kind=cast(ErrorKind, kind),
+            diagnostics=tuple(Diagnostic._from_native(d) for d in diags),
+        ) from None
 
 
 def simulate(
@@ -68,51 +113,11 @@ def simulate(
             does not exist).
     """
     text, path = _deck_source(netlist, includes)
-    try:
+    with _native_errors():
         native = _spice._simulate(
             text,
             path,
             None if includes is None else dict(includes),
             None if options is None else dict(options),
         )
-    except _spice.NativeError as e:
-        kind, message, diags = e.args
-        if kind == "io":
-            raise OSError(message) from None
-        raise SpiceError(
-            message,
-            kind=cast(ErrorKind, kind),
-            diagnostics=tuple(Diagnostic._from_native(d) for d in diags),
-        ) from None
     return Result(native)
-
-
-def _deck_source(
-    netlist: str | os.PathLike[str], includes: Mapping[str, str] | None
-) -> tuple[str | None, str | None]:
-    """Split ``netlist`` into the native ``(text, path)`` pair, validating it."""
-    text: str | None
-    path: str | None
-    if isinstance(netlist, str):
-        # A str is deck text, never a file name -- but a one-line str
-        # that names an existing file is a classic slip that would
-        # otherwise simulate an empty deck titled with the path.
-        if "\n" not in netlist and Path(netlist).is_file():
-            raise ValueError(
-                f"{netlist!r} is deck TEXT here, but it names an existing "
-                "file; pass pathlib.Path(...) to simulate a deck file"
-            )
-        text, path = netlist, None
-    elif isinstance(netlist, os.PathLike):
-        if includes is not None:
-            raise ValueError(
-                "includes applies to a netlist string; a deck file resolves .include on disk"
-            )
-        text, path = None, os.fspath(netlist)
-        if not Path(path).exists():
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
-    else:
-        raise TypeError(
-            f"netlist must be a str (deck text) or a path, not {type(netlist).__name__}"
-        )
-    return text, path

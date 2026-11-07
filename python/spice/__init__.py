@@ -13,7 +13,8 @@
 ['frequency', 're:v(1)', 'im:v(1)']
 
 The entry points are :func:`simulate` and :func:`sweep` (parametric sweeps
-and Monte Carlo, :class:`SweepResult`); results are :class:`Result` (one run)
+and Monte Carlo, :class:`SweepResult`); :class:`Session` keeps a circuit alive
+to alter values and re-run it (sliders, fitting loops). Results are :class:`Result` (one run)
 holding :class:`Plot` objects (one per analysis plot), each with NumPy
 columns (:meth:`Plot.column`) and a polars frame (:meth:`Plot.df`). The deck's
 ``.measure`` cards come back in :attr:`Result.measurements`; :func:`measure`
@@ -23,12 +24,14 @@ measures any plot directly.
 from ._errors import Diagnostic, ErrorKind, Severity, SpiceError
 from ._measure import MeasureAnalysis, Measurement, measure
 from ._result import Column, Plot, Result, Variable
+from ._session import AlterValue, Session, WarmStats
 from ._simulate import OPTION_NAMES, OptionValue, simulate
 from ._spice import __version__
 from ._sweep import SweepMode, SweepResult, sweep
 
 __all__ = [
     "OPTION_NAMES",
+    "AlterValue",
     "Column",
     "Diagnostic",
     "ErrorKind",
@@ -37,11 +40,13 @@ __all__ = [
     "OptionValue",
     "Plot",
     "Result",
+    "Session",
     "Severity",
     "SpiceError",
     "SweepMode",
     "SweepResult",
     "Variable",
+    "WarmStats",
     "__version__",
     "measure",
     "simulate",
