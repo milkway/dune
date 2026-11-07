@@ -20,6 +20,7 @@
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 dir="$root/corpus/pss"
+mkdir -p "$dir/golden"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 for deck in "$dir"/*.cir; do
