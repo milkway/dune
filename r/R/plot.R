@@ -116,13 +116,17 @@ as_tibble.spice_plot <- function(x, ...) {
 
 #' Results as one long tibble
 #'
-#' Binds [tibble::as_tibble()] of every plot of a result. When the
+#' Binds [tibble::as_tibble()] of every plot of a result. For a
+#' `spice_sweep` from [spice_sweep()], binds the tidy tibble of every
+#' run, with the sweep's `run` index and swept parameters as the first
+#' columns (one column per parameter, constant within a run): group by
+#' `run` for one curve per run. When the
 #' result mixes real and complex plots (e.g. a deck with `.tran` and
 #' `.ac`), the tibble has all of `value`, `re` and `im`, with `NA`
 #' where a column does not apply; otherwise only the columns of its
 #' kind. See [spice_plot] for the columns.
 #'
-#' @param result A `spice_result`.
+#' @param result A `spice_result`, or a `spice_sweep`.
 #' @param plots Optional: labels or indices of the plots to keep.
 #' @return A tibble.
 #' @export
@@ -130,6 +134,9 @@ as_tibble.spice_plot <- function(x, ...) {
 #' res <- spice_run("rc\nvin 1 0 pulse(0 1)\nr1 1 2 1k\nc1 2 0 1u\n.tran 0.1m 5m\n.end")
 #' spice_tidy(res)
 spice_tidy <- function(result, plots = NULL) {
+  if (inherits(result, "spice_sweep")) {
+    return(sweep_tidy(result, plots))
+  }
   check_result(result)
   ps <- result$plots
   if (!is.null(plots)) {

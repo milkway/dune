@@ -58,6 +58,18 @@ NULL
   .Call(savvy_ffi_run_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`)
 }
 
+#' Sweep a deck (issue #10): the deck, includes and options as in
+#' `ffi_run_deck`; `params` the swept names, `values` the runs as a
+#' column-major matrix (one row per run, one column per parameter),
+#' `threads` 1 for the sequential path, 0 for one per core. Returns
+#' `list(ok, title, params, runs, diagnostics, kind, message)`; each
+#' run is `list(ok, plots, notes)` or `list(ok = FALSE, kind,
+#' message)`.
+#' @noRd
+`ffi_sweep_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `params`, `values`, `threads`) {
+  .Call(savvy_ffi_sweep_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `params`, `values`, `threads`)
+}
+
 #' Write plots (each a list as `plot_to_r` makes) to a rawfile.
 #' @noRd
 `ffi_write_raw` <- function(`path`, `plots`, `binary`) {

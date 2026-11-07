@@ -21,7 +21,8 @@ num-complex = "0.4"
 # package's `configure` rewrites these paths from DUNE_ROOT when the
 # package is built from a tarball outside the repository (vendoring
 # for a real CRAN submission is a later task).
-dune-core = { path = "../../../crates/dune-core" }
+# `parallel`: `spice_sweep(.threads =)` (issue #10).
+dune-core = { path = "../../../crates/dune-core", features = ["parallel"] }
 dune-netlist = { path = "../../../crates/dune-netlist" }
 dune-raw = { path = "../../../crates/dune-raw" }
 

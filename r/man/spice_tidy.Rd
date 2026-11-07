@@ -7,7 +7,7 @@
 spice_tidy(result, plots = NULL)
 }
 \arguments{
-\item{result}{A \code{spice_result}.}
+\item{result}{A \code{spice_result}, or a \code{spice_sweep}.}
 
 \item{plots}{Optional: labels or indices of the plots to keep.}
 }
@@ -15,7 +15,11 @@ spice_tidy(result, plots = NULL)
 A tibble.
 }
 \description{
-Binds \code{\link[tibble:as_tibble]{tibble::as_tibble()}} of every plot of a result. When the
+Binds \code{\link[tibble:as_tibble]{tibble::as_tibble()}} of every plot of a result. For a
+\code{spice_sweep} from \code{\link[=spice_sweep]{spice_sweep()}}, binds the tidy tibble of every
+run, with the sweep's \code{run} index and swept parameters as the first
+columns (one column per parameter, constant within a run): group by
+\code{run} for one curve per run. When the
 result mixes real and complex plots (e.g. a deck with \code{.tran} and
 \code{.ac}), the tibble has all of \code{value}, \code{re} and \code{im}, with \code{NA}
 where a column does not apply; otherwise only the columns of its

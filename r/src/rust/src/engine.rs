@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use dune_core::consts::CTOK;
-use dune_core::{Circuit, Method, Options, Solution};
+use dune_core::{Circuit, Method, Options, Solution, SweepParam};
 use dune_netlist::{IncludeLoader, ParseOutcome, Severity};
 use dune_raw::{Data, Plot, Rawfile};
 
@@ -205,10 +205,15 @@ fn render_diags(parsed: &ParseOutcome, diags: &[dune_netlist::Diagnostic]) -> Ve
         .collect()
 }
 
-/// Parse, elaborate and run every analysis card in deck order — what
-/// `dune -b` runs — through [`Circuit::run`]. The deck's `.options`
-/// apply first, then `user` on top.
-pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput, Failure> {
+/// A parsed deck with its options settled (the deck's `.options`,
+/// then `user` on top), ready to elaborate.
+struct Prepared {
+    netlist: dune_netlist::ir::Netlist,
+    options: Options,
+    diagnostics: Vec<Diag>,
+}
+
+fn prepare(source: Source<'_>, user: &[(String, OptValue)]) -> Result<Prepared, Failure> {
     // Validate the overrides before any work.
     let mut options = Options::default();
     apply_options(&mut options, user).map_err(|m| Failure::new("options", m))?;
@@ -232,21 +237,44 @@ pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput,
         });
     }
 
-    let (circuit, mut notes) = Circuit::from_netlist(&parsed.netlist).map_err(|e| Failure {
-        kind: "elaborate",
-        message: e.to_string(),
-        diagnostics: std::mem::take(&mut diagnostics),
-    })?;
-
     let mut options = Options::default();
     let mut opt_diags = Vec::new();
     options.apply(&parsed.netlist.options, &mut opt_diags);
     diagnostics.extend(render_diags(&parsed, &opt_diags));
     // Cannot fail: validated above on a fresh `Options`.
     apply_options(&mut options, user).map_err(|m| Failure::new("options", m))?;
+    Ok(Prepared {
+        netlist: parsed.netlist,
+        options,
+        diagnostics,
+    })
+}
+
+fn to_plots(title: &str, solutions: &[Solution]) -> Vec<(Plot, Option<usize>)> {
+    solutions
+        .iter()
+        .map(|s| (s.to_plot(title, ""), s.scale))
+        .collect()
+}
+
+/// Parse, elaborate and run every analysis card in deck order — what
+/// `dune -b` runs — through [`Circuit::run`]. The deck's `.options`
+/// apply first, then `user` on top.
+pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput, Failure> {
+    let Prepared {
+        netlist,
+        options,
+        mut diagnostics,
+    } = prepare(source, user)?;
+
+    let (circuit, mut notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
+        kind: "elaborate",
+        message: e.to_string(),
+        diagnostics: std::mem::take(&mut diagnostics),
+    })?;
 
     let mut solutions: Vec<Solution> = Vec::new();
-    for analysis in &parsed.netlist.analyses {
+    for analysis in &netlist.analyses {
         let (sols, analysis_notes) = circuit.run(analysis, &options).map_err(|e| Failure {
             kind: "analysis",
             message: e.to_string(),
@@ -259,14 +287,90 @@ pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput,
         notes.push("no analyses in the deck; nothing to do".into());
     }
 
-    let title = parsed.netlist.title.clone();
+    let title = netlist.title.clone();
     Ok(RunOutput {
-        plots: solutions
-            .iter()
-            .map(|s| (s.to_plot(&title, ""), s.scale))
-            .collect(),
+        plots: to_plots(&title, &solutions),
         title,
         notes,
+        diagnostics,
+    })
+}
+
+/// One run of a sweep: its plots and notes, or why it failed.
+pub enum SweepRunOutput {
+    Ok {
+        plots: Vec<(Plot, Option<usize>)>,
+        notes: Vec<String>,
+    },
+    Failed {
+        kind: &'static str,
+        message: String,
+    },
+}
+
+/// A whole sweep (issue #10).
+pub struct SweepOutput {
+    pub title: String,
+    /// The swept parameters in canonical form (`r1`, `@m1[w]`, `temp`).
+    pub params: Vec<String>,
+    pub runs: Vec<SweepRunOutput>,
+    pub diagnostics: Vec<Diag>,
+}
+
+/// Parse once, then run the deck per row of `rows` through
+/// `dune_core::sweep` (`threads == 1`) or `sweep_parallel` (any other
+/// count; 0 = one per core). An unusable parameter or row is kind
+/// `sweep`; a run's own failure stays in its [`SweepRunOutput`].
+pub fn sweep(
+    source: Source<'_>,
+    user: &[(String, OptValue)],
+    params: &[String],
+    rows: &[Vec<f64>],
+    threads: usize,
+) -> Result<SweepOutput, Failure> {
+    let params = params
+        .iter()
+        .map(|p| SweepParam::parse(p))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| Failure::new("sweep", e.to_string()))?;
+    let Prepared {
+        netlist,
+        options,
+        diagnostics,
+    } = prepare(source, user)?;
+    let runs = if threads == 1 {
+        dune_core::sweep(&netlist, &options, &params, rows)
+    } else {
+        dune_core::sweep_parallel(&netlist, &options, &params, rows, threads)
+    }
+    .map_err(|e| Failure {
+        kind: "sweep",
+        message: e.to_string(),
+        diagnostics: Vec::new(),
+    })?;
+    let title = netlist.title.clone();
+    let runs = runs
+        .into_iter()
+        .map(|r| match r.outcome {
+            Ok(o) => SweepRunOutput::Ok {
+                plots: to_plots(&title, &o.solutions),
+                notes: o.notes,
+            },
+            Err(e) => SweepRunOutput::Failed {
+                kind: match e {
+                    dune_core::Error::Build(_)
+                    | dune_core::Error::Elab(_)
+                    | dune_core::Error::Unsupported { .. } => "elaborate",
+                    _ => "analysis",
+                },
+                message: e.to_string(),
+            },
+        })
+        .collect();
+    Ok(SweepOutput {
+        title,
+        params: params.iter().map(SweepParam::key).collect(),
+        runs,
         diagnostics,
     })
 }
@@ -351,6 +455,31 @@ mod tests {
             panic!("expected an options error");
         };
         assert_eq!(f.kind, "options");
+    }
+
+    #[test]
+    fn sweep_runs_every_row() {
+        let inc = BTreeMap::new();
+        let src = || Source::Text {
+            text: DIVIDER,
+            includes: &inc,
+        };
+        let rows = vec![vec![1e3], vec![3e3]];
+        let out = sweep(src(), &[], &["R2".into()], &rows, 1).ok().unwrap();
+        assert_eq!(out.params, ["r2"]);
+        let v2: Vec<f64> = out
+            .runs
+            .iter()
+            .map(|r| match r {
+                SweepRunOutput::Ok { plots, .. } => plots[0].0.real_values("v(2)").unwrap()[0],
+                SweepRunOutput::Failed { .. } => panic!("run failed"),
+            })
+            .collect();
+        assert!((v2[0] - 1.0).abs() < 1e-9 && (v2[1] - 1.5).abs() < 1e-9);
+        let Err(f) = sweep(src(), &[], &["r9".into()], &[vec![1.0]], 1) else {
+            panic!("expected a sweep error");
+        };
+        assert_eq!(f.kind, "sweep");
     }
 
     #[test]

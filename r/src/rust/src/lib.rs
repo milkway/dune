@@ -22,7 +22,7 @@ use savvy::{
     RealSexp, Sexp, StringSexp, TypedSexp, savvy,
 };
 
-use engine::{Diag, OptValue, Source};
+use engine::{Diag, OptValue, Source, SweepRunOutput};
 
 fn strings<I, S>(it: I) -> savvy::Result<Sexp>
 where
@@ -130,6 +130,30 @@ fn plots_to_r<'a>(
     Ok(out.into())
 }
 
+fn includes_map(names: &StringSexp, texts: &StringSexp) -> BTreeMap<String, String> {
+    names
+        .iter()
+        .zip(texts.iter())
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+fn user_options(names: &StringSexp, values: ListSexp) -> savvy::Result<Vec<(String, OptValue)>> {
+    let mut user = Vec::with_capacity(names.len());
+    for (name, value) in names.iter().zip(values.values_iter()) {
+        let v = match value.into_typed() {
+            TypedSexp::Real(x) if x.len() == 1 => OptValue::Num(x.as_slice()[0]),
+            TypedSexp::Logical(x) if x.len() == 1 => OptValue::Bool(x.to_vec()[0]),
+            TypedSexp::String(x) if x.len() == 1 => {
+                OptValue::Str(x.iter().next().unwrap_or_default().to_string())
+            }
+            _ => return Err(savvy::Error::new(format!("bad value for option `{name}`"))),
+        };
+        user.push((name.to_string(), v));
+    }
+    Ok(user)
+}
+
 /// Run a deck. `deck` is a path when `is_path`, netlist text
 /// otherwise; includes are parallel name/text vectors (text decks
 /// only); options are names plus a list of length-1 values.
@@ -143,23 +167,8 @@ fn ffi_run_deck(
     opt_names: StringSexp,
     opt_values: ListSexp,
 ) -> savvy::Result<Sexp> {
-    let includes: BTreeMap<String, String> = include_names
-        .iter()
-        .zip(include_texts.iter())
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-    let mut user = Vec::with_capacity(opt_names.len());
-    for (name, value) in opt_names.iter().zip(opt_values.values_iter()) {
-        let v = match value.into_typed() {
-            TypedSexp::Real(x) if x.len() == 1 => OptValue::Num(x.as_slice()[0]),
-            TypedSexp::Logical(x) if x.len() == 1 => OptValue::Bool(x.to_vec()[0]),
-            TypedSexp::String(x) if x.len() == 1 => {
-                OptValue::Str(x.iter().next().unwrap_or_default().to_string())
-            }
-            _ => return Err(savvy::Error::new(format!("bad value for option `{name}`"))),
-        };
-        user.push((name.to_string(), v));
-    }
+    let includes = includes_map(&include_names, &include_texts);
+    let user = user_options(&opt_names, opt_values)?;
     let source = if is_path {
         Source::Path(Path::new(deck))
     } else {
@@ -191,6 +200,94 @@ fn ffi_run_deck(
             out.set_name_and_value(3, "notes", OwnedStringSexp::new(0)?)?;
             out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
             out.set_name_and_value(5, "kind", string(f.kind)?)?;
+        }
+    }
+    Ok(out.into())
+}
+
+/// Sweep a deck (issue #10): the deck, includes and options as in
+/// `ffi_run_deck`; `params` the swept names, `values` the runs as a
+/// column-major matrix (one row per run, one column per parameter),
+/// `threads` 1 for the sequential path, 0 for one per core. Returns
+/// `list(ok, title, params, runs, diagnostics, kind, message)`; each
+/// run is `list(ok, plots, notes)` or `list(ok = FALSE, kind,
+/// message)`.
+/// @noRd
+#[savvy]
+#[allow(clippy::too_many_arguments)]
+fn ffi_sweep_deck(
+    deck: &str,
+    is_path: bool,
+    include_names: StringSexp,
+    include_texts: StringSexp,
+    opt_names: StringSexp,
+    opt_values: ListSexp,
+    params: StringSexp,
+    values: RealSexp,
+    threads: i32,
+) -> savvy::Result<Sexp> {
+    let includes = includes_map(&include_names, &include_texts);
+    let user = user_options(&opt_names, opt_values)?;
+    let names: Vec<String> = params.iter().map(str::to_string).collect();
+    let k = names.len();
+    let flat = values.as_slice();
+    if k == 0 || !flat.len().is_multiple_of(k) || threads < 0 {
+        return Err(savvy::Error::new("bad sweep shape"));
+    }
+    let n = flat.len() / k;
+    let rows: Vec<Vec<f64>> = (0..n)
+        .map(|r| (0..k).map(|c| flat[c * n + r]).collect())
+        .collect();
+    let source = if is_path {
+        Source::Path(Path::new(deck))
+    } else {
+        Source::Text {
+            text: deck,
+            includes: &includes,
+        }
+    };
+
+    let result = engine::sweep(source, &user, &names, &rows, threads as usize);
+    let mut out = OwnedListSexp::new(7, true)?;
+    match result {
+        Ok(r) => {
+            out.set_name_and_value(0, "ok", logical(true)?)?;
+            out.set_name_and_value(1, "title", string(&r.title)?)?;
+            out.set_name_and_value(2, "params", strings(&r.params)?)?;
+            let mut runs = OwnedListSexp::new(r.runs.len(), false)?;
+            for (i, run) in r.runs.iter().enumerate() {
+                let mut item = OwnedListSexp::new(3, true)?;
+                match run {
+                    SweepRunOutput::Ok { plots, notes } => {
+                        item.set_name_and_value(0, "ok", logical(true)?)?;
+                        item.set_name_and_value(
+                            1,
+                            "plots",
+                            plots_to_r(plots.iter().map(|(p, s)| (p, *s)))?,
+                        )?;
+                        item.set_name_and_value(2, "notes", strings(notes)?)?;
+                    }
+                    SweepRunOutput::Failed { kind, message } => {
+                        item.set_name_and_value(0, "ok", logical(false)?)?;
+                        item.set_name_and_value(1, "kind", string(kind)?)?;
+                        item.set_name_and_value(2, "message", string(message)?)?;
+                    }
+                }
+                runs.set_value(i, item)?;
+            }
+            out.set_name_and_value(3, "runs", runs)?;
+            out.set_name_and_value(4, "diagnostics", diag_list(&r.diagnostics)?)?;
+            out.set_name_and_value(5, "kind", savvy::NullSexp)?;
+            out.set_name_and_value(6, "message", savvy::NullSexp)?;
+        }
+        Err(f) => {
+            out.set_name_and_value(0, "ok", logical(false)?)?;
+            out.set_name_and_value(1, "title", savvy::NullSexp)?;
+            out.set_name_and_value(2, "params", savvy::NullSexp)?;
+            out.set_name_and_value(3, "runs", savvy::NullSexp)?;
+            out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
+            out.set_name_and_value(5, "kind", string(f.kind)?)?;
+            out.set_name_and_value(6, "message", string(&f.message)?)?;
         }
     }
     Ok(out.into())

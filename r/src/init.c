@@ -54,6 +54,11 @@ SEXP savvy_ffi_run_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg_
     return handle_result(res);
 }
 
+SEXP savvy_ffi_sweep_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__params, SEXP c_arg__values, SEXP c_arg__threads) {
+    SEXP res = savvy_ffi_sweep_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__params, c_arg__values, c_arg__threads);
+    return handle_result(res);
+}
+
 SEXP savvy_ffi_write_raw__impl(SEXP c_arg__path, SEXP c_arg__plots, SEXP c_arg__binary) {
     SEXP res = savvy_ffi_write_raw__ffi(c_arg__path, c_arg__plots, c_arg__binary);
     return handle_result(res);
@@ -64,6 +69,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"savvy_ffi_option_names__impl", (DL_FUNC) &savvy_ffi_option_names__impl, 0},
     {"savvy_ffi_read_raw__impl", (DL_FUNC) &savvy_ffi_read_raw__impl, 1},
     {"savvy_ffi_run_deck__impl", (DL_FUNC) &savvy_ffi_run_deck__impl, 6},
+    {"savvy_ffi_sweep_deck__impl", (DL_FUNC) &savvy_ffi_sweep_deck__impl, 9},
     {"savvy_ffi_write_raw__impl", (DL_FUNC) &savvy_ffi_write_raw__impl, 3},
     {NULL, NULL, 0}
 };
