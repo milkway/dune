@@ -140,8 +140,11 @@
   .pill.hd { background: transparent; border-style: dashed; color: var(--muted); }
   .note { color: var(--muted); font-size: 14px; max-width: 76ch; }
 
-  .duo { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: stretch; }
+  .duo { display: grid; grid-template-columns: 1.1fr auto 1fr auto .9fr; gap: 14px; align-items: stretch; }
   .duo .arrow { align-self: center; color: var(--brand); font-size: 22px; }
+  .canvas { display: flex; flex-direction: column; }
+  .canvas .fig { flex: 1; display: flex; align-items: center; justify-content: center; padding: 18px 14px; color: var(--fg); }
+  .canvas .fig svg { width: 100%; max-width: 320px; height: auto; }
   .panel {
     background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden;
@@ -288,8 +291,101 @@ R1: resistor(In, Out, 1k)
 C1: capacitor(Out, (2,0), 100n)
 ground((0,0))
 line from (0,0) to (2,0)
+"In" above at In + (0,0.05)
+"Out" above at Out + (0,0.05)
+dot at In; dot at Out
 .ac dec 20 10 100k
 .PE</code></pre>
+        </div>
+        <div class="arrow">→</div>
+        <div class="panel canvas">
+          <div class="cap">the figure — this SVG is Dune's own output</div>
+          <div class="fig" role="img" aria-label="Rendered schematic of the RC low-pass: an AC source into a 1 kilo-ohm resistor, a 100 nanofarad capacitor to ground at the output."><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 294.266667 163.56" font-family="sans-serif" font-size="14.666667" fill="none">
+<g id="s0">
+<text font-size="11pt" stroke-width="0.266667" fill="currentColor" x="45.866667" y="87.013333" text-anchor="end">AC 1</text>
+</g>
+<g id="s1">
+<line x1="77.333333" y1="130.173333" x2="77.333333" y2="101.373333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s2">
+<circle cx="77.333333" cy="82.173333" r="19.2" fill="none" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s3">
+<line x1="72.533333" y1="91.773333" x2="82.133333" y2="91.773333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s4">
+<line x1="72.533333" y1="72.573333" x2="82.133333" y2="72.573333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s5">
+<line x1="77.333333" y1="77.373333" x2="77.333333" y2="67.773333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s6">
+<line x1="77.333333" y1="62.973333" x2="77.333333" y2="34.173333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s7">
+</g>
+<g id="s8">
+</g>
+<g id="s9">
+<text font-size="11pt" stroke-width="0.266667" fill="currentColor" x="173.333333" y="19.813333" text-anchor="middle">1k</text>
+</g>
+<g id="s10">
+<polyline points="77.333333,34.173333 151.733333,34.173333 151.733333,34.173333 155.331893,27.453333 155.331893,27.453333 162.533333,40.893333 162.533333,40.893333 169.734773,27.453333 169.734773,27.453333 176.931893,40.893333 176.931893,40.893333 184.133333,27.453333 184.133333,27.453333 191.334773,40.893333 191.334773,40.893333 194.933333,34.173333 194.933333,34.173333 269.333333,34.173333" fill="none" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s11">
+</g>
+<g id="s12">
+</g>
+<g id="s13">
+<text font-size="11pt" stroke-width="0.266667" fill="currentColor" x="242.666667" y="87.013333" text-anchor="end">100n</text>
+</g>
+<g id="s14">
+<line x1="269.333333" y1="34.173333" x2="269.333333" y2="78.813333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s15">
+<line x1="281.813333" y1="78.813333" x2="256.853333" y2="78.813333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s16">
+<line x1="281.813333" y1="85.533333" x2="256.853333" y2="85.533333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s17">
+<line x1="269.333333" y1="85.533333" x2="269.333333" y2="130.173333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s18">
+</g>
+<g id="s19">
+</g>
+<g id="s20">
+<line x1="77.333333" y1="130.173333" x2="77.333333" y2="141.693333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s21">
+<line x1="64.853333" y1="141.693333" x2="89.813333" y2="141.693333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s22">
+<line x1="69.653333" y1="146.493333" x2="85.013333" y2="146.493333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s23">
+<line x1="74.453333" y1="151.293333" x2="80.213333" y2="151.293333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s24">
+</g>
+<g id="s25">
+<line x1="77.333333" y1="130.173333" x2="269.333333" y2="130.173333" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s26">
+<text font-size="11pt" stroke-width="0.266667" fill="currentColor" x="77.333333" y="26.706667" text-anchor="middle">In</text>
+</g>
+<g id="s27">
+<text font-size="11pt" stroke-width="0.266667" fill="currentColor" x="269.333333" y="26.706667" text-anchor="middle">Out</text>
+</g>
+<g id="s28">
+<circle cx="77.333333" cy="34.173333" r="3.36" fill="currentColor" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+<g id="s29">
+<circle cx="269.333333" cy="34.173333" r="3.36" fill="currentColor" stroke="currentColor" stroke-width="1.066667"/>
+</g>
+</svg>
+</div>
         </div>
         <div class="arrow">→</div>
         <div class="panel">
