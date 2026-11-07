@@ -1,0 +1,33 @@
+* netlist extracted by dune-pic
+Vin In 0 sin(0 0.1 50meg 0.5ns) ac 1
+Vcc Vp 0 15.0
+Vee Vn 0 -15.0
+RS1 B1 In 1k
+RS2 B2 0 1k
+R1 Ba Vn 4.8k
+R2 Bb Vn 4.8k
+R3 Vt Vn 811
+R4 Bias Vn 2.17k
+R5 Bias 0 820
+R6 Vp Oa 1.32k
+R7 Vp Vcas 4.5k
+R8 Vp Ob 1.32k
+R9 Out 0 5.25k
+R10 Outb 0 5.25k
+Q1 Vp B1 Ba qnl
+Q2 Vp B2 Bb qnl
+Q3 Ca Ba Tail qnl
+Q4 Cb Bb Tail qnl
+Q5 Oa Vcas Ca qnl
+Q6 Ob Vcas Cb qnl
+Q7 Vcas Vcas Vd qnl
+Q8 Vd Vd 0 qnl
+Q9 Tail Bias Vt qnl
+Q10 Vp Ob Out qnl
+Q11 Vp Oa Outb qnl
+.ac dec 10 1 10ghz
+.dc vin -0.25 0.25 0.005
+.tran 2.0ns 200ns
+.model qnl npn bf=80 rb=100 ccs=2pf tf=0.3ns tr=6ns cje=3pf
++ cjc=2pf va 50
+.end

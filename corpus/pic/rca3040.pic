@@ -1,0 +1,102 @@
+.PS
+# Berkeley's rca3040.cir drawn: the RCA CA3040 wideband amplifier.
+# Emitter followers T₁/T₂ drive the pair T₃/T₄, cascoded by T₅/T₆
+# (their bases held by the diode string T₇/T₈ under R7); T₉ sinks the
+# tail current set by R4/R5/R3, and T₁₀/T₁₁ buffer the two collector
+# loads. Elements are in the deck's card order (pins are coordinates,
+# so no transistor is referenced before its card), and the figure's
+# netlist is the deck's with named nodes (1 In, 2 Vp, 3 Vn, 5 Ba,
+# 6 Bb, 7 Tail, 8 Bias, 9 Vt, 10 Ca, 11 Cb, 12 Vcas, 13 Vd, 14 Oa,
+# 15 Ob, 16 Out, 17 Outb, 30 B1, 31 B2). Two wires cross without a dot
+# (no connection): the cascode bias into T₆ and T₂'s emitter into T₄,
+# each over the T₃–T₅ / T₄–T₆ link. The deck's 3-node Q cards keep
+# the substrate (CCS) on ground, so the plain npn symbol is used.
+spice = 1
+maxpswid = 12
+In:   (0.2,4.4)
+B1:   (1.52,4.4)
+B2:   (8.92,4.4)
+Vp:   (10.6,8.4)
+Vn:   (10.6,0)
+Ba:   (2.16,3.2)
+Bb:   (9.56,3.85)
+Tail: (6.16,2.3)
+Bias: (4.4,1.6)
+Vt:   (6.16,1.18)
+Ca:   (4.76,3.8)
+Cb:   (7.56,4.1)
+Vcas: (3.4,7)
+Vd:   (3.4,5.9)
+Oa:   (4.76,6.6)
+Ob:   (7.56,6.6)
+Out:  (8.56,6.18)
+Outb: (5.76,6.18)
+
+.ac dec 10 1 10ghz
+.dc vin -0.25 0.25 0.005
+.tran 2.0ns 200ns
+Vin: vsource((0.2,4.4), (0.2,3.2), sin(0 0.1 50meg 0.5ns) ac 1, "G₁")
+Vcc: vsource((10.6,8.4), (10.6,7.2), 15.0, "VCC")
+Vee: vsource((10.6,0), (10.6,1), -15.0, "VEE")
+RS1: resistor((1.52,4.4), (0.2,4.4), 1k)
+RS2: resistor((8.92,4.4), (7.95,4.4), 1k)
+R1: resistor((2.16,3.2), (2.16,0), 4.8k)
+R2: resistor((9.56,3.85), (9.56,0), 4.8k)
+R3: resistor((6.16,1.18), (6.16,0), 811)
+R4: resistor((4.4,1.6), (4.4,0), 2.17k)
+R5: resistor((3.6,1.6), (3.6,0.6), 820)
+R6: resistor((4.76,8.4), (4.76,6.6), 1.32k)
+R7: resistor((3.4,8.4), (3.4,7), 4.5k)
+R8: resistor((7.56,8.4), (7.56,6.6), 1.32k)
+R9: resistor((8.56,6.18), (8.56,5.3), 5.25k)
+R10: resistor((5.76,6.18), (5.76,5.3), 5.25k)
+Q1: npn((2,4.4), qnl, "T₁")
+Q2: npn((9.4,4.4), qnl, "T₂")
+Q3: npn((4.6,3.2), qnl, "T₃")
+Q4: npn((7.4,3.2), qnl, "T₄")
+Q5: npn((4.6,4.8), qnl, "T₅")
+Q6: npn((7.4,4.8), qnl, "T₆")
+Q7: npn((3.24,6.4), qnl, "T₇")
+Q8: npn((3.24,5.4), qnl, "T₈")
+Q9: npn((6,1.6), qnl, "T₉")
+Q10: npn((8.4,6.6), qnl, "T₁₀")
+Q11: npn((5.6,6.6), qnl, "T₁₁")
+
+# supply rails
+line from Q1.C to (2.16,8.4) then to Vcc.P
+line from Q11.C to (5.76,8.4)
+line from Q10.C to (8.56,8.4)
+line from Q2.C to (9.56,8.4)
+line from R1.N to Vee.P
+line from Vee.N to (11,1)
+# input followers into the pair
+line from Q1.E to Ba then to Q3.B
+line from Q2.E to Bb then to (6.75,3.85) then to (6.75,3.2) then to Q4.B
+# pair, cascode, tail
+line from Q3.C to Q5.E
+line from Q4.C to Q6.E
+line from Q3.E to (4.76,2.3) then to (7.56,2.3) then to Q4.E
+line from Q9.C to Tail
+line from Q9.B to (3.6,1.6)
+# cascode bias: the T₇/T₈ diode string
+line from Q7.C to Vcas
+line from Q7.B to (2.76,7) then to Vcas then to (4,7) then to (4,4.1) \
+  then to (6.6,4.1) then to (6.6,4.8) then to Q6.B
+line from (4,4.8) to Q5.B
+line from Q7.E to Q8.C
+line from Q8.B to (2.76,5.9) then to Vd
+# collector loads into the output followers
+line from Oa to Q5.C
+line from Oa to Q11.B
+line from Ob to Q6.C
+line from Ob to Q10.B
+dot at (3.4,8.4); dot at (4.76,8.4); dot at (5.76,8.4); dot at (7.56,8.4)
+dot at (8.56,8.4); dot at (9.56,8.4)
+dot at (4.4,0); dot at (6.16,0); dot at (9.56,0)
+dot at Ba; dot at Bb; dot at Tail; dot at Bias; dot at Vcas; dot at Vd
+dot at (4,4.8); dot at Oa; dot at Ob
+ground(Vin.N); ground(RS2.N); ground(R5.N); ground(Q8.E)
+ground(R9.N); ground(R10.N); ground(Vcc.N); ground((11,1))
+.model qnl npn bf=80 rb=100 ccs=2pf tf=0.3ns tr=6ns cje=3pf
++ cjc=2pf va 50
+.PE
