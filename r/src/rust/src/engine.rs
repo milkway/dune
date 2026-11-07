@@ -176,7 +176,7 @@ pub fn measure_plot(
 
 /// The option names `apply_options` accepts, in `Options` field order
 /// (the card's names, as in `spice.txt` §SIMULATOR VARIABLES).
-pub const OPTION_NAMES: [&str; 24] = [
+pub const OPTION_NAMES: [&str; 25] = [
     "reltol",
     "abstol",
     "vntol",
@@ -195,6 +195,7 @@ pub const OPTION_NAMES: [&str; 24] = [
     "chgtol",
     "method",
     "ltrabkrate",
+    "ltrafit",
     "maxord",
     "nopage",
     "defl",
@@ -283,6 +284,7 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
                     }
                 }
             }
+            "ltrafit" => opts.ltra_fit = flag(n, v)?,
             "ltrabkrate" => opts.ltra_break_rate = Some(count(n, v)?),
             "maxord" => opts.maxord = count(n, v)?,
             "nopage" => opts.nopage = flag(n, v)?,

@@ -44,7 +44,7 @@ create_exception!(
 const DECK_NAME: &str = "deck.cir";
 
 /// Every `options` key accepted, in `Options` field order.
-const OPTION_NAMES: [&str; 24] = [
+const OPTION_NAMES: [&str; 25] = [
     "reltol",
     "abstol",
     "vntol",
@@ -63,6 +63,7 @@ const OPTION_NAMES: [&str; 24] = [
     "chgtol",
     "method",
     "ltrabkrate",
+    "ltrafit",
     "maxord",
     "nopage",
     "defl",
@@ -436,6 +437,7 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
                 };
                 Box::new(move |o: &mut Options| o.method = m) as Override
             }
+            "ltrafit" => set!(ltra_fit, bool_value(key, &v)?),
             "ltrabkrate" => {
                 let v = count_value(key, &v)?;
                 Box::new(move |o: &mut Options| o.ltra_break_rate = Some(v)) as Override
