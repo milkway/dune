@@ -194,7 +194,7 @@ function deckRequests(deck) {
 const MAX_TRACES = 6;
 const W = 600, H = 236, X1 = 568, Y0 = 14, Y1 = 196;
 let X0 = 64; // set per chart from the widest y label
-const BUCKETS = 150; // min+max per bucket → ≤ ~300 points per trace
+const BUCKETS = 240; // min+max per bucket → ≤ ~480 points per trace (≈1/px)
 
 function niceStep(range, target = 5) {
   const raw = range / target;
@@ -537,6 +537,18 @@ function renderPlot(p, requests) {
 
 const stats = { total: 0, ok: 0, failed: [], byGroup: {} };
 
+/** The deck with Dune's opt-in robust integrator asked for
+ *  (`.options method=trbdf2`, D-0027) — only to show, next to an
+ *  expected faithful-mode failure, what the robust mode computes. */
+function robustDeck(deck) {
+  // Before the `.end` card when the deck has one; some corpus decks
+  // (ltra_3) end at EOF instead, so append there.
+  if (/^[ \t]*\.end[ \t]*$/im.test(deck)) {
+    return deck.replace(/^([ \t]*\.end[ \t]*)$/im, '.options method=trbdf2\n$1');
+  }
+  return `${deck.replace(/\s*$/, '')}\n.options method=trbdf2\n`;
+}
+
 function runResults(deck, stem, run) {
   const requests = deckRequests(deck);
   const out = [];
@@ -560,6 +572,26 @@ function runResults(deck, stem, run) {
         '</div>',
     );
     stats.failed.push({ stem, kind: err.kind, message: err.message, xfail: !!xf });
+    // An expected faithful-mode failure: also show the same deck under
+    // Dune's opt-in robust integrator, so the failure above reads as a
+    // property of the faithful contract, not of the engine.
+    if (xf) {
+      try {
+        const res2 = simulate(robustDeck(deck));
+        out.push(
+          `<div class="notebox"><b>Solved by the robust mode</b> <span class="ptag">.options method=trbdf2</span>` +
+            `<p>The same deck with Dune's opt-in L-stable TR-BDF2 integrator (D-0027, ` +
+            `<a href="https://github.com/milkway/dune/issues/6">#6</a>) appended: the trapezoidal ` +
+            `ring that seeds the failure is damped and the run completes. Below is what it computes — ` +
+            `closer to a fine-step reference than the faithful mode or ngspice's own golden on this deck. ` +
+            `Not the 3f5 contract: the oracle comparison runs plain <code>trap</code>, so the expected ` +
+            `failure above stays.</p></div>`,
+        );
+        for (const p of res2.plots) out.push(renderPlot(p, requests));
+      } catch (e2) {
+        out.push(`<div class="notebox"><b>Robust mode</b><pre>${esc(e2.message || String(e2))}</pre></div>`);
+      }
+    }
     return out.join('');
   }
   stats.ok++;
