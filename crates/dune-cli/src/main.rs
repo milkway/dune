@@ -9,7 +9,8 @@
 //! `ngspice -b -r`, which refuses measurements next to a rawfile;
 //! a measurement never changes what is simulated or written.
 //! `dune pic FIGURE.pic` extracts the netlist of an rpic figure
-//! (`dune-pic`); `dune pic --run` simulates it the same way.
+//! (`dune-pic`); `dune pic --run` simulates it the same way, and
+//! `--svg OUT.svg` also writes the drawing.
 
 #![forbid(unsafe_code)]
 
@@ -24,8 +25,8 @@ use dune_netlist::Severity;
 use dune_netlist::ir::{Output, OutputKind};
 use dune_raw::{Format, Rawfile};
 
-const USAGE: &str =
-    "usage: dune -b INPUT.cir [-r OUTPUT.raw]\n       dune pic [--run] FIGURE.pic [-r OUTPUT.raw]";
+const USAGE: &str = "usage: dune -b INPUT.cir [-r OUTPUT.raw]\n       \
+                     dune pic [--run] FIGURE.pic [-r OUTPUT.raw] [--svg OUTPUT.svg]";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1).peekable();
@@ -58,10 +59,13 @@ fn main() -> Result<()> {
 }
 
 /// `dune pic FIGURE.pic` prints the netlist extracted from an rpic
-/// figure (diagnostics to stderr); `--run` simulates it like `-b`.
+/// figure (diagnostics to stderr); `--run` simulates it like `-b`;
+/// `--svg FILE` also writes the figure's SVG (`dune_pic::render_svg`),
+/// before the extraction, so a figure with errors still draws.
 fn pic_main(args: impl Iterator<Item = String>) -> Result<()> {
     let mut input: Option<PathBuf> = None;
     let mut rawfile: Option<PathBuf> = None;
+    let mut svg: Option<PathBuf> = None;
     let mut run = false;
     let mut args = args;
     while let Some(a) = args.next() {
@@ -69,6 +73,11 @@ fn pic_main(args: impl Iterator<Item = String>) -> Result<()> {
             "--run" => run = true,
             "-r" => {
                 rawfile = Some(PathBuf::from(args.next().context("-r needs a file name")?));
+            }
+            "--svg" => {
+                svg = Some(PathBuf::from(
+                    args.next().context("--svg needs a file name")?,
+                ));
             }
             flag if flag.starts_with('-') => bail!("unknown flag `{flag}`\n{USAGE}"),
             _ => {
@@ -86,13 +95,18 @@ fn pic_main(args: impl Iterator<Item = String>) -> Result<()> {
     }
     let src =
         std::fs::read_to_string(&input).with_context(|| format!("reading {}", input.display()))?;
-    let ex =
-        dune_pic::extract(&src, &dune_pic::ExtractOptions::default()).map_err(|e| match &e {
-            dune_pic::PicError::Compile { span: Some(s), .. } => {
-                anyhow::anyhow!("{}:{s}: {e}", input.display())
-            }
-            _ => anyhow::anyhow!("{}: {e}", input.display()),
-        })?;
+    let pic_err = |e: dune_pic::PicError| match &e {
+        dune_pic::PicError::Compile { span: Some(s), .. } => {
+            anyhow::anyhow!("{}:{s}: {e}", input.display())
+        }
+        _ => anyhow::anyhow!("{}: {e}", input.display()),
+    };
+    if let Some(svg) = &svg {
+        let drawing =
+            dune_pic::render_svg(&src, &dune_pic::ExtractOptions::default()).map_err(pic_err)?;
+        std::fs::write(svg, drawing).with_context(|| format!("writing {}", svg.display()))?;
+    }
+    let ex = dune_pic::extract(&src, &dune_pic::ExtractOptions::default()).map_err(pic_err)?;
     for d in &ex.diagnostics {
         match &d.span {
             Some(s) if s.file.is_none() => eprintln!("{}:{d}", input.display()),
