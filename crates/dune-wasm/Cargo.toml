@@ -23,7 +23,7 @@ dune-core.workspace = true
 dune-raw.workspace = true
 dune-pic.workspace = true
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
-serde_json = { version = "1", default-features = false, features = ["std"] }
+serde_json = { version = "1", default-features = false, features = ["std", "float_roundtrip"] }
 wasm-bindgen = { version = "0.2", default-features = false, features = ["std"] }
 js-sys = { version = "0.3", default-features = false, features = ["std"] }
 console_error_panic_hook = { version = "0.1", optional = true }
