@@ -36,10 +36,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
-      - name: Parallel sweep (bit-identical to sequential)
+      - name: Parallel sweep and device load (bit-identical to sequential)
         run: |
           cargo clippy -p dune-core --features parallel --all-targets -- -D warnings
           cargo test -p dune-core --features parallel --test sweep
+          # Every corpus deck x {2, 3, 64} load threads vs 1; release
+          # because the debug build takes ~20 min over the corpus.
+          cargo test -p dune-core --features parallel --release --lib --test parload
       - name: Oracle golden check
         run: cargo run -p dune-oracle -- --ci
       - name: Clippy (wasm32)
