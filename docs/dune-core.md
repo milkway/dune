@@ -790,3 +790,144 @@ OSCNODE, ver relatório da issue); linhas de transmissão recusadas
 o histórico/estados no vetor do shooting); chaves com histerese
 semeiam o estado pelo controle (dentro da banda pode escolher o ramo
 errado); ruído transiente fica para a outra leva da issue #13.
+
+## Ruído transiente — `TRNOISE`/`TRRANDOM` (issue #13, parte 2)
+
+Sem contrato 3f5: a gramática e a semântica são as do **ngspice-47**
+(manual §4.1.7–4.1.8; `vsrcload.c`, `vsrcacct.c`, `vsrcpar.c`,
+`frontend/trannoise/1-f-code.c`; a fonte I espelha). Os geradores
+aleatórios são do Dune. Módulo `trnoise.rs`; a realização mora no
+dispositivo da fonte (`NoiseWave`), a onda crua em `Wave::TrNoise`/
+`Wave::TrRandom` (args como no cartão, igual às outras ondas).
+
+**Gramática** (fontes V e I, com ou sem parênteses):
+
+- `TRNOISE(NA NT <NALPHA NAMP <RTSAM RTSCAPT RTSEMT>>)` — 2 a 7
+  argumentos. Amostras `x₀ = 0, xₖ = NA·gₖ + (yₖ − y₀)` na grade
+  `k·NT` (`gₖ` gaussiana padrão; `y` a sequência 1/f^NALPHA de Kasdin
+  com ruído branco motor de rms NAMP, `hₖ = hₖ₋₁(α/2 + k − 1)/k`,
+  `⌊TSTOP/NT⌋ + 10` amostras); o valor é **linear entre amostras**
+  (`V1 + (V2−V1)·frac` do `VSRCload` — não é degrau). `NT = 0`: sem
+  branco/1-f. NAMP só vale com NALPHA ≠ 0 e o 1/f só existe com
+  NALPHA > 0 e NAMP > 0 (`trnoise_state_gen`). RTS (só com
+  RTSAM > 0): soma RTSAM com a armadilha cheia — captura após tempo
+  exponencial de média RTSCAPT, emissão após um de média RTSEMT;
+  alto em `[capᵢ, emᵢ]` (o `VSRCload` testa `time >= RTScapTime` e a
+  emissão é aplicada no accept após `emᵢ`).
+- `TRRANDOM(TYPE TS <TD <PARAM1 <PARAM2>>>)` — 2 a 5 argumentos;
+  `PARAM2` até TD, depois um sorteio novo em cada intervalo
+  `(TD+(k−1)TS, TD+kTS]`: tipo 1 uniforme `PARAM1·[−1,1) + PARAM2`, 2
+  gaussiana (σ PARAM1, média PARAM2), 3 exponencial (média PARAM1 +
+  PARAM2), 4 poisson (λ PARAM1 + PARAM2, corte em 1000 como o
+  `poisson` do `randnumb.c`). PARAM1 default 1, PARAM2 0.
+- Ambos **somam o valor DC** quando dado (o ngspice soma; as outras
+  ondas não) e valem 0 (TRRANDOM: PARAM2) em t = 0, logo o ponto de
+  operação e toda análise DC/AC são sem ruído. Argumentos fora de
+  domínio são erro de build (ver KNOWN_DIFFS); aridade errada é erro
+  com span no parser.
+- `alter`: `trnoise`/`trrandom` entram na lista de parâmetros da
+  fonte (`Circuit::alter`, mesmo formato de lista das outras ondas).
+
+**Passo.** O ngspice não mexe no TMAX: o `VSRCaccept` planta um
+breakpoint em cada ponto da grade (`break_time += TS`) e em cada
+borda do RTS; o integrador sempre pisa nas quinas e, entre elas, a
+fonte é linear (TRNOISE) ou constante (TRRANDOM). O Dune faz o mesmo
+pelo hook `accept` da fonte (próximo ponto `(⌊(t+minBreak)/NT⌋+1)·NT`,
+multiplicação em vez de soma acumulada — o ngspice deriva ~1e-6·NT
+em 10⁵ passos). Diferença: uma grade que só carrega zeros (`NA = 0`
+sem 1/f) não planta breakpoints. Cada breakpoint custa ~4–5 passos
+(o `DCtran` recomeça em 0,1 do vão), então o orçamento automático
+(D-0022) vira `max(automático, 50·⌈TSTOP/espaçamento⌉)` quando há
+fonte de ruído (`Circuit::noise_tran_options`; o engine não muda),
+e uma grade que sozinha estoura o guarda de memória, ou um 1/f de
+mais de 2²³ amostras, é recusada. Toda corrida com ruído deixa a
+nota `transient noise: N source(s), seed S (stream version 1)`.
+
+**Semente e PRNG.** `.options seed=N` — **a chave do próprio
+ngspice-47** (`inp.c` lê `option seed=val|random` e põe em
+`rndseed`; o `set rndseed=N` do front-end é o mesmo número).
+`Options::seed: u64`, default **1** (o `rndseed` de partida do
+`main.c` do ngspice). `seed=random` (relógio) e valores ≤ 0 são
+recusados com aviso, a semente fica. O gerador é **contado**
+(counter-based): todo número é função pura de `(seed, nome da fonte,
+fluxo, índice)` — chave = SplitMix64 encadeado sobre a semente, o
+FNV-1a 64 do nome em minúsculas e o id do fluxo (branco, 1/f, RTS,
+TRRANDOM); o item `k` usa o `k`-ésimo valor do SplitMix64 da chave
+como semente de um fluxo local (Steele–Lea–Flood 2014: incremento
+`0x9E3779B97F4A7C15`, mistura `0xBF58476D1CE4E5B9`/
+`0x94D049BB133111EB`; BigCrush). Gaussiana pelo método polar de
+Marsaglia (um da dupla), exponencial `−ln U`, poisson por chegadas.
+Só aritmética inteira, IEEE e o `libm` em Rust puro (já dependência:
+sem libm da plataforma) → **os mesmos bits em toda plataforma**,
+wasm32 incluído; pinados no teste `streams_are_pinned`
+(`STREAM_VERSION = 1`, a subir com os goldens se algo mudar os
+bits). Consequências (todas melhores que o ngspice, cujas fontes
+partilham UM fluxo global semeado por `rand()` da libc): a
+realização de uma fonte não muda quando outras fontes entram, saem
+ou trocam de ordem, nem quando o controle de passo rejeita e refaz
+um ponto; mesma semente ⇒ mesmos bits sempre.
+
+**1/f.** Kasdin pede convolução **linear** (FFT com zero-padding até
+2N); é o que o Dune faz (FFT radix-2 própria, twiddles do `libm`). O
+`f_alpha` do ngspice faz produto circular — e no build com FFTW (o
+do Homebrew: imprime `100010 1/f noise values`, comprimento não
+potência de 2) o produto espectral indexa os vetores intercalados
+`re,im` por `i, i+1` em vez de `2i, 2i+1` (`1-f-code.c`,
+`out[i][0] = hfa[i]*wfa[i] - hfa[i+1]*wfa[i+1]`): o espectro sai
+deformado. Medido abaixo.
+
+**Validação** (`crates/dune-core/src/trnoise.rs` testes unitários;
+`crates/dune-core/tests/trnoise.rs` circuito; réguas = 5σ do erro
+amostral, sementes fixas):
+
+| Caso | Referência | Resultado |
+|---|---|---|
+| 10⁶ amostras brancas (unitário) | média 0, var NA², curtose 3, correlação lag-1 0 | dentro de 5σ (σ_var = √(2/N) = 0,14%) |
+| branco sobre R, 2·10⁵ amostras, seed 42 | var NA², massa ±1σ/±2σ, ⟨v²⟩ₜ = ⅔NA² (interpolação linear; degrau daria 1) | var/NA² − 1 = +0,41% (σ 0,32%); P(±1σ) 0,68178 (0,68269); P(±2σ) 0,95420 (0,95450); ⟨v²⟩ₜ/NA² 0,66976 |
+| RC (τ = 10·NT) sobre branco, 4·10⁵ amostras | forma fechada do segurador de 1ª ordem: `NA²[b₁² + (ab₁+b₀)²/(1−a²)]`, `a = e^(−NT/τ)`, `b₁ = 1−τ(1−a)/NT`, `b₀ = 1−a−b₁` (= 0,047582; o limite NA²·NT/2τ dá 0,05) | −0,30% (σ 0,71%) |
+| 1/f, α = 0,5/1/1,5, 16 realizações de 2¹⁶ (unitário) | inclinação −α do periodograma (Hann) em f ∈ [10⁻³, 10⁻¹] | −0,4989 / −0,9978 / −1,4966 (régua ±0,08) |
+| convolução do 1/f | soma direta `Σ hⱼwₖ₋ⱼ` | 1e-12 |
+| RTS, 2·10⁴ ciclos | permanências médias RTSCAPT/RTSEMT | dentro de 5σ (σ = 0,71%) |
+| TRRANDOM 1–4, 10⁵ sorteios | médias/variâncias das 4 leis | dentro de 5σ |
+| reprodutibilidade | mesma seed ⇒ mesmos bits; seed 2 ≠ seed 1 (só t=0 coincide); `.options seed=2` = campo; fonte nova não altera as outras | ok |
+| `.pss` com ruído | erro claro | `Error::Unsupported { name, "a transient-noise source (TRNOISE/TRRANDOM) in .pss — …" }` |
+
+**Contra o ngspice-47** (mesmos decks, estatísticas — os fluxos são
+outros números, nada amostra a amostra; scripts ad hoc, não no CI):
+
+| Deck | Grandeza | ngspice-47 | Dune | Referência |
+|---|---|---|---|---|
+| branco NA=1, NT=1µ, 2·10⁵ amostras | var na grade | 1,0129 | 0,9931 | 1 (σ 0,32%) |
+| idem | DSP média nas bandas [10⁻³,10⁻²) [10⁻²,10⁻¹) [0,1;0,3) [0,3;0,5) ciclos/amostra | 0,961 1,016 1,002 1,023 | 0,984 0,976 0,986 0,987 | 1 |
+| RC τ=10·NT, mesmo deck | var de v(2) | 0,04796 (+0,8%) | 0,04679 (−1,7%) | 0,047582 (σ 1,0%) |
+| 1/f α=1 NAMP=1, 10⁵ amostras, seeds 3/4/9 | inclinação do periodograma | −1,06 / −0,96 / −0,96 | −1,01 / −1,04 / −0,90 | −1 |
+| idem | DSP em f = 0,01 | 24,8 / 26,2 / 36,9 | 15,6 / 15,1 / 19,0 | Kasdin 1/(2 sin πf) = 15,92 |
+| RTS 1 V, 20µ/30µ, 100 ms | fração alta; transições | 0,5970; 3995 | 0,5967; 3962 | 0,6; ~4000 |
+| TRRANDOM gauss(σ 0,5, μ 1) | média; var | 0,9922; 0,2481 | 0,9966; 0,2514 | 1; 0,25 |
+| TRRANDOM poisson(λ 3) | média; var | 2,992; 2,987 | 3,003; 3,001 | 3; 3 |
+
+Branco, RC, RTS e TRRANDOM batem dentro do erro amostral nos dois. O
+1/f do ngspice sai 1,6–2,3× acima da forma fechada para o mesmo
+NAMP; uma reprodução em numpy do produto do `f_alpha` com o
+deslize de índice dá 30,5 (média de 6 realizações) e a do produto
+circular correto dá 14,3–15,5 — a convolução circular sozinha não
+explica, o índice sim. O Dune segue a forma fechada (KNOWN_DIFFS).
+Densidade de passos: o deck branco/RC dá a mesma contagem de pontos
+nos dois (1 002 697 vs 1 002 699); no deck com 1/f+RTS+TRRANDOM o
+ngspice dá 954 k pontos e o Dune 520 k (não investigado: as quinas
+são as mesmas).
+
+**Sondas** (`corpus/regress/trnoise_white.cir`, `trnoise_1f_rts.cir`,
+`trrandom.cir`): golden do **próprio Dune** em
+`corpus/regress/golden/<stem>.dune.raw` (versionados — negação no
+`.gitignore`), comparados a 1e-12 relativo (os fluxos são bit-exatos;
+o LU em volta pode variar em ulps entre builds SIMD); regenerar com
+`DUNE_BLESS=1 cargo test -p dune-core --test trnoise`. Estão no
+`corpus/SKIP` (fora do `--ci` do oráculo: não há golden ngspice
+comparável).
+
+**Pendências**: ruído transiente intrínseco dos dispositivos
+(térmico/shot/flicker de R, diodo, BJT, MOS como fontes no tempo —
+o ngspice só tem as fontes independentes; seria além dele);
+`.pss` com ruído (recusado nesta fase); `notrnoise` do ngspice (não
+portado — basta não ter a onda).
