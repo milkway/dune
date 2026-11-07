@@ -16,3 +16,21 @@ dune-netlist.workspace = true
 dune-core.workspace = true
 dune-raw.workspace = true
 dune-pic.workspace = true
+# rpic's `texlabels` math renderer (RaTeX, via `rpic-render`'s
+# `math` feature only — no raster/PDF backends). Registered at the top
+# of `main` so a `$...$` label in a figure (`texlabels = 1`) comes out
+# typeset in `dune pic --svg`. The pin must equal dune-pic's
+# `rpic-core`: the renderer hook is a static of that crate, and a
+# second rpic-core in the graph would carry its own, unread, hook.
+# Kept out of dune-pic/dune-core: those stay wasm-friendly and
+# dependency-free (issue #7; docs/dune-pic.md "Rótulos $...$").
+rpic-core = { version = "=0.16.1", optional = true }
+rpic-render = { version = "=0.16.1", default-features = false, features = ["math"], optional = true }
+
+[features]
+default = ["texlabels"]
+# Typeset `$...$` figure labels (rpic `texlabels`) with RaTeX.
+texlabels = ["dep:rpic-core", "dep:rpic-render"]
+
+[dev-dependencies]
+tempfile.workspace = true

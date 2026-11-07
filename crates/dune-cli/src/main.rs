@@ -10,7 +10,11 @@
 //! a measurement never changes what is simulated or written.
 //! `dune pic FIGURE.pic` extracts the netlist of an rpic figure
 //! (`dune-pic`); `dune pic --run` simulates it the same way, and
-//! `--svg OUT.svg` also writes the drawing.
+//! `--svg OUT.svg` also writes the drawing. With the default
+//! `texlabels` feature the binary registers rpic's RaTeX math
+//! renderer, so a `$...$` label (in a figure that sets
+//! `texlabels = 1`) is typeset; without it the label stays literal,
+//! as in the wasm build.
 
 #![forbid(unsafe_code)]
 
@@ -29,6 +33,10 @@ const USAGE: &str = "usage: dune -b INPUT.cir [-r OUTPUT.raw]\n       \
                      dune pic [--run] FIGURE.pic [-r OUTPUT.raw] [--svg OUTPUT.svg]";
 
 fn main() -> Result<()> {
+    // rpic's math hook is process-wide and first-call-wins; nothing
+    // else in this process registers one.
+    #[cfg(feature = "texlabels")]
+    rpic_core::set_math_renderer(rpic_render::math::render_math);
     let mut args = std::env::args().skip(1).peekable();
     if args.peek().map(String::as_str) == Some("pic") {
         args.next();
