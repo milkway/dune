@@ -904,7 +904,7 @@ impl Device for VsourceI {
         if let Some(p) = &self.port {
             p.stamp(|sl, v| ctx.add(sl, v));
         }
-let v = source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
+        let v = source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
         ctx.add_rhs(self.branch.br, v);
     }
 
@@ -1105,7 +1105,7 @@ impl Device for IsourceI {
     }
 
     fn load(&mut self, ctx: &mut LoadCtx) {
-let v = self.m * source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
+        let v = self.m * source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
         ctx.add_rhs(self.pos, -v);
         ctx.add_rhs(self.neg, v);
     }
