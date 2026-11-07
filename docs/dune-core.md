@@ -931,3 +931,80 @@ comparável).
 o ngspice só tem as fontes independentes; seria além dele);
 `.pss` com ruído (recusado nesta fase); `notrnoise` do ngspice (não
 portado — basta não ter a onda).
+## Load paralelo de dispositivos (issue #9, alavanca 1)
+
+`Options::load_threads` (API, não `.options`; feature nativa
+`parallel`, a mesma do `sweep_parallel`; ignorado sem ela e no
+wasm). `1` (default) = o `CKTload` sequencial de sempre; `0` = um
+thread por núcleo; `n > 1` = `n` workers. Números e limiar em
+`docs/perf.md` — só compensa com centenas de dispositivos caros e o
+load dominando a LU.
+
+**Desenho.** O que impede somar em paralelo não é a avaliação dos
+dispositivos (independente), é a soma em ponto flutuante: uma posição
+da matriz carimbada por vários dispositivos vale `((0 + a) + b) + c`
+na ordem dos dispositivos, e qualquer outro agrupamento (somas
+parciais por worker reduzidas no fim) muda ulps. Então os workers não
+somam:
+
+1. A lista de dispositivos é cortada em **chunks contíguos na ordem
+   dos dispositivos** (peso `1 + nº de estados` por dispositivo,
+   `4 × threads` chunks; com chunks ≥ dispositivos, um por chunk).
+2. Cada worker avalia o seu chunk num `StampLog` próprio: a lista de
+   `(posição, valor)` dos carimbos de matriz e de RHS, na ordem em que
+   os dispositivos do chunk os fizeram — sem somar nada.
+3. A **redução** roda na thread chamadora: reaplica os logs chunk a
+   chunk, em ordem de chunk, `values[k] += v` carimbo a carimbo.
+
+Isso executa exatamente as mesmas somas do laço sequencial, na mesma
+ordem por posição — o resultado é **bit-idêntico** para qualquer
+número de threads, qualquer particionamento e qualquer escalonamento
+(a ordem de término dos workers não entra em lugar nenhum).
+
+**Por que não há aliasing** (sem `unsafe`; o borrow checker prova as
+três primeiras):
+
+- *Campos do dispositivo*: cada worker recebe um `&mut [Box<dyn
+  Device>]` disjunto (`split_at_mut`); `Device: Send`.
+- *Estados*: os offsets são distribuídos em ordem de dispositivo
+  (`StateAlloc`, um dispositivo por spec), então os estados de um
+  chunk formam uma janela contígua de cada banco. `Built::state_ranges`
+  guarda a janela de cada dispositivo; `States::split_views` corta os
+  8 bancos nas fronteiras dos chunks e cada worker recebe um
+  `StateView` só da sua janela. Um acesso fora dela é pânico de
+  índice, nunca leitura de célula alheia.
+- *Matriz/RHS*: o `LoadCtx` agora só expõe `add`/`add_rhs` (o
+  `StampSink` é só-escrita); nenhum load lê o que outro carimbou. Os
+  52 `ctx.rhs[i] ±= v` viraram `add_rhs(i, ±v)` — `a − v` e
+  `a + (−v)` são a mesma operação IEEE.
+- *`noncon`/`fault`*: OR e "o último dispositivo que acusou",
+  mesclados em ordem de chunk — a semântica do laço sequencial.
+- *Quem escapa da própria janela*: o indutor mútuo (`MUTload` soma no
+  fluxo dos dois indutores). `Device::par_load()` é opt-in por tipo
+  depois de auditado (22 tipos `true`, K fica `false`); um dispositivo
+  não-paralelo **corta a lista**: carrega no lugar, na thread
+  chamadora, entre o trecho paralelo anterior (já reaplicado) e o
+  seguinte — mantém sua posição na ordem sequencial. O `load_late`
+  (integração do indutor) segue sequencial depois de todos os loads,
+  como antes.
+
+**Verificação.** `crates/dune-core/tests/parload.rs` (no CI, em
+`--release`): todo deck de `corpus/{spice3f5/examples, regress, basic,
+pss, measure}` com 2, 3 e 64 threads contra 1, bit a bit em todos os
+plots (op/dc/ac/tran/noise/pz/disto/sens/tf/sp/pss) — com 64 threads
+cada dispositivo é o seu chunk, então a janela de estados de cada
+worker é exatamente a de um dispositivo e qualquer tipo que tocasse
+estado alheio entraria em pânico ali; mais uma cadeia BSIM3 de 12
+inversores com um par K no meio da lista, em `.op`/`.dc`/`.ac`/`.tran`.
+Teste de mutação manual: inverter a ordem do replay quebra a
+bit-identidade na hora. Fora do teste: `ltra_3` (a cascata de
+breakpoints do KNOWN_DIFFS custa minutos por rodada; usa só diodos e
+LTRA, cobertos por `ltra_1`/`ltra_2`). O oráculo roda sequencial (default) e
+segue em 76.
+
+**Notas.** Um pool rayon por `Engine`, criado no primeiro load que
+pedir `load_threads ≠ 1` (falha ao criar → load sequencial, mesmo
+resultado). Dentro de `sweep_parallel` cada rodada criaria o seu pool:
+não combine os dois com contagens altas (oversubscription). Laços
+ainda sequenciais por dispositivo: `conv_test`, `trunc`, `accept`,
+`load_ac` (o `.ac`/`.noise` por frequência é da alavanca 2).
