@@ -1,0 +1,11 @@
+series rlc near resonance (Q = 10), periodic steady state
+* written for Dune (.pss, issue #13); not from Berkeley
+* closed form: v(3) = |H| sin(wt + arg H), H = 1/(1 - w^2 LC + jwRC);
+* the ring decays with tau = 2L/R = 2 ms, so the shooting starts
+* one period (0.67 ms) into a transient far from steady state.
+v1 1 0 sin(0 1 1.5k)
+r1 1 2 10
+l1 2 3 10m
+c1 3 0 1u
+.pss 1.5k 0 3 256 10
+.end

@@ -1,0 +1,16 @@
+rc with a delayed pulse train and a diode clamp, periodic steady state
+* written for Dune (.pss, issue #13); not from Berkeley
+* the pulse corners fall inside the shooting interval (TD = 0.3 us):
+* the breakpoint chain must be seeded there. Reference: the last
+* period of a long .tran (golden, ngspice-47)
+*tran-golden: .tran 5n 300u 298.9u
+v1 1 0 pulse(0 5 0.3u 20n 20n 0.4u 1u)
+r1 1 2 1k
+c1 2 0 2n
+d1 0 2 dmod
+r2 2 3 500
+c2 3 0 10n
+r3 3 0 2k
+.model dmod d(is=1e-14 cjo=2p)
+.pss 1meg 2u 3 200 10
+.end
