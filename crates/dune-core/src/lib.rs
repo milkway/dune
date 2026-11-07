@@ -27,6 +27,7 @@ mod error;
 mod integ;
 mod jfet;
 mod ltra;
+mod ltrafit;
 mod matrix;
 pub mod measure;
 mod mes;

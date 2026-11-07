@@ -36,10 +36,18 @@
 //! `LTRAlteCalculate`: its LTE control needs `fullcontrol`/
 //! `halfcontrol`, which the 3f5 (and ngspice) parameter tables never
 //! accept, so it is unreachable.
+//!
+//! Dune's opt-in recursive mode (`Options::ltra_fit`, issue #8)
+//! replaces the RLC/RC coefficient walk with the exponential sums of
+//! [`crate::ltrafit`], advanced once per accepted point; off, every
+//! line of the faithful path runs unchanged.
 
 use crate::devices::Device;
 use crate::disto::DistoSetupCtx;
 use crate::integ::TerrCtx;
+use crate::ltrafit::{
+    ExpFit, RC_WINDOW_FRACTION, fit_rc, fit_rlc, i0e, i1e, i1e_over_x, rc_integrals, segment,
+};
 use crate::matrix::{AcCtx, AcceptCtx, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 
 // Every transcendental in this file goes through the pure-Rust `libm`
@@ -148,6 +156,8 @@ pub(crate) enum LtraCase {
 /// else).
 #[derive(Clone, Debug)]
 pub(crate) struct LtraParams {
+    /// The instance name, for notes.
+    pub name: String,
     pub case: LtraCase,
     resist: f64,
     induct: f64,
@@ -282,6 +292,7 @@ impl LtraParams {
         };
 
         let mut p = LtraParams {
+            name: name.to_string(),
             case,
             resist,
             induct,
@@ -1025,6 +1036,111 @@ pub(crate) struct LtraI {
     co: Coeffs,
     /// `CKTgmin` of the last DC load, for the RG stamps in `.ac`.
     gmin: f64,
+    /// Dune's opt-in recursive convolution (`Options::ltra_fit`,
+    /// issue #8); off = the C's coefficient walk, untouched.
+    fit_on: bool,
+    /// The recursive-mode model and states of the current run (built
+    /// at the operating-point accept, when TSTOP is known).
+    fit: Option<FitState>,
+    /// Why the recursive mode does not apply to this line, if it was
+    /// asked for (LC/RG have no history convolution).
+    fit_skip: Option<&'static str>,
+}
+
+/// Wave blocks of a state snapshot.
+const V1: usize = 0;
+const V2: usize = 1;
+const I1: usize = 2;
+const I2: usize = 3;
+
+/// The recursive-mode state of one line (issue #8).
+///
+/// For every pole `−x_j` of the [`ExpFit`] and every port wave `w`
+/// (`v1`, `v2`, `i1`, `i2`), `S_j[w](t_k) = ∫₀^∞ e^{−x_j σ}·d_w(t_k − σ)dσ`
+/// with `d_w = w − w_init` piecewise linear on the accepted points
+/// (and `d_w(t_0) = 0`, the C's convention of leaving index 0 out of
+/// the sums). It advances once per accepted point, in `accept` — never
+/// per Newton iteration or per TR-BDF2 stage. A load at time `t`
+/// needs it at the newest point (`h1'`, RC kernels) and at the point
+/// just older than `t − T` (`h2`, `h3'`), so a snapshot per accepted
+/// point is kept from the oldest one a later load can still reach.
+struct FitState {
+    fit: ExpFit,
+    /// Snapshots, `4·N` values per accepted point from `base` on.
+    snaps: Vec<f64>,
+    base: usize,
+    /// Scratch for `e^{−x_j·lag}`.
+    ew: Vec<f64>,
+}
+
+impl FitState {
+    fn new(fit: ExpFit) -> Self {
+        let n = fit.rates.len();
+        FitState {
+            fit,
+            snaps: vec![0.0; 4 * n],
+            base: 0,
+            ew: vec![0.0; n],
+        }
+    }
+
+    fn n(&self) -> usize {
+        self.fit.rates.len()
+    }
+
+    /// The snapshot of history point `k`; `None` if pruned (a bug).
+    fn snap(&self, k: usize) -> Option<&[f64]> {
+        let n4 = 4 * self.n();
+        let off = k.checked_sub(self.base)? * n4;
+        self.snaps.get(off..off + n4)
+    }
+
+    /// `e^{−x_j·lag}` into the scratch.
+    fn exps(&mut self, lag: f64) {
+        for (e, x) in self.ew.iter_mut().zip(&self.fit.rates) {
+            *e = exp(-x * lag);
+        }
+    }
+
+    /// `Σ_j r_j[kernel]·e^{−x_j·lag}·S_j[wave]` at snapshot `k`, with
+    /// the exponentials already in the scratch.
+    fn tail(&self, kernel: usize, k: usize, wave: usize) -> Option<f64> {
+        let n = self.n();
+        let s = &self.snap(k)?[wave * n..(wave + 1) * n];
+        Some(
+            self.fit.res[kernel]
+                .iter()
+                .zip(&self.ew)
+                .zip(s)
+                .map(|((r, e), s)| r * e * s)
+                .sum(),
+        )
+    }
+
+    /// Advance one accepted segment of length `h`: `dn`/`dp` are the
+    /// four wave deviations at the new and the previous point.
+    fn advance(&mut self, h: f64, dn: [f64; 4], dp: [f64; 4]) {
+        let n = self.n();
+        let start = self.snaps.len() - 4 * n;
+        self.snaps.extend_from_within(start..);
+        let new = start + 4 * n;
+        for j in 0..n {
+            let (e, a, b) = segment(self.fit.rates[j] * h);
+            for w in 0..4 {
+                let s = &mut self.snaps[new + w * n + j];
+                *s = e * *s + h * (a * dn[w] + b * dp[w]);
+            }
+        }
+    }
+
+    /// Drop the snapshots older than history point `keep`, in chunks.
+    fn prune(&mut self, keep: usize) {
+        let dead = keep.saturating_sub(self.base);
+        if dead >= 1024 {
+            self.snaps.drain(..dead * 4 * self.n());
+            self.base += dead;
+        }
+    }
 }
 
 impl LtraI {
@@ -1053,6 +1169,292 @@ impl LtraI {
             i2: Vec::new(),
             co: Coeffs::default(),
             gmin: 0.0,
+            fit_on: false,
+            fit: None,
+            fit_skip: None,
+        }
+    }
+
+    /// Opt into the recursive convolution (`Options::ltra_fit`).
+    pub fn with_fit(mut self, on: bool) -> Self {
+        self.fit_on = on;
+        self
+    }
+
+    /// Build the recursive model for a run to `final_time` (at the
+    /// operating-point accept). Lines without a history convolution,
+    /// or whose kernels live entirely inside the exact window, keep
+    /// the exact path and say why.
+    fn start_fit(&mut self, final_time: f64) {
+        self.fit = None;
+        self.fit_skip = None;
+        let p = &self.p;
+        let horizon = final_time.max(f64::MIN_POSITIVE);
+        match p.case {
+            LtraCase::Lc | LtraCase::Rg => {
+                self.fit_skip = Some("no history convolution in this regime");
+            }
+            LtraCase::Rlc if !(p.alpha > 0.0 && p.alpha.is_finite()) => {
+                self.fit_skip = Some("needs R/L > 0");
+            }
+            LtraCase::Rlc => {
+                self.fit = Some(FitState::new(fit_rlc(p.alpha, p.td, horizon)));
+            }
+            LtraCase::Rc => {
+                let w = RC_WINDOW_FRACTION * p.rclsqr;
+                if !(w > 0.0 && w.is_finite() && p.cbyr > 0.0 && p.cbyr.is_finite()) {
+                    self.fit_skip = Some("needs R, C > 0");
+                } else if w >= horizon {
+                    self.fit_skip =
+                        Some("the diffusion time exceeds the run: exact window covers it");
+                } else {
+                    self.fit = Some(FitState::new(fit_rc(p.cbyr, p.rclsqr, w, horizon)));
+                }
+            }
+        }
+    }
+
+    /// The deviation `w − w_init` of history point `k` (0 at `k = 0`).
+    fn dev(&self, wave: usize, k: usize) -> f64 {
+        if k == 0 {
+            return 0.0;
+        }
+        match wave {
+            V1 => self.v1[k] - self.init_v1,
+            V2 => self.v2[k] - self.init_v2,
+            I1 => self.i1[k] - self.init_i1,
+            _ => self.i2[k] - self.init_i2,
+        }
+    }
+
+    /// `LTRArlcCoeffsSetup`'s `auxindex` by bisection: the newest
+    /// point with `t − t_i ≥ T`, one older if the lag is exactly `T`.
+    fn aux_index(&self, time: f64) -> usize {
+        let td = self.p.td;
+        if td == 0.0 {
+            return self.times.len() - 1;
+        }
+        if time - td <= 0.0 {
+            return 0;
+        }
+        let n = self.times.partition_point(|&t| time - t >= td);
+        let Some(found) = n.checked_sub(1) else {
+            return 0;
+        };
+        if time - self.times[found] == td {
+            found.saturating_sub(1)
+        } else {
+            found
+        }
+    }
+
+    /// The oldest history point whose snapshot a load after the newest
+    /// accepted point can still need.
+    fn oldest_needed(&self) -> usize {
+        let n = self.times.len() - 1;
+        let t = self.times[n];
+        let k = match self.p.case {
+            LtraCase::Rc => {
+                let w = self.fit.as_ref().map_or(0.0, |f| f.fit.window);
+                self.times
+                    .partition_point(|&ti| t - ti >= w)
+                    .saturating_sub(1)
+            }
+            _ => self.aux_index(t),
+        };
+        k.saturating_sub(1).min(n)
+    }
+
+    /// Recursive mode, LC/RLC: the first coefficients (for the matrix)
+    /// and the history inputs of `LTRAload` in one pass. `h1'` is the
+    /// exact first segment (lags `[0, Δ]`, the C's closed forms) plus
+    /// the recursion for older lags; `h2`/`h3'` likewise at `t − T`,
+    /// whose first segment keeps the C's linear-in-lag rule.
+    fn fit_inputs_lc_rlc(&mut self, time: f64, del: Option<Delayed>) -> Result<(), &'static str> {
+        const PRUNED: &str = "LTRA: recursive history state pruned";
+        let n = self.times.len() - 1;
+        let (mut in1, mut in2) = (0.0, 0.0);
+        if self.p.case == LtraCase::Rlc {
+            let (alpha, beta, td, admit) = (self.p.alpha, self.p.beta, self.p.td, self.p.admit);
+            let fs = self.fit.as_mut().ok_or(PRUNED)?;
+            // h1': H''(Δ)/Δ (LTRArlcH1dashTwiceIntFunc, scaled Bessel)
+            // and the x_n share H'(Δ) − H''(Δ)/Δ, H'(Δ) = e^{−βΔ}I0(βΔ) − 1.
+            let dlt = time - self.times[n];
+            let bd = beta * dlt;
+            let h1_first = if dlt == 0.0 {
+                0.0
+            } else {
+                (i1e(bd) + i0e(bd)) - 1.0
+            };
+            let c_n = (i0e(bd) - 1.0) - h1_first;
+            fs.exps(dlt);
+            let t1 = fs.tail(0, n, V1).ok_or(PRUNED)?;
+            let t2 = fs.tail(0, n, V2).ok_or(PRUNED)?;
+            self.co.h1_first = h1_first;
+            let p = &self.p;
+            let mut d1 = c_n * self.dev(V1, n) + t1;
+            let mut d2 = c_n * self.dev(V2, n) + t2;
+            d1 += self.init_v1 * p.int_h1dash - self.init_v1 * h1_first;
+            d2 += self.init_v2 * p.int_h1dash - self.init_v2 * h1_first;
+            in1 -= d1 * admit;
+            in2 -= d2 * admit;
+
+            let (mut e1, mut e2, mut f1, mut f2) = (0.0, 0.0, 0.0, 0.0);
+            if let Some(dl) = del {
+                let aux = self.aux_index(time);
+                let hi = time - self.times[aux];
+                let dp = hi - td;
+                let h2lo = rlc_h2(td, td, alpha, beta);
+                let z = if hi > td {
+                    alpha * (hi * hi - td * td).sqrt()
+                } else {
+                    0.0
+                };
+                let damp = exp(-(beta * hi - z));
+                let h2hi = if hi < td {
+                    0.0
+                } else {
+                    alpha * alpha * td * damp * i1e_over_x(z)
+                };
+                let h2_first = twiceintlinfunc(td, hi, td, h2lo, h2hi, td, hi) / dp;
+                let c2 = intlinfunc(td, hi, h2lo, h2hi, td, hi) - h2_first;
+                let h3hi = if hi <= td || beta == 0.0 {
+                    0.0
+                } else {
+                    damp * i0e(z) - exp(-beta * td)
+                };
+                let h3_first = intlinfunc(td, hi, 0.0, h3hi, td, hi) / dp;
+                let c3 = h3hi - h3_first;
+                let fs = self.fit.as_mut().ok_or(PRUNED)?;
+                fs.exps(dp);
+                let (s2a, s2b) = (
+                    fs.tail(1, aux, I2).ok_or(PRUNED)?,
+                    fs.tail(1, aux, I1).ok_or(PRUNED)?,
+                );
+                let (s3a, s3b) = (
+                    fs.tail(2, aux, V2).ok_or(PRUNED)?,
+                    fs.tail(2, aux, V1).ok_or(PRUNED)?,
+                );
+                e1 = (dl.i2 - self.init_i2) * h2_first + c2 * self.dev(I2, aux) + s2a;
+                e2 = (dl.i1 - self.init_i1) * h2_first + c2 * self.dev(I1, aux) + s2b;
+                f1 = (dl.v2 - self.init_v2) * h3_first + c3 * self.dev(V2, aux) + s3a;
+                f2 = (dl.v1 - self.init_v1) * h3_first + c3 * self.dev(V1, aux) + s3b;
+            }
+            let p = &self.p;
+            e1 += self.init_i2 * p.int_h2;
+            e2 += self.init_i1 * p.int_h2;
+            in1 += e1;
+            in2 += e2;
+            f1 += self.init_v2 * p.int_h3dash;
+            f2 += self.init_v1 * p.int_h3dash;
+            in1 += admit * f1;
+            in2 += admit * f2;
+        }
+        let p = &self.p;
+        match del {
+            None => {
+                in1 += p.attenuation * (self.init_v2 * p.admit + self.init_i2);
+                in2 += p.attenuation * (self.init_v1 * p.admit + self.init_i1);
+            }
+            Some(dl) => {
+                in1 += p.attenuation * (dl.v2 * p.admit + dl.i2);
+                in2 += p.attenuation * (dl.v1 * p.admit + dl.i1);
+            }
+        }
+        self.input1 = in1;
+        self.input2 = in2;
+        Ok(())
+    }
+
+    /// Recursive mode, RC: the exact coefficients of
+    /// `LTRArcCoeffsSetup` over the window of lags `< W` (from the
+    /// newest point `b` at least `W` old), the recursion beyond it.
+    fn fit_inputs_rc(&mut self, time: f64) -> Result<(), &'static str> {
+        const PRUNED: &str = "LTRA: recursive history state pruned";
+        let n = self.times.len() - 1;
+        let (cbyr, rclsqr) = (self.p.cbyr, self.p.rclsqr);
+        let w = self.fit.as_ref().ok_or(PRUNED)?.fit.window;
+        let b = self
+            .times
+            .partition_point(|&t| time - t >= w)
+            .saturating_sub(1)
+            .min(n);
+        let lb = time - self.times[b];
+        let fs = self.fit.as_mut().ok_or(PRUNED)?;
+        fs.exps(lb);
+        // sums[k][port]: kernel k against (v1|i2|v2) for port 1 and
+        // (v2|i1|v1) for port 2, like `inputs_rc`.
+        let waves = [[V1, V2], [I2, I1], [V2, V1]];
+        let mut tails = [[0.0; 2]; 3];
+        for k in 0..3 {
+            for q in 0..2 {
+                tails[k][q] = fs.tail(k, b, waves[k][q]).ok_or(PRUNED)?;
+            }
+        }
+        let mut firsts = [0.0; 3];
+        let mut sums = tails;
+        for k in 0..3 {
+            // H''(L_i) for i = n (first segment), walking older.
+            let ln = time - self.times[n];
+            let mut hi_val = rc_integrals(k, cbyr, rclsqr, ln).1;
+            let mut dd_new = hi_val / ln; // DD of the segment [n, now]
+            firsts[k] = dd_new;
+            for i in (b + 1..=n).rev() {
+                let lag = time - self.times[i - 1];
+                let v = rc_integrals(k, cbyr, rclsqr, lag).1;
+                let dd_old = (v - hi_val) / (self.times[i] - self.times[i - 1]);
+                let c = dd_old - dd_new;
+                for q in 0..2 {
+                    sums[k][q] += c * self.dev(waves[k][q], i);
+                }
+                hi_val = v;
+                dd_new = dd_old;
+            }
+            // The boundary point b: its share of lags [L_{b+1}, L_b].
+            let c_b = rc_integrals(k, cbyr, rclsqr, lb).0 - dd_new;
+            for q in 0..2 {
+                sums[k][q] += c_b * self.dev(waves[k][q], b);
+            }
+        }
+        self.co.h1_first = firsts[0];
+        self.co.h2_first = firsts[1];
+        self.co.h3_first = firsts[2];
+        let p = &self.p;
+        let init = |wave: usize| match wave {
+            V1 => self.init_v1,
+            V2 => self.init_v2,
+            I1 => self.init_i1,
+            _ => self.init_i2,
+        };
+        let ints = [p.int_h1dash, p.int_h2, p.int_h3dash];
+        let mut inp = [0.0; 2];
+        for q in 0..2 {
+            for k in 0..3 {
+                let x0 = init(waves[k][q]);
+                let d = sums[k][q] + x0 * ints[k] - x0 * firsts[k];
+                if k == 0 {
+                    inp[q] -= d;
+                } else {
+                    inp[q] += d;
+                }
+            }
+        }
+        self.input1 = inp[0];
+        self.input2 = inp[1];
+        Ok(())
+    }
+
+    /// Advance the recursive states over the newest accepted segment
+    /// and drop snapshots no later load can reach.
+    fn fit_accept(&mut self) {
+        let k = self.times.len() - 1;
+        let h = self.times[k] - self.times[k - 1];
+        let dn = [V1, V2, I1, I2].map(|w| self.dev(w, k));
+        let dp = [V1, V2, I1, I2].map(|w| self.dev(w, k - 1));
+        let keep = self.oldest_needed();
+        if let Some(fs) = self.fit.as_mut() {
+            fs.advance(h, dn, dp);
+            fs.prune(keep);
         }
     }
 
@@ -1120,7 +1522,27 @@ impl LtraI {
         if i < 0 {
             return None;
         }
-        let isaved = i as usize;
+        Some(self.interp_delayed(i as usize, target))
+    }
+
+    /// [`Self::delayed`] by bisection (recursive mode): the same
+    /// bracketing point — the newest one strictly before `time − T`,
+    /// never the newest of all — in O(log n) instead of the C's
+    /// backward scan.
+    fn delayed_bisect(&self, time: f64) -> Option<Delayed> {
+        let target = time - self.p.td;
+        let time_index = self.times.len() - 1;
+        let below = self.times.partition_point(|&t| t < target);
+        if below == 0 {
+            return None;
+        }
+        let i = (below - 1).min(time_index.checked_sub(1)?);
+        Some(self.interp_delayed(i, target))
+    }
+
+    /// The interpolation of `LTRAload` around `times[isaved]`,
+    /// `times[isaved + 1]` (and `times[isaved − 1]` for quadratic).
+    fn interp_delayed(&self, isaved: usize, target: f64) -> Delayed {
         let t2 = self.times[isaved];
         let t3 = self.times[isaved + 1];
         let interp = self.p.interp;
@@ -1152,12 +1574,12 @@ impl LtraI {
             }
             d
         };
-        Some(Delayed {
+        Delayed {
             v1: one(&self.v1),
             i1: one(&self.i1),
             v2: one(&self.v2),
             i2: one(&self.i2),
-        })
+        }
     }
 
     /// The `MODEINITPRED | MODEINITTRAN` part of `LTRAload` for
@@ -1292,6 +1714,72 @@ impl Device for LtraI {
         Ok(())
     }
 
+    /// The recursive mode's report (issue #8): the model and its
+    /// error against the closed-form responses, on the setup grid and
+    /// at the lags the last timepoint's convolution actually spanned.
+    fn tran_notes(&self) -> Vec<String> {
+        if !self.fit_on {
+            return Vec::new();
+        }
+        let name = &self.p.name;
+        let Some(fs) = &self.fit else {
+            let why = self.fit_skip.unwrap_or("not started");
+            return vec![format!(
+                "`{name}`: ltrafit not applied ({why}); exact convolution"
+            )];
+        };
+        let f = &fs.fit;
+        let (labels, delayed) = match self.p.case {
+            LtraCase::Rc => (["h1", "h2", "h3"], false),
+            _ => (["h1'", "h2", "h3'"], true),
+        };
+        let mut hist = [0.0; 3];
+        if let Some(&te) = self.times.last() {
+            let n = self.times.len() - 1;
+            let w = f.window;
+            let lags0 = self.times[..n].iter().map(|t| te - t).filter(|l| *l >= w);
+            hist[0] = f.err_at(0, lags0);
+            for (k, h) in hist.iter_mut().enumerate().skip(1) {
+                *h = if delayed {
+                    let td = self.p.td;
+                    let lags = self.times.iter().map(|t| te - td - t).filter(|l| *l > 0.0);
+                    f.err_at(k, lags)
+                } else {
+                    f.err_at(
+                        k,
+                        self.times[..n].iter().map(|t| te - t).filter(|l| *l >= w),
+                    )
+                };
+            }
+        }
+        let errs: Vec<String> = (0..3)
+            .map(|k| {
+                format!(
+                    "{} {:.1e}/{:.1e}/{:.1e}",
+                    labels[k], f.err[k].max_rel, f.err[k].l1_rel, hist[k]
+                )
+            })
+            .collect();
+        let regime = match self.p.case {
+            LtraCase::Rc => format!(
+                "RC, RCl²={:.3e}s, exact window {:.3e}s",
+                self.p.rclsqr, f.window
+            ),
+            _ => format!("RLC, T={:.3e}s, R/2L={:.3e}/s", self.p.td, self.p.alpha),
+        };
+        vec![format!(
+            "`{name}`: ltrafit {regime}: {} real poles ({} panels x {} Gauss points); \
+             kernel error max/L1 on [{:.3e}s, {:.3e}s] / max at the {} history lags: {}",
+            f.rates.len(),
+            f.panels,
+            f.order,
+            f.window,
+            f.horizon,
+            self.times.len(),
+            errs.join(", ")
+        )]
+    }
+
     fn alloc(&mut self, mb: &mut MatrixBuilder) {
         let (p1, n1, p2, n2, b1, b2) = (
             self.pos1, self.neg1, self.pos2, self.neg2, self.br1, self.br2,
@@ -1340,7 +1828,18 @@ impl Device for LtraI {
         let time_index = self.times.len() - 1;
         let tdover = matches!(self.p.case, LtraCase::Lc | LtraCase::Rlc) && ctx.time > self.p.td;
         let mut del = None;
-        if first {
+        if first && self.fit.is_some() {
+            // Recursive mode (issue #8): coefficients and inputs at once.
+            if tdover {
+                match self.delayed_bisect(ctx.time) {
+                    Some(d) => del = Some(d),
+                    None => {
+                        ctx.fault = Some("LTRA: cannot find delayed timepoint");
+                        return;
+                    }
+                }
+            }
+        } else if first {
             match self.p.case {
                 LtraCase::Rlc => rlc_coeffs(
                     &mut self.co,
@@ -1387,6 +1886,20 @@ impl Device for LtraI {
             self.init_v2 = ctx.sol[self.pos2] - ctx.sol[self.neg2];
             self.init_i1 = ctx.sol[self.br1];
             self.init_i2 = ctx.sol[self.br2];
+        }
+
+        // Recursive mode: the first coefficients the stamps below use
+        // come out of the same pass as the history inputs.
+        if first && self.fit.is_some() {
+            let r = match self.p.case {
+                LtraCase::Lc | LtraCase::Rlc => self.fit_inputs_lc_rlc(ctx.time, del),
+                LtraCase::Rc => self.fit_inputs_rc(ctx.time),
+                LtraCase::Rg => Ok(()),
+            };
+            if let Err(e) = r {
+                ctx.fault = Some(e);
+                return;
+            }
         }
 
         // Matrix loading, every call.
@@ -1441,7 +1954,7 @@ impl Device for LtraI {
             LtraCase::Rg => {} // stamped by `load_dc` above
         }
 
-        if first {
+        if first && self.fit.is_none() {
             match self.p.case {
                 LtraCase::Lc | LtraCase::Rlc => self.inputs_lc_rlc(del),
                 LtraCase::Rc => self.inputs_rc(),
@@ -1588,6 +2101,13 @@ impl Device for LtraI {
         self.i2.push(sol[self.br2]);
 
         let idx = self.times.len() - 1;
+        if self.fit_on {
+            if ctx.first {
+                self.start_fit(ctx.final_time);
+            } else if idx > 0 && self.fit.is_some() {
+                self.fit_accept();
+            }
+        }
         if idx == 0 {
             return;
         }
@@ -1625,6 +2145,12 @@ impl Device for LtraI {
             ctx.set_slope_break(t);
         }
     }
+}
+
+/// The C's unscaled Bessel fits, for the scaled ones' tests.
+#[cfg(test)]
+pub(crate) fn tests_bess(x: f64) -> (f64, f64) {
+    (bess_i0(x), bess_i1(x))
 }
 
 #[cfg(test)]

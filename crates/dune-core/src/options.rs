@@ -87,6 +87,16 @@ pub struct Options {
     /// which caps them at about `n` per TMAX span. `None` or
     /// `Some(0)` (default): faithful, every request scheduled.
     pub ltra_break_rate: Option<usize>,
+    /// Dune's opt-in recursive convolution for LTRA lines
+    /// (`.options ltrafit`; not a SPICE option, issue #8). The 3f5
+    /// recomputes every line's convolution over the whole accepted
+    /// history at each timepoint — O(n) per point, quadratic per run.
+    /// `true`: the RLC and RC impulse responses become exponential
+    /// sums (an exact branch-cut quadrature, error budget 1e-6 per
+    /// kernel, reported in the run's notes) advanced once per accepted
+    /// point, with the newest segment kept exact — O(1) per point.
+    /// `false` (default): faithful.
+    pub ltra_fit: bool,
 }
 
 impl Default for Options {
@@ -117,6 +127,7 @@ impl Default for Options {
             defas: 0.0,
             max_tran_steps: None,
             ltra_break_rate: None,
+            ltra_fit: false,
         }
     }
 }
@@ -214,6 +225,9 @@ impl Options {
                         self.ltra_break_rate = Some(v);
                     }
                 }
+                // Dune's opt-in LTRA recursive convolution (issue #8):
+                // a bare flag or `ltrafit=0|1`.
+                "ltrafit" => self.ltra_fit = num.is_none_or(|v| v != 0.0),
                 "gminsteps" => {
                     if let Some(v) = count(num, p, diags) {
                         self.gminsteps = v;

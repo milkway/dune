@@ -669,6 +669,11 @@ impl Engine {
         *time_step = f64::min(2.0 * *time_step, timetemp);
     }
 
+    /// The devices' remarks about the transient run just finished.
+    pub fn tran_notes(&self) -> Vec<String> {
+        self.devices.iter().flat_map(|d| d.tran_notes()).collect()
+    }
+
     /// The accepted-step history devices see (`CKTdeltaOld` outside
     /// TR-BDF2).
     fn accepted_steps(&self) -> &[f64; 8] {

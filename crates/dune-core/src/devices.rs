@@ -29,6 +29,11 @@ pub(crate) trait Device {
     /// Accepted-timepoint hook; sources plant breakpoints here
     /// (`*acct.c`).
     fn accept(&mut self, _ctx: &mut AcceptCtx) {}
+    /// Remarks about a finished transient run (Dune's opt-in modes
+    /// report their error budgets here). Default: none.
+    fn tran_notes(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// Overwrite the DC value (`.dc` sweep). No-op elsewhere.
     fn set_dc(&mut self, _value: f64) {}
     /// Device convergence test (`*conv.c`, NEWCONV): called once

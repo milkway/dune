@@ -36,7 +36,7 @@ impl Circuit {
             return Err(Error::Build(".tran times are inconsistent".into()));
         }
         let built = self.build(opts)?;
-        let notes = built.notes.clone();
+        let mut notes = built.notes.clone();
         let mut engine = Engine::new(built);
         let rows = engine.tran(
             opts,
@@ -48,6 +48,7 @@ impl Circuit {
                 uic,
             },
         )?;
+        notes.extend(engine.tran_notes());
 
         let mut variables = vec![("time".to_string(), VarType::Time)];
         let mut columns = vec![rows.iter().map(|(t, _)| *t).collect::<Vec<f64>>()];

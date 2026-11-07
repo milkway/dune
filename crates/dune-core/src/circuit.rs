@@ -1586,7 +1586,9 @@ impl Circuit {
                         crate::ltra::LtraParams::new(&s.name, &s.model, opts.reltol, opts.abstol)
                             .map_err(Error::Build)?;
                     notes.extend(p.notes.iter().cloned());
-                    devices.push(Box::new(crate::ltra::LtraI::new(p, n, br)));
+                    devices.push(Box::new(
+                        crate::ltra::LtraI::new(p, n, br).with_fit(opts.ltra_fit),
+                    ));
                 }
                 Spec::Tra(s) => {
                     let n = [
