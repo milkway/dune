@@ -334,17 +334,39 @@ fn source(ctx: &mut ElemCtx, kind: SourceKind) -> Parsed {
                     distof2 = Some(spec);
                 }
             }
-            fname @ ("pulse" | "sin" | "exp" | "pwl" | "sffm") => {
+            fname @ ("pulse" | "sin" | "exp" | "pwl" | "sffm" | "trnoise" | "trrandom") => {
                 let kind = match fname {
                     "pulse" => TranFnKind::Pulse,
                     "sin" => TranFnKind::Sin,
                     "exp" => TranFnKind::Exp,
                     "pwl" => TranFnKind::Pwl,
-                    _ => TranFnKind::Sffm,
+                    "sffm" => TranFnKind::Sffm,
+                    "trnoise" => TranFnKind::TrNoise,
+                    _ => TranFnKind::TrRandom,
                 };
                 let mut args = Vec::new();
                 while let Some(v) = ctx.value_opt() {
                     args.push(v);
+                }
+                // ngspice's `VSRCparam`/`ISRCparam` read the first two
+                // coefficients unconditionally (`NA NT`, `TYPE TS`)
+                // and at most 7 / 5.
+                let arity = match kind {
+                    TranFnKind::TrNoise => {
+                        Some((2, 7, "TRNOISE(NA NT <NALPHA NAMP <RTSAM RTSCAPT RTSEMT>>)"))
+                    }
+                    TranFnKind::TrRandom => {
+                        Some((2, 5, "TRRANDOM(TYPE TS <TD <PARAM1 <PARAM2>>>)"))
+                    }
+                    _ => None,
+                };
+                if let Some((lo, hi, form)) = arity
+                    && !(lo..=hi).contains(&args.len())
+                {
+                    ctx.err(
+                        span,
+                        format!("{form} takes {lo} to {hi} arguments, got {}", args.len()),
+                    );
                 }
                 if tran.is_some() {
                     ctx.warn(span, "more than one transient function; the last one wins");
@@ -767,6 +789,43 @@ mod tests {
         ));
         let (_, diags) = parse("k1 r1 l2 0.5");
         assert!(diags.iter().any(|d| d.message.contains("not an inductor")));
+    }
+
+    #[test]
+    fn transient_noise_functions() {
+        // ngspice-47 manual §4.1.7/§4.1.8 forms.
+        let e = ok("VNoi 1 0 DC 0 TRNOISE(20n 0.5n 0 0)");
+        match &e.device {
+            Device::Source { dc, tran, .. } => {
+                assert_eq!(*dc, Some(0.0));
+                let t = tran.as_ref().unwrap();
+                assert_eq!(t.kind, TranFnKind::TrNoise);
+                assert_eq!(t.args, vec![20e-9, 0.5e-9, 0.0, 0.0]);
+            }
+            d => panic!("{d:?}"),
+        }
+        let e = ok("inoi 1 0 trnoise 0 0 0 0 15m 22u 50u");
+        match &e.device {
+            Device::Source { tran, .. } => {
+                let t = tran.as_ref().unwrap();
+                assert_eq!(t.kind, TranFnKind::TrNoise);
+                assert_eq!(t.args.len(), 7);
+            }
+            d => panic!("{d:?}"),
+        }
+        let e = ok("VR2 r2 0 dc 0 trrandom (2 10m 0 1)");
+        match &e.device {
+            Device::Source { tran, .. } => {
+                let t = tran.as_ref().unwrap();
+                assert_eq!(t.kind, TranFnKind::TrRandom);
+                assert_eq!(t.args, vec![2.0, 10e-3, 0.0, 1.0]);
+            }
+            d => panic!("{d:?}"),
+        }
+        let (_, diags) = parse("v1 1 0 trnoise(1m)");
+        assert!(diags.iter().any(|d| d.message.contains("takes 2 to 7")));
+        let (_, diags) = parse("v1 1 0 trrandom(1 1m 0 1 0 9)");
+        assert!(diags.iter().any(|d| d.message.contains("takes 2 to 5")));
     }
 
     #[test]

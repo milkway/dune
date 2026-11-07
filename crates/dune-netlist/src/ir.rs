@@ -202,6 +202,12 @@ pub enum TranFnKind {
     Exp,
     Pwl,
     Sffm,
+    /// ngspice-47 `TRNOISE(NA NT NALPHA NAMP RTSAM RTSCAPT RTSEMT)`:
+    /// transient noise (white, 1/f^alpha, random telegraph).
+    TrNoise,
+    /// ngspice-47 `TRRANDOM(TYPE TS TD PARAM1 PARAM2)`: a random
+    /// value held for `TS` seconds.
+    TrRandom,
 }
 
 /// A keyword parameter from a card: `IC=3`, `OFF`, `IC=2,0.5,0,0.2`,
