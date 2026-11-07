@@ -18,7 +18,8 @@ name = "_spice"
 crate-type = ["cdylib"]
 
 [dependencies]
-dune-core = { path = "../crates/dune-core" }
+# `parallel`: `spice.sweep(..., threads=)` (issue #10).
+dune-core = { path = "../crates/dune-core", features = ["parallel"] }
 dune-netlist = { path = "../crates/dune-netlist" }
 dune-raw = { path = "../crates/dune-raw" }
 num-complex = "0.4"

@@ -19,7 +19,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use dune_core::consts::CTOK;
-use dune_core::{Circuit, Data, Method, Options, Solution};
+use dune_core::{Circuit, Data, Method, Options, Solution, SweepParam, SweepRun};
+use dune_netlist::ir::Netlist;
 use dune_netlist::{Diagnostic, IncludeLoader, ParseOutcome, Severity, SourceMap};
 use num_complex::Complex64;
 use numpy::PyArray1;
@@ -158,8 +159,16 @@ impl IncludeLoader for MapLoader<'_> {
     }
 }
 
-/// Parse, elaborate and run every analysis card (what `dune -b` runs).
-fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
+/// A parsed deck and its options (the deck's `.options`, then the
+/// caller's overrides on top), ready to elaborate.
+struct Prepared {
+    netlist: Netlist,
+    options: Options,
+    diags: Vec<Diag>,
+}
+
+/// Parse the deck and settle its options.
+fn prepare(source: &Source, overrides: &[Override]) -> Result<Prepared, Failure> {
     let parsed: ParseOutcome = match source {
         Source::Text { text, includes } => dune_netlist::parse_with_loader(
             Path::new(DECK_NAME),
@@ -182,11 +191,6 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
             diags,
         });
     }
-
-    let (circuit, mut notes) = Circuit::from_netlist(&parsed.netlist)
-        .map_err(|e| Failure::new("elaborate", e.to_string()))?;
-
-    // `.options` of the deck first, then the caller's overrides on top.
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
     options.apply(&parsed.netlist.options, &mut opt_diags);
@@ -194,9 +198,25 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
     for set in overrides {
         set(&mut options);
     }
+    Ok(Prepared {
+        netlist: parsed.netlist,
+        options,
+        diags,
+    })
+}
+
+/// Parse, elaborate and run every analysis card (what `dune -b` runs).
+fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
+    let Prepared {
+        netlist,
+        options,
+        diags,
+    } = prepare(source, overrides)?;
+    let (circuit, mut notes) =
+        Circuit::from_netlist(&netlist).map_err(|e| Failure::new("elaborate", e.to_string()))?;
 
     let mut solutions = Vec::new();
-    for analysis in &parsed.netlist.analyses {
+    for analysis in &netlist.analyses {
         let (sols, analysis_notes) = circuit
             .run(analysis, &options)
             .map_err(|e| Failure::new("analysis", e.to_string()))?;
@@ -207,9 +227,44 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
         notes.push("no analyses in the deck; nothing to do".into());
     }
     Ok(Output {
-        title: parsed.netlist.title.clone(),
+        title: netlist.title.clone(),
         solutions,
         notes,
+        diags,
+    })
+}
+
+/// A finished sweep, still in Rust form.
+struct SweepOut {
+    title: String,
+    keys: Vec<String>,
+    runs: Vec<SweepRun>,
+    diags: Vec<Diag>,
+}
+
+/// Parse once, then run the deck per row of `rows` (issue #10).
+fn run_sweep(
+    source: &Source,
+    overrides: &[Override],
+    params: &[SweepParam],
+    rows: &[Vec<f64>],
+    threads: usize,
+) -> Result<SweepOut, Failure> {
+    let Prepared {
+        netlist,
+        options,
+        diags,
+    } = prepare(source, overrides)?;
+    let runs = if threads == 1 {
+        dune_core::sweep(&netlist, &options, params, rows)
+    } else {
+        dune_core::sweep_parallel(&netlist, &options, params, rows, threads)
+    }
+    .map_err(|e| Failure::new("sweep", e.to_string()))?;
+    Ok(SweepOut {
+        title: netlist.title.clone(),
+        keys: params.iter().map(SweepParam::key).collect(),
+        runs,
         diags,
     })
 }
@@ -379,6 +434,29 @@ fn plot_dict<'py>(py: Python<'py>, title: &str, s: Solution) -> PyResult<Bound<'
     Ok(d)
 }
 
+/// The deck from exactly one of `text` and `path`.
+fn source(
+    text: Option<String>,
+    path: Option<PathBuf>,
+    includes: Option<BTreeMap<String, String>>,
+) -> PyResult<Source> {
+    match (text, path) {
+        (Some(text), None) => Ok(Source::Text {
+            text,
+            includes: includes.unwrap_or_default(),
+        }),
+        (None, Some(path)) => {
+            if includes.is_some() {
+                return Err(PyValueError::new_err(
+                    "includes applies to a netlist string; a deck file resolves .include on disk",
+                ));
+            }
+            Ok(Source::File(path))
+        }
+        _ => Err(PyValueError::new_err("give exactly one of text and path")),
+    }
+}
+
 /// `_simulate(text, path, includes, options) -> dict`.
 ///
 /// Exactly one of `text` (a deck; `.include` from `includes`) and
@@ -396,21 +474,7 @@ fn _simulate<'py>(
     includes: Option<BTreeMap<String, String>>,
     options: Option<Bound<'py, PyDict>>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let source = match (text, path) {
-        (Some(text), None) => Source::Text {
-            text,
-            includes: includes.unwrap_or_default(),
-        },
-        (None, Some(path)) => {
-            if includes.is_some() {
-                return Err(PyValueError::new_err(
-                    "includes applies to a netlist string; a deck file resolves .include on disk",
-                ));
-            }
-            Source::File(path)
-        }
-        _ => return Err(PyValueError::new_err("give exactly one of text and path")),
-    };
+    let source = source(text, path, includes)?;
     // Validated before any parsing work; applied over the deck's
     // `.options` inside `run`.
     let overrides = match &options {
@@ -440,6 +504,84 @@ fn _simulate<'py>(
     }
 }
 
+/// `_sweep(text, path, includes, options, params, rows, threads) -> dict`.
+///
+/// The deck as in `_simulate`; `params` are the swept quantities (see
+/// `dune_core::SweepParam`), `rows` one list of values per run,
+/// `threads` 1 for the sequential path, 0 for one per core. Returns
+/// `{"title", "params": [canonical key], "diagnostics": [dict],
+/// "runs": [{"ok": True, "plots", "notes"} | {"ok": False, "kind",
+/// "message"}]}`. Bad parameter names or rows raise `ValueError`.
+/// The GIL is released while the runs execute.
+#[pyfunction]
+#[pyo3(signature = (text, path, includes, options, params, rows, threads))]
+#[allow(clippy::too_many_arguments)]
+fn _sweep<'py>(
+    py: Python<'py>,
+    text: Option<String>,
+    path: Option<PathBuf>,
+    includes: Option<BTreeMap<String, String>>,
+    options: Option<Bound<'py, PyDict>>,
+    params: Vec<String>,
+    rows: Vec<Vec<f64>>,
+    threads: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let source = source(text, path, includes)?;
+    let overrides = match &options {
+        Some(d) => parse_overrides(d)?,
+        None => Vec::new(),
+    };
+    let params = params
+        .iter()
+        .map(|p| SweepParam::parse(p).map_err(|e| PyValueError::new_err(e.to_string())))
+        .collect::<PyResult<Vec<_>>>()?;
+    let outcome = py.detach(|| guarded(|| run_sweep(&source, &overrides, &params, &rows, threads)));
+    let out = match outcome {
+        Ok(out) => out,
+        Err(f) if f.kind == "sweep" => return Err(PyValueError::new_err(f.message)),
+        Err(f) => {
+            return Err(NativeError::new_err((
+                f.kind,
+                f.message,
+                diag_list(py, &f.diags)?.unbind(),
+            )));
+        }
+    };
+    let result = PyDict::new(py);
+    result.set_item("title", &out.title)?;
+    result.set_item("params", out.keys)?;
+    result.set_item("diagnostics", diag_list(py, &out.diags)?)?;
+    let runs = PyList::empty(py);
+    for run in out.runs {
+        let d = PyDict::new(py);
+        match run.outcome {
+            Ok(o) => {
+                d.set_item("ok", true)?;
+                let plots = PyList::empty(py);
+                for s in o.solutions {
+                    plots.append(plot_dict(py, &out.title, s)?)?;
+                }
+                d.set_item("plots", plots)?;
+                d.set_item("notes", o.notes)?;
+            }
+            Err(e) => {
+                d.set_item("ok", false)?;
+                let kind = match e {
+                    dune_core::Error::Build(_)
+                    | dune_core::Error::Elab(_)
+                    | dune_core::Error::Unsupported { .. } => "elaborate",
+                    _ => "analysis",
+                };
+                d.set_item("kind", kind)?;
+                d.set_item("message", e.to_string())?;
+            }
+        }
+        runs.append(d)?;
+    }
+    result.set_item("runs", runs)?;
+    Ok(result)
+}
+
 /// Run `f`, turning a panic (an engine bug) into kind `internal`.
 fn guarded<T>(f: impl FnOnce() -> Result<T, Failure>) -> Result<T, Failure> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|p| {
@@ -461,5 +603,6 @@ fn _spice(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("OPTION_NAMES", OPTION_NAMES.to_vec())?;
     m.add("NativeError", m.py().get_type::<NativeError>())?;
     m.add_function(wrap_pyfunction!(_simulate, m)?)?;
+    m.add_function(wrap_pyfunction!(_sweep, m)?)?;
     Ok(())
 }

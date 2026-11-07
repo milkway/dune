@@ -13,3 +13,13 @@ def _simulate(
     includes: dict[str, str] | None,
     options: dict[str, Any] | None,
 ) -> dict[str, Any]: ...
+
+def _sweep(
+    text: str | None,
+    path: str | Path | None,
+    includes: dict[str, str] | None,
+    options: dict[str, Any] | None,
+    params: list[str],
+    rows: list[list[float]],
+    threads: int,
+) -> dict[str, Any]: ...

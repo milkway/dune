@@ -67,6 +67,30 @@ def simulate(
         OSError: the deck file cannot be read (``FileNotFoundError`` when it
             does not exist).
     """
+    text, path = _deck_source(netlist, includes)
+    try:
+        native = _spice._simulate(
+            text,
+            path,
+            None if includes is None else dict(includes),
+            None if options is None else dict(options),
+        )
+    except _spice.NativeError as e:
+        kind, message, diags = e.args
+        if kind == "io":
+            raise OSError(message) from None
+        raise SpiceError(
+            message,
+            kind=cast(ErrorKind, kind),
+            diagnostics=tuple(Diagnostic._from_native(d) for d in diags),
+        ) from None
+    return Result(native)
+
+
+def _deck_source(
+    netlist: str | os.PathLike[str], includes: Mapping[str, str] | None
+) -> tuple[str | None, str | None]:
+    """Split ``netlist`` into the native ``(text, path)`` pair, validating it."""
     text: str | None
     path: str | None
     if isinstance(netlist, str):
@@ -91,20 +115,4 @@ def simulate(
         raise TypeError(
             f"netlist must be a str (deck text) or a path, not {type(netlist).__name__}"
         )
-    try:
-        native = _spice._simulate(
-            text,
-            path,
-            None if includes is None else dict(includes),
-            None if options is None else dict(options),
-        )
-    except _spice.NativeError as e:
-        kind, message, diags = e.args
-        if kind == "io":
-            raise OSError(message) from None
-        raise SpiceError(
-            message,
-            kind=cast(ErrorKind, kind),
-            diagnostics=tuple(Diagnostic._from_native(d) for d in diags),
-        ) from None
-    return Result(native)
+    return text, path

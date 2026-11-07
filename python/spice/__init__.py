@@ -12,7 +12,8 @@
 >>> ac.df().columns[:3]
 ['frequency', 're:v(1)', 'im:v(1)']
 
-The entry point is :func:`simulate`; results are :class:`Result` (one run)
+The entry points are :func:`simulate` and :func:`sweep` (parametric sweeps
+and Monte Carlo, :class:`SweepResult`); results are :class:`Result` (one run)
 holding :class:`Plot` objects (one per analysis plot), each with NumPy
 columns (:meth:`Plot.column`) and a polars frame (:meth:`Plot.df`).
 """
@@ -21,6 +22,7 @@ from ._errors import Diagnostic, ErrorKind, Severity, SpiceError
 from ._result import Column, Plot, Result, Variable
 from ._simulate import OPTION_NAMES, OptionValue, simulate
 from ._spice import __version__
+from ._sweep import SweepMode, SweepResult, sweep
 
 __all__ = [
     "OPTION_NAMES",
@@ -32,7 +34,10 @@ __all__ = [
     "Result",
     "Severity",
     "SpiceError",
+    "SweepMode",
+    "SweepResult",
     "Variable",
     "__version__",
     "simulate",
+    "sweep",
 ]
