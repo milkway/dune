@@ -1,0 +1,69 @@
+.PS
+# regress/mos3_inv.cir drawn: two level-3 CMOS inverters in cascade
+# (T₁/T₂ drive T₃/T₄, 50f and 100f loads) and, on the right, a
+# self-biased level-3 amplifier T₅ — 200k drain-to-gate feedback,
+# 500 ohm source degeneration with the bulk on ground (a four-terminal
+# MOS), 10k load. Card order kept; deck nodes 1 Vp, 2 In, 3 Out1,
+# 4 Out2, 5 Ain, 6 Vg, 7 Vd, 8 Vs.
+spice = 1
+maxpswid = 12
+Vp:   (11.2,3.1)
+In:   (1.2,1.5)
+Out1: (2.16,1.5)
+Out2: (4.56,1.5)
+Ain:  (6.8,1.2)
+Vg:   (7.8,1.2)
+Vd:   (8.96,2)
+Vs:   (8.96,0.84)
+
+Vdd: vsource((11.2,3.1), (11.2,0), dc 3.3, "VDD")
+Vin: vsource((0.3,1.5), (0.3,0), dc 0 pulse(0 3.3 2n 1n 1n 8n 20n), "G₁")
+MN1: nmos((2,0.9), n3 l=1u w=4u ad=8p as=8p pd=12u ps=12u, "T₁")
+MP1: pmos((2,2.1), p3 l=1u w=10u ad=20p as=20p pd=24u ps=24u, "T₂")
+C3: capacitor((3.2,1.5), (3.2,0), 50f)
+MN2: nmos((4.4,0.9), n3 l=1u w=4u ad=8p as=8p pd=12u ps=12u, "T₃")
+MP2: pmos((4.4,2.1), p3 l=1u w=10u ad=20p as=20p pd=24u ps=24u, "T₄")
+C4: capacitor((5.6,1.5), (5.6,0), 100f)
+Vac: vsource((6.8,1.2), (6.8,0), dc 0 ac 1, "G₂")
+Cin: capacitor((6.8,1.2), (7.8,1.2), 10p)
+RF: resistor((8.96,2), (7.8,2), 200k)
+MN3: nmos4((8.8,1.2), n3 l=2u w=20u ad=40p as=40p pd=44u ps=44u, "T₅")
+RS3: resistor((8.96,0.84), (8.96,0), 500)
+RL: resistor((8.96,3.1), (8.96,2), 10k)
+C7: capacitor((10.3,2), (10.3,0), 0.2p)
+
+# the two inverters
+line from Vin.P to In
+line from MN1.G to (1.2,0.9) then to (1.2,2.1) then to MP1.G
+line from MP1.D to MN1.D
+line from Out1 to C3.P then to (3.6,1.5)
+line from MN2.G to (3.6,0.9) then to (3.6,2.1) then to MP2.G
+line from MP2.D to MN2.D
+line from Out2 to C4.P
+line from MN1.S to (2.16,0)
+line from MN2.S to (4.56,0)
+# the amplifier
+line from Cin.N to MN3.G
+line from RF.N to Vg
+line from MN3.D to Vd then to C7.P
+line from MN3.B to (9.4,1.2) then to (9.4,0)
+# rails
+line from MP1.S to (2.16,3.1) then to Vp
+line from MP2.S to (4.56,3.1)
+line from Vin.N to Vdd.N
+dot at In; dot at Out1; dot at C3.P; dot at (3.6,1.5); dot at Out2
+dot at Vg; dot at Vd
+dot at (4.56,3.1); dot at RL.P
+dot at (2.16,0); dot at C3.N; dot at (4.56,0); dot at C4.N; dot at Vac.N
+dot at RS3.N; dot at (9.4,0); dot at C7.N
+ground((0.75,0))
+.model n3 nmos level=3 vto=0.6 nsub=4e16 tox=1.5e-8 xj=0.15u ld=0.05u u0=450
++ theta=0.06 eta=0.2 delta=0.6 vmax=1.6e5 kappa=0.4 nfs=6e11 rsh=15
++ cj=4e-4 mj=0.45 cjsw=3e-10 mjsw=0.3 cgso=2e-10 cgdo=2e-10 cgbo=1e-10
+.model p3 pmos level=3 vto=-0.7 nsub=3e16 tox=1.5e-8 xj=0.2u ld=0.06u u0=180
++ theta=0.05 eta=0.15 delta=0.5 kappa=0.6 nfs=4e11 rsh=25
++ cj=5e-4 mj=0.5 cjsw=3.5e-10 mjsw=0.33 cgso=2.5e-10 cgdo=2.5e-10 cgbo=1e-10
+.ac dec 10 10k 10g
+.op
+.tran 0.1n 40n
+.PE

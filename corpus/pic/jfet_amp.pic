@@ -1,0 +1,33 @@
+.PS
+# regress/jfet_amp.cir drawn: an n-JFET common-source stage (VTO -2,
+# BETA 1.3m) with 4.7k drain load and 100 ohm source degeneration,
+# driven through 10k; the 1.5 V sine pushes the gate into forward
+# conduction on its crests. Card order kept; deck nodes 1 Vp, 5 In,
+# 2 Vg, 3 Vd, 4 Vs.
+spice = 1
+Vp: (4.4,3.2)
+In: (0.3,1.5)
+Vg: (2.3,1.5)
+Vd: (2.86,2.3)
+Vs: (2.86,1.14)
+
+Vdd: vsource((4.4,3.2), (4.4,0), dc 15, "VDD")
+Vin: vsource((0.3,1.5), (0.3,0), dc 0 ac 1 sin(0 1.5 1meg), "G₁")
+Rsig: resistor((0.3,1.5), (2.3,1.5), 10k)
+J1: njfet((2.7,1.5), jn, "T₁")
+RD: resistor((2.86,3.2), (2.86,2.3), 4.7k)
+RS: resistor((2.86,1.14), (2.86,0), 100)
+
+line from RD.N to J1.D
+line from RD.P to Vdd.P
+line from Vin.N to Vdd.N
+line from Vd to (3.6,2.3); circle rad 0.04 at (3.64,2.3)
+"out" above at (3.64,2.35)
+dot at Vd; dot at RS.N
+ground((1.5,0))
+.model jn njf vto=-2 beta=1.3e-3 lambda=0.01 rd=20 rs=15 cgs=3p cgd=1.5p
++ pb=0.8 is=2e-14 b=0.95
+.ac dec 10 1k 1g
+.op
+.tran 10n 3u
+.PE
