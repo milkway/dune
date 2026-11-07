@@ -123,20 +123,23 @@ dobradas no `Drawing.passthrough` e argumentos crus em
 
 ## Compat
 
-Nenhum shim desde o rpic-core 0.16.1. Pendente aproveitável: a
-0.16 também trouxe labels em macro flat (E3) e os gêmeos
-`__switch/__nmos/__pmos/__njfet/__pjfet` no std — as cópias
-`__dn_*_geom` do prelude podem virar chamadas a eles (dune#17).
+Nenhum shim desde o rpic-core 0.16.1. O prelude desenha os símbolos
+que sombreia pelos gêmeos de geometria do std 0.16
+(`__switch/__nmos/__pmos/__njfet/__pjfet`, como já fazia com
+`__resistor`, `__bjt`, `__opamp` & cia.) em vez de cópias próprias
+(dune#18; as 14 figuras do corpus deram SVG, netlist e OverlayMap
+idênticos byte a byte antes/depois). Só o `battery` segue copiado
+(`__dn_battery`, BSD-2): o std não tem `__battery`. Labels em macro
+flat (E3) não são usadas — os elementos continuam blocos rotulados.
 
 ## Ressalvas conhecidas
 
 - Regra de junção em T é interpretação nossa (ferramentas de
   esquemático fazem assim; endpoint-only tornaria `dot` no meio de
   fio inútil).
-- O prelude carrega cópias verbatim da geometria do std
-  (switch/nmos/pmos/njfet/pjfet/battery, BSD-2), de quando macro
-  flat não aceitava label; o std 0.16 expõe os gêmeos `__*` —
-  trocar as cópias por eles é o dune#17.
+- `battery` é a única geometria do std copiada no prelude
+  (`__dn_battery`, sem gêmeo `__battery` no 0.16): mudança no
+  `battery` do std não chega ao Dune até a cópia ser refeita.
 - `pmos`: o std chama `gDrain` o terminal de cima; o prelude mapeia
   S e B em cima e D embaixo (convenção de símbolo PMOS).
 - `vsource` chama `voltage_source($2,$1)` invertido para o `+`
