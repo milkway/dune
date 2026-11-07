@@ -5,17 +5,17 @@
 # figure's netlist is the deck's with named nodes (1 In, 2 B1, 3 B2,
 # 4 Vc1, 5 Vc2, 6 Tail, 7 Bias, 8 Vp, 9 Vn) and simulates identically.
 spice = 1
-Vin: vsource((0.3,2.5), (0.3,1.7), sin(0 0.1 5meg) ac 1)
-Vcc: vsource((6.2,4), (6.2,3.2), 12)
-Vee: vsource((6.2,0.3), (6.2,1.1), -12)
-Q1: npn((2.9,2.5), qnl)
-Q2: npn((5.2,2.5), qnl)
+Vin: vsource((0.3,2.5), (0.3,1.7), sin(0 0.1 5meg) ac 1, "G₁")
+Vcc: vsource((6.2,4), (6.2,3.2), 12, "VCC")
+Vee: vsource((6.2,0.3), (6.2,1.1), -12, "VEE")
+Q1: npn((2.9,2.5), qnl, "T₁")
+Q2: npn((5.2,2.5), qnl, "T₂")
 RS1: resistor((1.5,2.5), Q1.B, 1k)
 RS2: resistor(Q2.B, (3.9,2.5), 1k)
 RC1: resistor(Q1.C, (Q1.C.x,4), 10k)
 RC2: resistor(Q2.C, (Q2.C.x,4), 10k)
-Q3: npn((4.3,1), qnl)
-Q4: npn((2.6,1), qnl)
+Q3: npn((4.3,1), qnl, "T₃")
+Q4: npn((2.6,1), qnl, "T₄")
 Rbias: resistor((1.2,1.42), (1.2,2.3), 20k)
 
 In:   (0.3,2.5)

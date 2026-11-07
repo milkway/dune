@@ -2,7 +2,7 @@
 # RC low-pass driven by a 0 -> 5 V step; tau = R1*C1 = 1 ms.
 spice = 1
 Vin: (0,1.5); Vout: (2.5,1.5)
-V1: vsource(Vin, (0,0), PULSE(0 5 0 1u 1u 10m 20m))
+V1: vsource(Vin, (0,0), PULSE(0 5 0 1u 1u 10m 20m), "G₁")
 R1: resistor(Vin, Vout, 1k)
 C1: capacitor(Vout, (2.5,0), 1u)
 line from V1.N to C1.N

@@ -93,6 +93,36 @@ const ELEMENT_MARKERS: &[&str] = &[
 ];
 /// Pins of a `Q` drawn with its substrate (`npn4`/`pnp4`).
 const BJT4_PINS: &[&str] = &["C", "B", "E", "S"];
+/// Marker of a block whose drawn text is a display, not the value.
+const DISPLAY_MARKER: &str = "Disp";
+/// Prelude macros that take an optional display text after the
+/// value/model, drawn instead of it (two-terminals, `vcvs`/`vccs` and
+/// the elements centered on an `At` anchor).
+const DISPLAY_MACROS: &[&str] = &[
+    "resistor",
+    "capacitor",
+    "inductor",
+    "diode",
+    "vsource",
+    "acsource",
+    "battery",
+    "isource",
+    "cccs",
+    "ccvs",
+    "vcvs",
+    "vccs",
+    "npn",
+    "pnp",
+    "npn4",
+    "pnp4",
+    "nmos",
+    "pmos",
+    "nmos4",
+    "pmos4",
+    "njfet",
+    "pjfet",
+    "opamp",
+];
 /// The supported card letters, for messages.
 const LETTERS: &str = "R C L V I D Q M J S W X T O E F G H K";
 
@@ -934,7 +964,7 @@ impl<'a> Extractor<'a> {
     ) -> Option<Element> {
         let d = self.d;
         let Some(refdes) = d.blocks[b].label.clone() else {
-            let value = self.value(b, ms, ' ');
+            let value = self.value(b, ms, ' ').unwrap_or_default();
             let at = ms.first().map(|m| m.2).unwrap_or((0.0, 0.0));
             let msg = format!(
                 "element without a label (refdes) at ({:.3}, {:.3}){}; skipped — write `R1: resistor(…)`",
@@ -1024,6 +1054,26 @@ impl<'a> Extractor<'a> {
             return None;
         }
         seen.insert(key, refdes.clone());
+        let Some(value) = value else {
+            self.diag(
+                PicSeverity::Error,
+                PicDiagKind::MissingValue,
+                format!(
+                    "`{refdes}` draws a display text instead of its value, but its call \
+                     is not the element's own macro (a wrapper?), so the value cannot \
+                     be read; the card is incomplete"
+                ),
+                span.clone(),
+            );
+            return Some(Element {
+                refdes,
+                pins,
+                terms: pin_terms,
+                value: String::new(),
+                block: b,
+                span,
+            });
+        };
         if value.is_empty() {
             // A source without a value is 0 V / 0 A in SPICE; anything
             // else is incomplete.
@@ -1130,19 +1180,34 @@ impl<'a> Extractor<'a> {
     /// takes all three arguments, `L1 L2 k`; its drawing shows only
     /// `k=…`, so it has no drawn fallback.
     ///
+    /// A call to one of the [`DISPLAY_MACROS`] with one more argument,
+    /// non-empty, carries a display text that the prelude draws instead
+    /// of the value: the value still comes from its own argument, and
+    /// the check below compares the drawing with the display. A
+    /// mismatch then falls back on the drawn text, which is the display
+    /// — wrong, but it only happens when the call is not the element's
+    /// (and the extraction would be wrong without the display too).
+    /// A drawing that shows a display (`Disp` marker) without such a
+    /// call — a wrapper macro passing one — has no trustworthy value:
+    /// `None`.
+    ///
     /// The call is trusted only when its argument is what the prelude
     /// drew (both normalized by pic), which rules out a user wrapper
     /// macro whose arguments are not the element's (`BlockInfo.call` is
     /// the *outermost* call). Fallbacks, in order: rpic's normalized
     /// argument (a call spanning lines, whose text cannot be re-read);
     /// the drawn text (no call — an inline block — or a mismatch).
-    fn value(&self, b: usize, ms: &[(usize, &'a str, Pt)], letter: char) -> String {
+    fn value(&self, b: usize, ms: &[(usize, &'a str, Pt)], letter: char) -> Option<String> {
         let coupling = letter == 'K';
         let drawn = self.value_text(b);
-        let fallback = if coupling {
-            String::new()
+        // A drawn display is not the value: nothing to fall back on.
+        let shows_display = ms.iter().any(|m| m.1 == DISPLAY_MARKER);
+        let fallback = if shows_display {
+            None
+        } else if coupling {
+            Some(String::new())
         } else {
-            drawn.clone()
+            Some(drawn.clone())
         };
         let k = match letter {
             'E' | 'G' => 4,
@@ -1160,8 +1225,22 @@ impl<'a> Extractor<'a> {
         }
         let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         let spliced = unquote(arg);
+        // A display text (one argument past the value, non-empty) is
+        // what the prelude drew, so it is what the call must match.
+        // Only a call to the prelude macro itself has one: a wrapper's
+        // extra argument says nothing about the element.
+        let display = (DISPLAY_MACROS.contains(&call.name.as_str()) && call.args.len() == k + 2)
+            .then(|| words(unquote(&call.args[k + 1])))
+            .filter(|d| !d.is_empty());
+        if shows_display && display.is_none() {
+            // The display came through a wrapper: its arguments are
+            // not the element's.
+            return None;
+        }
         let expect = if coupling {
             format!("k={}", words(spliced))
+        } else if let Some(d) = display {
+            d
         } else {
             words(spliced)
         };
@@ -1175,11 +1254,11 @@ impl<'a> Extractor<'a> {
             Some(raw) => unquote(&raw[i]).trim().to_string(),
             None => unquote(&call.args[i]).trim().to_string(),
         };
-        if coupling {
+        Some(if coupling {
             (0..3).map(pick).collect::<Vec<_>>().join(" ")
         } else {
             pick(k)
-        }
+        })
     }
 
     /// The arguments of block `b`'s call as written in the user source,

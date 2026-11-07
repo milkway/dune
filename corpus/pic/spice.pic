@@ -29,9 +29,23 @@
 #   tline (T),     P1 N1 P2 N2 (port 1 +/-, port 2 +/-: card order)
 #   ltraline (O)
 #
+# Display text: every two-terminal element with a value (resistor,
+# capacitor, inductor, diode, vsource, acsource, battery, isource,
+# cccs, ccvs), the four-point vcvs/vccs and the centered devices (npn,
+# pnp, npn4, pnp4, nmos, pmos, nmos4, pmos4, njfet, pjfet, opamp:
+# `M1: nmos(At, NMOD W=4u L=1u, "T₁")`) take one optional argument
+# after the value/model, a display text drawn INSTEAD of it:
+# `V1: vsource(In, (0,0), PULSE(0 5 0 1u 1u 10m 20m), "Vin")` draws
+# `Vin` and still emits `V1 In 0 PULSE(0 5 0 1u 1u 10m 20m)`. Empty or
+# absent, the value is drawn. (Not for coupling, switches or lines.)
+# Plain Unicode reads best for subscripts (`T₁`); rpic's $...$ math
+# labels are not rendered on this (rpic-core) path. A block drawing a display carries a `Disp`
+# marker, so the extractor never mistakes the display for the value.
+#
 # Reserved marker labels: `Gnd` (ground block), `At` (anchor of
 # centered elements; their value is the 2nd argument, not the 3rd),
-# `Mutual` (a coupling block, whose pins are none). Pin
+# `Mutual` (a coupling block, whose pins are none), `Disp` (see
+# above). Pin
 # markers are `circle invis rad 0`; the extractor recognizes exactly
 # that shape. Net names are plain pic places (`Vout: (2,1)`), not
 # prelude macros.
@@ -43,7 +57,8 @@
 # with `dn`.
 
 # --- value label beside a two-terminal body ------------------------------
-# $1 from, $2 to, $3 offset from the axis (in), $4 the text. The label
+# $1 from, $2 to, $3 offset from the axis (in), $4 the value, $5 the
+# optional display text drawn instead of the value when not empty. The label
 # goes ABOVE horizontal-ish elements and LEFT of vertical ones
 # (right-justified, so long values never cross the body), whatever the
 # drawing direction.
@@ -53,10 +68,26 @@ define __dn_val {
   dnpx=0-dndy/dnl; dnpy=dndx/dnl
   if (dnpy < -0.001) || ((dnpy < 0.001) && (dnpx > 0)) then { dnpx=0-dnpx; dnpy=0-dnpy }
   dnmx=(dnax+dnbx)/2+dnpx*$3; dnmy=(dnay+dnby)/2+dnpy*$3
-  if dnpx < -0.5 then {
-    "$4" rjust at (dnmx,dnmy)
+  if "$5" == "" then { __dn_valtext($4) } else { __dn_valtext($5); __dn_disp }
+}
+# `Disp` marks a block whose drawn text is a display, not the value.
+define __dn_disp { Disp: circle invis rad 0 at (dnmx,dnmy) }
+# The model/value text of a centered element: $1 the value, $2 the
+# optional display (drawn instead when not empty), $3/$4 where, $5 the
+# justification (ljust, or empty).
+define __dn_label {
+  if "$2" == "" then {
+    "$1" $5 at ($3,$4)
   } else {
-    "$4" at (dnmx,dnmy)
+    "$2" $5 at ($3,$4)
+    Disp: circle invis rad 0 at ($3,$4)
+  }
+}
+define __dn_valtext {
+  if dnpx < -0.5 then {
+    "$1" rjust at (dnmx,dnmy)
+  } else {
+    "$1" at (dnmx,dnmy)
   }
 }
 
@@ -68,22 +99,22 @@ define __dn_pn {
 }
 
 # --- passives --------------------------------------------------------------
-define resistor  { [ __dn_val($1,$2,0.2,$3); __resistor($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
-define capacitor { [ __dn_val($1,$2,0.25,$3); __capacitor($1,$2); __dn_pn($1,$2) ] with .P at $1 }
-define inductor  { [ __dn_val($1,$2,0.25,$3); __inductor($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
-define diode     { [ __dn_val($1,$2,0.25,$3); __diode($1,$2);     __dn_pn($1,$2) ] with .P at $1 }
+define resistor  { [ __dn_val($1,$2,0.2,$3,$4); __resistor($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
+define capacitor { [ __dn_val($1,$2,0.25,$3,$4); __capacitor($1,$2); __dn_pn($1,$2) ] with .P at $1 }
+define inductor  { [ __dn_val($1,$2,0.25,$3,$4); __inductor($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
+define diode     { [ __dn_val($1,$2,0.25,$3,$4); __diode($1,$2);     __dn_pn($1,$2) ] with .P at $1 }
 
 # --- independent sources ---------------------------------------------------
 # vsource(P, N, value): circle with -/+; std voltage_source draws its +
 # toward its second point, so it gets the points swapped (+ toward P).
-define vsource  { [ __dn_val($1,$2,0.3,$3); voltage_source($2,$1); __dn_pn($1,$2) ] with .P at $1 }
+define vsource  { [ __dn_val($1,$2,0.3,$3,$4); voltage_source($2,$1); __dn_pn($1,$2) ] with .P at $1 }
 # acsource(P, N, value): circle with a sine.
-define acsource { [ __dn_val($1,$2,0.3,$3); ac_source($1,$2);      __dn_pn($1,$2) ] with .P at $1 }
+define acsource { [ __dn_val($1,$2,0.3,$3,$4); ac_source($1,$2);      __dn_pn($1,$2) ] with .P at $1 }
 # battery(P, N, value): long (+) plate toward P.
-define battery  { [ __dn_val($1,$2,0.25,$3); __dn_battery($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
+define battery  { [ __dn_val($1,$2,0.25,$3,$4); __dn_battery($1,$2);  __dn_pn($1,$2) ] with .P at $1 }
 # isource(P, N, value): arrow from P to N (SPICE: current flows from
 # n+ through the source into n-).
-define isource  { [ __dn_val($1,$2,0.3,$3); current_source($1,$2); __dn_pn($1,$2) ] with .P at $1 }
+define isource  { [ __dn_val($1,$2,0.3,$3,$4); current_source($1,$2); __dn_pn($1,$2) ] with .P at $1 }
 
 # std `battery` is a flat statement macro under the same name; keep its
 # geometry reachable under a private name before shadowing it.
@@ -137,7 +168,8 @@ define __dn_ctl_stub {
   if $3 == 1 then { "+" at (dnsgx,dnsgy) } else { "−" at (dnsgx,dnsgy) }
 }
 define __dn_dep4 {
-  # $1 P, $2 N, $3 Cp, $4 Cn, $5 gain, $6 = 0 vcvs / 1 vccs.
+  # $1 P, $2 N, $3 Cp, $4 Cn, $5 gain, $6 = 0 vcvs / 1 vccs, $7 the
+  # optional display text.
   dnax=$1.x; dnay=$1.y; dnbx=$2.x; dnby=$2.y
   dncpx=$3.x; dncpy=$3.y; dncnx=$4.x; dncny=$4.y
   dndx=dnbx-dnax; dndy=dnby-dnay; dnl=sqrt(dndx*dndx+dndy*dndy)
@@ -147,13 +179,7 @@ define __dn_dep4 {
   dnside=((dncpx+dncnx)/2-dnmx)*dnpx+((dncpy+dncny)/2-dnmy)*dnpy
   if dnside > 0 then { dnpx=0-dnpx; dnpy=0-dnpy }
   dntx=dnmx+dnpx*0.32; dnty=dnmy+dnpy*0.32
-  if dnpx > 0.5 then {
-    "$5" ljust at (dntx,dnty)
-  } else { if dnpx < -0.5 then {
-    "$5" rjust at (dntx,dnty)
-  } else {
-    "$5" at (dntx,dnty)
-  } }
+  if "$7" == "" then { __dn_gaintext($5) } else { __dn_gaintext($7); __dn_disp }
   if $6 == 0 then { vsource_ctrl($2,$1) } else { isource_ctrl($1,$2) }
   __dn_pn($1,$2)
   # Each sign sits away from the other terminal.
@@ -165,13 +191,22 @@ define __dn_dep4 {
   Cp: circle invis rad 0 at (dncpx,dncpy)
   Cn: circle invis rad 0 at (dncnx,dncny)
 }
-define vcvs { [ __dn_dep4($1,$2,$3,$4,$5,0) ] with .P at $1 }
-define vccs { [ __dn_dep4($1,$2,$3,$4,$5,1) ] with .P at $1 }
+define __dn_gaintext {
+  if dnpx > 0.5 then {
+    "$1" ljust at (dntx,dnty)
+  } else { if dnpx < -0.5 then {
+    "$1" rjust at (dntx,dnty)
+  } else {
+    "$1" at (dntx,dnty)
+  } }
+}
+define vcvs { [ __dn_dep4($1,$2,$3,$4,$5,0,$6) ] with .P at $1 }
+define vccs { [ __dn_dep4($1,$2,$3,$4,$5,1,$6) ] with .P at $1 }
 # cccs(P, N, Vname gain) -> F, ccvs(P, N, Vname gain) -> H: two points;
 # the controlling branch is the current through voltage source Vname,
 # named in the value exactly as the card wants it.
-define cccs { [ __dn_val($1,$2,0.32,$3); isource_ctrl($1,$2);   __dn_pn($1,$2) ] with .P at $1 }
-define ccvs { [ __dn_val($1,$2,0.32,$3); vsource_ctrl($2,$1);   __dn_pn($1,$2) ] with .P at $1 }
+define cccs { [ __dn_val($1,$2,0.32,$3,$4); isource_ctrl($1,$2);   __dn_pn($1,$2) ] with .P at $1 }
+define ccvs { [ __dn_val($1,$2,0.32,$3,$4); vsource_ctrl($2,$1);   __dn_pn($1,$2) ] with .P at $1 }
 
 # --- mutual inductance (K) -----------------------------------------------------
 # K1: coupling(L1, L2, k): no pins; the arguments are the two inductor
@@ -239,22 +274,22 @@ define cswitch { [ __dn_val($1,$2,0.3,$3); __dn_switch($1,$2); __dn_pn($1,$2) ] 
 define __dn_bjt {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$3" ljust at (dncx+0.36,dncy)
+    __dn_label($3,$4,dncx+0.36,dncy,ljust)
     __bjt((dncx,dncy), 1, 1, $2)
     B: circle invis rad 0 at (gBase_x,gBase_y)
     C: circle invis rad 0 at (gColl_x,gColl_y)
     E: circle invis rad 0 at (gEmit_x,gEmit_y)
   ] with .At at $1
 }
-define npn { __dn_bjt($1, 0, $2) }
-define pnp { __dn_bjt($1, 1, $2) }
+define npn { __dn_bjt($1, 0, $2, $3) }
+define pnp { __dn_bjt($1, 1, $2, $3) }
 # npn4(C, model) / pnp4(C, model): the same symbols plus the substrate
 # (S) as a stub leaving the envelope on the collector side, to the
 # right, above the model text. Card order `Q1 C B E S model`.
 define __dn_bjt4 {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$3" ljust at (dncx+0.36,dncy-0.04)
+    __dn_label($3,$4,dncx+0.36,dncy-0.04,ljust)
     __bjt((dncx,dncy), 1, 1, $2)
     line from (dncx+0.2236,dncy+0.2) to (dncx+0.5,dncy+0.2)
     B: circle invis rad 0 at (gBase_x,gBase_y)
@@ -263,8 +298,8 @@ define __dn_bjt4 {
     S: circle invis rad 0 at (dncx+0.5,dncy+0.2)
   ] with .At at $1
 }
-define npn4 { __dn_bjt4($1, 0, $2) }
-define pnp4 { __dn_bjt4($1, 1, $2) }
+define npn4 { __dn_bjt4($1, 0, $2, $3) }
+define pnp4 { __dn_bjt4($1, 1, $2, $3) }
 
 # nmos(C, model): gate left, drain up, source down; pmos(C, model):
 # gate left, source up, drain down. The body (B) is drawn tied to the
@@ -277,7 +312,7 @@ define __dn_mos_pins {
 define nmos {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$2" ljust at (dncx+0.26,dncy)
+    __dn_label($2,$3,dncx+0.26,dncy,ljust)
     __dn_nmos_geom((dncx,dncy)); __dn_mos_pins
     B: circle invis rad 0 at (gSrc_x,gSrc_y)
   ] with .At at $1
@@ -285,7 +320,7 @@ define nmos {
 define pmos {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$2" ljust at (dncx+0.26,dncy)
+    __dn_label($2,$3,dncx+0.26,dncy,ljust)
     __dn_pmos_geom((dncx,dncy))
     # std pmos ties the body to its TOP lead (named gDrain there): that
     # lead is the source of the drawn symbol, as in a CMOS pull-up.
@@ -301,7 +336,7 @@ define pmos {
 define nmos4 {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$2" ljust at (dncx+0.26,dncy+0.24)
+    __dn_label($2,$3,dncx+0.26,dncy+0.24,ljust)
     __dn_mos4_geom((dncx,dncy))
     arrow from (dncx+0.16,dncy) to (dncx-0.08,dncy)
     __dn_mos_pins
@@ -311,7 +346,7 @@ define nmos4 {
 define pmos4 {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$2" ljust at (dncx+0.26,dncy+0.24)
+    __dn_label($2,$3,dncx+0.26,dncy+0.24,ljust)
     __dn_mos4_geom((dncx,dncy))
     arrow from (dncx-0.08,dncy) to (dncx+0.16,dncy)
     S: circle invis rad 0 at (gDrain_x,gDrain_y)
@@ -341,14 +376,14 @@ define __dn_mos4_geom {
 define njfet {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$2" ljust at (dncx+0.26,dncy)
+    __dn_label($2,$3,dncx+0.26,dncy,ljust)
     __dn_njfet_geom((dncx,dncy)); __dn_mos_pins
   ] with .At at $1
 }
 define pjfet {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$2" ljust at (dncx+0.26,dncy)
+    __dn_label($2,$3,dncx+0.26,dncy,ljust)
     __dn_pjfet_geom((dncx,dncy)); __dn_mos_pins
   ] with .At at $1
 }
@@ -359,7 +394,7 @@ define pjfet {
 define opamp {
   [ dncx=$1.x; dncy=$1.y
     At: circle invis rad 0 at (dncx,dncy)
-    "$2" at (dncx,dncy-0.5)
+    __dn_label($2,$3,dncx,dncy-0.5,)
     __opamp((dncx,dncy), 1)
     Inp: circle invis rad 0 at (gIp_x,gIp_y)
     Inm: circle invis rad 0 at (gIm_x,gIm_y)

@@ -11,13 +11,13 @@ B2:   (3.72,1.2)
 Out2: (4.36,1.62)
 Vp:   (5.2,3)
 
-Vcc: vsource((5.2,3), (5.2,0.3), 5)
-Vin: vsource((0.3,1.2), (0.3,0.3), pulse(0 5 2ns 2ns 2ns 80ns))
+Vcc: vsource((5.2,3), (5.2,0.3), 5, "VCC")
+Vin: vsource((0.3,1.2), (0.3,0.3), pulse(0 5 2ns 2ns 2ns 80ns), "G₁")
 RB1: resistor((0.3,1.2), (1.72,1.2), 10k)
 RC1: resistor((2.36,3), (2.36,1.62), 1k)
-Q1: npn((2.2,1.2), qnd)
+Q1: npn((2.2,1.2), qnd, "T₁")
 RB2: resistor((2.36,1.62), (3.4,1.62), 10k)
-Q2: npn((4.2,1.2), qnd)
+Q2: npn((4.2,1.2), qnd, "T₂")
 RC2: resistor((4.36,3), (4.36,1.62), 1k)
 
 line from RC1.P to Vcc.P

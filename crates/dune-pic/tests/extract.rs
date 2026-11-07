@@ -687,3 +687,172 @@ line from Q1.B to (3.52,0); line from Q1.E to (4.16,0); ground((3.52,0)); ground
     assert_eq!(d.severity, PicSeverity::Warning);
     assert!(d.message.contains("substrate net `QM`"), "{}", d.message);
 }
+
+/// The text the figure draws (all `<text>` contents of the SVG).
+fn drawn_texts(body: &str) -> Vec<String> {
+    let src = format!(".PS\nspice = 1\n{body}\n.PE\n");
+    let svg = render_svg(&src, &ExtractOptions::default()).unwrap();
+    svg.split("<text")
+        .skip(1)
+        .filter_map(|t| {
+            let t = &t[t.find('>')? + 1..];
+            Some(t[..t.find('<')?].to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn display_text_is_drawn_and_the_value_emitted() {
+    let body = "V1: vsource((0,1),(0,0), PULSE(0 5 1e-9 1n 1n 5n 10n), \"Vin\")
+R1: resistor((0,1),(1,1), 1e3, \"Rload\")
+C1: capacitor((1,1),(1,0), 1p, \"\")
+D1: diode((1,1),(2,1), DX, \"D\"); I1: isource((2,1),(2,0), 1m, \"Ib\")
+line from (0,0) to (2,0); ground((0,0))
+.model DX D";
+    let e = ex(body);
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    assert_eq!(
+        cards(&e),
+        [
+            "V1 n1 0 PULSE(0 5 1e-9 1n 1n 5n 10n)",
+            "R1 n1 n2 1e3",
+            "C1 n2 0 1p",
+            "D1 n2 n3 DX",
+            "I1 n3 0 1m",
+        ]
+    );
+    // The drawing shows the displays (and the value when the display
+    // is empty), never the long stimulus.
+    let texts = drawn_texts(body);
+    for t in ["Vin", "Rload", "1p", "D", "Ib"] {
+        assert!(texts.iter().any(|x| x == t), "{t}: {texts:?}");
+    }
+    assert!(
+        !texts
+            .iter()
+            .any(|x| x.contains("PULSE") || x == "1e3" || x == "1000")
+    );
+}
+
+#[test]
+fn display_on_four_point_sources_is_the_sixth_argument() {
+    let body = "V1: vsource((0,2),(0,0), DC 1); line from (0,2) to (2.1,2) then to (2.1,1.2)
+E1: vcvs((3,2),(3,0),(2.5,1.2),(2.5,0.8), 1e1, \"A\")
+line from (2.1,1.2) to E1.Cp; line from E1.Cn to (2.1,0.8) then to (2.1,0)
+G1: vccs((4,2),(4,0),(3.5,1.2),(3.5,0.8), 2m, \"gm\")
+line from E1.P to (3.3,2) then to (3.3,1.2) then to G1.Cp
+line from G1.Cn to (3.3,0.8) then to (3.3,0)
+R1: resistor((5,2),(5,0), 1k); line from G1.P to R1.P
+line from (0,0) to (5,0); ground((0,0))";
+    let e = ex(body);
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    let c = cards(&e);
+    assert_eq!(c[1], "E1 n2 0 n1 0 1e1");
+    assert_eq!(c[2], "G1 n3 0 n2 0 2m");
+    let texts = drawn_texts(body);
+    assert!(texts.iter().any(|x| x == "A") && texts.iter().any(|x| x == "gm"));
+    assert!(!texts.iter().any(|x| x == "1e1" || x == "10" || x == "2m"));
+}
+
+#[test]
+fn wrapper_arguments_never_pass_for_a_display() {
+    // A wrapper with one more argument than the value slot: its 4th
+    // argument matches the drawn text, but it is not a display (the
+    // call is not the prelude's): the drawing decides, as before.
+    let e = ex("define rr { R7: resistor($1, $2, $4) }
+rr((0,0), (1,0), junk, 10k)
+ground((0,0)); ground((1,0))");
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    assert_eq!(cards(&e), ["R7 0 0 10k"]);
+
+    // A wrapper that passes a display: the drawing is not the value
+    // and the call is not the element's, so there is no value to
+    // trust — an error, not the display (nor the wrapper's argument
+    // that happens to equal it) on the card.
+    for call in ["vv((0,1), (0,0), Vin)", "vv((0,1), (0,0), \"Vin\")"] {
+        let e = ex(&format!(
+            "define vv {{ V1: vsource($1, $2, DC 1, $3) }}
+{call}
+R1: resistor((0,1),(0,0),1k); ground((0,0))"
+        ));
+        let d = e
+            .diagnostics
+            .iter()
+            .find(|d| d.kind == PicDiagKind::MissingValue)
+            .unwrap_or_else(|| panic!("{call}: {:#?}", e.diagnostics));
+        assert_eq!(d.severity, PicSeverity::Error);
+        assert!(d.message.contains("display text"), "{}", d.message);
+        assert_eq!(e.diagnostics.len(), 1, "{:#?}", e.diagnostics);
+        assert_eq!(cards(&e)[0], "V1 n1 0", "{call}");
+    }
+}
+
+#[test]
+fn display_on_centered_devices() {
+    let body = "Q1: npn((3,1), QX AREA=2, \"T₁\")
+M1: nmos((5,1), NM W=1e-6 L=1u, \"T₂\")
+J1: njfet((7,1), JM, \"T₃\")
+line from Q1.C to (3.16,2); line from M1.D to (5.16,2); line from J1.D to (7.16,2)
+line from Q1.B to (2,1) then to (2,2); line from (2,2) to (7.16,2)
+line from M1.G to (4.5,0); line from J1.G to (6.5,0)
+line from Q1.E to (3.16,0); line from M1.S to (5.16,0); line from J1.S to (7.16,0)
+V1: vsource((8,2),(8,0), DC 1, \"V₁\")
+line from (7.16,2) to (8,2); line from (2,0) to (8,0); ground((2,0))
+.model QX NPN
+.model NM NMOS
+.model JM NJF
+.op";
+    let e = ex(body);
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    let c = cards(&e);
+    // The model stays on the card, raw (`1e-6` would print as
+    // 0.000001), even with a multibyte display after it on the line.
+    assert_eq!(c[0], "Q1 n1 n1 0 QX AREA=2");
+    assert_eq!(c[1], "M1 n1 0 0 0 NM W=1e-6 L=1u");
+    assert_eq!(c[2], "J1 n1 0 0 JM");
+    assert_eq!(c[3], "V1 n1 0 DC 1");
+    let texts = drawn_texts(body);
+    for t in ["T₁", "T₂", "T₃", "V₁"] {
+        assert!(texts.iter().any(|x| x == t), "{t}: {texts:?}");
+    }
+    assert!(!texts.iter().any(|x| x.contains("QX") || x.contains("NM")));
+    let parsed = dune_netlist::parse_str("c.cir", &e.netlist);
+    assert!(parsed.is_clean(), "{:?}", parsed.diags);
+}
+
+#[test]
+fn display_with_spaces_matches_after_normalization() {
+    // pic collapses nothing inside a string, but the guard compares
+    // word-normalized text: a display with runs of blanks still
+    // matches what was drawn, and the value is the raw argument.
+    let body = "V1: vsource((0,1),(0,0), SIN(0  1e-3   1k), \"G₁  (1 kHz)\")
+M1: nmos((2,1), NM  W=2u, \" T  4 \")
+line from M1.D to (2.16,1.5) then to (0,1.5) then to (0,1)
+line from M1.G to (1.6,0); line from M1.S to (2.16,0); line from (0,0) to (2.16,0)
+ground((0,0))
+.model NM NMOS";
+    let e = ex(body);
+    assert!(e.diagnostics.is_empty(), "{:#?}", e.diagnostics);
+    let c = cards(&e);
+    assert_eq!(c[0], "V1 n1 0 SIN(0  1e-3   1k)");
+    assert_eq!(c[1], "M1 n1 0 0 0 NM  W=2u");
+    let texts = drawn_texts(body);
+    assert!(texts.iter().any(|x| x.contains("(1 kHz)")), "{texts:?}");
+}
+
+#[test]
+fn display_through_a_wrapper_on_a_centered_device_is_refused() {
+    let e = ex("define mytr { Q1: npn($1, QX, $2) }
+mytr((3,1), \"T₁\")
+line from Q1.C to (3.16,2); line from Q1.B to (2,1) then to (2,2) then to (3.16,2)
+line from Q1.E to (3.16,0); ground((3.16,0))
+V1: vsource((4,2),(4,0), 1); line from (3.16,2) to (4,2); line from (4,0) to (3.16,0)");
+    let d = e
+        .diagnostics
+        .iter()
+        .find(|d| d.kind == PicDiagKind::MissingValue)
+        .unwrap_or_else(|| panic!("{:#?}", e.diagnostics));
+    assert_eq!(d.severity, PicSeverity::Error);
+    assert!(cards(&e)[0].starts_with("Q1 "));
+    assert!(!cards(&e)[0].contains("T₁"));
+}

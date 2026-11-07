@@ -6,7 +6,7 @@
 spice = 1
 Vin:  (1.4,1.5)
 Vend: (3.8,1.5)
-V1: vsource((0,1.5), (0,0), PULSE(0 1 0 10p 10p 20n 40n))
+V1: vsource((0,1.5), (0,0), PULSE(0 1 0 10p 10p 20n 40n), "G₁")
 R1: resistor(V1.P, Vin, 50)
 T1: tline(Vin, Vend, Z0=50 TD=1n)
 R2: resistor(Vend, (3.8,0), 150)

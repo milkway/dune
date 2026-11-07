@@ -86,6 +86,36 @@ na release 0.13.0.
 - Valor desenhado na figura (acima do elemento horizontal, à
   esquerda do vertical) — é o que o extrator lê.
 
+## Display (rótulo curto no desenho)
+
+- Argumento opcional **depois** do valor/modelo: quando não vazio, o
+  prelude desenha o display no lugar do valor —
+  `vsource(In, (0,0), PULSE(0 5 0 1u 1u 10m 20m), "G₁")` desenha só
+  "G₁"; o cartão continua com o PULSE completo. Aceitam display: os
+  2-terminais com valor (R C L D, v/ac/i-source, battery, cccs,
+  ccvs), vcvs/vccs (6º argumento) e os centrados em `At`
+  (npn/pnp/npn4/pnp4, nmos/pmos/nmos4/pmos4, njfet/pjfet, opamp).
+  coupling, chaves e linhas ficam de fora.
+- Todo bloco que desenha display carrega o marcador reservado
+  `Disp`. O extrator só reconhece display quando a chamada mais
+  externa é a **própria macro do prelude** com exatamente um
+  argumento a mais; aí o guard compara o desenho com o display e o
+  valor segue vindo cru do argumento posicional.
+- Armadilhas fechadas (testadas): wrapper com um argumento a mais
+  cai no fluxo antigo (guard contra o valor → fallback no desenho);
+  wrapper que **repassa** um display não tem valor confiável — o
+  `Disp` sem chamada verificável vira erro `MissingValue` com span
+  ("draws a display text… but its call is not the element's own
+  macro").
+- Subscritos: use Unicode ("T₁", "G₁") — o `$T_1$` do texlabels não
+  renderiza no caminho rpic-core/wasm do dune (issue #7 cobre
+  registrar o renderer de math no caminho nativo).
+- Convenção do corpus: **G₁** geradores/sinais, **T₁…** transistores,
+  **VCC/VEE/VDD** alimentações.
+- Pega: nome curto de macro do usuário pode colidir com variável de
+  rascunho do std (ex.: `tr`, usada pelo `__bjt` — "macro expansion
+  too deep"); prefixe os seus.
+
 ## O que restou do `compat` (pós-0.13)
 
 - `split_continuations`: o pic erra em linhas `+` de coluna 1, então
