@@ -1,0 +1,12 @@
+transient noise: 1/f plus random telegraph noise into a resistor
+* Dune-only probe (issue #13, part 2): seed 3, golden from Dune itself
+* (corpus/regress/golden/trnoise_1f_rts.raw). in drives 1/f noise
+* (alpha 1, driving rms 1 uA) and RTS (2 uA, capture 20 us, emission
+* 30 us); vw is white noise alone.
+.options seed=3
+in 0 1 trnoise(0 1u 1 1u 2u 20u 30u)
+r1 1 0 1k
+vw 2 0 trnoise(1m 2u)
+r2 2 0 1k
+.tran 1u 200u
+.end

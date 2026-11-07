@@ -1,0 +1,14 @@
+transient noise: TRRANDOM of each type
+* Dune-only probe (issue #13, part 2): default seed (1), golden from
+* Dune itself (corpus/regress/golden/trrandom.raw). Types 1 uniform,
+* 2 gaussian, 3 exponential (after a 10 us delay), 4 poisson.
+v1 1 0 trrandom(1 5u 0 1 0)
+v2 2 0 trrandom(2 5u 0 0.5 1)
+v3 3 0 dc 0.1 trrandom(3 5u 10u 2)
+i4 0 4 trrandom(4 5u 0 3 0)
+r1 1 0 1k
+r2 2 0 1k
+r3 3 0 1k
+r4 4 0 1
+.tran 1u 100u
+.end

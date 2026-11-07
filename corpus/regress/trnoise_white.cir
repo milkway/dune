@@ -1,0 +1,12 @@
+transient noise: white TRNOISE over a resistor, RC-filtered copy
+* Dune-only probe (issue #13, part 2): seed 7, golden from Dune itself
+* (corpus/regress/golden/trnoise_white.raw); ngspice's streams are not
+* comparable sample by sample (corpus/KNOWN_DIFFS.md). Statistics in
+* crates/dune-core/tests/trnoise.rs.
+.options seed=7
+vn 1 0 dc 0.5 trnoise(10m 1u 0 0)
+r1 1 2 1k
+c1 2 0 2n
+rl 1 0 10k
+.tran 1u 100u
+.end

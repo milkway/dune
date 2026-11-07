@@ -33,6 +33,8 @@ r/src/*.dll
 !corpus/golden/**/*.raw
 !corpus/measure/golden/*.raw
 !crates/*/tests/data/*.raw
+# Dune-only transient-noise probes: goldens written by Dune itself.
+!corpus/regress/golden/*.raw
 
 # macOS
 .DS_Store
