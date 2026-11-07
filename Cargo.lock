@@ -823,9 +823,9 @@ checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
 name = "rpic-core"
-version = "0.13.0"
+version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9b6d08a0fa4bc5ea52d2639c7354c5046f5c8d24d0da18fd304460fbbe0fa3e"
+checksum = "4fdfad842274e4fc5260640c964156b8edc8cc422d944f6516d605f11528b6d8"
 
 [[package]]
 name = "rustix"
