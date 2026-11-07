@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dune — SPICE, reborn in Rust</title>
+<meta name="description" content="Dune is a faithful Rust rewrite of Berkeley's SPICE3f5 circuit simulator: same netlists, same defaults, same numbers — validated circuit by circuit against ngspice — callable from Python, R, JavaScript and C." />
+<meta property="og:title" content="Dune — SPICE, reborn in Rust" />
+<meta property="og:description" content="A faithful SPICE3f5 rewrite, oracle-tested against ngspice. Netlists in, waveforms out — from the CLI, Python, R, the browser, or a schematic drawn in pic." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://milkway.github.io/dune/" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%9C%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+<style>
+  :root {
+    --bg: #171108;
+    --bg-soft: #1f1709;
+    --card: #231a0d;
+    --border: #41331c;
+    --fg: #f2e9d8;
+    --muted: #b5a687;
+    --brand: #e8a33d;          /* dune amber */
+    --trace-1: #4ad6a0;        /* scope green */
+    --trace-2: #e8a33d;
+    --code-bg: #140f07;
+    --grid: #342918;
+    --shadow: 0 14px 44px rgba(0,0,0,.45);
+    --radius: 14px;
+    --maxw: 1080px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f7f1e3;
+      --bg-soft: #f1e8d3;
+      --card: #fffdf6;
+      --border: #e2d5b6;
+      --fg: #241c0e;
+      --muted: #6f6248;
+      --code-bg: #171108;
+      --grid: #ded2b4;
+      --shadow: 0 12px 34px rgba(90,70,30,.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--fg);
+    background:
+      radial-gradient(1000px 540px at 14% -6%, rgba(232,163,61,.14), transparent 60%),
+      radial-gradient(820px 480px at 94% 2%, rgba(74,214,160,.08), transparent 55%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 22px; }
+
+  header.nav {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: blur(10px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 22px; height: 58px; }
+  .logo { font-weight: 750; letter-spacing: .01em; font-size: 18px; color: var(--fg); }
+  .logo b { color: var(--brand); font-weight: 750; }
+  .nav-links { margin-left: auto; display: flex; gap: 18px; font-size: 14.5px; }
+  .nav-links a { color: var(--muted); }
+  .nav-links a:hover { color: var(--fg); text-decoration: none; }
+
+  .hero { padding: 72px 0 56px; }
+  .hero-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 42px; align-items: center; }
+  .eyebrow { color: var(--brand); font-size: 13.5px; letter-spacing: .04em; }
+  h1 { font-size: clamp(32px, 5vw, 46px); line-height: 1.12; letter-spacing: -.015em; margin: 10px 0 14px; font-weight: 760; }
+  .lead { color: var(--muted); font-size: 17.5px; max-width: 54ch; margin: 0 0 18px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; }
+  .badges img { height: 20px; display: block; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; }
+  .btn {
+    display: inline-block; padding: 10px 16px; border-radius: 10px;
+    border: 1px solid var(--border); color: var(--fg); font-weight: 600; font-size: 15px;
+    background: var(--card);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--brand); }
+  .btn.primary { background: var(--brand); border-color: var(--brand); color: #221604; }
+  .btn.primary:hover { filter: brightness(1.06); }
+
+  .scope {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+  }
+  .scope-bar {
+    display: flex; align-items: center; gap: 7px; padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
+  .scope-title { margin-left: 8px; color: #8d7f63; font-size: 12.5px; font-family: ui-monospace, Menlo, monospace; }
+  .scope pre {
+    margin: 0; padding: 14px 16px 10px; font-size: 12.5px; line-height: 1.55;
+    color: #d9cdb4; overflow-x: auto;
+  }
+  .c-prompt { color: #8d7f63; } .c-cmd { color: #e8a33d; } .c-cmt { color: #7a6c50; }
+  .c-card { color: #4ad6a0; }
+  .scope svg { display: block; width: 100%; height: auto; }
+  .plot-grid line { stroke: var(--grid); stroke-width: 1; }
+  .plot-axis { fill: #8d7f63; font: 10.5px ui-monospace, Menlo, monospace; }
+  .tr1 { fill: none; stroke: var(--trace-1); stroke-width: 2; }
+  .tr2 { fill: none; stroke: var(--trace-2); stroke-width: 1.6; opacity: .85; }
+  @media (prefers-reduced-motion: no-preference) {
+    .tr1 { stroke-dasharray: 1; stroke-dashoffset: 1; animation: sweep 1.6s ease-out .25s forwards; }
+    @keyframes sweep { to { stroke-dashoffset: 0; } }
+  }
+  .legend { display: flex; gap: 16px; padding: 8px 16px 12px; font: 11.5px ui-monospace, Menlo, monospace; color: #8d7f63; }
+  .legend .sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+
+  section { padding: 56px 0; }
+  section.alt { background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  h2 { font-size: clamp(24px, 3.4vw, 31px); letter-spacing: -.012em; margin: 0 0 8px; font-weight: 740; }
+  .sub { color: var(--muted); margin: 0 0 26px; max-width: 70ch; }
+  .grid { display: grid; gap: 16px; }
+  .f2 { grid-template-columns: 1fr 1fr; }
+  .f3 { grid-template-columns: repeat(3, 1fr); }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 18px 16px;
+  }
+  .card h3 { margin: 8px 0 6px; font-size: 16.5px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .ic { font-size: 20px; }
+
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+  .pill {
+    font: 12.5px/1 ui-monospace, Menlo, monospace; color: var(--fg);
+    border: 1px solid var(--border); background: var(--card);
+    padding: 7px 10px; border-radius: 999px;
+  }
+  .pill.hd { background: transparent; border-style: dashed; color: var(--muted); }
+  .note { color: var(--muted); font-size: 14px; max-width: 76ch; }
+
+  .duo { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: stretch; }
+  .duo .arrow { align-self: center; color: var(--brand); font-size: 22px; }
+  .panel {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .panel .cap {
+    padding: 8px 14px; border-bottom: 1px solid var(--border);
+    color: #8d7f63; font: 12px ui-monospace, Menlo, monospace;
+  }
+  .panel pre { margin: 0; padding: 13px 16px; font-size: 12.5px; line-height: 1.6; color: #d9cdb4; overflow-x: auto; }
+
+  .lic { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .lic th, .lic td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .lic th { color: var(--muted); font-weight: 600; }
+  .tag { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; }
+  .tag.bsd { color: var(--trace-1); border-color: color-mix(in srgb, var(--trace-1) 40%, var(--border)); }
+
+  footer { border-top: 1px solid var(--border); padding: 26px 0 34px; color: var(--muted); font-size: 14px; }
+  .foot-inner { display: flex; flex-wrap: wrap; gap: 14px; justify-content: space-between; }
+  .foot-links { display: flex; flex-wrap: wrap; gap: 16px; }
+
+  @media (max-width: 860px) {
+    .hero { padding: 48px 0 40px; }
+    .hero-grid { grid-template-columns: 1fr; gap: 28px; }
+    .f3 { grid-template-columns: 1fr; }
+    .f2 { grid-template-columns: 1fr; }
+    .duo { grid-template-columns: 1fr; }
+    .duo .arrow { transform: rotate(90deg); justify-self: center; }
+    .nav-links { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <span class="logo">dune<b>.</b></span>
+    <nav class="nav-links">
+      <a href="#fidelity">Fidelity</a>
+      <a href="#coverage">Coverage</a>
+      <a href="#figures">Figures</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/milkway/dune">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow">circuit simulation · Rust · Berkeley lineage</span>
+        <h1>SPICE, reborn in Rust.</h1>
+        <p class="lead">Dune is a faithful rewrite of Berkeley's SPICE3f5: the same netlists, the same defaults, the same numbers — validated circuit by circuit against ngspice — with a clean engine you can call from Python, R, JavaScript or C.</p>
+        <div class="badges">
+          <a href="https://github.com/milkway/dune/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/milkway/dune/actions/workflows/ci.yml/badge.svg"></a>
+          <a href="https://pypi.org/project/spice3/"><img alt="PyPI" src="https://img.shields.io/pypi/v/spice3.svg?label=pypi%20spice3"></a>
+          <a href="https://www.npmjs.com/package/@strategicprojects/dune-sim"><img alt="npm" src="https://img.shields.io/npm/v/%40strategicprojects%2Fdune-sim.svg?label=npm%20dune-sim"></a>
+          <img alt="License BSD-3" src="https://img.shields.io/badge/license-BSD--3--Clause-blue.svg">
+          <img alt="Rust 1.88+" src="https://img.shields.io/badge/rust-1.88%2B-orange.svg">
+          <img alt="wasm" src="https://img.shields.io/badge/wasm-ready-8b74ff.svg">
+        </div>
+        <div class="cta">
+          <a class="btn primary" href="#install">Get started</a>
+          <a class="btn" href="https://github.com/milkway/dune">GitHub</a>
+          <a class="btn" href="https://github.com/milkway/dune/blob/main/corpus/KNOWN_DIFFS.md">Known differences</a>
+        </div>
+      </div>
+      <div class="scope" aria-hidden="true">
+        <div class="scope-bar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span><span class="scope-title">rlc.cir — the spice must flow</span></div>
+<pre><code><span class="c-prompt">$</span> <span class="c-cmd">cat</span> rlc.cir
+<span class="c-card">step into a series rlc</span>
+V1 in 0 PULSE(0 1 0 1n 1n 1 2)
+R1 in n1 60
+L1 n1 out 1m
+C1 out 0 1n
+.tran 0.1u 40u
+.end
+<span class="c-prompt">$</span> <span class="c-cmd">dune</span> -b rlc.cir -r rlc.raw</code></pre>
+        <svg viewBox="0 0 520 240" role="img" aria-label="Simulated step response of a series RLC circuit: the output rings past the input step and settles at 1 volt.">
+          <g class="plot-grid">
+            <line x1="46" y1="22.1" x2="506" y2="22.1" /><line x1="46" y1="83.5" x2="506" y2="83.5" /><line x1="46" y1="144.8" x2="506" y2="144.8" />
+            <line x1="46" y1="16" x2="46" y2="200" /><line x1="161" y1="16" x2="161" y2="200" /><line x1="276" y1="16" x2="276" y2="200" /><line x1="391" y1="16" x2="391" y2="200" /><line x1="506" y1="16" x2="506" y2="200" />
+          </g>
+          <text class="plot-axis" x="40" y="148.8" text-anchor="end">0</text>
+          <text class="plot-axis" x="40" y="87.5" text-anchor="end">1 V</text>
+          <text class="plot-axis" x="40" y="26.1" text-anchor="end">2 V</text>
+          <text class="plot-axis" x="46" y="214" text-anchor="middle">0</text>
+          <text class="plot-axis" x="276" y="214" text-anchor="middle">20 µs</text>
+          <text class="plot-axis" x="506" y="214" text-anchor="middle">40 µs</text>
+          <polyline class="tr2" points="46.0,144.8 55.2,144.8 55.2,83.5 506.0,83.5" />
+          <polyline class="tr1" pathLength="1" points="46.0,144.8 47.6,144.2 49.3,142.3 50.9,139.3 52.6,135.2 54.2,130.0 55.9,124.0 57.5,117.2 59.1,109.7 60.8,101.8 62.4,93.6 64.1,85.2 65.7,76.9 67.4,68.8 69.0,61.1 70.6,53.8 72.3,47.3 73.9,41.5 75.6,36.6 77.2,32.7 78.9,29.9 80.5,28.2 82.1,27.7 83.8,28.2 85.4,29.9 87.1,32.7 88.7,36.4 90.4,41.1 92.0,46.6 93.6,52.8 95.3,59.6 96.9,66.8 98.6,74.3 100.2,81.9 101.9,89.4 103.5,96.8 105.1,103.9 106.8,110.4 108.4,116.4 110.1,121.7 111.7,126.1 113.4,129.6 115.0,132.2 116.6,133.7 118.3,134.3 119.9,133.7 121.6,132.2 123.2,129.7 124.9,126.3 126.5,122.0 128.1,117.0 129.8,111.4 131.4,105.2 133.1,98.7 134.7,91.9 136.4,84.9 138.0,78.1 139.6,71.3 141.3,64.9 142.9,58.9 144.6,53.5 146.2,48.7 147.9,44.7 149.5,41.5 151.1,39.1 152.8,37.7 154.4,37.2 156.1,37.7 157.7,39.1 159.4,41.4 161.0,44.5 162.6,48.4 164.3,52.9 165.9,58.1 167.6,63.7 169.2,69.6 170.9,75.8 172.5,82.1 174.1,88.4 175.8,94.5 177.4,100.3 179.1,105.8 180.7,110.7 182.4,115.1 184.0,118.8 185.6,121.7 187.3,123.8 188.9,125.1 190.6,125.5 192.2,125.1 193.9,123.8 195.5,121.8 197.1,118.9 198.8,115.4 200.4,111.3 202.1,106.6 203.7,101.5 205.4,96.1 207.0,90.4 208.6,84.7 210.3,79.0 211.9,73.4 213.6,68.1 215.2,63.2 216.9,58.7 218.5,54.7 220.1,51.4 221.8,48.7 223.4,46.8 225.1,45.6 226.7,45.2 228.4,45.6 230.0,46.7 231.6,48.6 233.3,51.2 234.9,54.4 236.6,58.2 238.2,62.4 239.9,67.1 241.5,72.0 243.1,77.1 244.8,82.3 246.4,87.5 248.1,92.6 249.7,97.4 251.4,101.9 253.0,106.0 254.6,109.6 256.3,112.7 257.9,115.1 259.6,116.9 261.2,117.9 262.9,118.3 264.5,118.0 266.1,116.9 267.8,115.2 269.4,112.8 271.1,109.9 272.7,106.5 274.4,102.6 276.0,98.4 277.6,93.9 279.3,89.2 280.9,84.5 282.6,79.8 284.2,75.2 285.9,70.8 287.5,66.7 289.1,62.9 290.8,59.6 292.4,56.9 294.1,54.7 295.7,53.1 297.4,52.1 299.0,51.8 300.6,52.1 302.3,53.0 303.9,54.6 305.6,56.7 307.2,59.4 308.9,62.5 310.5,66.0 312.1,69.9 313.8,74.0 315.4,78.2 317.1,82.5 318.7,86.8 320.4,91.0 322.0,95.0 323.6,98.8 325.3,102.2 326.9,105.1 328.6,107.7 330.2,109.7 331.9,111.1 333.5,112.0 335.1,112.3 336.8,112.0 338.4,111.2 340.1,109.7 341.7,107.8 343.4,105.4 345.0,102.5 346.6,99.3 348.3,95.8 349.9,92.1 351.6,88.3 353.2,84.3 354.9,80.4 356.5,76.6 358.1,73.0 359.8,69.6 361.4,66.5 363.1,63.7 364.7,61.5 366.4,59.6 368.0,58.3 369.6,57.5 371.3,57.2 372.9,57.5 374.6,58.3 376.2,59.6 377.9,61.3 379.5,63.5 381.1,66.1 382.8,69.0 384.4,72.2 386.1,75.6 387.7,79.1 389.4,82.7 391.0,86.2 392.6,89.7 394.3,93.0 395.9,96.1 397.6,98.9 399.2,101.4 400.9,103.5 402.5,105.2 404.1,106.4 405.8,107.1 407.4,107.4 409.1,107.1 410.7,106.4 412.4,105.2 414.0,103.6 415.6,101.6 417.3,99.3 418.9,96.6 420.6,93.7 422.2,90.6 423.9,87.4 425.5,84.2 427.1,80.9 428.8,77.8 430.4,74.8 432.1,72.0 433.7,69.4 435.4,67.1 437.0,65.2 438.6,63.7 440.3,62.6 441.9,62.0 443.6,61.7 445.2,61.9 446.9,62.6 448.5,63.7 450.1,65.1 451.8,66.9 453.4,69.1 455.1,71.5 456.7,74.1 458.4,76.9 460.0,79.8 461.6,82.8 463.3,85.8 464.9,88.6 466.6,91.4 468.2,93.9 469.9,96.3 471.5,98.3 473.1,100.1 474.8,101.4 476.4,102.4 478.1,103.0 479.7,103.2 481.4,103.1 483.0,102.5 484.6,101.5 486.3,100.2 487.9,98.5 489.6,96.6 491.2,94.4 492.9,92.0 494.5,89.4 496.1,86.8 497.8,84.1 499.4,81.4 501.1,78.8 502.7,76.3 504.4,73.9 506.0,71.8" />
+        </svg>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--trace-1)"></span>v(out)</span>
+          <span><span class="sw" style="background:var(--trace-2)"></span>v(in)</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="fidelity" class="alt">
+    <div class="wrap">
+      <h2>Faithful to the last ulp</h2>
+      <p class="sub">SPICE3f5 is the contract; ngspice is the oracle. Nothing ships until the oracle agrees — at SPICE's own tolerances, not numbers invented to pass.</p>
+      <div class="grid f3">
+        <div class="card"><div class="ic">📜</div><h3>Byte-faithful netlists</h3><p>The lexer and number parser mirror <code>INPgetTok</code>/<code>INPevaluate</code> token for token: 22 element letters, dot cards, hierarchical <code>.subckt</code> expansion with ngspice's names (<code>r.x1.r1</code>, <code>x1.n1</code>).</p></div>
+        <div class="card"><div class="ic">⚖️</div><h3>Oracle-tested, circuit by circuit</h3><p>75 circuits — Berkeley's own decks included — run through Dune and compared point-by-point against pinned ngspice-47 goldens on every analysis, within <code>reltol</code>/<code>abstol</code>/<code>vntol</code>.</p></div>
+        <div class="card"><div class="ic">🧭</div><h3>Divergence is documented</h3><p>Where SPICE3f5 and ngspice disagree, Dune picks deliberately and writes it down: every entry in <code>KNOWN_DIFFS</code> has a measured gate that fails if the choice is reverted.</p></div>
+        <div class="card"><div class="ic">🛡️</div><h3>Hostile input never crashes</h3><p>Malformed decks produce structured diagnostics with spans — never a panic, never an infinite loop. The parser is fuzzed in CI.</p></div>
+        <div class="card"><div class="ic">🧮</div><h3>The real algorithms</h3><p>Newton–Raphson with <code>pnjlim</code> junction limiting, gmin and source stepping, trapezoidal and Gear 1–6 integration with LTE control and breakpoints — ported from the C, not approximated.</p></div>
+        <div class="card"><div class="ic">🦀</div><h3>A clean engine inside</h3><p>No global state, no <code>unsafe</code> outside the FFI crate, one type per device, a swappable linear-solver backend. The C's <code>GENmodel</code> maze stayed in 1993.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="coverage">
+    <div class="wrap">
+      <h2>The whole SPICE3f5 surface</h2>
+      <p class="sub">Every device and analysis of the Berkeley release, plus BSIM3v3 and S-parameters from modern ngspice.</p>
+      <div class="pills">
+        <span class="pill hd">devices</span>
+        <span class="pill">R C L + coupled K</span><span class="pill">V I sources</span><span class="pill">E F G H controlled</span><span class="pill">diode</span><span class="pill">BJT (Gummel–Poon)</span><span class="pill">MOS levels 1–6</span><span class="pill">BSIM1 · BSIM2 · BSIM3v3</span><span class="pill">JFET · MESFET</span><span class="pill">S/W switches</span><span class="pill">T ideal line</span><span class="pill">O lossy line (LTRA)</span><span class="pill">.subckt / X</span>
+      </div>
+      <div class="pills">
+        <span class="pill hd">analyses</span>
+        <span class="pill">.OP</span><span class="pill">.DC</span><span class="pill">.AC</span><span class="pill">.TRAN</span><span class="pill">.PZ</span><span class="pill">.NOISE</span><span class="pill">.DISTO</span><span class="pill">.TF</span><span class="pill">.SENS</span><span class="pill">.SP (S-parameters)</span>
+      </div>
+      <p class="note">Rawfiles come out in SPICE3's own binary and ASCII formats, so existing viewers read them unchanged. Transmission-line convolution, Volterra distortion kernels, adjoint noise analysis and pole-zero deflation are ports of the original algorithms, validated against the oracle.</p>
+    </div>
+  </section>
+
+  <section id="figures" class="alt">
+    <div class="wrap">
+      <h2>Draw the circuit, get the netlist</h2>
+      <p class="sub">Dune reads schematics written in <a href="https://rpic.dev">rpic</a>'s pic language: label the elements, and the extractor derives connectivity, nets and a runnable deck — with diagnostics that point back to your source lines.</p>
+      <div class="duo">
+        <div class="panel">
+          <div class="cap">lowpass.pic</div>
+<pre><code>.PS
+spice = 1
+In: (0,1); Out: (2,1)
+V1: vsource(In, (0,0), AC 1)
+R1: resistor(In, Out, 1k)
+C1: capacitor(Out, (2,0), 100n)
+ground((0,0))
+line from (0,0) to (2,0)
+.ac dec 20 10 100k
+.PE</code></pre>
+        </div>
+        <div class="arrow">→</div>
+        <div class="panel">
+          <div class="cap">dune pic lowpass.pic</div>
+<pre><code>* netlist extracted by dune-pic
+V1 In 0 AC 1
+R1 In Out 1k
+C1 Out 0 100n
+.ac dec 20 10 100k
+.end</code></pre>
+        </div>
+      </div>
+      <p class="note" style="margin-top:16px">The same engine powers the Simulate panel in <a href="https://rpic.dev">rpic Studio</a>: draw a figure in the browser, run it, click a wire to probe its voltage, scrub through the transient — all client-side WebAssembly, no server.</p>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>Install &amp; run</h2>
+      <p class="sub">One engine, four front doors. The Python and R packages are first-class products, not CLI wrappers — the numbers always come from the same Rust core.</p>
+      <div class="panel" style="margin-bottom:18px">
+<pre><code><span class="c-cmt"># Python — PyPI (polars DataFrames, zero-copy numpy)</span>
+<span class="c-prompt">$</span> <span class="c-cmd">pip</span> install spice3
+
+<span class="c-cmt"># JavaScript / WebAssembly — npm (runs in the browser)</span>
+<span class="c-prompt">$</span> <span class="c-cmd">npm</span> install @strategicprojects/dune-sim
+
+<span class="c-cmt"># R — tidy tibbles (CRAN submission planned)</span>
+<span class="c-prompt">&gt;</span> remotes::install_github(<span class="c-card">"milkway/dune"</span>, subdir = <span class="c-card">"r"</span>)
+
+<span class="c-cmt"># CLI and Rust library — from source (Rust 1.88+)</span>
+<span class="c-prompt">$</span> <span class="c-cmd">git</span> clone https://github.com/milkway/dune &amp;&amp; <span class="c-cmd">cargo</span> build --release</code></pre>
+      </div>
+      <div class="grid f2">
+        <div class="panel">
+          <div class="cap">python</div>
+<pre><code><span class="c-cmt"># import spice — the module keeps the classic name</span>
+import spice
+
+run = spice.simulate(<span class="c-card">"""
+step into a series rlc
+V1 in 0 PULSE(0 1 0 1n 1n 1 2)
+R1 in n1 60
+L1 n1 out 1m
+C1 out 0 1n
+.tran 0.1u 40u
+.end
+"""</span>)
+run.plots[0].frame()   <span class="c-cmt"># polars DataFrame: time, v(in), v(out)…</span></code></pre>
+        </div>
+        <div class="panel">
+          <div class="cap">r</div>
+<pre><code>library(spice)
+
+run &lt;- spice_run(<span class="c-card">"rlc.cir"</span>)
+run                     <span class="c-cmt"># tidy tibble, one row per point</span>
+
+<span class="c-cmt"># or straight from a figure:</span>
+spice_pic(<span class="c-card">"lowpass.pic"</span>) |&gt; spice_run()</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="trust" class="alt">
+    <div class="wrap">
+      <h2>Berkeley lineage, modern hygiene</h2>
+      <p class="sub">SPICE has been free software since before the term existed. Dune keeps the license, the file formats and the semantics — and adds the engineering practices the original couldn't have.</p>
+      <div class="grid f3">
+        <div class="card"><div class="ic">✅</div><h3>CI with the oracle in the loop</h3><p>fmt · clippy <code>-D warnings</code> · the full test suite · the 75-circuit oracle run · a wasm build — on every pull request and before every release, on x86-64 as well as arm64.</p></div>
+        <div class="card"><div class="ic">🔐</div><h3>Trusted publishing</h3><p>PyPI wheels and the npm package are published by CI through OIDC trusted publishing with signed provenance — no long-lived tokens anywhere.</p></div>
+        <div class="card"><div class="ic">📖</div><h3>Documented ports</h3><p>Each device and analysis ships with notes on what was ported, what was rewritten and why — equations, parameter defaults and their SPICE3f5 names included.</p></div>
+      </div>
+      <div style="margin-top:22px" class="card">
+        <table class="lic">
+          <thead><tr><th>Component</th><th>License</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><code>dune</code> (all crates)</td><td><span class="tag bsd">BSD-3-Clause</span></td><td>© 2026 André Leite; portions derived from SPICE3f5, © 1985–1991 The Regents of the University of California.</td></tr>
+            <tr><td>SPICE3f5 sources in <code>corpus/</code></td><td><span class="tag bsd">BSD-3-Clause</span></td><td>Berkeley's original C, kept verbatim as the reference the port is reviewed against.</td></tr>
+            <tr><td>ngspice-47 (oracle)</td><td><span class="tag bsd">BSD-3-Clause</span></td><td>Not redistributed — installed separately and pinned; Dune's test goldens are generated from it.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot-inner">
+    <div><strong>dune</strong> · BSD-3-Clause · built with 🦀 Rust · the spice must flow</div>
+    <div class="foot-links">
+      <a href="https://github.com/milkway/dune">Repository</a>
+      <a href="https://pypi.org/project/spice3/">PyPI</a>
+      <a href="https://www.npmjs.com/package/@strategicprojects/dune-sim">npm</a>
+      <a href="https://github.com/milkway/dune/blob/main/LICENSE">License</a>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
