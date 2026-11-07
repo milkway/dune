@@ -437,11 +437,11 @@ fn when(p: &Plot, c: &MeasCross) -> Result<Option<f64>, MeasureError> {
         // The C checks the exact count at every point; counts only
         // move on transitions, so it fires on the one that reached it.
         if nth(want_cross, cross) || nth(want_rise, rise) || nth(want_fall, fall) {
-            return Ok(Some(interp()));
+            return Ok(finite(interp()));
         }
         if pending {
             if c.edge == MeasEdge::Any {
-                return Ok(Some(interp()));
+                return Ok(finite(interp()));
             }
             if any_last {
                 last = Some(interp());
@@ -449,7 +449,14 @@ fn when(p: &Plot, c: &MeasCross) -> Result<Option<f64>, MeasureError> {
         }
         (px, pv, pv2) = (x, v, v2);
     }
-    Ok(last)
+    Ok(last.and_then(finite))
+}
+
+/// A crossing interpolated across a flat stretch (`v == level` on
+/// both ends: the C's `<=`/`>=` flip-flop on equality) is 0/0;
+/// ngspice reports it as "out of interval", and so do we.
+fn finite(x: f64) -> Option<f64> {
+    (!x.is_nan()).then_some(x)
 }
 
 /// `measure_at`: linear interpolation of `y` at scale value `at`
