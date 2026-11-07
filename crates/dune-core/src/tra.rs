@@ -369,6 +369,7 @@ impl Device for TraI {
     /// last stored point plus `TD`. The slopes divide by
     /// `CKTdeltaOld[1]`/`[2]` although the newest difference spans
     /// the step being checked (`CKTdeltaOld[0]`) — kept from the C.
+    /// (`step_old`: the accepted steps, which the table follows.)
     fn trunc(&self, t: &TerrCtx, time_step: &mut f64) {
         let Some(size) = self.delays.len().checked_sub(1) else {
             return;
@@ -378,10 +379,10 @@ impl Device for TraI {
         }
         let (v1, v4) = self.waves(t.sol);
         let (last, prev) = (self.delays[size], self.delays[size - 1]);
-        let d1 = (v1 - last.in1) / t.delta_old[1];
-        let d2 = (last.in1 - prev.in1) / t.delta_old[2];
-        let d3 = (v4 - last.in2) / t.delta_old[1];
-        let d4 = (last.in2 - prev.in2) / t.delta_old[2];
+        let d1 = (v1 - last.in1) / t.step_old[1];
+        let d2 = (last.in1 - prev.in1) / t.step_old[2];
+        let d3 = (v4 - last.in2) / t.step_old[1];
+        let d4 = (last.in2 - prev.in2) / t.step_old[2];
         if slope_changed(d1, d2) || slope_changed(d3, d4) {
             let tmp = last.t + self.p.td - t.time;
             *time_step = time_step.min(tmp);

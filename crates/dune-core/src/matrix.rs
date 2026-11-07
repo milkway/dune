@@ -326,11 +326,21 @@ pub(crate) struct AcceptCtx<'a> {
     pub delta_old: &'a [f64; 8],
     /// `CKTminBreak`.
     pub min_break: f64,
-    pub requests: &'a mut Vec<f64>,
+    /// Breakpoint requests: `(time, slope)`, `slope` marking the
+    /// LTRA slope-rule ones (`ltraacct.c`) that the opt-in hygiene
+    /// may thin out.
+    pub requests: &'a mut Vec<(f64, bool)>,
 }
 
 impl AcceptCtx<'_> {
     pub fn set_break(&mut self, t: f64) {
-        self.requests.push(t);
+        self.requests.push((t, false));
+    }
+
+    /// A breakpoint from the LTRA slope rule (`LTRAaccept`):
+    /// `CKTsetBreak` like any other, unless the opt-in breakpoint
+    /// hygiene (`Options::ltra_break_rate`) is on.
+    pub fn set_slope_break(&mut self, t: f64) {
+        self.requests.push((t, true));
     }
 }

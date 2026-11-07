@@ -51,6 +51,15 @@ pub(crate) fn sweep_budget(
     }
 }
 
+/// Whether the sorted breakpoint table has an entry within `r` of `t`
+/// (the LTRA breakpoint hygiene's dedupe test).
+fn within_radius(breaks: &[f64], t: f64, r: f64) -> bool {
+    let i = breaks.partition_point(|&b| b < t);
+    let after = breaks.get(i).is_some_and(|&b| b - t <= r);
+    let before = i > 0 && t - breaks[i - 1] <= r;
+    after || before
+}
+
 pub(crate) struct Engine {
     pub vars: Vars,
     devices: Vec<Box<dyn Device>>,
@@ -85,11 +94,27 @@ pub(crate) struct Engine {
     ag: [f64; 7],
     order: usize,
     maxord: usize,
+    /// The method devices integrate with: under TR-BDF2 the current
+    /// stage's (trapezoidal, then gear).
     method: Method,
+    /// `method=trbdf2` (issue #6): each step is two stages, and the
+    /// state banks/`delta_old` advance per stage.
+    trbdf2: bool,
+    /// Under TR-BDF2, the accepted-step history (`[0]` = the step
+    /// being taken) that devices with their own per-accepted-point
+    /// history read; `delta_old` then holds the stage history.
+    step_old: [f64; 8],
+    /// Set while a TR-BDF2 composite step is LTE-checked: `CKTterr`
+    /// then runs its composite estimate.
+    composite: bool,
 
     // Breakpoint table (always ≥ 2 entries, sorted).
     breaks: Vec<f64>,
     min_break: f64,
+    /// The opt-in LTRA breakpoint hygiene (`Options::ltra_break_rate`):
+    /// the merge radius for slope-rule breakpoints, `TMAX/N`, or
+    /// `None` (faithful: every request goes through `CKTsetBreak`).
+    slope_break_radius: Option<f64>,
     /// A device load fault from the last `load_all` (see
     /// [`LoadCtx::fault`]).
     fault: Option<&'static str>,
@@ -143,8 +168,12 @@ impl Engine {
             order: 1,
             maxord: 2,
             method: Method::Trapezoidal,
+            trbdf2: false,
+            step_old: [0.0; 8],
+            composite: false,
             breaks: vec![0.0, 0.0],
             min_break: 0.0,
+            slope_break_radius: None,
             fault: None,
         }
     }
@@ -580,9 +609,18 @@ impl Engine {
             sol: &self.sol,
             time: self.time,
             delta_old: &self.delta_old,
+            step_old: self.accepted_steps(),
             order: self.order,
-            method: self.method,
-            delta: self.delta,
+            method: if self.composite {
+                Method::TrBdf2
+            } else {
+                self.method
+            },
+            delta: if self.composite {
+                self.step_old[0]
+            } else {
+                self.delta
+            },
             reltol: opts.reltol,
             abstol: opts.abstol,
             chgtol: opts.chgtol,
@@ -594,9 +632,24 @@ impl Engine {
         *time_step = f64::min(2.0 * *time_step, timetemp);
     }
 
+    /// The accepted-step history devices see (`CKTdeltaOld` outside
+    /// TR-BDF2).
+    fn accepted_steps(&self) -> &[f64; 8] {
+        if self.trbdf2 {
+            &self.step_old
+        } else {
+            &self.delta_old
+        }
+    }
+
     /// `CKTaccept`: device hooks, then merge breakpoint requests.
     fn accept(&mut self, brk: bool, first: bool, opts: &Options) -> Result<(), Error> {
         let mut requests = Vec::new();
+        let delta_old = if self.trbdf2 {
+            &self.step_old
+        } else {
+            &self.delta_old
+        };
         let mut ctx = AcceptCtx {
             time: self.time,
             first,
@@ -606,17 +659,33 @@ impl Engine {
             brk,
             step: self.step,
             final_time: self.final_time,
-            delta_old: &self.delta_old,
+            delta_old,
             min_break: self.min_break,
             requests: &mut requests,
         };
         for d in &mut self.devices {
             d.accept(&mut ctx);
         }
-        for t in requests {
+        for (t, slope) in requests {
+            if slope && self.near_break(t) {
+                continue;
+            }
             self.set_break(t)?;
         }
         Ok(())
+    }
+
+    /// The LTRA breakpoint hygiene (issue #6): whether a slope-rule
+    /// request at `t` falls within the hygiene radius of a breakpoint
+    /// already in the table, and is dropped. `CKTsetBreak` merges only
+    /// within `CKTminBreak = 5e-5·TMAX` — a guard against coincident
+    /// times, not a density limit: it lets 20 000 breakpoints into one
+    /// TMAX span, which is what an LTRA echo cascade fills (D-0022).
+    /// The radius `TMAX/N` caps slope breakpoints at about `N` per TMAX
+    /// span. Always false with the hygiene off.
+    fn near_break(&self, t: f64) -> bool {
+        self.slope_break_radius
+            .is_some_and(|r| within_radius(&self.breaks, t, r))
     }
 
     /// `DCtran`: the transient loop. Returns `(time, solution)` rows
@@ -630,9 +699,14 @@ impl Engine {
             Some(m) if m > 0.0 => m,
             _ => f64::min(p.tstep, (p.tstop - p.tstart) / 50.0),
         };
-        self.method = opts.method;
-        self.maxord = match self.method {
-            Method::Trapezoidal => 2,
+        self.trbdf2 = opts.method == Method::TrBdf2;
+        self.method = if self.trbdf2 {
+            Method::Trapezoidal
+        } else {
+            opts.method
+        };
+        self.maxord = match opts.method {
+            Method::Trapezoidal | Method::TrBdf2 => 2,
             Method::Gear => opts.maxord.clamp(1, 6),
         };
         let planned = ((p.tstop - p.tstart) / p.tstep + 2.0) * self.vars.len() as f64;
@@ -646,6 +720,10 @@ impl Engine {
         self.time = 0.0;
         self.breaks = vec![0.0, p.tstop];
         self.min_break = 5e-5 * max_step;
+        self.slope_break_radius = match opts.ltra_break_rate {
+            Some(n) if n > 0 => Some(f64::max(max_step / n as f64, self.min_break)),
+            _ => None,
+        };
         let delmin = 1e-9 * max_step;
         let mut delta = f64::min(p.tstop / 50.0, p.tstep) / 10.0;
 
@@ -663,6 +741,7 @@ impl Engine {
         self.ag = [0.0; 7];
         self.states.copy01();
         self.delta_old = [max_step; 8];
+        self.step_old = [max_step; 8];
         self.delta = delta;
         let mut save_delta = p.tstop / 50.0;
         let mut firsttime = true;
@@ -734,6 +813,21 @@ impl Engine {
             }
             self.delta_old[0] = delta;
             self.states.rotate(self.maxord);
+            if self.trbdf2 {
+                for i in (0..=5).rev() {
+                    self.step_old[i + 1] = self.step_old[i];
+                }
+                self.step_old[0] = delta;
+                self.tran_trbdf2_point(
+                    opts,
+                    &mut delta,
+                    &mut firsttime,
+                    delmin,
+                    &mut steps,
+                    step_budget,
+                )?;
+                continue 'next_time;
+            }
 
             loop {
                 // Dune's step budget (D-0022): every attempted
@@ -806,6 +900,139 @@ impl Engine {
 }
 
 impl Engine {
+    /// One accepted timepoint under `method=trbdf2` (issue #6): the
+    /// inner attempt loop of [`Engine::tran`]. On entry the step
+    /// history and the state banks have advanced once (as for any
+    /// method) and `delta` is the step `h` to try; on success the
+    /// engine sits at `t + h` and `delta` holds the next step.
+    ///
+    /// Where the 3f5 cuts the order — the first point, the point after
+    /// a breakpoint, a retry after non-convergence — the step is one
+    /// backward-Euler step checked by `CKTterr` at order 1, exactly the
+    /// faithful restart: it re-seeds the companion currents, which a
+    /// source corner leaves stale. Every other step is the composite:
+    /// a trapezoidal stage to `t + γh`, then a BDF2 stage on
+    /// `{t, t + γh, t + h}` (`com_cof` already solves non-uniform
+    /// BDF2), checked by [`crate::integ::terr`]'s composite estimate.
+    /// Stage 2 rotates the banks and `delta_old` once more; a rejection
+    /// (a stage not converging, or the LTE) undoes that rotation and
+    /// restores the solution at `t`, so every retry starts from the
+    /// accepted point. The first point skips the LTE check, like
+    /// `DCtran`.
+    fn tran_trbdf2_point(
+        &mut self,
+        opts: &Options,
+        delta: &mut f64,
+        firsttime: &mut bool,
+        delmin: f64,
+        steps: &mut usize,
+        step_budget: usize,
+    ) -> Result<(), Error> {
+        let t0 = self.time;
+        let sol0 = self.sol.clone();
+        loop {
+            *steps += 1;
+            if *steps > step_budget {
+                return Err(Error::StepLimit {
+                    steps: step_budget,
+                    time: self.time,
+                });
+            }
+            let olddelta = *delta;
+            let h = *delta;
+            self.step_old[0] = h;
+            let start = if *firsttime {
+                InitMode::Tran
+            } else {
+                InitMode::Pred
+            };
+            let restart = *firsttime || self.order == 1;
+
+            let mut saved_old = None;
+            let ok = if restart {
+                // The 3f5's order-1 restart: one backward-Euler step.
+                self.time = t0 + h;
+                self.delta_old[0] = h;
+                self.delta = h;
+                self.method = Method::Trapezoidal;
+                self.ag = com_cof(Method::Trapezoidal, 1, h, &self.delta_old)?;
+                self.newton(opts, start)?
+            } else {
+                // Stage 1: trapezoidal to t + γh.
+                let d1 = crate::integ::TRBDF2_GAMMA * h;
+                let t1 = t0 + d1;
+                self.time = t1;
+                self.delta_old[0] = d1;
+                self.delta = d1;
+                self.method = Method::Trapezoidal;
+                self.ag = com_cof(Method::Trapezoidal, 2, d1, &self.delta_old)?;
+                if self.newton(opts, start)? {
+                    // Stage 2: BDF2 on {t, t + γh, t + h}.
+                    saved_old = Some(self.delta_old);
+                    for i in (0..=5).rev() {
+                        self.delta_old[i + 1] = self.delta_old[i];
+                    }
+                    self.states.rotate(self.maxord);
+                    self.time = t0 + h;
+                    let d2 = self.time - t1;
+                    self.delta_old[0] = d2;
+                    self.delta = d2;
+                    self.method = Method::Gear;
+                    self.ag = com_cof(Method::Gear, 2, d2, &self.delta_old)?;
+                    self.newton(opts, InitMode::Pred)?
+                } else {
+                    false
+                }
+            };
+
+            if ok {
+                if *firsttime {
+                    *firsttime = false;
+                    self.order = 2;
+                    return Ok(());
+                }
+                let mut new = h;
+                self.composite = !restart;
+                self.trunc(opts, &mut new);
+                self.composite = false;
+                *delta = new;
+                if new > 0.9 * h {
+                    self.order = 2;
+                    return Ok(());
+                }
+            }
+            // Rejected: roll back to the accepted point.
+            if let Some(old) = saved_old {
+                self.states.unrotate(self.maxord);
+                self.delta_old = old;
+            }
+            self.time = t0;
+            self.sol.copy_from_slice(&sol0);
+            if !ok {
+                *delta /= 8.0;
+                self.order = 1;
+            }
+            if *delta <= delmin {
+                if olddelta > delmin {
+                    *delta = delmin;
+                } else {
+                    return Err(Error::Timestep { time: self.time });
+                }
+            }
+        }
+    }
+
+    /// One transient Newton solve: `Ok(false)` when it does not
+    /// converge (the step is retried smaller); a singular matrix is
+    /// fatal, as in `DCtran`.
+    fn newton(&mut self, opts: &Options, start: InitMode) -> Result<bool, Error> {
+        match self.ni_iter(opts, start, opts.itl4, 0.0, 1.0) {
+            Ok(_) => Ok(true),
+            Err(e @ Error::Singular(_)) => Err(e),
+            Err(_) => Ok(false),
+        }
+    }
+
     /// `ACan` (`ckt/acan.c`): operating point, one `MODEINITSMSIG`
     /// load to store small-signal parameters, then one complex
     /// solve per frequency (`NIacIter`). Returns `(freq, solution)`
@@ -1870,4 +2097,21 @@ pub(crate) struct TranParams {
     pub tstart: f64,
     pub tmax: Option<f64>,
     pub uic: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::within_radius;
+
+    #[test]
+    fn hygiene_dedupe_checks_both_neighbours() {
+        let breaks = [0.0, 1.0, 2.0, 10.0];
+        assert!(within_radius(&breaks, 1.05, 0.1)); // after 1.0
+        assert!(within_radius(&breaks, 1.95, 0.1)); // before 2.0
+        assert!(within_radius(&breaks, 2.0, 0.0)); // coincident
+        assert!(!within_radius(&breaks, 1.5, 0.1));
+        assert!(!within_radius(&breaks, 10.2, 0.1)); // past the end
+        assert!(within_radius(&breaks, 10.05, 0.1));
+        assert!(!within_radius(&[], 1.0, 0.1));
+    }
 }

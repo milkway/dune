@@ -46,7 +46,8 @@ pub struct Options {
     pub trtol: f64,
     /// `CHGTOL`: charge tolerance, default 1e-14.
     pub chgtol: f64,
-    /// `METHOD`: `trap` (default) or `gear`.
+    /// `METHOD`: `trap` (default), `gear`, or Dune's opt-in `trbdf2`
+    /// ([`Method::TrBdf2`]; not a SPICE value).
     pub method: Method,
     /// `MAXORD` for Gear, default 2.
     pub maxord: usize,
@@ -76,6 +77,16 @@ pub struct Options {
     /// deck costs O(n²) in its history length — D-0022). `Some(n)`:
     /// at most `n` (`Some(usize::MAX)` is unlimited).
     pub max_tran_steps: Option<usize>,
+    /// Dune's opt-in LTRA breakpoint hygiene (`.options ltrabkrate=N`;
+    /// not a SPICE option, issue #6). The slope rule of `LTRAaccept`
+    /// plants a breakpoint one delay after every accepted point where
+    /// an incident wave's slope changes; `CKTsetBreak` merges only
+    /// within `5e-5·TMAX`, so a ringing load can feed it an echo
+    /// cascade (D-0022). `Some(n)`, `n > 0`: a slope breakpoint that
+    /// falls within `TMAX/n` of one already scheduled is dropped,
+    /// which caps them at about `n` per TMAX span. `None` or
+    /// `Some(0)` (default): faithful, every request scheduled.
+    pub ltra_break_rate: Option<usize>,
 }
 
 impl Default for Options {
@@ -105,6 +116,7 @@ impl Default for Options {
             defad: 0.0,
             defas: 0.0,
             max_tran_steps: None,
+            ltra_break_rate: None,
         }
     }
 }
@@ -190,11 +202,18 @@ impl Options {
                     ParamValue::Str(s) if s == "trap" || s == "trapezoidal" => {
                         self.method = Method::Trapezoidal;
                     }
+                    // Dune's opt-in L-stable composite (issue #6).
+                    ParamValue::Str(s) if s == "trbdf2" => self.method = Method::TrBdf2,
                     _ => diags.push(Diagnostic::warning(
-                        "method must be trap or gear".to_string(),
+                        "method must be trap, gear or trbdf2".to_string(),
                         p.span,
                     )),
                 },
+                "ltrabkrate" => {
+                    if let Some(v) = count(num, p, diags) {
+                        self.ltra_break_rate = Some(v);
+                    }
+                }
                 "gminsteps" => {
                     if let Some(v) = count(num, p, diags) {
                         self.gminsteps = v;

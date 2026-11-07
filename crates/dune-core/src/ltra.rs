@@ -1622,7 +1622,7 @@ impl Device for LtraI {
             && check(v4, v5, v6);
         if test1 || test2 {
             let t = self.times[idx - 1] + p.td;
-            ctx.set_break(t);
+            ctx.set_slope_break(t);
         }
     }
 }

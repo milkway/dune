@@ -72,7 +72,7 @@ pub struct RunOutput {
 
 /// The option names `apply_options` accepts, in `Options` field order
 /// (the card's names, as in `spice.txt` §SIMULATOR VARIABLES).
-pub const OPTION_NAMES: [&str; 23] = [
+pub const OPTION_NAMES: [&str; 24] = [
     "reltol",
     "abstol",
     "vntol",
@@ -90,6 +90,7 @@ pub const OPTION_NAMES: [&str; 23] = [
     "trtol",
     "chgtol",
     "method",
+    "ltrabkrate",
     "maxord",
     "nopage",
     "defl",
@@ -164,15 +165,21 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
             "method" => {
                 opts.method = match v {
                     OptValue::Str(s) if s.eq_ignore_ascii_case("gear") => Method::Gear,
+                    OptValue::Str(s) if s.eq_ignore_ascii_case("trbdf2") => Method::TrBdf2,
                     OptValue::Str(s)
                         if s.eq_ignore_ascii_case("trap")
                             || s.eq_ignore_ascii_case("trapezoidal") =>
                     {
                         Method::Trapezoidal
                     }
-                    _ => return Err("option `method` must be \"trap\" or \"gear\"".into()),
+                    _ => {
+                        return Err(
+                            "option `method` must be \"trap\", \"gear\" or \"trbdf2\"".into()
+                        );
+                    }
                 }
             }
+            "ltrabkrate" => opts.ltra_break_rate = Some(count(n, v)?),
             "maxord" => opts.maxord = count(n, v)?,
             "nopage" => opts.nopage = flag(n, v)?,
             "defl" => opts.defl = num(n, v)?,

@@ -40,7 +40,7 @@ create_exception!(
 const DECK_NAME: &str = "deck.cir";
 
 /// Every `options` key accepted, in `Options` field order.
-const OPTION_NAMES: [&str; 23] = [
+const OPTION_NAMES: [&str; 24] = [
     "reltol",
     "abstol",
     "vntol",
@@ -58,6 +58,7 @@ const OPTION_NAMES: [&str; 23] = [
     "trtol",
     "chgtol",
     "method",
+    "ltrabkrate",
     "maxord",
     "nopage",
     "defl",
@@ -302,13 +303,18 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
                 let m = match s.to_ascii_lowercase().as_str() {
                     "trap" | "trapezoidal" => Method::Trapezoidal,
                     "gear" => Method::Gear,
+                    "trbdf2" => Method::TrBdf2,
                     _ => {
                         return Err(PyValueError::new_err(format!(
-                            "option method must be 'trap' or 'gear', got {s:?}"
+                            "option method must be 'trap', 'gear' or 'trbdf2', got {s:?}"
                         )));
                     }
                 };
                 Box::new(move |o: &mut Options| o.method = m) as Override
+            }
+            "ltrabkrate" => {
+                let v = count_value(key, &v)?;
+                Box::new(move |o: &mut Options| o.ltra_break_rate = Some(v)) as Override
             }
             "maxord" => set!(maxord, count_value(key, &v)?),
             "nopage" => set!(nopage, bool_value(key, &v)?),

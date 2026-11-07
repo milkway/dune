@@ -1,0 +1,22 @@
+diode string ring: trap rings, trbdf2 does not
+* Dune-only probe for .options method=trbdf2 (issue #6); see
+* crates/dune-core/tests/robust_tran.rs. The dioload string of
+* ltra_3 (rs + diffusion charge, no cjo): with the input high the
+* string conducts; once the input drops, the string's inner nodes
+* hang between reverse-biased junctions whose only dynamics is the
+* diffusion charge through rs, a mode with tau = tt*gd*rs far below
+* any step. The trapezoidal rule's amplification there is -1, so v(2)
+* and v(3) alternate every step (period-2 ring); TR-BDF2 is
+* L-stable and damps the mode in one step.
+.options method=trbdf2
+vcc 5 0 5
+vin 9 0 pulse(4 -1 2n 0.2n 0.2n 6n 16n)
+rin 9 28 50
+r5 1 5 7.5k
+d1 1 28 dmod
+d2 1 3 dmod
+d3 3 2 dmod
+d4 2 0 dmod
+.model dmod d(tt=0.75ns vj=0.6 rs=909 bv=10)
+.tran 0.1ns 20ns
+.end

@@ -39,6 +39,14 @@ impl States {
         self.banks[..maxord + 2].rotate_right(1);
     }
 
+    /// Undo one [`States::rotate`] (a rejected TR-BDF2 stage): bank
+    /// 1 becomes bank 0 again. The recycled bank goes back to the end
+    /// holding the rejected stage's values, which nothing reads (the
+    /// next rotation recycles it again).
+    pub fn unrotate(&mut self, maxord: usize) {
+        self.banks[..maxord + 2].rotate_left(1);
+    }
+
     /// Bank-0 helpers for ngspice's dynamic gmin stepping
     /// (`cktop.c::dynamic_gmin` zeroes, saves and restores
     /// `CKTstate0`).

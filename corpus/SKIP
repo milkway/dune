@@ -2,3 +2,4 @@
 # followed by the reason. Kept machine-readable for dune-oracle; the
 # human story behind each entry belongs in KNOWN_DIFFS.md.
 spice3f5/examples/mixdisto.cir no analysis card (the .disto lines are commented out upstream); ngspice-47 -b writes an empty rawfile; its two setups run uncommented as regress/mixdisto_hd.cir and regress/mixdisto_im.cir
+regress/trbdf2_ring.cir Dune-only probe for .options method=trbdf2 (issue #6): ngspice-47 has no TR-BDF2 ("unsupported integration method") and would golden the ringing trap run; checked against the physics in crates/dune-core/tests/robust_tran.rs

@@ -607,3 +607,44 @@ oráculo contra o ngspice.
   pseudo-transiente — é o único que fecha um `.op` puro com BJT
   `off` atrás de fonte só-transiente; o caso `.tran` equivalente
   está coberto e regredido em `corpus/regress/offbjt.cir`).
+
+## Transiente robusto (opt-in, issue #6)
+
+Nenhum dos dois é contrato 3f5 (D-0002 vale só para trap/gear); os
+defaults são fiéis, e com as opções desligadas o binário produz
+rawfile e stdout **byte-idênticos** ao HEAD anterior nos 76 decks
+do corpus (verificado via `git archive`). Decisão D-0027.
+
+- **`.options method=trbdf2`** (`Method::TrBdf2`): composto TR-BDF2
+  (Bank et al. 1985; Hosea & Shampine 1996) — cada passo h é um
+  estágio trapezoidal até γ·h (γ = 2−√2) e um BDF2 não-uniforme em
+  {t, t+γh, t+h}, ambos sobre o `com_cof` existente; 2ª ordem,
+  L-estável (o trap amplifica com −1 quando h/τ→∞ e ringa; o
+  composto amortece). Onde o 3f5 corta a ordem (1º ponto, pós-
+  breakpoint, retry), o passo é backward Euler com `CKTterr` de
+  ordem 1 — necessário: a corrente de companheiro guardada em t
+  pode ser anterior a uma quina de fonte. LTE do composto: Bank,
+  `2|k|h³|q'[·,·,·]|` com k=(−3γ²+4γ−2)/(12(2−γ))≈−0.0404, na
+  MESMA escala do CKTterr (1/6 do erro verdadeiro nas ordens 2).
+  Bancos de estado e `delta_old` giram por estágio (`unrotate` na
+  rejeição); dispositivos com histórico próprio (TRA) leem
+  `step_old` (= passos aceitos). Custo: 2 Newtons/passo — em deck
+  suave, trap a TMAX/2 empata; o valor do trbdf2 é a
+  L-estabilidade. Medidas (ngspice gear a TMAX/100 como
+  referência): ltra_3 completa com 763 pontos e v(x3.2) rms 3.7 mV
+  (trap do Dune: 23 mV; golden ngspice: 65 mV); erro ≤ trap em
+  rc/trrlc/truic (≈0.5×, a razão 0.0404/0.0833 das constantes);
+  regressão `corpus/regress/trbdf2_ring.cir` (fileira do dioload:
+  trap alterna 164×, trbdf2 10× — deck em corpus/SKIP porque o
+  ngspice-47 não tem o método e o golden seria um trap ringando).
+- **`.options ltrabkrate=N`** (`Options.ltra_break_rate`): higiene
+  dos breakpoints da regra de inclinação do `ltraacct.c`. O
+  diagnóstico (fase 0): o `CKTminBreak` (5e-5·TMAX) é guarda de
+  coincidência, não teto de densidade — admite ~20k breakpoints
+  por vão de TMAX e a cascata do ltra_3 vive a 4,6× o minBreak.
+  Com N>0, pedido da regra de inclinação a menos de
+  max(TMAX/N, minBreak) de um breakpoint já agendado é descartado
+  (~N por vão). Sem cascata é bit-idêntico (medido em
+  ltra_1/2/3/rc/rg no arm64). Limita o custo; a correção de
+  verdade é o trbdf2 (trap+N=10 completa o ltra_3 no linux mas o
+  ring persiste, v(5) erra 0.185 V).
