@@ -33,6 +33,7 @@
 #' @param .includes,.options As `includes` and `options` in
 #'   [spice_run()]; the options apply to every run (a swept `temp`
 #'   overrides `options$temp`).
+#' @param .tmax_divisor As `tmax_divisor` in [spice_run()], for every run.
 #' @param .threads Worker threads: `1` (the default) runs sequentially,
 #'   `0` uses one per core, `n` uses `n`. Results are identical either
 #'   way: every run is an independent circuit.
@@ -80,12 +81,13 @@
 #' )
 #' mc$params
 spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
-                        .options = NULL, .threads = 1L) {
+                        .options = NULL, .threads = 1L, .tmax_divisor = NULL) {
   call <- rlang::current_env()
   .mode <- rlang::arg_match(.mode)
   src <- check_deck(deck, call = call)
   inc <- check_includes(.includes, is_path = src$is_path, call = call)
   opt <- check_options(.options, call = call)
+  div <- check_tmax_divisor(.tmax_divisor, call = call)
   threads <- check_threads(.threads, call = call)
   params <- check_sweep_params(rlang::list2(...), call = call)
 
@@ -97,7 +99,7 @@ spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
 
   out <- ffi_sweep_deck(
     src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
-    as.character(names(opt)), unname(opt),
+    as.character(names(opt)), unname(opt), div,
     names(params), as.double(unlist(values, use.names = FALSE)), threads
   )
   diagnostics <- tibble::tibble(

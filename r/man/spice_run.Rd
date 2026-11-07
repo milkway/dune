@@ -4,7 +4,7 @@
 \alias{spice_run}
 \title{Run a SPICE3 deck}
 \usage{
-spice_run(deck, includes = NULL, options = NULL)
+spice_run(deck, includes = NULL, options = NULL, tmax_divisor = NULL)
 }
 \arguments{
 \item{deck}{Either the path to a deck file, or the netlist itself as
@@ -28,6 +28,15 @@ units (temperatures \code{temp}/\code{tnom} in degrees Celsius): \code{reltol},
 \code{nopage}, \code{defl}, \code{defw}, \code{defad}, \code{defas}. \code{noopiter} and \code{nopage}
 take \code{TRUE}/\code{FALSE}. Unlike a \code{.options} card, which only warns, an
 unknown name or a value of the wrong type is an error.}
+
+\item{tmax_divisor}{\code{NULL} (the default) or a finite number \verb{>= 1} that
+divides the maximum step of every \code{.tran} card -- its TMAX argument,
+else the default \code{min(TSTEP, (TSTOP - TSTART) / 50)}. The run is, bit
+for bit, that of the deck with the card's TMAX edited to
+\code{TMAX / tmax_divisor}; with \code{options = list(trtol = 1)} it gives the
+"fine steps" view of a waveform. It is an argument rather than an
+\code{options} name because TMAX is a parameter of the analysis card, not
+an engine option.}
 }
 \value{
 A \code{spice_result}: a list with
@@ -87,6 +96,9 @@ head(spice_tidy(res))
 
 # Options override the deck's .options card
 spice_run(deck, options = list(reltol = 1e-4, method = "gear"))
+
+# Finer transient steps: trtol = 1 and a tenth of the maximum step
+spice_run(deck, options = list(trtol = 1), tmax_divisor = 10)
 }
 \seealso{
 \code{\link[=spice_plots]{spice_plots()}}, \code{\link[=spice_tidy]{spice_tidy()}}, \code{\link[=spice_write_raw]{spice_write_raw()}}.

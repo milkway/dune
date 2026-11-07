@@ -298,6 +298,19 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
     Ok(())
 }
 
+/// Check a `tmax_divisor` argument: `None` or a finite number ≥ 1.
+/// It is an argument of its own, not an `options` name: it scales the
+/// TMAX of every `.tran` card, a parameter of the analysis card, not
+/// an engine option ([`Options::tmax_divisor`]).
+pub fn check_divisor(d: Option<f64>) -> Result<(), String> {
+    match d {
+        Some(d) if !(d >= 1.0 && d.is_finite()) => Err(format!(
+            "`tmax_divisor` must be a finite number >= 1, got {d}"
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn render_diags(parsed: &ParseOutcome, diags: &[dune_netlist::Diagnostic]) -> Vec<Diag> {
     diags
         .iter()
@@ -312,17 +325,22 @@ fn render_diags(parsed: &ParseOutcome, diags: &[dune_netlist::Diagnostic]) -> Ve
 }
 
 /// A parsed deck with its options settled (the deck's `.options`,
-/// then `user` on top), ready to elaborate.
+/// then `user` and `tmax_divisor` on top), ready to elaborate.
 struct Prepared {
     netlist: dune_netlist::ir::Netlist,
     options: Options,
     diagnostics: Vec<Diag>,
 }
 
-fn prepare(source: Source<'_>, user: &[(String, OptValue)]) -> Result<Prepared, Failure> {
+fn prepare(
+    source: Source<'_>,
+    user: &[(String, OptValue)],
+    tmax_divisor: Option<f64>,
+) -> Result<Prepared, Failure> {
     // Validate the overrides before any work.
     let mut options = Options::default();
     apply_options(&mut options, user).map_err(|m| Failure::new("options", m))?;
+    check_divisor(tmax_divisor).map_err(|m| Failure::new("options", m))?;
 
     let parsed = match source {
         Source::Path(p) => {
@@ -349,6 +367,7 @@ fn prepare(source: Source<'_>, user: &[(String, OptValue)]) -> Result<Prepared, 
     diagnostics.extend(render_diags(&parsed, &opt_diags));
     // Cannot fail: validated above on a fresh `Options`.
     apply_options(&mut options, user).map_err(|m| Failure::new("options", m))?;
+    options.tmax_divisor = tmax_divisor;
     Ok(Prepared {
         netlist: parsed.netlist,
         options,
@@ -365,13 +384,17 @@ fn to_plots(title: &str, solutions: &[Solution]) -> Vec<(Plot, Option<usize>)> {
 
 /// Parse, elaborate and run every analysis card in deck order — what
 /// `dune -b` runs — through [`Circuit::run`]. The deck's `.options`
-/// apply first, then `user` on top.
-pub fn run(source: Source<'_>, user: &[(String, OptValue)]) -> Result<RunOutput, Failure> {
+/// apply first, then `user` and `tmax_divisor` on top.
+pub fn run(
+    source: Source<'_>,
+    user: &[(String, OptValue)],
+    tmax_divisor: Option<f64>,
+) -> Result<RunOutput, Failure> {
     let Prepared {
         netlist,
         options,
         mut diagnostics,
-    } = prepare(source, user)?;
+    } = prepare(source, user, tmax_divisor)?;
 
     let (circuit, mut notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
         kind: "elaborate",
@@ -433,12 +456,16 @@ fn alter_failure(e: dune_core::Error) -> Failure {
 }
 
 impl LiveSession {
-    pub fn open(source: Source<'_>, user: &[(String, OptValue)]) -> Result<Self, Failure> {
+    pub fn open(
+        source: Source<'_>,
+        user: &[(String, OptValue)],
+        tmax_divisor: Option<f64>,
+    ) -> Result<Self, Failure> {
         let Prepared {
             netlist,
             options,
             mut diagnostics,
-        } = prepare(source, user)?;
+        } = prepare(source, user, tmax_divisor)?;
         let (circuit, notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
             kind: "elaborate",
             message: e.to_string(),
@@ -480,6 +507,18 @@ impl LiveSession {
 
     pub fn set_warm_start(&mut self, on: bool) {
         self.session.set_warm_start(on);
+    }
+
+    /// Replace the `tmax_divisor` of the next runs (kind `options`
+    /// when out of range; nothing changes then).
+    pub fn set_tmax_divisor(&mut self, d: Option<f64>) -> Result<(), Failure> {
+        check_divisor(d).map_err(|m| Failure::new("options", m))?;
+        self.session.options_mut().tmax_divisor = d;
+        Ok(())
+    }
+
+    pub fn tmax_divisor(&self) -> Option<f64> {
+        self.session.options().tmax_divisor
     }
 
     pub fn warm_start(&self) -> bool {
@@ -549,6 +588,7 @@ pub struct SweepOutput {
 pub fn sweep(
     source: Source<'_>,
     user: &[(String, OptValue)],
+    tmax_divisor: Option<f64>,
     params: &[String],
     rows: &[Vec<f64>],
     threads: usize,
@@ -562,7 +602,7 @@ pub fn sweep(
         netlist,
         options,
         diagnostics,
-    } = prepare(source, user)?;
+    } = prepare(source, user, tmax_divisor)?;
     let runs = if threads == 1 {
         dune_core::sweep(&netlist, &options, &params, rows)
     } else {
@@ -653,6 +693,7 @@ mod tests {
                 includes: &inc,
             },
             &[],
+            None,
         )
     }
 
@@ -664,7 +705,7 @@ mod tests {
             text: deck,
             includes: &inc,
         };
-        let mut s = LiveSession::open(src(), &[]).ok().unwrap();
+        let mut s = LiveSession::open(src(), &[], None).ok().unwrap();
         let v2 = |o: &RunOutput| o.plots[0].0.real_values("v(2)").unwrap()[0];
         s.alter("r2", "", AlterValue::Num(3e3)).ok().unwrap();
         let altered = deck.replace("r2 2 0 1k", "r2 2 0 3k");
@@ -674,6 +715,7 @@ mod tests {
                 includes: &inc,
             },
             &[],
+            None,
         )
         .ok()
         .unwrap();
@@ -713,6 +755,7 @@ mod tests {
                 includes: &inc,
             },
             &[("reltl".into(), OptValue::Num(1e-4))],
+            None,
         ) else {
             panic!("expected an options error");
         };
@@ -727,7 +770,9 @@ mod tests {
             includes: &inc,
         };
         let rows = vec![vec![1e3], vec![3e3]];
-        let out = sweep(src(), &[], &["R2".into()], &rows, 1).ok().unwrap();
+        let out = sweep(src(), &[], None, &["R2".into()], &rows, 1)
+            .ok()
+            .unwrap();
         assert_eq!(out.params, ["r2"]);
         let v2: Vec<f64> = out
             .runs
@@ -738,7 +783,7 @@ mod tests {
             })
             .collect();
         assert!((v2[0] - 1.0).abs() < 1e-9 && (v2[1] - 1.5).abs() < 1e-9);
-        let Err(f) = sweep(src(), &[], &["r9".into()], &[vec![1.0]], 1) else {
+        let Err(f) = sweep(src(), &[], None, &["r9".into()], &[vec![1.0]], 1) else {
             panic!("expected a sweep error");
         };
         assert_eq!(f.kind, "sweep");
@@ -754,6 +799,7 @@ mod tests {
                 includes: &inc,
             },
             &[],
+            None,
         )
         .ok()
         .unwrap();

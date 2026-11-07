@@ -60,10 +60,11 @@ NULL
 
 #' Run a deck. `deck` is a path when `is_path`, netlist text
 #' otherwise; includes are parallel name/text vectors (text decks
-#' only); options are names plus a list of length-1 values.
+#' only); options are names plus a list of length-1 values;
+#' `tmax_divisor` is `numeric(0)` for none.
 #' @noRd
-`ffi_run_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`) {
-  .Call(savvy_ffi_run_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`)
+`ffi_run_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`) {
+  .Call(savvy_ffi_run_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`)
 }
 
 #' Sweep a deck (issue #10): the deck, includes and options as in
@@ -74,8 +75,8 @@ NULL
 #' run is `list(ok, plots, notes, measurements)` or `list(ok = FALSE, kind,
 #' message)`.
 #' @noRd
-`ffi_sweep_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `params`, `values`, `threads`) {
-  .Call(savvy_ffi_sweep_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `params`, `values`, `threads`)
+`ffi_sweep_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `params`, `values`, `threads`) {
+  .Call(savvy_ffi_sweep_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `params`, `values`, `threads`)
 }
 
 #' Write plots (each a list as `plot_to_r` makes) to a rawfile.
@@ -116,6 +117,12 @@ NULL
   }
 }
 
+`SpiceSession_set_tmax_divisor` <- function(self) {
+  function(`d`) {
+    .Call(savvy_SpiceSession_set_tmax_divisor__impl, `self`, `d`)
+  }
+}
+
 `SpiceSession_set_warm_start` <- function(self) {
   function(`on`) {
     invisible(.Call(savvy_SpiceSession_set_warm_start__impl, `self`, `on`))
@@ -140,6 +147,12 @@ NULL
   }
 }
 
+`SpiceSession_tmax_divisor` <- function(self) {
+  function() {
+    .Call(savvy_SpiceSession_tmax_divisor__impl, `self`)
+  }
+}
+
 `SpiceSession_warm_start` <- function(self) {
   function() {
     .Call(savvy_SpiceSession_warm_start__impl, `self`)
@@ -160,10 +173,12 @@ NULL
   e$`param` <- `SpiceSession_param`(ptr)
   e$`run` <- `SpiceSession_run`(ptr)
   e$`set_temp` <- `SpiceSession_set_temp`(ptr)
+  e$`set_tmax_divisor` <- `SpiceSession_set_tmax_divisor`(ptr)
   e$`set_warm_start` <- `SpiceSession_set_warm_start`(ptr)
   e$`status` <- `SpiceSession_status`(ptr)
   e$`temp` <- `SpiceSession_temp`(ptr)
   e$`title` <- `SpiceSession_title`(ptr)
+  e$`tmax_divisor` <- `SpiceSession_tmax_divisor`(ptr)
   e$`warm_start` <- `SpiceSession_warm_start`(ptr)
   e$`warm_stats` <- `SpiceSession_warm_stats`(ptr)
 
@@ -181,8 +196,8 @@ NULL
 
 ### associated functions for SpiceSession
 
-`SpiceSession`$`open` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`) {
-  .savvy_wrap_SpiceSession(.Call(savvy_SpiceSession_open__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`))
+`SpiceSession`$`open` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`) {
+  .savvy_wrap_SpiceSession(.Call(savvy_SpiceSession_open__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`))
 }
 
 

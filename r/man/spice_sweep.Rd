@@ -10,7 +10,8 @@ spice_sweep(
   .mode = c("grid", "zip"),
   .includes = NULL,
   .options = NULL,
-  .threads = 1L
+  .threads = 1L,
+  .tmax_divisor = NULL
 )
 }
 \arguments{
@@ -30,6 +31,8 @@ overrides \code{options$temp}).}
 \item{.threads}{Worker threads: \code{1} (the default) runs sequentially,
 \code{0} uses one per core, \code{n} uses \code{n}. Results are identical either
 way: every run is an independent circuit.}
+
+\item{.tmax_divisor}{As \code{tmax_divisor} in \code{\link[=spice_run]{spice_run()}}, for every run.}
 }
 \value{
 A \code{spice_sweep}: a list with

@@ -115,6 +115,8 @@ s.alter('R1', 2200).alter('M1', 'w', 4e-6).alter('V1', 'pulse', [0, 1, 1e-9]);
 s.param('R1'); s.param('V1', 'pulse');   // number | Float64Array | null
 s.alterable('M1');                        // ['w', 'l', 'temp']
 s.temp = 85; s.warmStart = true; s.warmStats;   // {hits, misses}
+s.options = { trtol: 1 }; s.tmaxDivisor = 10;  // "passos finos" (issue #16)
+s.options = null; s.tmaxDivisor = null;        // volta ao deck
 s.run();        // === simulate(deck alterado)
 s.runTyped();   // === simulateTyped(deck alterado)
 s.free();       // ou `using s = Session.fromPic(...)`
@@ -123,13 +125,25 @@ s.free();       // ou `using s = Session.fromPic(...)`
 Erros: `SimError` com `kind` novo `'alter'`. A classe JS é um wrapper
 fino (`index.js`) sobre a classe `Session` do wasm-bindgen.
 
+`options`/`tmaxDivisor` (issue #16; também em `SimOptions` de todo
+`simulate*`/`from*`): `options` são chaves de `.options` aplicadas
+depois dos cartões do deck pelo próprio `Options::apply` (entrada
+inválida = aviso em `diagnostics`, prefixo `opts.options:`, nunca
+exceção; número entra exato, string é lida como o texto do cartão);
+`tmaxDivisor` ≥ 1 vira `Options::tmax_divisor`. O setter troca a
+camada inteira (`null`/`{}` = opções do deck) sem reabrir a sessão;
+ordem das camadas: deck → `options` → `temp` (o `setTemp` vence).
+`{options:{trtol:1}, tmaxDivisor:10}` é bit a bit o deck com
+`.options trtol=1` e o TMAX do `.tran` a um décimo.
+
 ### Python (`spice`)
 
 ```python
-s = spice.Session(deck_or_path, includes=None, options=None)
+s = spice.Session(deck_or_path, includes=None, options=None, tmax_divisor=None)
 s.alter("r1", 2.2e3).alter("m1", "w", 4e-6).alter("vin", "pulse", [0, 1, 1e-9])
 s.param("m1", "w"); s.alterable("m1")
 s.temp = 85; s.warm_start = True; s.warm_stats   # WarmStats(hits, misses)
+s.tmax_divisor = 10; s.tmax_divisor = None       # passos finos, sem reabrir
 res = s.run()   # spice.Result, == spice.simulate(deck alterado)
 ```
 
@@ -139,10 +153,12 @@ o `run` solta o GIL.
 ### R (`spice`)
 
 ```r
-s <- spice_session(deck, includes = NULL, options = NULL, warm_start = FALSE)
+s <- spice_session(deck, includes = NULL, options = NULL, warm_start = FALSE,
+                   tmax_divisor = NULL)
 s |> spice_alter("r1", 2.2e3) |> spice_alter("m1", w = 4e-6, l = 1e-6)
 spice_alter(s, "vin", pulse = c(0, 1, 1e-9))
 spice_set_temp(s, 85); spice_temp(s)
+spice_set_tmax_divisor(s, 10); spice_tmax_divisor(s)   # NULL limpa
 spice_param(s, "m1", "w"); spice_alterable(s, "m1")
 res <- spice_rerun(s)   # spice_result, == spice_run(deck alterado)
 ```

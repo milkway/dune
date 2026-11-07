@@ -235,9 +235,16 @@ fn ffi_measure(
     Ok(out.into())
 }
 
+/// A `tmax_divisor` from R: `numeric(0)` (what `NULL` becomes on the
+/// R side) is none, else its one value.
+fn divisor(d: &RealSexp) -> Option<f64> {
+    d.as_slice().first().copied()
+}
+
 /// Run a deck. `deck` is a path when `is_path`, netlist text
 /// otherwise; includes are parallel name/text vectors (text decks
-/// only); options are names plus a list of length-1 values.
+/// only); options are names plus a list of length-1 values;
+/// `tmax_divisor` is `numeric(0)` for none.
 /// @noRd
 #[savvy]
 fn ffi_run_deck(
@@ -247,6 +254,7 @@ fn ffi_run_deck(
     include_texts: StringSexp,
     opt_names: StringSexp,
     opt_values: ListSexp,
+    tmax_divisor: RealSexp,
 ) -> savvy::Result<Sexp> {
     let includes = includes_map(&include_names, &include_texts);
     let user = user_options(&opt_names, opt_values)?;
@@ -259,7 +267,7 @@ fn ffi_run_deck(
         }
     };
 
-    run_list(engine::run(source, &user))
+    run_list(engine::run(source, &user, divisor(&tmax_divisor)))
 }
 
 /// `list(ok = FALSE, message, plots = NULL, notes, diagnostics, kind,
@@ -340,6 +348,7 @@ impl SpiceSession {
         include_texts: StringSexp,
         opt_names: StringSexp,
         opt_values: ListSexp,
+        tmax_divisor: RealSexp,
     ) -> savvy::Result<Self> {
         let includes = includes_map(&include_names, &include_texts);
         let user = user_options(&opt_names, opt_values)?;
@@ -352,7 +361,7 @@ impl SpiceSession {
             }
         };
         Ok(SpiceSession {
-            live: engine::LiveSession::open(source, &user),
+            live: engine::LiveSession::open(source, &user, divisor(&tmax_divisor)),
         })
     }
 
@@ -428,6 +437,17 @@ impl SpiceSession {
         logical(self.live()?.warm_start())
     }
 
+    /// `numeric(0)` clears it; a failure list when out of range.
+    fn set_tmax_divisor(&mut self, d: RealSexp) -> savvy::Result<Sexp> {
+        outcome(self.live_mut()?.set_tmax_divisor(divisor(&d)))
+    }
+
+    /// The divisor, `NaN` when none.
+    fn tmax_divisor(&self) -> savvy::Result<Sexp> {
+        let d = self.live()?.tmax_divisor().unwrap_or(f64::NAN);
+        Ok(OwnedRealSexp::try_from_scalar(d)?.into())
+    }
+
     /// `c(hits, misses)` as doubles.
     fn warm_stats(&self) -> savvy::Result<Sexp> {
         let (h, m) = self.live()?.warm_stats();
@@ -463,6 +483,7 @@ fn ffi_sweep_deck(
     include_texts: StringSexp,
     opt_names: StringSexp,
     opt_values: ListSexp,
+    tmax_divisor: RealSexp,
     params: StringSexp,
     values: RealSexp,
     threads: i32,
@@ -488,7 +509,14 @@ fn ffi_sweep_deck(
         }
     };
 
-    let result = engine::sweep(source, &user, &names, &rows, threads as usize);
+    let result = engine::sweep(
+        source,
+        &user,
+        divisor(&tmax_divisor),
+        &names,
+        &rows,
+        threads as usize,
+    );
     let mut out = OwnedListSexp::new(7, true)?;
     match result {
         Ok(r) => {

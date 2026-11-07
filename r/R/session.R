@@ -15,8 +15,8 @@
 #' Transient operating points and decks with `.nodeset` are never
 #' warm-started.
 #'
-#' A session is a **reference** object: `spice_alter()` and
-#' `spice_set_temp()` modify it in place (every copy of it sees the
+#' A session is a **reference** object: `spice_alter()`,
+#' `spice_set_temp()` and `spice_set_tmax_divisor()` modify it in place (every copy of it sees the
 #' change) and return it invisibly, so calls can be piped.
 #'
 #' @inheritParams spice_run
@@ -26,7 +26,7 @@
 #' @section Mirror of the Python package:
 #' This is `spice.Session` in Python: `spice_alter()` is `Session.alter()`,
 #' `spice_rerun()` is `Session.run()`, `spice_set_temp()` sets
-#' `Session.temp`.
+#' `Session.temp`, `spice_set_tmax_divisor()` sets `Session.tmax_divisor`.
 #' @seealso [spice_alter()], [spice_rerun()], [spice_param()].
 #' @export
 #' @examples
@@ -39,16 +39,18 @@
 #' spice_plots(spice_rerun(s))[[1]]$values[["v(2)"]]
 #' s |> spice_alter("r2", 3e3)
 #' spice_plots(spice_rerun(s))[[1]]$values[["v(2)"]]
-spice_session <- function(deck, includes = NULL, options = NULL, warm_start = FALSE) {
+spice_session <- function(deck, includes = NULL, options = NULL, warm_start = FALSE,
+                          tmax_divisor = NULL) {
   call <- rlang::current_env()
   src <- check_deck(deck, call = call)
   inc <- check_includes(includes, is_path = src$is_path, call = call)
   opt <- check_options(options, call = call)
   check_flag(warm_start, "warm_start", call = call)
+  div <- check_tmax_divisor(tmax_divisor, call = call)
 
   ptr <- SpiceSession$open(
     src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
-    as.character(names(opt)), unname(opt)
+    as.character(names(opt)), unname(opt), div
   )
   failed <- ptr$status()
   if (!is.null(failed)) {
@@ -259,6 +261,41 @@ spice_set_temp <- function(session, celsius) {
 spice_temp <- function(session) {
   check_session(session)
   session$ptr$temp()
+}
+
+#' Set a session's transient step divisor
+#'
+#' The `tmax_divisor` of [spice_run()] on a live session: from the next
+#' [spice_rerun()] on, every `.tran` card runs with its maximum step
+#' divided by `tmax_divisor` (`NULL` restores the cards' own), without
+#' re-building the circuit -- a "fine steps" toggle.
+#'
+#' @param session A [spice_session()].
+#' @param tmax_divisor `NULL` or a finite number `>= 1`.
+#' @return `spice_set_tmax_divisor()`: `session`, invisibly (modified in
+#'   place). `spice_tmax_divisor()`: the divisor, or `NULL`.
+#' @export
+#' @examples
+#' s <- spice_session("rc\nv1 1 0 pulse(0 1)\nr1 1 2 1k\nc1 2 0 1u\n.tran 0.1m 5m\n.end")
+#' nrow(spice_tidy(spice_rerun(s)))
+#' spice_set_tmax_divisor(s, 10)
+#' nrow(spice_tidy(spice_rerun(s)))
+#' spice_tmax_divisor(s)
+spice_set_tmax_divisor <- function(session, tmax_divisor) {
+  call <- rlang::current_env()
+  check_session(session, call = call)
+  div <- check_tmax_divisor(tmax_divisor, call = call)
+  failed <- session$ptr$set_tmax_divisor(div)
+  if (!is.null(failed)) abort_failure(failed, call = call)
+  invisible(session)
+}
+
+#' @rdname spice_set_tmax_divisor
+#' @export
+spice_tmax_divisor <- function(session) {
+  check_session(session)
+  d <- session$ptr$tmax_divisor()
+  if (is.na(d)) NULL else d
 }
 
 #' @export

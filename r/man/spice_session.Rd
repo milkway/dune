@@ -4,7 +4,13 @@
 \alias{spice_session}
 \title{Keep a circuit alive to alter and re-run it}
 \usage{
-spice_session(deck, includes = NULL, options = NULL, warm_start = FALSE)
+spice_session(
+  deck,
+  includes = NULL,
+  options = NULL,
+  warm_start = FALSE,
+  tmax_divisor = NULL
+)
 }
 \arguments{
 \item{deck}{Either the path to a deck file, or the netlist itself as
@@ -31,6 +37,15 @@ unknown name or a value of the wrong type is an error.}
 
 \item{warm_start}{Continue each operating point from the previous run's
 (see Details).}
+
+\item{tmax_divisor}{\code{NULL} (the default) or a finite number \verb{>= 1} that
+divides the maximum step of every \code{.tran} card -- its TMAX argument,
+else the default \code{min(TSTEP, (TSTOP - TSTART) / 50)}. The run is, bit
+for bit, that of the deck with the card's TMAX edited to
+\code{TMAX / tmax_divisor}; with \code{options = list(trtol = 1)} it gives the
+"fine steps" view of a waveform. It is an argument rather than an
+\code{options} name because TMAX is a parameter of the analysis card, not
+an engine option.}
 }
 \value{
 A \code{spice_session}.
@@ -52,15 +67,15 @@ tolerances (\code{reltol}, \code{vntol}, \code{abstol}) rather than bit for bit.
 Transient operating points and decks with \code{.nodeset} are never
 warm-started.
 
-A session is a \strong{reference} object: \code{spice_alter()} and
-\code{spice_set_temp()} modify it in place (every copy of it sees the
+A session is a \strong{reference} object: \code{spice_alter()},
+\code{spice_set_temp()} and \code{spice_set_tmax_divisor()} modify it in place (every copy of it sees the
 change) and return it invisibly, so calls can be piped.
 }
 \section{Mirror of the Python package}{
 
 This is \code{spice.Session} in Python: \code{spice_alter()} is \code{Session.alter()},
 \code{spice_rerun()} is \code{Session.run()}, \code{spice_set_temp()} sets
-\code{Session.temp}.
+\code{Session.temp}, \code{spice_set_tmax_divisor()} sets \code{Session.tmax_divisor}.
 }
 
 \examples{

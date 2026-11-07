@@ -22,6 +22,14 @@
 #'   `nopage`, `defl`, `defw`, `defad`, `defas`. `noopiter` and `nopage`
 #'   take `TRUE`/`FALSE`. Unlike a `.options` card, which only warns, an
 #'   unknown name or a value of the wrong type is an error.
+#' @param tmax_divisor `NULL` (the default) or a finite number `>= 1` that
+#'   divides the maximum step of every `.tran` card -- its TMAX argument,
+#'   else the default `min(TSTEP, (TSTOP - TSTART) / 50)`. The run is, bit
+#'   for bit, that of the deck with the card's TMAX edited to
+#'   `TMAX / tmax_divisor`; with `options = list(trtol = 1)` it gives the
+#'   "fine steps" view of a waveform. It is an argument rather than an
+#'   `options` name because TMAX is a parameter of the analysis card, not
+#'   an engine option.
 #'
 #' @return A `spice_result`: a list with
 #'   * `title`: the deck's title line;
@@ -72,15 +80,19 @@
 #'
 #' # Options override the deck's .options card
 #' spice_run(deck, options = list(reltol = 1e-4, method = "gear"))
-spice_run <- function(deck, includes = NULL, options = NULL) {
+#'
+#' # Finer transient steps: trtol = 1 and a tenth of the maximum step
+#' spice_run(deck, options = list(trtol = 1), tmax_divisor = 10)
+spice_run <- function(deck, includes = NULL, options = NULL, tmax_divisor = NULL) {
   call <- rlang::current_env()
   src <- check_deck(deck, call = call)
   inc <- check_includes(includes, is_path = src$is_path, call = call)
   opt <- check_options(options, call = call)
+  div <- check_tmax_divisor(tmax_divisor, call = call)
 
   out <- ffi_run_deck(
     src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
-    as.character(names(opt)), unname(opt)
+    as.character(names(opt)), unname(opt), div
   )
   diagnostics <- tibble::tibble(
     severity = out$diagnostics$severity,
@@ -231,6 +243,24 @@ check_options <- function(options, call) {
   })
   names(values) <- nms
   values
+}
+
+# `NULL` or a finite number >= 1, as the double vector the FFI takes
+# (`numeric(0)` for none).
+check_tmax_divisor <- function(tmax_divisor, arg = rlang::caller_arg(tmax_divisor),
+                               call = rlang::caller_env()) {
+  if (is.null(tmax_divisor)) {
+    return(numeric(0))
+  }
+  if (!is.numeric(tmax_divisor) || length(tmax_divisor) != 1L ||
+    is.na(tmax_divisor) || !is.finite(tmax_divisor) || tmax_divisor < 1) {
+    cli::cli_abort(
+      "{.arg {arg}} must be {.code NULL} or a single finite number >= 1, not {.obj_type_friendly {tmax_divisor}}.",
+      class = c("spice_error_options", "spice_error"),
+      call = call
+    )
+  }
+  as.double(tmax_divisor)
 }
 
 #' Plots of a simulation result
