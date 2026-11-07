@@ -1,0 +1,29 @@
+.PS
+# basic/lck.cir drawn: at the operating point the coils are shorts and
+# the capacitors open, so v(vl) = 3 V and the coupled secondary L2
+# (k = 0.95) carries nothing: v(sec) = 0. Card order kept; deck nodes
+# 1 Vs, 2 Vl, 3 Sec.
+spice = 1
+Vs:  (2.25,2.4)
+Vl:  (2.25,1.2)
+Sec: (3.25,2.4)
+
+V1: vsource((0.3,2.4), (0.3,0), dc 3)
+L1: inductor((2.25,2.4), (2.25,1.2), 10m)
+R1: resistor((2.25,1.2), (2.25,0), 150)
+L2: inductor((3.25,2.4), (3.25,1.2), 20m)
+K12: coupling(L1, L2, 0.95)
+C1: capacitor((1.25,1.2), (1.25,0), 10u)
+C2: capacitor((4.05,2.4), (4.05,0), 22u)
+R3: resistor((4.85,2.4), (4.85,0), 1k)
+
+line from V1.P to Vs
+line from Vl to C1.P
+line from L2.N to (3.25,0)
+line from L2.P to R3.P
+line from V1.N to R3.N
+dot at Vl; dot at C2.P
+dot at C1.N; dot at R1.N; dot at (3.25,0); dot at C2.N
+ground((0.75,0))
+.op
+.PE

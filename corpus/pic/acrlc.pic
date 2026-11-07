@@ -1,0 +1,32 @@
+.PS
+# basic/acrlc.cir drawn: a 2 V / 45 degree drive into a pair of 10u
+# coils coupled by k = 0.3; the secondary rings a series 5 ohm /
+# 253.3p branch (f0 = 3.16 MHz) and a VCVS (x2) buffers the secondary
+# into RE. Card order kept; deck nodes 1 In, 2 Pri, 3 Sec, 4 Vc,
+# 5 Vout.
+spice = 1
+In:   (0.3,2)
+Pri:  (1.4,2)
+Sec:  (2.4,2)
+Vc:   (3.5,2)
+Vout: (5.1,2)
+
+Vin: acsource((0.3,2), (0.3,0), ac 2 45)
+RS: resistor((0.3,2), (1.4,2), 50)
+L1: inductor((1.4,2), (1.4,0), 10u)
+L2: inductor((2.4,2), (2.4,0), 10u)
+K12: coupling(L1, L2, 0.3)
+RL: resistor((2.4,2), (3.5,2), 5)
+C2: capacitor((3.5,2), (3.5,0), 253.3p)
+E1: vcvs((5.1,2), (5.1,0), (4.6,1.2), (4.6,0.8), 2)
+RE: resistor((6.3,2), (6.3,0), 1k)
+
+line from Sec to (2.4,2.6) then to (4.3,2.6) then to (4.3,1.2) then to E1.Cp
+line from E1.Cn to (4.3,0.8) then to (4.3,0)
+line from E1.P to RE.P
+line from Vin.N to RE.N
+dot at Sec
+dot at L1.N; dot at L2.N; dot at C2.N; dot at (4.3,0); dot at E1.N
+ground((0.85,0))
+.ac lin 50 1meg 5meg
+.PE

@@ -1,0 +1,7 @@
+* netlist extracted by dune-pic
+Vin In 0 sin(0 1 100k 2u 2e4)
+R1 In Vr 200
+L1 Vr Vout 1m
+C1 Vout 0 2.5n
+.tran 0.05u 50u
+.end

@@ -1,0 +1,12 @@
+* netlist extracted by dune-pic
+Vin In 0 ac 2 45
+RS In Pri 50
+L1 Pri 0 10u
+L2 Sec 0 10u
+K12 L1 L2 0.3
+RL Sec Vc 5
+C2 Vc 0 253.3p
+E1 Vout 0 Sec 0 2
+RE Vout 0 1k
+.ac lin 50 1meg 5meg
+.end

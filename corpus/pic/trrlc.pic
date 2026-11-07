@@ -1,0 +1,19 @@
+.PS
+# basic/trrlc.cir drawn: a damped 100 kHz sine (delay 2u, theta 2e4)
+# into a series RLC (f0 = 100.7 kHz, Q = 3.2), output across C1. Card
+# order kept; deck nodes 1 In, 2 Vr, 3 Vout.
+spice = 1
+In:   (0.3,1.5)
+Vr:   (1.5,1.5)
+Vout: (2.9,1.5)
+
+Vin: vsource((0.3,1.5), (0.3,0), sin(0 1 100k 2u 2e4), "G₁")
+R1: resistor((0.3,1.5), (1.5,1.5), 200)
+L1: inductor((1.5,1.5), (2.9,1.5), 1m)
+C1: capacitor((2.9,1.5), (2.9,0), 2.5n)
+
+line from Vin.N to C1.N
+dot at Vr; dot at Vout
+ground((1.6,0))
+.tran 0.05u 50u
+.PE

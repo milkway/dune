@@ -1,0 +1,7 @@
+* netlist extracted by dune-pic
+C1 Vc 0 1u ic=2
+R1 Vc 0 1k
+L1 Vc Vl 1m ic=1m
+R2 Vl 0 50
+.tran 2u 3m uic
+.end

@@ -1,0 +1,11 @@
+* netlist extracted by dune-pic
+V1 Vs 0 dc 3
+L1 Vs Vl 10m
+R1 Vl 0 150
+L2 Sec 0 20m
+K12 L1 L2 0.95
+C1 Vl 0 10u
+C2 Sec 0 22u
+R3 Sec 0 1k
+.op
+.end

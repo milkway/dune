@@ -1,0 +1,22 @@
+.PS
+# basic/trpwl.cir drawn: a piecewise-linear source (G₁) and an
+# exponential one (G₂), each into its own RC low-pass (tau = 100 ns
+# both). Card order kept; deck nodes 1 In1, 2 Out1, 3 In2, 4 Out2.
+spice = 1
+In1:  (0.3,1.5)
+Out1: (1.5,1.5)
+In2:  (2.5,1.5)
+Out2: (3.7,1.5)
+
+V1: vsource((0.3,1.5), (0.3,0), pwl(0 0 1u 1 2u 1 3u -1 5u 0), "G₁")
+R1: resistor((0.3,1.5), (1.5,1.5), 1k)
+C1: capacitor((1.5,1.5), (1.5,0), 100p)
+V2: vsource((2.5,1.5), (2.5,0), exp(0 2 0.5u 0.3u 2.5u 0.6u), "G₂")
+R2: resistor((2.5,1.5), (3.7,1.5), 500)
+C2: capacitor((3.7,1.5), (3.7,0), 200p)
+
+line from V1.N to C2.N
+dot at C1.N; dot at V2.N
+ground((0.9,0))
+.tran 0.02u 6u
+.PE

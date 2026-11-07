@@ -1,0 +1,9 @@
+* netlist extracted by dune-pic
+V1 In1 0 pwl(0 0 1u 1 2u 1 3u -1 5u 0)
+R1 In1 Out1 1k
+C1 Out1 0 100p
+V2 In2 0 exp(0 2 0.5u 0.3u 2.5u 0.6u)
+R2 In2 Out2 500
+C2 Out2 0 200p
+.tran 0.02u 6u
+.end

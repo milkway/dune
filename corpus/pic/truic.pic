@@ -1,0 +1,20 @@
+.PS
+# basic/truic.cir drawn: no source at all — .tran uic starts from the
+# stored energy, C1 charged to 2 V and L1 carrying 1 mA, and the
+# network rings down through R1 and R2. Card order kept; deck nodes
+# 1 Vc, 2 Vl.
+spice = 1
+Vc: (1.1,2)
+Vl: (2.5,2)
+
+C1: capacitor((0.3,2), (0.3,0), 1u ic=2)
+R1: resistor((1.1,2), (1.1,0), 1k)
+L1: inductor((1.1,2), (2.5,2), 1m ic=1m)
+R2: resistor((2.5,2), (2.5,0), 50)
+
+line from C1.P to R1.P
+line from C1.N to R2.N
+dot at Vc; dot at R1.N
+ground((1.8,0))
+.tran 2u 3m uic
+.PE
