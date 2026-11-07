@@ -64,6 +64,21 @@ pub enum MeasDetail {
     Window { from: f64, to: f64 },
 }
 
+impl MeasDetail {
+    /// The extras as `(label, value)` pairs, labelled as ngspice
+    /// prints them (`trig`, `targ`, `at`, `with`, `from`, `to`) —
+    /// the flat form the bindings hand out.
+    pub fn pairs(&self) -> Vec<(&'static str, f64)> {
+        match *self {
+            MeasDetail::None => Vec::new(),
+            MeasDetail::Delay { trig, targ } => vec![("trig", trig), ("targ", targ)],
+            MeasDetail::At { at } => vec![("at", at)],
+            MeasDetail::With { with } => vec![("with", with)],
+            MeasDetail::Window { from, to } => vec![("from", from), ("to", to)],
+        }
+    }
+}
+
 /// Which clause of the card a failure belongs to (ngspice's
 /// `measure  NAME  FUNC(CLAUSE)` message).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +114,19 @@ pub enum MeasureError {
     /// Measurements need a `.tran`, `.ac`, `.dc` or `.sp` plot.
     #[error("measure limited to tran, dc, sp, or ac analysis (plot `{0}`)")]
     UnsupportedPlot(String),
+}
+
+impl MeasureError {
+    /// The message with its clause, for one-line reports
+    /// (`out of interval (WHEN)`).
+    pub fn describe(&self) -> String {
+        match self {
+            MeasureError::OutOfInterval { clause } => {
+                format!("out of interval ({})", clause.tag())
+            }
+            other => other.to_string(),
+        }
+    }
 }
 
 /// The analysis family of a plot, which decides the window rules.
