@@ -129,7 +129,7 @@ def test_monte_carlo_is_reproducible_from_the_seed(examples: Path) -> None:
     final = a.group_by("run", maintain_order=True).last()
     tau = final["r"] * final["c"]
     want = 1 - (np.exp(0.1 / tau) - 1) / (0.1 / tau) * np.exp(-final["time"] / tau)
-    np.testing.assert_allclose(final["v(2)"].to_numpy(), want.to_numpy(), rtol=2e-3)
+    np.testing.assert_allclose(final["v(2)"].to_numpy(), np.asarray(want), rtol=2e-3)
 
 
 def test_ac_and_mosfet_geometry(examples: Path) -> None:
