@@ -36,6 +36,10 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Parallel sweep (bit-identical to sequential)
+        run: |
+          cargo clippy -p dune-core --features parallel --all-targets -- -D warnings
+          cargo test -p dune-core --features parallel --test sweep
       - name: Oracle golden check
         run: cargo run -p dune-oracle -- --ci
       - name: Clippy (wasm32)

@@ -45,6 +45,7 @@ mod solution;
 mod sp;
 mod srcfn;
 mod state;
+mod sweep;
 mod switch;
 mod tf;
 mod tra;
@@ -86,6 +87,9 @@ pub use sens::{Sens, SensAc};
 pub use solution::Solution;
 pub use sp::Sp;
 pub use srcfn::Wave;
+#[cfg(feature = "parallel")]
+pub use sweep::sweep_parallel;
+pub use sweep::{SweepOutput, SweepParam, SweepRun, sweep};
 pub use switch::{CswModel, SwModel};
 pub use tf::{OutputVar, Tf};
 pub use tran::Tran;

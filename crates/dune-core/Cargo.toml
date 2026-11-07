@@ -12,6 +12,10 @@ default = ["solver-faer"]
 # it the default). The sparse `solver-xingo` backend lives on the
 # `p3-sparse` branch until xingo is published (D-0013).
 solver-faer = ["dep:faer"]
+# `sweep_parallel`: the runs of a sweep over a rayon thread pool
+# (issue #10). Native only — off by default and never enabled for
+# wasm32 (dune-wasm runs `sweep` sequentially).
+parallel = ["dep:rayon"]
 
 [dependencies]
 thiserror.workspace = true
@@ -19,6 +23,7 @@ num-complex.workspace = true
 dune-netlist.workspace = true
 dune-raw.workspace = true
 libm.workspace = true
+rayon = { version = "1.10", optional = true }
 faer = { version = "0.24", optional = true, default-features = false, features = [
     "std",
     "linalg",
