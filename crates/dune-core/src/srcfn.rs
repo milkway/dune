@@ -159,9 +159,10 @@ impl Wave {
                 }
             }
             Wave::Pwl(c) => {
-                for pair in c.chunks_exact(2) {
-                    if inside(pair[0]) {
-                        out.push(pair[0]);
+                // Every even index is a PWL corner time.
+                for &t in c.iter().step_by(2) {
+                    if inside(t) {
+                        out.push(t);
                     }
                 }
             }
