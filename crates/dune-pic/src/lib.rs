@@ -243,6 +243,28 @@ pub struct ElementOverlay {
     pub refdes: String,
     /// Half-open range of shape indices of the element's block.
     pub shapes: Range<usize>,
+    /// The element's terminals, in card order (the nodes of its card);
+    /// empty for a `K`, which has none.
+    pub pins: Vec<PinOverlay>,
+}
+
+/// One terminal of an element: where it is drawn and the net it is on.
+///
+/// Element pins are invisible markers inside the element's own shapes,
+/// so a net whose elements touch pin to pin has no wire of its own in
+/// [`NetOverlay::shapes`]; the pins still give a probe target for it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinOverlay {
+    /// The pin's prelude name (`P`, `N`, `C`, `B`, `E`, `D`, `G`, `S`,
+    /// `Inp`, `Cp`, `P1`, …; D-0020).
+    pub name: String,
+    /// The node name on the card, as in [`NetOverlay::name`].
+    pub net: String,
+    /// The terminal point, in pic inches, in the frame of the compiled
+    /// drawing's shapes (y up, after the whole-picture rescale) — the
+    /// frame of rpic's scene, which maps it to SVG pixels.
+    pub x: f64,
+    pub y: f64,
 }
 
 impl ElementOverlay {
@@ -896,9 +918,21 @@ impl<'a> Extractor<'a> {
             }
             netlist.push('\n');
             let (lo, hi) = d.blocks[e.block].shapes;
+            let pins = e
+                .pins
+                .iter()
+                .zip(&e.terms)
+                .map(|(&name, &k)| PinOverlay {
+                    name: name.to_string(),
+                    net: name_of[&roots[k]].clone(),
+                    x: terms[k].at.0,
+                    y: terms[k].at.1,
+                })
+                .collect();
             map.elements.push(ElementOverlay {
                 refdes: e.refdes.clone(),
                 shapes: lo..hi,
+                pins,
             });
         }
         for dir in self.directives {

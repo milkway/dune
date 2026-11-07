@@ -434,6 +434,67 @@ fn overlay_map_points_at_drawn_shapes() {
     }
 }
 
+/// `(name, net, x, y)` of each pin of element `refdes`.
+fn pins_of(e: &Extraction, refdes: &str) -> Vec<(String, String, f64, f64)> {
+    let el = e.map.elements.iter().find(|x| x.refdes == refdes).unwrap();
+    el.pins
+        .iter()
+        .map(|p| (p.name.clone(), p.net.clone(), p.x, p.y))
+        .collect()
+}
+
+#[test]
+fn overlay_pins_name_nets_without_wires() {
+    // Elements snapped pin to pin: not one wire, so the nets between
+    // them draw nothing — the pins are their probe targets.
+    let e = ex("Vin: (0,1)
+V1: vsource(Vin, (0,0), 1)
+R1: resistor(Vin, (1.5,1), 1k)
+R2: resistor((1.5,1), (1.5,0), 2k)
+Q1: npn((2.5,1), QX)
+ground((0,0)); ground((1.5,0))");
+    assert_eq!(
+        cards(&e),
+        ["V1 Vin 0 1", "R1 Vin n1 1k", "R2 n1 0 2k", "Q1 n3 n2 n4 QX"]
+    );
+    let near = |got: &[(String, String, f64, f64)], want: &[(&str, &str, f64, f64)]| {
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for (g, w) in got.iter().zip(want) {
+            assert_eq!((g.0.as_str(), g.1.as_str()), (w.0, w.1), "{got:?}");
+            assert!(
+                (g.2 - w.2).abs() < 1e-9 && (g.3 - w.3).abs() < 1e-9,
+                "{g:?} vs {w:?}"
+            );
+        }
+    };
+    near(
+        &pins_of(&e, "V1"),
+        &[("P", "Vin", 0.0, 1.0), ("N", "0", 0.0, 0.0)],
+    );
+    near(
+        &pins_of(&e, "R1"),
+        &[("P", "Vin", 0.0, 1.0), ("N", "n1", 1.5, 1.0)],
+    );
+    near(
+        &pins_of(&e, "R2"),
+        &[("P", "n1", 1.5, 1.0), ("N", "0", 1.5, 0.0)],
+    );
+    // `n1` has no shapes of its own; the two pins on it coincide.
+    let n1 = e.map.nets.iter().find(|n| n.name == "n1").unwrap();
+    assert!(n1.shapes.is_empty(), "{n1:?}");
+    // A centered device's pins sit off its anchor, in card order.
+    let q = pins_of(&e, "Q1");
+    let names: Vec<(&str, &str)> = q.iter().map(|p| (p.0.as_str(), p.1.as_str())).collect();
+    assert_eq!(names, [("C", "n3"), ("B", "n2"), ("E", "n4")]);
+    assert!(q.iter().all(|p| (p.2, p.3) != (2.5, 1.0)), "{q:?}");
+    // Every pin's net is a net of the map.
+    for el in &e.map.elements {
+        for p in &el.pins {
+            assert!(e.map.nets.iter().any(|n| n.name == p.net), "{p:?}");
+        }
+    }
+}
+
 #[test]
 fn copy_circuits_is_flagged() {
     let e = ex("copy \"circuits\"\nline from (0,0) to (1,0)");
