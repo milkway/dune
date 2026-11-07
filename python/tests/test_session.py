@@ -142,3 +142,25 @@ def test_numpy_values() -> None:
         )
     )
     assert_same(s.run(), want)
+
+
+RISE = """rc rise
+v1 1 0 pulse(0 1 0 1n 1n 10m 20m)
+r1 1 2 1k
+c1 2 0 1u
+.tran 2u 8m
+.measure tran trise trig v(2) val=0.1 rise=1 targ v(2) val=0.9 rise=1
+.end
+"""
+
+
+def test_run_measures_the_deck_cards() -> None:
+    s = spice.Session(RISE)
+    r1 = s.run()
+    t1 = r1.measurement("trise").value
+    assert t1 == spice.simulate(RISE).measurement("trise").value
+    assert t1 == pytest.approx(np.log(9) * 1e-3, rel=1e-2)
+    r2 = s.alter("r1", 2e3).run()
+    fresh = spice.simulate(RISE.replace("r1 1 2 1k", "r1 1 2 2k"))
+    assert [m.value for m in r2.measurements] == [m.value for m in fresh.measurements]
+    assert r2.measurement("trise").value / t1 == pytest.approx(2.0, rel=1e-2)
