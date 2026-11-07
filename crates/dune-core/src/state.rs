@@ -54,6 +54,11 @@ impl States {
         self.banks[0].fill(0.0);
     }
 
+    /// Slots per bank.
+    pub fn len0(&self) -> usize {
+        self.banks[0].len()
+    }
+
     pub fn snapshot0(&self) -> Vec<f64> {
         self.banks[0].clone()
     }

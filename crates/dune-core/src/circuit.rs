@@ -581,7 +581,11 @@ impl Spec {
 
 /// A circuit under construction. Analyses live in `analysis/`
 /// (Phase 1: [`Circuit::op`]).
-#[derive(Default)]
+///
+/// Cloning copies the element specs, `.nodeset`s and `.ic`s; the
+/// clone never shares a [`Session`](crate::Session)'s warm-start
+/// state.
+#[derive(Clone, Default)]
 pub struct Circuit {
     pub title: String,
     pub(crate) specs: Vec<Spec>,
@@ -590,6 +594,10 @@ pub struct Circuit {
     /// `.ic` entries (node, volts), applied at the transient
     /// operating point.
     pub(crate) ics: Vec<(String, f64)>,
+    /// The warm-start channel of a [`Session`](crate::Session):
+    /// empty for a plain circuit (the engine then runs exactly the
+    /// 3f5 path).
+    pub(crate) warm: crate::session::WarmSlot,
 }
 
 impl Circuit {
@@ -834,6 +842,8 @@ pub(crate) struct Built {
     pub num_states: usize,
     /// Diode temperature-adjust notes etc., surfaced by the caller.
     pub notes: Vec<String>,
+    /// The circuit's warm-start channel (see [`Circuit::warm`]).
+    pub warm: crate::session::WarmSlot,
 }
 
 impl Circuit {
@@ -1659,6 +1669,7 @@ impl Circuit {
             ports,
             num_states,
             notes,
+            warm: self.warm.share(),
         })
     }
 }

@@ -118,6 +118,9 @@ pub(crate) struct Engine {
     /// A device load fault from the last `load_all` (see
     /// [`LoadCtx::fault`]).
     fault: Option<&'static str>,
+    /// The session warm-start channel (empty outside a
+    /// [`Session`](crate::Session) with warm starts on).
+    warm: crate::session::WarmSlot,
 }
 
 impl Engine {
@@ -130,6 +133,7 @@ impl Engine {
             ics,
             sources,
             num_states,
+            warm,
             ..
         } = built;
         let n = vars.len() - 1;
@@ -175,6 +179,7 @@ impl Engine {
             min_break: 0.0,
             slope_break_radius: None,
             fault: None,
+            warm,
         }
     }
 
@@ -370,11 +375,43 @@ impl Engine {
         Error::Singular(name)
     }
 
+    /// `CKTop`, behind the session warm start: a standalone
+    /// operating point (`MODEDCOP`) of a [`Session`](crate::Session)
+    /// with warm starts on first tries one `NIiter` in `INITFLOAT`
+    /// from the previous operating point (solution and state bank
+    /// 0) — the continuation `DCtrCurv` uses between sweep points. A
+    /// miss returns at once with the slot marked, and the session
+    /// re-runs the whole analysis cold, so the cold result is the
+    /// fresh-run one bit for bit. Every operating point solved here
+    /// (warm or cold) refreshes the slot.
+    pub fn op(&mut self, opts: &Options) -> Result<(), Error> {
+        let warm_ok = self.kind == AnKind::DcOp && self.nodesets.is_empty();
+        if warm_ok && let Some((sol, st0)) = self.warm.guess(self.sol.len(), self.states.len0()) {
+            self.sol.copy_from_slice(&sol);
+            self.states.restore0(&st0);
+            return match self.ni_iter(opts, InitMode::Float, opts.itl1, 0.0, 1.0) {
+                Ok(_) => {
+                    self.warm.hit(&self.sol, &self.states.snapshot0());
+                    Ok(())
+                }
+                Err(e) => {
+                    self.warm.miss();
+                    Err(e)
+                }
+            };
+        }
+        self.op_cold(opts)?;
+        if warm_ok {
+            self.warm.store(&self.sol, &self.states.snapshot0());
+        }
+        Ok(())
+    }
+
     /// `CKTop`. Direct Newton, then gmin stepping — ngspice's
     /// dynamic (Gillespie) algorithm when `gminsteps == 1` (the
     /// ngspice default), the 3f5 fixed ladder when `gminsteps > 1`
     /// — then source stepping.
-    pub fn op(&mut self, opts: &Options) -> Result<(), Error> {
+    fn op_cold(&mut self, opts: &Options) -> Result<(), Error> {
         let first = InitMode::Jct;
         let direct = if !opts.noopiter {
             self.ni_iter(opts, first, opts.itl1, 0.0, 1.0).map(|_| ())
