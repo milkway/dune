@@ -13,7 +13,7 @@ import { ready, simulate, extractPic, simulatePic, renderPic } from '@strategicp
 await ready(); // Node: await ready(fs.readFileSync(require.resolve('…/pkg/dune_wasm_bg.wasm')))
 
 const deck = simulate('divider\nv1 1 0 dc 10\nr1 1 2 1k\nr2 2 0 1k\n.op\n.end\n');
-// { plots: [{ plotname: 'Operating Point', variables, columns, … }], notes, diagnostics }
+// { plots: [{ plotname: 'Operating Point', variables, columns, … }], measurements: [], notes, diagnostics }
 
 const figure = `.PS
 spice = 1
@@ -40,10 +40,25 @@ await ready(wasmUrl);
 ## API
 
 - `ready(wasm?)` — initialize once (idempotent; a failed init can be retried).
-- `simulate(netlist, { includes? })` → `{ plots, notes, diagnostics }`. Plots
+- `simulate(netlist, { includes? })` → `{ plots, measurements, notes, diagnostics }`. Plots
   mirror the SPICE rawfile: `variables` (first = scale) and `columns`
   (numbers, or `[re, im]` pairs in complex plots; NaN/±inf as `null`).
   `includes` maps `.include` paths to file text (there is no file system).
+  `measurements` holds the deck's `.measure` results — the rows Python's
+  `Result.measurements` and R's `res$measurements` carry, one per card and
+  measured plot:
+
+  ```js
+  { name: 'trise', analysis: 'tran', plot: 0, value: 2.1972e-9,
+    details: { trig: 1.106e-9, targ: 3.303e-9 } }
+  { name: 'never', analysis: 'tran', plot: 0, value: null, details: {},
+    error: 'out of interval (WHEN)' }
+  ```
+
+  `value` is `null` when the measurement failed (or is not finite);
+  `error` is present only on failure; `details` is always an object
+  (`trig`/`targ`, `at`, `with`, `from`/`to`, in ngspice's order). A
+  `Session` re-measures on every `run()`.
 - `extractPic(src, { snap? })` → `{ netlist, diagnostics, map }`. `map`
   relates netlist names to the shapes (`<g id="sN">`) of the figure as
   rpic compiles it with the dune prelude: `elements[{ refdes, shapes:

@@ -35,7 +35,12 @@ function ensure() {
   if (!wasm) throw new Error('dune-sim: call `await ready()` first');
 }
 
-/** Run a SPICE3 deck; returns `{ plots, notes, diagnostics }`. Throws a `SimError`. */
+/**
+ * Run a SPICE3 deck; returns `{ plots, measurements, notes, diagnostics }`.
+ * `measurements` holds the deck's `.measure` results, one row per card and
+ * plot: `{ name, analysis, plot, value, details, error? }` (`value` is `null`
+ * and `error` is set when the measurement failed). Throws a `SimError`.
+ */
 export function simulate(netlist, opts) {
   ensure();
   return wasm.simulate(netlist, opts);
@@ -177,7 +182,10 @@ export class Session {
     return this.#inner.pic();
   }
 
-  /** Re-run every analysis card: `simulate`'s result for the current circuit. */
+  /**
+   * Re-run every analysis card: `simulate`'s result for the current circuit,
+   * the deck's `.measure` cards re-evaluated (`measurements`).
+   */
   run() {
     return this.#inner.run();
   }

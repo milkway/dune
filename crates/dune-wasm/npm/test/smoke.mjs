@@ -149,4 +149,39 @@ const psAlt = simulate(ex.netlist.replace('C1 Vout 0 1u', 'C1 Vout 0 2u'));
 assert.deepEqual(ps.run(), psAlt);
 ps.free();
 
+// .measure results (issue #14): flat rows on every result shape.
+const mDeck = 'rc measured\nv1 in 0 pulse(0 1 1n 1p 1p 20n 40n)\nr1 in out 1k\nc1 out 0 1p\n.tran 10p 15n\n' +
+  '.meas tran trise trig v(out) val=0.1 rise=1 targ v(out) val=0.9 rise=1\n' +
+  '.meas tran never when v(out)=5\n.end\n';
+const tau = 1e3 * 1e-12;
+const mr = simulate(mDeck);
+assert.equal(mr.measurements.length, 2);
+const [trise, never] = mr.measurements;
+assert.deepEqual(Object.keys(trise), ['name', 'analysis', 'plot', 'value', 'details']);
+assert.deepEqual([trise.name, trise.analysis, trise.plot], ['trise', 'tran', 0]);
+assert.ok(Math.abs(trise.value / (Math.log(9) * tau) - 1) < 1e-3, `trise = ${trise.value}`);
+assert.deepEqual(Object.keys(trise.details), ['trig', 'targ']);
+assert.equal(trise.details.targ - trise.details.trig, trise.value);
+assert.ok(!('error' in trise));
+assert.equal(never.value, null);
+assert.deepEqual(never.details, {});
+assert.equal(never.error, 'out of interval (WHEN)');
+assert.deepEqual(simulate('d\nv1 1 0 1\nr1 1 0 1k\n.op\n.end\n').measurements, []);
+assert.deepEqual(simulateTyped(mDeck).measurements, mr.measurements);
+// Session: R doubled -> tau and trise doubled; every run re-measures.
+const ms = Session.fromDeck(mDeck);
+assert.deepEqual(ms.run().measurements, mr.measurements);
+ms.alter('r1', 2e3);
+const t2 = ms.run().measurements[0].value;
+assert.ok(Math.abs(t2 / trise.value - 2) < 1e-3, `${trise.value} -> ${t2}`);
+assert.ok(Math.abs(t2 / (Math.log(9) * 2 * tau) - 1) < 1e-3);
+assert.equal(ms.runTyped().measurements[0].value, t2);
+ms.free();
+// A figure's .meas line: rows at the top level of simulatePic's result.
+const rcMeas = rc.replace('.tran 20u 5m', '.tran 20u 5m\n.meas tran trise trig v(vout) val=0.5 rise=1 targ v(vout) val=4.5 rise=1');
+const pm = simulatePic(rcMeas).measurements;
+assert.equal(pm.length, 1);
+assert.ok(Math.abs(pm[0].value / (Math.log(9) * 1e-3) - 1) < 1e-2, `pic trise = ${pm[0].value}`);
+assert.deepEqual(simulatePicTyped(rcMeas).measurements, pm);
+
 console.log('dune-sim smoke: ok');

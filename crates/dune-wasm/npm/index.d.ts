@@ -85,7 +85,9 @@ export class Session {
   readonly warmStats: { hits: number; misses: number };
   /** The extraction of a session opened with {@link Session.fromPic}. */
   readonly pic: PicExtraction | undefined;
+  /** {@link simulate}'s result for the current circuit, `measurements` re-evaluated. */
   run(): Rawfile;
+  /** {@link simulateTyped}'s result for the current circuit. */
   runTyped(): TypedRawfile;
   free(): void;
   [Symbol.dispose](): void;
@@ -108,9 +110,45 @@ export interface PicSimOptions extends SimOptions, ExtractOptions {}
 
 export interface Rawfile {
   plots: Plot[];
+  /**
+   * The deck's `.measure` cards evaluated on this run: each card against
+   * every plot of its analysis, in plot order then card order. `[]` when the
+   * deck has none. Same rows as Python's `Result.measurements` / R's
+   * `res$measurements` (D-0029).
+   */
+  measurements: Measurement[];
   notes: string[];
   /** Netlist parser and `.options` warnings (file `deck.cir`). */
   diagnostics: Diagnostic[];
+}
+
+/**
+ * One `.measure` result (ngspice-47 `.meas` semantics). A measurement that
+ * does not happen is a row with `error`, never a thrown error.
+ */
+export interface Measurement {
+  /** Result name, lowercased as on the card. */
+  name: string;
+  analysis: 'tran' | 'ac' | 'dc' | 'sp';
+  /** Index of the measured plot in `plots`. */
+  plot: number;
+  /**
+   * The result: a time for `WHEN` and `TRIG/TARG` (the delay), a value for
+   * `FIND`, `MIN`, `AVG`…, the scale value for `MIN_AT`/`MAX_AT`. `null` when
+   * the measurement failed (Python's `nan`) or the result is not finite.
+   */
+  value: number | null;
+  /**
+   * The extras ngspice prints beside it, in its order: `trig`/`targ`, `at`
+   * (`MIN`/`MAX`), `with` (`MIN_AT`/`MAX_AT`), `from`/`to` (`AVG`, `RMS`,
+   * `INTEG`, `PP`). `{}` for `WHEN`, `FIND`, `DERIV` and failures.
+   */
+  details: Partial<Record<'trig' | 'targ' | 'at' | 'with' | 'from' | 'to', number | null>>;
+  /**
+   * Why it failed (`out of interval (WHEN)`, an unknown vector…). Absent on
+   * success (Python's `None`): a row failed exactly when it has this key.
+   */
+  error?: string;
 }
 
 export interface Plot {
