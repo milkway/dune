@@ -42,8 +42,11 @@ impl Circuit {
                 "tmax divisor must be a finite number >= 1, got {d}"
             )));
         }
+        let (noise_opts, noise_note) = self.noise_tran_options(opts, tstep, tstop, tstart, tmax)?;
+        let opts = noise_opts.as_ref().unwrap_or(opts);
         let built = self.build(opts)?;
         let mut notes = built.notes.clone();
+        notes.extend(noise_note);
         let mut engine = Engine::new(built);
         let rows = engine.tran(
             opts,

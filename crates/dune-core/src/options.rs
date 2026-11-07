@@ -111,6 +111,14 @@ pub struct Options {
     /// `.tran` fail with [`Error::Build`](crate::Error::Build).
     /// `None` (default): the card's TMAX as is.
     pub tmax_divisor: Option<f64>,
+    /// `SEED`: the seed of the transient-noise sources
+    /// (`TRNOISE`/`TRRANDOM`, ngspice-47 `.options seed=N`, which sets
+    /// its `rndseed`). Default 1 — ngspice's start-up `rndseed` too
+    /// (`main.c`) —, so a deck without the option is reproducible.
+    /// The same seed gives the same noise bits on every platform (see
+    /// `docs/dune-core.md` §Ruído transiente); ngspice's
+    /// `seed=random` (a clock seed) is refused with a warning.
+    pub seed: u64,
 }
 
 impl Default for Options {
@@ -143,6 +151,7 @@ impl Default for Options {
             ltra_break_rate: None,
             ltra_fit: false,
             tmax_divisor: None,
+            seed: 1,
         }
     }
 }
@@ -264,6 +273,22 @@ impl Options {
                     Some(v) => self.tnom = v + CTOK,
                     None => diags.push(Diagnostic::warning(
                         "option tnom needs a value in °C".to_string(),
+                        p.span,
+                    )),
+                },
+                // ngspice-47 `inp.c`: `option seed=val|random`; a
+                // value that `atoi` makes non-positive is skipped with
+                // a warning. Dune never seeds from the clock.
+                "seed" => match num {
+                    Some(v) if v >= 1.0 && v.is_finite() && v < 9.007_199_254_740_992e15 => {
+                        self.seed = v as u64;
+                    }
+                    _ => diags.push(Diagnostic::warning(
+                        format!(
+                            "option seed needs a positive integer (seed=random is not \
+                             supported: runs must be reproducible); keeping seed={}",
+                            self.seed
+                        ),
                         p.span,
                     )),
                 },

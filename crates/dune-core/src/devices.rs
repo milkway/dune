@@ -9,6 +9,7 @@ use crate::matrix::{
     TRASH, Var,
 };
 use crate::srcfn::Wave;
+use crate::trnoise::NoiseWave;
 
 /// A device instance bound to matrix positions and state slots.
 pub(crate) trait Device {
@@ -690,16 +691,29 @@ impl BranchStamp {
 /// stepping can zero transient-function sources too; the 3f5 left
 /// those unscaled and its stepping could never converge a tranop
 /// driven only by such sources (`corpus/KNOWN_DIFFS.md`).
-fn source_value(ctx: &LoadCtx, dc: Option<f64>, wave: &Option<Wave>) -> f64 {
+///
+/// A transient-noise function (`noise`, ngspice-47's `TRNOISE`/
+/// `TRRANDOM`) is added to the DC value, as `VSRCload` does; it is
+/// noiseless at t = 0 and hence in every DC mode.
+fn source_value(
+    ctx: &LoadCtx,
+    dc: Option<f64>,
+    wave: &Option<Wave>,
+    noise: Option<&mut NoiseWave>,
+) -> f64 {
     if matches!(ctx.kind, AnKind::DcOp | AnKind::DcSweep) && dc.is_some() {
         return ctx.srcfact * dc.unwrap_or(0.0);
     }
-    let v = match wave {
-        Some(w) => {
+    let v = match (noise, wave) {
+        (Some(n), _) => {
+            let time = if ctx.is_dc() { 0.0 } else { ctx.time };
+            n.value(time, ctx.final_time) + dc.unwrap_or(0.0)
+        }
+        (None, Some(w)) => {
             let time = if ctx.is_dc() { 0.0 } else { ctx.time };
             w.value(time, ctx.step, ctx.final_time)
         }
-        None => dc.unwrap_or(0.0),
+        (None, None) => dc.unwrap_or(0.0),
     };
     if ctx.kind == AnKind::TranOp {
         v * ctx.srcfact
@@ -712,6 +726,8 @@ fn source_value(ctx: &LoadCtx, dc: Option<f64>, wave: &Option<Wave>) -> f64 {
 pub(crate) struct VsourceI {
     pub dc: Option<f64>,
     pub wave: Option<Wave>,
+    /// The realization of a `TRNOISE`/`TRRANDOM` wave.
+    noise: Option<NoiseWave>,
     /// `AC <MAG <PHASE°>>` as given (`.sens` moves it).
     ac: Option<(f64, f64)>,
     /// `VSRCacReal`/`VSRCacImag` (`vsrctemp.c`: phase in degrees).
@@ -758,6 +774,7 @@ impl VsourceI {
         VsourceI {
             dc,
             wave,
+            noise: None,
             ac,
             ac_re,
             ac_im,
@@ -770,6 +787,13 @@ impl VsourceI {
     /// Attach the `DISTOF1`/`DISTOF2` inputs.
     pub fn with_disto(mut self, f1: Option<(f64, f64)>, f2: Option<(f64, f64)>) -> Self {
         self.disto = SourceDisto { f1, f2 };
+        self
+    }
+
+    /// Attach the realization of the source's noise wave
+    /// ([`NoiseWave::from_wave`]).
+    pub fn with_noise(mut self, noise: Option<NoiseWave>) -> Self {
+        self.noise = noise;
         self
     }
 
@@ -851,7 +875,7 @@ impl Device for VsourceI {
         if let Some(p) = &self.port {
             p.stamp(|sl, v| ctx.add(sl, v));
         }
-        let v = source_value(ctx, self.dc, &self.wave);
+        let v = source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
         ctx.rhs[self.branch.br] += v;
     }
 
@@ -885,7 +909,9 @@ impl Device for VsourceI {
     }
 
     fn accept(&mut self, ctx: &mut AcceptCtx) {
-        if let Some(w) = &self.wave {
+        if let Some(n) = &mut self.noise {
+            n.accept(ctx);
+        } else if let Some(w) = &self.wave {
             w.accept(ctx);
         }
     }
@@ -973,6 +999,8 @@ fn sens_set_source(
 pub(crate) struct IsourceI {
     pub dc: Option<f64>,
     pub wave: Option<Wave>,
+    /// The realization of a `TRNOISE`/`TRRANDOM` wave.
+    noise: Option<NoiseWave>,
     /// `AC <MAG <PHASE°>>` as given, and the parallel multiplier
     /// (`ISRCmValue`, 1 on cards; `.sens` moves both).
     ac: Option<(f64, f64)>,
@@ -996,6 +1024,7 @@ impl IsourceI {
         IsourceI {
             dc,
             wave,
+            noise: None,
             ac,
             m: 1.0,
             ac_re,
@@ -1009,6 +1038,13 @@ impl IsourceI {
     /// Attach the `DISTOF1`/`DISTOF2` inputs.
     pub fn with_disto(mut self, f1: Option<(f64, f64)>, f2: Option<(f64, f64)>) -> Self {
         self.disto = SourceDisto { f1, f2 };
+        self
+    }
+
+    /// Attach the realization of the source's noise wave
+    /// ([`NoiseWave::from_wave`]).
+    pub fn with_noise(mut self, noise: Option<NoiseWave>) -> Self {
+        self.noise = noise;
         self
     }
 }
@@ -1036,7 +1072,7 @@ impl Device for IsourceI {
     }
 
     fn load(&mut self, ctx: &mut LoadCtx) {
-        let v = self.m * source_value(ctx, self.dc, &self.wave);
+        let v = self.m * source_value(ctx, self.dc, &self.wave, self.noise.as_mut());
         ctx.rhs[self.pos] -= v;
         ctx.rhs[self.neg] += v;
     }
@@ -1084,7 +1120,9 @@ impl Device for IsourceI {
     }
 
     fn accept(&mut self, ctx: &mut AcceptCtx) {
-        if let Some(w) = &self.wave {
+        if let Some(n) = &mut self.noise {
+            n.accept(ctx);
+        } else if let Some(w) = &self.wave {
             w.accept(ctx);
         }
     }

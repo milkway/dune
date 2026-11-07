@@ -5,7 +5,12 @@
 
 use crate::matrix::AcceptCtx;
 
-/// A transient source function: `PULSE SIN EXP PWL SFFM`, raw args.
+/// A transient source function: `PULSE SIN EXP PWL SFFM`, and
+/// ngspice-47's transient-noise functions `TRNOISE TRRANDOM`, raw
+/// args. The noise functions are random: a source's realization is
+/// fixed by `.options seed` and the source name (see
+/// `docs/dune-core.md` §Ruído transiente), and is added to the
+/// source's `DC` value, as in ngspice.
 #[derive(Clone, Debug)]
 pub enum Wave {
     Pulse(Vec<f64>),
@@ -13,6 +18,19 @@ pub enum Wave {
     Exp(Vec<f64>),
     Pwl(Vec<f64>),
     Sffm(Vec<f64>),
+    /// `TRNOISE(NA NT <NALPHA NAMP <RTSAM RTSCAPT RTSEMT>>)`: white
+    /// gaussian noise of rms `NA` sampled every `NT` seconds (linear
+    /// between samples), plus `1/f^NALPHA` noise driven by white noise
+    /// of rms `NAMP`, plus random telegraph noise of amplitude
+    /// `RTSAM` with mean capture/emission times `RTSCAPT`/`RTSEMT`.
+    TrNoise(Vec<f64>),
+    /// `TRRANDOM(TYPE TS <TD <PARAM1 <PARAM2>>>)`: a random value held
+    /// for `TS` seconds from `TD` on — `TYPE` 1 uniform in
+    /// `[-PARAM1, PARAM1) + PARAM2`, 2 gaussian (σ `PARAM1`, mean
+    /// `PARAM2`), 3 exponential (mean `PARAM1`, offset `PARAM2`), 4
+    /// poisson (λ `PARAM1`, offset `PARAM2`); `PARAM1` defaults to 1,
+    /// `PARAM2` to 0, and the value is `PARAM2` up to `TD`.
+    TrRandom(Vec<f64>),
 }
 
 fn arg(c: &[f64], i: usize) -> Option<f64> {
@@ -29,9 +47,14 @@ fn arg_nz(c: &[f64], i: usize, default: f64) -> f64 {
 }
 
 impl Wave {
-    /// Source value at `time` (`VSRCload`'s transient switch).
+    /// Source value at `time` (`VSRCload`'s transient switch). The
+    /// noise functions give their deterministic `t = 0` value here
+    /// (0, or `PARAM2` for `TRRANDOM`); a source evaluates their
+    /// realization through [`crate::trnoise::NoiseWave`].
     pub(crate) fn value(&self, time: f64, step: f64, final_time: f64) -> f64 {
         match self {
+            Wave::TrNoise(_) => 0.0,
+            Wave::TrRandom(c) => arg(c, 4).unwrap_or(0.0),
             Wave::Pulse(c) => {
                 let v1 = arg(c, 0).unwrap_or(0.0);
                 let v2 = arg(c, 1).unwrap_or(0.0);

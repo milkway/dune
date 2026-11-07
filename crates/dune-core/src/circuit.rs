@@ -9,6 +9,7 @@ use crate::diode::{DiodeModel, DiodeTemp};
 use crate::error::Error;
 use crate::matrix::Var;
 use crate::options::Options;
+use crate::trnoise::NoiseWave;
 
 /// `RXXXXXXX N1 N2 VALUE` (ohms; nonzero).
 #[derive(Clone, Debug)]
@@ -1457,8 +1458,10 @@ impl Circuit {
                     let pos = get(&node_ids, &s.nodes[0]);
                     let neg = get(&node_ids, &s.nodes[1]);
                     let br = branches[&s.name];
+                    let noise = NoiseWave::from_wave(s.wave.as_ref(), opts.seed, &s.name)?;
                     let mut dev = VsourceI::new(s.dc, s.wave.clone(), s.ac, pos, neg, br)
-                        .with_disto(s.distof1, s.distof2);
+                        .with_disto(s.distof1, s.distof2)
+                        .with_noise(noise);
                     if let Some(p) = s.port.filter(RfPort::is_port) {
                         let res = get(&node_ids, &format!("{}#res", s.name));
                         dev = dev.with_port(res, p.z0);
@@ -1475,6 +1478,7 @@ impl Circuit {
                 }
                 Spec::Isource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), false));
+                    let noise = NoiseWave::from_wave(s.wave.as_ref(), opts.seed, &s.name)?;
                     devices.push(Box::new(
                         IsourceI::new(
                             s.dc,
@@ -1483,7 +1487,8 @@ impl Circuit {
                             get(&node_ids, &s.nodes[0]),
                             get(&node_ids, &s.nodes[1]),
                         )
-                        .with_disto(s.distof1, s.distof2),
+                        .with_disto(s.distof1, s.distof2)
+                        .with_noise(noise),
                     ));
                 }
                 Spec::Vcvs(s) => {

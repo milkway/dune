@@ -81,7 +81,7 @@ fn params_of(spec: &Spec) -> &'static [&'static str] {
         Spec::Capacitor(_) => &["capacitance", "ic"],
         Spec::Inductor(_) => &["inductance", "ic"],
         Spec::Vsource(_) | Spec::Isource(_) => &[
-            "dc", "acmag", "acphase", "pulse", "sin", "exp", "pwl", "sffm",
+            "dc", "acmag", "acphase", "pulse", "sin", "exp", "pwl", "sffm", "trnoise", "trrandom",
         ],
         Spec::Vcvs(_) | Spec::Vccs(_) | Spec::Cccs(_) | Spec::Ccvs(_) => &["gain"],
         Spec::Mos1(_) | Spec::Mos2(_) | Spec::Mos3(_) | Spec::Mos6(_) => &["w", "l", "temp"],
@@ -154,6 +154,8 @@ fn wave_param(w: &Wave) -> (&'static str, &[f64]) {
         Wave::Exp(a) => ("exp", a),
         Wave::Pwl(a) => ("pwl", a),
         Wave::Sffm(a) => ("sffm", a),
+        Wave::TrNoise(a) => ("trnoise", a),
+        Wave::TrRandom(a) => ("trrandom", a),
     }
 }
 
@@ -180,7 +182,7 @@ impl Circuit {
     /// | `R` | `resistance` (`r`) | ohms, nonzero |
     /// | `C` / `L` | `capacitance` (`c`) / `inductance` (`l`), `ic` | F / H; IC in V / A |
     /// | `V` / `I` | `dc`, `acmag`, `acphase` (degrees) | V or A |
-    /// | `V` / `I` | `pulse`, `sin`, `exp`, `pwl`, `sffm` | [`AlterValue::List`]: the card's arguments; replaces the transient function |
+    /// | `V` / `I` | `pulse`, `sin`, `exp`, `pwl`, `sffm`, `trnoise`, `trrandom` | [`AlterValue::List`]: the card's arguments; replaces the transient function |
     /// | `E` `F` `G` `H` | `gain` | as on the card |
     /// | MOS (all levels, BSIM) | `w`, `l` | meters, positive |
     /// | MOS 1/2/3/6, `D`, `Q`, `J` | `temp` | °C, like `TEMP=` on the card |
@@ -273,7 +275,9 @@ impl Circuit {
                             "sin" => Wave::Sin(args),
                             "exp" => Wave::Exp(args),
                             "pwl" => Wave::Pwl(args),
-                            _ => Wave::Sffm(args),
+                            "sffm" => Wave::Sffm(args),
+                            "trnoise" => Wave::TrNoise(args),
+                            _ => Wave::TrRandom(args),
                         });
                     }
                 }

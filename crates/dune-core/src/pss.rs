@@ -150,6 +150,21 @@ impl Circuit {
             return bad("steady coefficient must be positive");
         }
         for spec in &self.specs {
+            let noisy = match spec {
+                Spec::Vsource(v) => &v.wave,
+                Spec::Isource(i) => &i.wave,
+                _ => &None,
+            };
+            if matches!(noisy, Some(Wave::TrNoise(_) | Wave::TrRandom(_))) {
+                // Issue #13, part 2: a random stimulus has no periodic
+                // steady state; shooting would chase a moving target.
+                return Err(Error::Unsupported {
+                    name: spec.name().to_string(),
+                    what: "a transient-noise source (TRNOISE/TRRANDOM) in .pss — a random \
+                           stimulus has no periodic steady state"
+                        .into(),
+                });
+            }
             if matches!(spec, Spec::Ltra(_) | Spec::Tra(_)) {
                 return Err(Error::Unsupported {
                     name: spec.name().to_string(),
@@ -376,6 +391,8 @@ impl Circuit {
                     }
                 }
                 Wave::Exp(_) | Wave::Pwl(_) => {}
+                // Refused by `Circuit::pss` before the harvest.
+                Wave::TrNoise(_) | Wave::TrRandom(_) => {}
             }
         }
         Ok(out)

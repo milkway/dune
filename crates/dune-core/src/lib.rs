@@ -54,6 +54,7 @@ mod switch;
 mod tf;
 mod tra;
 mod tran;
+mod trnoise;
 
 pub use ac::{Ac, AcSweep};
 pub use bjt::BjtModel;

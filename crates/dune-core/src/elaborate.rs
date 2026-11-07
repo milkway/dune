@@ -297,6 +297,8 @@ impl Circuit {
                             ir::TranFnKind::Exp => crate::srcfn::Wave::Exp(args),
                             ir::TranFnKind::Pwl => crate::srcfn::Wave::Pwl(args),
                             ir::TranFnKind::Sffm => crate::srcfn::Wave::Sffm(args),
+                            ir::TranFnKind::TrNoise => crate::srcfn::Wave::TrNoise(args),
+                            ir::TranFnKind::TrRandom => crate::srcfn::Wave::TrRandom(args),
                         }
                     });
                     match kind {
