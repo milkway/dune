@@ -1,0 +1,12 @@
+* netlist extracted by dune-pic
+Vdd Vp 0 dc 5
+Vin In 0 dc -0.5 ac 1 sin(-0.5 1.5 1g)
+Rsig In Vg 50
+Z1 Vd Vg 0 zn
+RL Vp Vd 1k
+CL Vd 0 50f
+.model zn nmf vto=-1.8 beta=3e-3 b=0.3 alpha=2.5 lambda=0.05 rd=5 rs=5
++ cgs=1p cgd=0.2p pb=0.8
+.ac dec 10 1meg 100g
+.tran 10p 4n
+.end

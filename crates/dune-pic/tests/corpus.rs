@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use dune_core::{Circuit, Options, Solution};
-use dune_pic::{ExtractOptions, extract};
+use dune_pic::{ExtractOptions, PicDiagKind, PicSeverity, extract};
 
 fn corpus(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -27,10 +27,23 @@ fn normalize(s: &str) -> Vec<String> {
 /// Extract `name.pic`, compare with `golden/name.cir`, parse, run
 /// every analysis.
 fn check(name: &str) -> Vec<Solution> {
+    check_dangling(name, &[])
+}
+
+/// [`check`] for a figure whose only diagnostics are the dangling-pin
+/// warnings on the nets `dangling` (in order): test points a deck
+/// prints but loads with nothing else.
+fn check_dangling(name: &str, dangling: &[&str]) -> Vec<Solution> {
     let src = std::fs::read_to_string(corpus(&format!("{name}.pic"))).unwrap();
     let ex = extract(&src, &ExtractOptions::default()).unwrap();
+    let nets: Vec<&str> = ex
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == PicDiagKind::DanglingPin && d.severity == PicSeverity::Warning)
+        .filter_map(|d| d.message.split('`').nth(1))
+        .collect();
     assert!(
-        ex.diagnostics.is_empty(),
+        nets == dangling && ex.diagnostics.len() == dangling.len(),
         "{name}: unexpected diagnostics: {:#?}",
         ex.diagnostics
     );
@@ -586,7 +599,13 @@ fn rtlinv_figure_simulates_like_the_berkeley_deck() {
 /// to roundoff (in practice: bit for bit). Returns the largest
 /// absolute difference seen.
 fn same_as_deck(name: &str, deck: &str, nodes: &[(&str, &str)]) -> f64 {
-    let fig = check(name);
+    same_as_deck_dangling(name, deck, nodes, &[])
+}
+
+/// [`same_as_deck`] for a figure with test-point nets
+/// ([`check_dangling`]).
+fn same_as_deck_dangling(name: &str, deck: &str, nodes: &[(&str, &str)], dangling: &[&str]) -> f64 {
+    let fig = check_dangling(name, dangling);
     let deck = run_deck(&corpus("").join("..").join(deck));
     assert_eq!(fig.len(), deck.len(), "{name}: plot count");
     let rename = |v: &str| -> String {
@@ -833,6 +852,55 @@ fn rca3040_figure_simulates_like_the_berkeley_deck() {
             ("30", "b1"),
             ("31", "b2"),
         ],
+    );
+    assert_eq!(worst, 0.0);
+}
+
+// --- 5th wave: the generic subcircuit box and the MESFET ----------------------
+
+#[test]
+fn mos6inv_figure_simulates_like_the_berkeley_deck() {
+    // Four `subckt6` boxes; the NDINV body and the models come from
+    // `.include mos6inv_sub.sub`. The inner stage outputs (deck nodes
+    // 11..43) and the last output are test points: one pin each.
+    let mut nodes = vec![
+        ("1".to_string(), "in".to_string()),
+        ("100".into(), "vp".into()),
+    ];
+    for k in 2..=5 {
+        nodes.push((k.to_string(), format!("n{k}")));
+    }
+    for k in 1..=4 {
+        for j in 1..=3 {
+            nodes.push((format!("{k}{j}"), format!("n{k}{j}")));
+        }
+    }
+    let nodes: Vec<(&str, &str)> = nodes
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let dangling = [
+        "N11", "N12", "N13", "N21", "N22", "N23", "N31", "N32", "N33", "N41", "N42", "N43", "N5",
+    ];
+    let worst = same_as_deck_dangling(
+        "mos6inv",
+        "spice3f5/examples/mos6inv.cir",
+        &nodes,
+        &dangling,
+    );
+    assert_eq!(worst, 0.0);
+    // The chain inverts four times: the output follows the 5 V input.
+    let s = &check_dangling("mos6inv", &dangling)[0];
+    let out = col(s, "v(n5)");
+    assert!(out[out.len() - 1] > 4.5, "{}", out[out.len() - 1]);
+}
+
+#[test]
+fn mes_amp_figure_simulates_like_the_regress_deck() {
+    let worst = same_as_deck(
+        "mes_amp",
+        "regress/mes_amp.cir",
+        &[("1", "vp"), ("2", "vg"), ("3", "vd"), ("5", "in")],
     );
     assert_eq!(worst, 0.0);
 }

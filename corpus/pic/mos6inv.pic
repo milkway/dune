@@ -1,0 +1,69 @@
+.PS
+# Berkeley's mos6inv.cir drawn: four NDINV cells in a chain, each an
+# instance of the subcircuit in mos6inv_sub.sub (pulled in by
+# `.include`, with the deck's six model cards) through the generic
+# `subckt6` box. Pins in `.SUBCKT NDINV 10 11 21 31 41 100` order: 1 in
+# (left), 2-4 the inner stage outputs (bottom, brought out to test
+# points as the deck does, so each is a one-pin net), 5 out (right),
+# 6 vdd (top). Card order kept (XNDINV1-4, VDD, VIN); deck nodes 1 In,
+# 2-5 N2-N5, 11-43 N11-N43, 100 Vp.
+spice = 1
+maxpswid = 12
+In: (0.9,1.5)
+N2: (2.1,1.5)
+N3: (3.9,1.5)
+N4: (5.7,1.5)
+N5: (7.5,1.5)
+Vp: (1.5,2.3)
+N11: (1.2,1.1)
+N12: (1.5,1.1)
+N13: (1.8,1.1)
+N21: (3,1.1)
+N22: (3.3,1.1)
+N23: (3.6,1.1)
+N31: (4.8,1.1)
+N32: (5.1,1.1)
+N33: (5.4,1.1)
+N41: (6.6,1.1)
+N42: (6.9,1.1)
+N43: (7.2,1.1)
+
+XNDINV1: subckt6((0.9,1.5), (1.2,1.1), (1.5,1.1), (1.8,1.1), (2.1,1.5), (1.5,1.9), NDINV)
+XNDINV2: subckt6((2.7,1.5), (3,1.1), (3.3,1.1), (3.6,1.1), (3.9,1.5), (3.3,1.9), NDINV)
+XNDINV3: subckt6((4.5,1.5), (4.8,1.1), (5.1,1.1), (5.4,1.1), (5.7,1.5), (5.1,1.9), NDINV)
+XNDINV4: subckt6((6.3,1.5), (6.6,1.1), (6.9,1.1), (7.2,1.1), (7.5,1.5), (6.9,1.9), NDINV)
+VDD: vsource((8.7,2.3), (8.7,0), 5, "VDD")
+VIN: vsource((0.3,1.5), (0.3,0), DC 0 PWL(0 0 2N 5), "G₁")
+
+line from VIN.P to XNDINV1.P1
+line from XNDINV1.P5 to XNDINV2.P1
+line from XNDINV2.P5 to XNDINV3.P1
+line from XNDINV3.P5 to XNDINV4.P1
+line from XNDINV4.P5 to (7.9,1.5); circle rad 0.04 at (7.94,1.5)
+"out" above at (7.94,1.55)
+line from (1.5,2.3) to VDD.P
+line from XNDINV1.P6 to (XNDINV1.P6.x,2.3)
+line from XNDINV2.P6 to (XNDINV2.P6.x,2.3)
+line from XNDINV3.P6 to (XNDINV3.P6.x,2.3)
+line from XNDINV4.P6 to (XNDINV4.P6.x,2.3)
+dot at (3.3,2.3); dot at (5.1,2.3); dot at (6.9,2.3)
+line from XNDINV1.P2 to (1.2,0.84); circle rad 0.04 at (1.2,0.8); "11" below at (1.2,0.76)
+line from XNDINV1.P3 to (1.5,0.84); circle rad 0.04 at (1.5,0.8); "12" below at (1.5,0.76)
+line from XNDINV1.P4 to (1.8,0.84); circle rad 0.04 at (1.8,0.8); "13" below at (1.8,0.76)
+line from XNDINV2.P2 to (3,0.84); circle rad 0.04 at (3,0.8); "21" below at (3,0.76)
+line from XNDINV2.P3 to (3.3,0.84); circle rad 0.04 at (3.3,0.8); "22" below at (3.3,0.76)
+line from XNDINV2.P4 to (3.6,0.84); circle rad 0.04 at (3.6,0.8); "23" below at (3.6,0.76)
+line from XNDINV3.P2 to (4.8,0.84); circle rad 0.04 at (4.8,0.8); "31" below at (4.8,0.76)
+line from XNDINV3.P3 to (5.1,0.84); circle rad 0.04 at (5.1,0.8); "32" below at (5.1,0.76)
+line from XNDINV3.P4 to (5.4,0.84); circle rad 0.04 at (5.4,0.8); "33" below at (5.4,0.76)
+line from XNDINV4.P2 to (6.6,0.84); circle rad 0.04 at (6.6,0.8); "41" below at (6.6,0.76)
+line from XNDINV4.P3 to (6.9,0.84); circle rad 0.04 at (6.9,0.8); "42" below at (6.9,0.76)
+line from XNDINV4.P4 to (7.2,0.84); circle rad 0.04 at (7.2,0.8); "43" below at (7.2,0.76)
+line from VIN.N to VDD.N
+ground((4.2,0))
+.include mos6inv_sub.sub
+.TRAN 0.5N 150N
+.PRINT TRAN V(In) V(N2) V(N3) V(N4) V(N5)
+.PRINT TRAN V(N11) V(N12) V(N13) V(N41) V(N42) V(N43)
+.OPTIONS ACCT
+.PE

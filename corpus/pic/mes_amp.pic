@@ -1,0 +1,31 @@
+.PS
+# regress/mes_amp.cir drawn: an n-MESFET (Statz, NMF) common-source
+# stage with a 1k drain load and a 50 fF load capacitor, driven through
+# 50 ohm by a 1 GHz sine biased at -0.5 V. Card order kept; deck nodes
+# 1 Vp, 5 In, 2 Vg, 3 Vd.
+spice = 1
+Vp: (4.8,3.2)
+In: (0.3,1.5)
+Vg: (2.3,1.5)
+Vd: (2.86,2.3)
+
+Vdd: vsource((4.8,3.2), (4.8,0), dc 5, "VDD")
+Vin: vsource((0.3,1.5), (0.3,0), dc -0.5 ac 1 sin(-0.5 1.5 1g), "G₁")
+Rsig: resistor((0.3,1.5), (2.3,1.5), 50)
+Z1: nmes((2.7,1.5), zn, "T₁")
+RL: resistor((2.86,3.2), (2.86,2.3), 1k)
+CL: capacitor((3.7,2.3), (3.7,0), 50f)
+
+line from RL.N to Z1.D
+line from RL.P to Vdd.P
+line from Vd to CL.P then to (4.1,2.3); circle rad 0.04 at (4.14,2.3)
+"out" above at (4.14,2.35)
+line from Z1.S to (2.86,0)
+line from Vin.N to Vdd.N
+dot at Vd; dot at (2.86,0); dot at CL.N
+ground((1.5,0))
+.model zn nmf vto=-1.8 beta=3e-3 b=0.3 alpha=2.5 lambda=0.05 rd=5 rs=5
++ cgs=1p cgd=0.2p pb=0.8
+.ac dec 10 1meg 100g
+.tran 10p 4n
+.PE

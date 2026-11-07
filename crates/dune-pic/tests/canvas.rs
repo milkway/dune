@@ -165,7 +165,8 @@ fn canvas_of_every_corpus_figure() {
     for f in [
         "bandpass", "bjtamp", "ccprobe", "cmosinv", "diffpair", "mos4bias", "opamp", "rc", "rect",
         "rlc", "rtlinv", "tline", "tuned", "vcamp", "acdiode", "acrlc", "dc2src", "depsrc", "dfwd",
-        "divider", "jfet_amp", "lck", "mos3_inv", "rca3040", "trpwl", "trrlc", "truic",
+        "divider", "jfet_amp", "lck", "mos3_inv", "rca3040", "trpwl", "trrlc", "truic", "mes_amp",
+        "mos6inv",
     ] {
         let src = corpus(&format!("{f}.pic"));
         let e = ex(&src);
