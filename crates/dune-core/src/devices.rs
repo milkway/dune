@@ -328,34 +328,15 @@ impl Device for ResistorI {
     }
 
     /// `RESpTable`: the principal `resistance`, the AC-only `ac`,
-    /// then `temp dtemp l w m tc tc2 tce bv_max scale`. The 3f5's
-    /// walk (`cktsens.c` → `sens_setp` + `sens_temp` = `REStemp`)
-    /// moves the model `tc1`/`tc2` and the instance `temp`, and
-    /// `REStemp` recomputes the conductance from them, so those
-    /// three are live (`d/dTC1 = −R·ΔT·…`); the resistance, `ac`,
-    /// `m` and `scale` reach the conductance directly. `dtemp` (no
-    /// 3f5 counterpart) stays inert: in ngspice-47 the `temp`
-    /// perturbation before it leaves `REStempGiven` up, so `dtemp`
-    /// is ignored by then and comes out zero (measured).
+    /// then `temp dtemp l w m tc tc2 tce bv_max scale`; only the
+    /// resistance, `ac`, `m` and `scale` reach Dune's conductance.
     fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
-        let mut v: Vec<SensParam> = RES_MODEL_SENS
-            .iter()
-            .map(|&suffix| match suffix {
-                ":tc1" => sens_param(suffix, self.rt.tc1),
-                ":tc2" => sens_param(suffix, self.rt.tc2),
-                _ => SensParam { suffix, value: 0.0 },
-            })
-            .collect();
+        let mut v: Vec<SensParam> = sens_inert(RES_MODEL_SENS).collect();
         v.push(sens_param("", self.r));
         if ac {
             v.push(sens_param("_ac", self.r_ac.unwrap_or(self.r)));
         }
-        // `RESask(RES_TEMP)` reports °C.
-        v.push(sens_param(
-            "_temp",
-            self.temperature() - crate::consts::CTOK,
-        ));
-        v.extend(sens_inert(&["_dtemp", "_l", "_w"]));
+        v.extend(sens_inert(&["_temp", "_dtemp", "_l", "_w"]));
         v.push(sens_param("_m", self.m));
         v.extend(sens_inert(&["_tc", "_tc2", "_tce", "_bv_max"]));
         v.push(sens_param("_scale", self.scale));
@@ -368,12 +349,6 @@ impl Device for ResistorI {
             "_ac" => self.r_ac = Some(value),
             "_m" => self.m = value,
             "_scale" => self.scale = value,
-            ":tc1" => self.rt.tc1 = value,
-            ":tc2" => self.rt.tc2 = value,
-            // `RES_TEMP` (`resparam.c`): `REStemp = value + CONSTCtoK`,
-            // given. Restoring writes back the effective temperature,
-            // so a `DTEMP` instance ends where it started.
-            "_temp" => self.rt.temp = Some(value + crate::consts::CTOK),
             _ => return,
         }
         self.update_conduct();

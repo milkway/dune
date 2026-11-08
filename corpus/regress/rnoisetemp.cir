@@ -1,0 +1,21 @@
+Resistor thermal noise at the instance temperature
+* Coverage: ngspice-47's resnoise.c evaluates the thermal generator
+* with NevalSrcInstanceTemp at CKTtemp + dtemp, dtemp = REStemp -
+* CKTtemp when TEMP= is given, else RESdtemp - the resistor's own
+* temperature (the 3f5's NevalSrc used CKTtemp for every resistor).
+* rhot has TEMP=150, rcold DTEMP=-200 (73 K), rtc a TC model at
+* DTEMP=60 (its conductance moves too, so the density sees both the
+* temperature and the conductance), rref stays at the circuit
+* temperature as the control. A bridge keeps every generator's gain
+* to the output distinct, so each per-device vector pins its own T.
+.options temp=40
+vin in 0 dc 0 ac 1
+rs in a 1k
+rhot a out 2k temp=150
+rcold a 0 3k dtemp=-200
+rtc out 0 rtc 5k dtemp=60
+rref out b 1.5k
+cb b 0 1n
+.model rtc r tc1=4e-3 tc2=1e-5
+.noise v(out) vin dec 4 1k 10meg 1
+.end
