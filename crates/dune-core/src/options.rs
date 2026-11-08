@@ -26,11 +26,16 @@ pub struct Options {
     /// `ITL4`: transient timepoint iteration limit, default 10
     /// (`CKTtranMaxIter`).
     pub itl4: usize,
-    /// Gmin steps in `CKTop`. 1 (the ngspice default) selects the
-    /// dynamic Gillespie stepping; n > 1 runs the 3f5 fixed ladder
-    /// with n steps (`corpus/KNOWN_DIFFS.md`).
+    /// Gmin steps in `CKTop`. 1 (the ngspice-47 default) selects the
+    /// dynamic Gillespie stepping of the diagonal gmin followed, if it
+    /// fails, by the "true gmin" stepping of the devices' `gmin`;
+    /// n > 1 runs the 3f5 fixed ladder with n steps; 0 skips gmin
+    /// stepping (`corpus/KNOWN_DIFFS.md`).
     pub gminsteps: usize,
-    /// Source steps in `CKTop`, default 10 (`TSKnumSrcSteps`).
+    /// Source steps in `CKTop`. 1 (the ngspice-47 default,
+    /// `cktntask.c`) selects Gillespie's adaptive source ramp; n > 1
+    /// runs the 3f5 fixed ladder of n steps (the 3f5 default is 10);
+    /// 0 skips source stepping (`corpus/KNOWN_DIFFS.md`).
     pub srcsteps: usize,
     /// Operating temperature in kelvin (`TEMP`, default 27 °C).
     pub temp: f64,
@@ -168,7 +173,7 @@ impl Default for Options {
             itl2: 50,
             itl4: 10,
             gminsteps: 1,
-            srcsteps: 10,
+            srcsteps: 1,
             temp: REFTEMP,
             tnom: REFTEMP,
             pivtol: 1e-13,

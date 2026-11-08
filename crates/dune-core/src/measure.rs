@@ -654,7 +654,7 @@ fn average(p: &Plot, y: &[f64], w: &Win) -> (Option<f64>, f64) {
 }
 
 /// ngspice's `AlmostEqualUlps` (`maths/misc/equality.c`).
-fn almost_equal_ulps(a: f64, b: f64, max_ulps: i64) -> bool {
+pub(crate) fn almost_equal_ulps(a: f64, b: f64, max_ulps: i64) -> bool {
     if a == b {
         return true;
     }

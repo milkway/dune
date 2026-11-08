@@ -62,6 +62,14 @@ impl States {
         self.banks[0].copy_from_slice(saved);
     }
 
+    /// `memcpy(state2, state1)`, `memcpy(state3, state1)` after the
+    /// first transient Newton (`optran.c`, `dctran.c`).
+    pub fn copy1_to_23(&mut self) {
+        let (head, rest) = self.banks.split_at_mut(2);
+        rest[0].copy_from_slice(&head[1]);
+        rest[1].copy_from_slice(&head[1]);
+    }
+
     /// `bcopy(state0, state1, …)` after the transient operating
     /// point (`dctran.c`).
     pub fn copy01(&mut self) {

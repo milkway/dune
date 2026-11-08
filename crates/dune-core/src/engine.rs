@@ -17,6 +17,7 @@ use crate::matrix::{
     AcCtx, AcceptCtx, AnKind, InitMode, LoadCtx, LoadEnv, MatrixBuilder, NoiseCtx, PzCtx, Slot,
     StampSink, Var,
 };
+use crate::measure::almost_equal_ulps;
 use crate::options::Options;
 use crate::state::States;
 use num_complex::Complex64;
@@ -52,6 +53,168 @@ pub(crate) fn sweep_budget(
     }
 }
 
+/// `CKTgminFactor` (ngspice-47 default, `cktntask.c`: `TSKgminFactor
+/// = 10`).
+const GMIN_FACTOR: f64 = 10.0;
+/// `CKTgshunt` (ngspice-47 default 0; not a 3f5 option).
+const GSHUNT: f64 = 0.0;
+/// The ngspice-47 default `optran 1 1 1 100n 10u 0` (frontend/init.c:
+/// 77-93): the transient operating point steps at most 100 ns …
+const OPTRAN_STEP: f64 = 100e-9;
+/// … up to 10 µs, with no supply ramp.
+const OPTRAN_FINAL: f64 = 10e-6;
+
+/// ngspice-47's `NIiter` floor (`niiter.c:37-39`: "some convergence
+/// issues that get resolved by increasing max iter"). The Dune's own
+/// `NIiter` keeps the 3f5 limits (`itl1`/`itl2`/`itl4` as given); the
+/// floor applies only inside the ngspice-only fallback degrees of
+/// `CKTop` (dynamic and true gmin, Gillespie source stepping,
+/// `OPtran`), whose step adaptation was tuned against it.
+fn ng_iter(maxiter: usize) -> usize {
+    maxiter.max(100)
+}
+
+/// The degree of the `CKTop` fallback chain that closed the last cold
+/// operating point (tests and statistics only; not API).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpStep {
+    Direct,
+    DynamicGmin,
+    TrueGmin,
+    Spice3Gmin,
+    GillespieSrc,
+    Spice3Src,
+    OpTran,
+}
+
+/// The adaptive walk of ngspice's `dynamic_gmin` (`cktop.c:188-249`)
+/// and `new_gmin` (`cktop.c:376-441`): the gmin to try next, starting
+/// at `1e-2/CKTgminFactor`. A converged step divides the gmin by the
+/// factor — grown ×√factor (capped at `CKTgminFactor`) after a fast
+/// step (≤ ¼ of `itl2` iterations), shrunk to `max(√factor,
+/// slow_floor)` after a slow one (> ¾) —, landing exactly on the
+/// target when the next division would pass it; a failed step backs
+/// the factor off to its 4th root and retries from the last good
+/// gmin, giving up once the factor is below 1.00005. `slow_floor` is
+/// the one literal difference of the two walks: 1.00005 (diagonal)
+/// and 3 (true gmin).
+#[derive(Clone, Debug)]
+pub(crate) struct GminWalk {
+    factor: f64,
+    old_gmin: f64,
+    /// The gmin of the step about to be tried.
+    pub gmin: f64,
+    gtarget: f64,
+    slow_floor: f64,
+}
+
+impl GminWalk {
+    pub fn new(gtarget: f64, slow_floor: f64) -> Self {
+        let factor = GMIN_FACTOR;
+        let old_gmin = 1e-2;
+        GminWalk {
+            factor,
+            old_gmin,
+            gmin: old_gmin / factor,
+            gtarget,
+            slow_floor,
+        }
+    }
+
+    /// A step converged in `iters` iterations: `true` when it was at
+    /// the target (the walk is done), else the next gmin is set.
+    pub fn converged(&mut self, iters: usize, itl2: usize) -> bool {
+        if self.gmin <= self.gtarget {
+            return true;
+        }
+        if iters <= itl2 / 4 {
+            self.factor *= self.factor.sqrt();
+            if self.factor > GMIN_FACTOR {
+                self.factor = GMIN_FACTOR;
+            }
+        }
+        if iters > 3 * itl2 / 4 {
+            self.factor = f64::max(self.factor.sqrt(), self.slow_floor);
+        }
+        self.old_gmin = self.gmin;
+        if self.gmin < self.factor * self.gtarget {
+            self.factor = self.gmin / self.gtarget;
+            self.gmin = self.gtarget;
+        } else {
+            self.gmin /= self.factor;
+        }
+        false
+    }
+
+    /// A step failed: `true` when the walk gives up, else the retry
+    /// gmin is set.
+    pub fn failed(&mut self) -> bool {
+        if self.factor < 1.00005 {
+            return true;
+        }
+        self.factor = self.factor.sqrt().sqrt();
+        self.gmin = self.old_gmin / self.factor;
+        false
+    }
+}
+
+/// The source ramp of ngspice's `gillespie_src` (`cktop.c:553-641`):
+/// `srcFact` climbs from the converged all-zero solution by `raise`
+/// (initially 0.001), which grows ×1.5 after a fast step (≤ ¼ of
+/// `itl2` iterations) and halves after a slow one (> ¾). A failure
+/// divides `raise` by 10 (capped at 0.01) and re-solves at the last
+/// converged factor; the ramp gives up when a failed step was within
+/// 1e-8 of it or `raise` drops below 1e-7, and is done when a solve
+/// at `srcFact = 1` converged.
+#[derive(Clone, Debug)]
+pub(crate) struct SrcRamp {
+    raise: f64,
+    /// The last converged `srcFact`.
+    pub conv_fact: f64,
+    /// The `srcFact` of the step about to be tried.
+    pub src_fact: f64,
+}
+
+impl SrcRamp {
+    pub fn new() -> Self {
+        SrcRamp {
+            raise: 0.001,
+            conv_fact: 0.0,
+            src_fact: 0.001,
+        }
+    }
+
+    /// The C's `do … while ((raise >= 1e-7) && (ConvFact < 1))`.
+    pub fn finished(&self) -> bool {
+        !(self.raise >= 1e-7 && self.conv_fact < 1.0)
+    }
+
+    pub fn converged(&mut self, iters: usize, itl2: usize) {
+        self.conv_fact = self.src_fact;
+        self.src_fact = self.conv_fact + self.raise;
+        if iters <= itl2 / 4 {
+            self.raise *= 1.5;
+        }
+        if iters > 3 * itl2 / 4 {
+            self.raise *= 0.5;
+        }
+        self.src_fact = self.src_fact.min(1.0);
+    }
+
+    /// `true` when the ramp gives up at once (the C's `break`).
+    pub fn failed(&mut self) -> bool {
+        if self.src_fact - self.conv_fact < 1e-8 {
+            return true;
+        }
+        self.raise /= 10.0;
+        if self.raise > 0.01 {
+            self.raise = 0.01;
+        }
+        self.src_fact = self.conv_fact;
+        false
+    }
+}
+
 /// Whether the sorted breakpoint table has an entry within `r` of `t`
 /// (the LTRA breakpoint hygiene's dedupe test).
 fn within_radius(breaks: &[f64], t: f64, r: f64) -> bool {
@@ -59,6 +222,107 @@ fn within_radius(breaks: &[f64], t: f64, r: f64) -> bool {
     let after = breaks.get(i).is_some_and(|&b| b - t <= r);
     let before = i > 0 && t - breaks[i - 1] <= r;
     after || before
+}
+
+/// The positions Sparse 1.3's `LoadGmin` (`spsmp.c:460`) adds the
+/// diagonal gmin to: `Matrix->Diag[]` after `spMNA_Preorder`
+/// (`sputils.c`), which the 3f5 and ngspice-47 (Sparse is its default
+/// solver; KLU only under `.options klu`) run once on the first loaded
+/// matrix. The preorder fills every structurally zero diagonal that
+/// has a *symmetric twin* — a pair `(r, j)`, `(j, r)` both of
+/// magnitude exactly 1, i.e. the ±1 incidences of a voltage-source
+/// branch — by swapping columns `j` and `r`: lone twins first, then
+/// the first column with several, repeated until none is left. The
+/// swapped columns' diagonal becomes the twins themselves, so under
+/// gmin stepping a voltage source's incidence reads `1 + gmin` (the
+/// source's node sits at `V/(1+gmin)`) and that node gets no shunt to
+/// ground — what the oracle does, measured on schmitt's path. Every
+/// other diagonal present gets the gmin as before.
+fn gmin_slots(mb: &MatrixBuilder, values: &[f64]) -> Vec<Slot> {
+    let entries = mb.entries();
+    let n = mb.pattern().n;
+    // Internal column j (1-based) holds the elements of an external
+    // column, sorted by row as Sparse links them: (row, slot).
+    let mut cols: Vec<Vec<(usize, Slot)>> = vec![Vec::new(); n + 1];
+    for (k, &(r, c)) in entries.iter().enumerate() {
+        cols[c + 1].push((r + 1, Slot(k + 1)));
+    }
+    for col in &mut cols {
+        col.sort_unstable_by_key(|e| e.0);
+    }
+    let mut diag: Vec<Option<Slot>> = vec![None; n + 1];
+    for (j, col) in cols.iter().enumerate().skip(1) {
+        diag[j] = col.iter().find(|e| e.0 == j).map(|e| e.1);
+    }
+    let one = |s: Slot| values[s.0].abs() == 1.0;
+    // `CountTwins`: (count capped at 2, first pair as (row, twin slots)).
+    let count_twins = |cols: &Vec<Vec<(usize, Slot)>>, j: usize| {
+        let mut twins = 0;
+        let mut first = None;
+        for &(row, s1) in &cols[j] {
+            if !one(s1) {
+                continue;
+            }
+            if let Some(&(_, s2)) = cols[row].iter().find(|e| e.0 == j)
+                && one(s2)
+            {
+                twins += 1;
+                if twins >= 2 {
+                    return (twins, first);
+                }
+                first = Some((row, s1, s2));
+            }
+        }
+        (twins, first)
+    };
+    // `SwapCols`: Diag[j] = twin at row j, Diag[row] = twin at row `row`.
+    let swap = |cols: &mut Vec<Vec<(usize, Slot)>>,
+                diag: &mut Vec<Option<Slot>>,
+                j: usize,
+                (row, s1, s2): (usize, Slot, Slot)| {
+        cols.swap(j, row);
+        diag[j] = Some(s2);
+        diag[row] = Some(s1);
+    };
+    let mut start_at = 1;
+    loop {
+        let mut another = false;
+        let mut swapped = false;
+        // The C's `for (J = StartAt; …)` reads StartAt once; a new
+        // StartAt is for the next pass.
+        let from = start_at;
+        for j in from..=n {
+            if diag[j].is_none() {
+                match count_twins(&cols, j) {
+                    (1, Some(t)) => {
+                        swap(&mut cols, &mut diag, j, t);
+                        swapped = true;
+                    }
+                    (t, _) if t > 1 && !another => {
+                        another = true;
+                        start_at = j;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if another {
+            let mut j = start_at;
+            while !swapped && j <= n {
+                if diag[j].is_none()
+                    && let (_, Some(t)) = count_twins(&cols, j)
+                {
+                    swap(&mut cols, &mut diag, j, t);
+                    swapped = true;
+                }
+                j += 1;
+            }
+        }
+        if !another {
+            break;
+        }
+    }
+    diag.into_iter().flatten().collect()
 }
 
 pub(crate) struct Engine {
@@ -135,6 +399,16 @@ pub(crate) struct Engine {
     /// The transient device-noise injector (`.options devnoise`;
     /// set by `Circuit::tran` only).
     dev_noise: Option<crate::devnoise::DevNoise>,
+    /// The degree of `CKTop` that closed the last cold operating point.
+    pub(crate) op_step: Option<OpStep>,
+    /// Where `LoadGmin` puts the diagonal gmin: the diagonal of the
+    /// matrix *after* Sparse's `spMNA_Preorder` column swaps, fixed at
+    /// the first load like the C's `NIDIDPREORDER` ([`gmin_slots`]).
+    gmin_slots: Option<Vec<Slot>>,
+    /// `CKTdelmin`/`CKTminBreak` as `OPtran` sees them: 0 for `.op` and
+    /// `.dc` (the task defaults), `.tran`'s during its operating point.
+    op_delmin: f64,
+    op_min_break: f64,
 }
 
 impl Engine {
@@ -202,6 +476,10 @@ impl Engine {
             #[cfg(feature = "parallel")]
             par: None,
             dev_noise: None,
+            op_step: None,
+            gmin_slots: None,
+            op_delmin: 0.0,
+            op_min_break: 0.0,
         }
     }
 
@@ -361,28 +639,54 @@ impl Engine {
         diag_gmin: f64,
         srcfact: f64,
     ) -> Result<usize, Error> {
+        let mut mode = start;
+        self.ni_iter_mode(opts, &mut mode, maxiter, diag_gmin, srcfact)
+    }
+
+    /// [`Engine::ni_iter`] with the C's `CKTmode` INITF bits in
+    /// `mode`: on return they are where `NIiter` left them — the
+    /// fallback degrees of `CKTop` retry a failed solve in the mode
+    /// it stopped in, not from `INITJCT`.
+    fn ni_iter_mode(
+        &mut self,
+        opts: &Options,
+        mode: &mut InitMode,
+        maxiter: usize,
+        diag_gmin: f64,
+        srcfact: f64,
+    ) -> Result<usize, Error> {
         // The UIC transient operating point: one load, no solve
         // (`niiter.c` top).
         if self.kind == AnKind::TranOp && self.uic {
             std::mem::swap(&mut self.sol, &mut self.rhs);
-            self.load_all(start, opts, srcfact);
+            self.load_all(*mode, opts, srcfact);
             return Ok(0);
         }
 
-        let mut mode = start;
         let mut iterno = 0usize;
         let mut ipass = false;
         let has_nodesets =
             !self.nodesets.is_empty() && matches!(self.kind, AnKind::DcOp | AnKind::DcSweep);
 
         loop {
-            let mut noncon = self.load_all(mode, opts, srcfact);
+            let mut noncon = self.load_all(*mode, opts, srcfact);
             if let Some(f) = self.fault.take() {
                 return Err(Error::Build(f.into()));
             }
 
+            // `SMPpreOrder` once, on the first loaded matrix
+            // (`niiter.c`: `NIDIDPREORDER`), then `LoadGmin` on the
+            // preordered diagonal.
+            if self.gmin_slots.is_none() {
+                self.gmin_slots = Some(gmin_slots(&self.mb, &self.values));
+            }
+            if diag_gmin != 0.0 {
+                for s in self.gmin_slots.as_deref().unwrap_or_default() {
+                    self.values[s.0] += diag_gmin;
+                }
+            }
             self.solver
-                .factor(&self.values[1..], diag_gmin)
+                .factor(&self.values[1..], 0.0)
                 .map_err(|e| self.map_singular(e))?;
             self.solver
                 .solve_in_place(&mut self.rhs[1..])
@@ -402,7 +706,7 @@ impl Engine {
                 noncon = true;
             }
 
-            match mode {
+            match *mode {
                 InitMode::Float => {
                     if has_nodesets {
                         if ipass {
@@ -415,14 +719,14 @@ impl Engine {
                         return Ok(iterno);
                     }
                 }
-                InitMode::Jct => mode = InitMode::Fix,
+                InitMode::Jct => *mode = InitMode::Fix,
                 InitMode::Fix => {
                     if !noncon {
-                        mode = InitMode::Float;
+                        *mode = InitMode::Float;
                     }
                     ipass = true;
                 }
-                InitMode::Tran | InitMode::Pred | InitMode::Smsig => mode = InitMode::Float,
+                InitMode::Tran | InitMode::Pred | InitMode::Smsig => *mode = InitMode::Float,
             }
             std::mem::swap(&mut self.sol, &mut self.rhs);
         }
@@ -498,18 +802,35 @@ impl Engine {
         Ok(())
     }
 
-    /// `CKTop`. Direct Newton, then gmin stepping — ngspice's
-    /// dynamic (Gillespie) algorithm when `gminsteps == 1` (the
-    /// ngspice default), the 3f5 fixed ladder when `gminsteps > 1`
-    /// — then source stepping.
+    /// `CKTop` (ngspice-47 `spicelib/analysis/cktop.c:26-116`): the
+    /// operating-point fallback chain, each degree tried only when
+    /// every earlier one failed, in the C's order and with its
+    /// defaults (docs/dune-core.md §Cadeia do op):
+    ///
+    /// 1. direct Newton at `itl1` (skipped under `noopiter`);
+    /// 2. gmin stepping — `gminsteps == 1` (default): Gillespie's
+    ///    dynamic diagonal gmin, then, if it fails, the "true gmin"
+    ///    stepping of the devices' own `gmin` (`new_gmin`);
+    ///    `gminsteps > 1`: the 3f5 fixed ladder; 0: none;
+    /// 3. source stepping — `srcsteps == 1` (default): Gillespie's
+    ///    adaptive ramp (`gillespie_src`); `> 1`: the 3f5 fixed
+    ///    ladder; 0: none;
+    /// 4. the transient operating point (`OPtran`, optran.c), on by
+    ///    default in ngspice-47 (`optran 1 1 1 100n 10u 0`, set by
+    ///    `cp_init`, frontend/init.c:77-93).
     fn op_cold(&mut self, opts: &Options) -> Result<(), Error> {
-        let first = InitMode::Jct;
+        self.op_step = None;
+        // `ckt->CKTmode = firstmode`; NIiter moves the INITF bits and
+        // a failed call leaves them where it stopped.
+        let mut mode = InitMode::Jct;
         let direct = if !opts.noopiter {
-            self.ni_iter(opts, first, opts.itl1, 0.0, 1.0).map(|_| ())
+            self.ni_iter_mode(opts, &mut mode, opts.itl1, 0.0, 1.0)
+                .map(|_| ())
         } else {
             Err(Error::IterLim)
         };
         if direct.is_ok() {
+            self.op_step = Some(OpStep::Direct);
             return Ok(());
         }
         let mut last = direct;
@@ -517,11 +838,20 @@ impl Engine {
         if opts.gminsteps == 1 {
             last = self.dynamic_gmin(opts);
             if last.is_ok() {
+                self.op_step = Some(OpStep::DynamicGmin);
+                return Ok(());
+            }
+            // Without the frontend variable `dyngmin` (unset by
+            // default) the C follows with `new_gmin` (cktop.c:63-69).
+            last = self.true_gmin(opts);
+            if last.is_ok() {
+                self.op_step = Some(OpStep::TrueGmin);
                 return Ok(());
             }
         }
 
         if opts.gminsteps > 1 {
+            let first = InitMode::Jct;
             let mut diag_gmin = opts.gmin;
             for _ in 0..opts.gminsteps {
                 diag_gmin *= 10.0;
@@ -536,86 +866,343 @@ impl Engine {
             }
             last = self.ni_iter(opts, mode, opts.itl1, 0.0, 1.0).map(|_| ());
             if last.is_ok() {
+                self.op_step = Some(OpStep::Spice3Gmin);
                 return Ok(());
             }
         }
 
-        if opts.srcsteps > 1 {
-            let mut mode = first;
+        if opts.srcsteps == 1 {
+            last = self.gillespie_src(opts);
+            if last.is_ok() {
+                self.op_step = Some(OpStep::GillespieSrc);
+                return Ok(());
+            }
+        } else if opts.srcsteps > 1 {
+            let mut mode = InitMode::Jct;
+            let mut ladder = Ok(());
             for i in 0..=opts.srcsteps {
                 let srcfact = i as f64 / opts.srcsteps as f64;
                 let r = self.ni_iter(opts, mode, opts.itl1, 0.0, srcfact);
                 mode = InitMode::Float;
-                r?; // "source stepping failed"
+                if let Err(e) = r {
+                    ladder = Err(e); // "source stepping failed"
+                    break;
+                }
             }
-            return Ok(()); // "Source stepping completed"
+            if ladder.is_ok() {
+                self.op_step = Some(OpStep::Spice3Src);
+                return Ok(()); // "Source stepping completed"
+            }
+            last = ladder;
         }
 
+        // cktop.c:94-103. A failed transient op reports its own cause
+        // in the C; here the earlier degree's error stands.
+        if self.op_tran(opts).is_ok() {
+            self.op_step = Some(OpStep::OpTran);
+            return Ok(());
+        }
         last
     }
 
-    /// ngspice's dynamic gmin stepping (`cktop.c::dynamic_gmin`,
-    /// Alan Gillespie): start from a zeroed solution with a large
-    /// diagonal gmin and shrink it adaptively — the factor grows
-    /// when Newton converges fast, shrinks on failure, and the
-    /// state rolls back to the last good step. The 3f5 has only the
-    /// fixed ladder; several classic decks (schmitt, mosamp2) need
-    /// this once the NEWCONV device tests are enforced
+    /// ngspice's dynamic gmin stepping (`cktop.c:161-274`, Alan
+    /// Gillespie): from a zeroed solution and state, walk the diagonal
+    /// gmin down from 1e-3 to `max(gmin, gshunt)` ([`GminWalk`]),
+    /// rolling back to the last good step on failure. Whether the walk
+    /// reaches the target or gives up, the C ends with a full Newton at
+    /// `CKTdiagGmin = CKTgshunt` (0) from wherever it stopped. The 3f5
+    /// has only the fixed ladder; several classic decks (schmitt,
+    /// mosamp2) need this once the NEWCONV device tests are enforced
     /// (`corpus/KNOWN_DIFFS.md`).
     fn dynamic_gmin(&mut self, opts: &Options) -> Result<(), Error> {
-        /// `CKTgminFactor` (ngspice default).
-        const GMIN_FACTOR: f64 = 10.0;
+        let mut walk = GminWalk::new(f64::max(opts.gmin, GSHUNT), 1.00005);
+        let mut mode = self.gmin_walk(opts, &mut walk, false);
+        self.ni_iter_mode(opts, &mut mode, ng_iter(opts.itl1), GSHUNT, 1.0)
+            .map(|_| ())
+    }
+
+    /// ngspice's "true gmin stepping" (`new_gmin`, `cktop.c:349-466`):
+    /// the same walk on the devices' own `CKTgmin` (the conductance
+    /// every junction loads in parallel) with the diagonal gmin at
+    /// `CKTgshunt`; a slow step floors the factor at 3 instead of
+    /// 1.00005. `CKTgmin` is restored to `max(gmin, gshunt)` for the
+    /// final Newton.
+    fn true_gmin(&mut self, opts: &Options) -> Result<(), Error> {
+        let mut walk = GminWalk::new(f64::max(opts.gmin, GSHUNT), 3.0);
+        let mut mode = self.gmin_walk(opts, &mut walk, true);
+        self.ni_iter_mode(opts, &mut mode, ng_iter(opts.itl1), GSHUNT, 1.0)
+            .map(|_| ())
+    }
+
+    /// The loop shared by [`Engine::dynamic_gmin`] and
+    /// [`Engine::true_gmin`]: each step's gmin goes to `LoadGmin`
+    /// (diagonal walk) or replaces the devices' `gmin` with the
+    /// diagonal at `CKTgshunt` (`device`, the true walk). Returns the
+    /// INITF mode the walk ended in.
+    fn gmin_walk(&mut self, opts: &Options, walk: &mut GminWalk, device: bool) -> InitMode {
+        let mut o = opts.clone();
+        let mut mode = InitMode::Jct; // `CKTmode = firstmode`
         self.sol.fill(0.0);
         self.states.zero0();
-        let mut factor = GMIN_FACTOR;
-        let mut old_gmin = 1e-2;
-        let mut diag_gmin = old_gmin / factor;
-        let gtarget = opts.gmin; // gshunt defaults to 0
+        let maxit = ng_iter(opts.itl2);
         let mut saved_sol: Vec<f64> = vec![0.0; self.sol.len()];
         let mut saved_states = self.states.snapshot0();
-        let mut mode = InitMode::Jct;
         loop {
-            match self.ni_iter(opts, mode, opts.itl2, diag_gmin, 1.0) {
+            let diag = if device {
+                o.gmin = walk.gmin;
+                GSHUNT
+            } else {
+                walk.gmin
+            };
+            match self.ni_iter_mode(&o, &mut mode, maxit, diag, 1.0) {
                 Ok(iters) => {
-                    mode = InitMode::Float;
-                    if diag_gmin <= gtarget {
-                        break;
+                    mode = InitMode::Float; // `CKTmode = continuemode`
+                    if walk.converged(iters, opts.itl2) {
+                        break; // reached the target
                     }
                     saved_sol.copy_from_slice(&self.sol);
                     saved_states = self.states.snapshot0();
-                    if iters <= opts.itl2 / 4 {
-                        factor *= factor.sqrt();
-                        if factor > GMIN_FACTOR {
-                            factor = GMIN_FACTOR;
-                        }
-                    }
-                    if iters > 3 * opts.itl2 / 4 {
-                        factor = factor.sqrt();
-                    }
-                    old_gmin = diag_gmin;
-                    if diag_gmin < factor * gtarget {
-                        diag_gmin = gtarget;
-                    } else {
-                        diag_gmin /= factor;
-                    }
                 }
-                // Any failure (the C only looks at the convergence
-                // flag): back off the factor and roll back.
+                // Any failure (the C only looks at the return code):
+                // back off and roll back, in the mode NIiter left.
                 Err(_) => {
-                    if factor < 1.00005 {
-                        return Err(Error::IterLim);
+                    if walk.failed() {
+                        break; // "Last gmin step failed"
                     }
-                    factor = factor.sqrt().sqrt();
-                    diag_gmin = old_gmin / factor;
                     self.sol.copy_from_slice(&saved_sol);
                     self.states.restore0(&saved_states);
                 }
             }
         }
-        // `CKTdiagGmin = CKTgshunt` (0), then the full-precision
-        // Newton at `iterlim`.
-        self.ni_iter(opts, InitMode::Float, opts.itl1, 0.0, 1.0)
-            .map(|_| ())
+        mode
+    }
+
+    /// Gillespie's source stepping (`gillespie_src`,
+    /// `cktop.c:480-658`): solve with every source at zero — with a
+    /// fixed 10-step diagonal-gmin ladder from `gmin·1e10` if the
+    /// plain solve fails —, then raise `srcFact` from 0 by the
+    /// adaptive increment of [`SrcRamp`]. Succeeds when a solve at
+    /// `srcFact = 1` converges (no extra Newton after it).
+    fn gillespie_src(&mut self, opts: &Options) -> Result<(), Error> {
+        let mut mode = InitMode::Jct;
+        let maxit = ng_iter(opts.itl2);
+        self.sol.fill(0.0);
+        self.states.zero0();
+        // "First, try a straight solution with all sources at zero".
+        let mut r = self.ni_iter_mode(opts, &mut mode, maxit, GSHUNT, 0.0);
+        if r.is_err() {
+            // "try gmin stepping as well for the first solution"
+            // (`gshunt <= 0` starts from `gmin`).
+            let mut diag_gmin = opts.gmin;
+            for _ in 0..10 {
+                diag_gmin *= 10.0;
+            }
+            for _ in 0..=10 {
+                r = self.ni_iter_mode(opts, &mut mode, maxit, diag_gmin, 0.0);
+                if r.is_err() {
+                    break; // "gmin step failed"
+                }
+                diag_gmin /= 10.0;
+                mode = InitMode::Float;
+            }
+        }
+        if let Err(e) = r {
+            return Err(e); // "source stepping failed"
+        }
+        let mut last = Error::IterLim;
+        let mut ramp = SrcRamp::new();
+        let mut saved_sol = self.sol.clone();
+        let mut saved_states = self.states.snapshot0();
+        while !ramp.finished() {
+            let r = self.ni_iter_mode(opts, &mut mode, maxit, GSHUNT, ramp.src_fact);
+            mode = InitMode::Float;
+            match r {
+                Ok(iters) => {
+                    ramp.converged(iters, opts.itl2);
+                    saved_sol.copy_from_slice(&self.sol);
+                    saved_states = self.states.snapshot0();
+                }
+                Err(e) => {
+                    last = e;
+                    if ramp.failed() {
+                        break;
+                    }
+                    self.sol.copy_from_slice(&saved_sol);
+                    self.states.restore0(&saved_states);
+                }
+            }
+        }
+        if ramp.conv_fact != 1.0 {
+            Err(last) // "source stepping failed"
+        } else {
+            Ok(()) // "Source stepping completed"
+        }
+    }
+
+    /// `OPtran` (ngspice-47 `spicelib/analysis/optran.c:290-852`, the
+    /// XSPICE build the oracle runs): when every other degree has
+    /// failed, march a private transient of the circuit from the
+    /// state the last attempt left, `0 → 10 µs` with `TSTEP = TMAX =
+    /// 100 ns` and trapezoidal/LTE control as `DCtran`, and take the
+    /// final point as the operating point. Faithful to the C in what
+    /// matters for the result:
+    ///
+    /// - the circuit time `CKTtime` is never advanced (only the local
+    ///   `optime`), so sources hold their transient value at t = 0
+    ///   and plant no breakpoints; the only breakpoints are 0 and the
+    ///   final time (`opbreaks`);
+    /// - first step `min(10 µs/100, 100 ns)/10`, cut ÷10 again at the
+    ///   start; a failed Newton (any cause) divides the step by 8;
+    ///   `NIiter` gets its ngspice floor of 100 iterations;
+    /// - `delmin`/`minBreak` are the ones the calling analysis has
+    ///   (0 for `.op`/`.dc`; `.tran`'s for its operating point), and
+    ///   no `MAX(delta, 2·delmin)` (XSPICE branch).
+    ///
+    /// Device accept hooks are not called (they only plant source
+    /// breakpoints in `CKTbreaks`, which `OPtran` ignores, or record
+    /// line history); circuits with transmission lines skip this
+    /// degree (their history would be built on a frozen `CKTtime`).
+    fn op_tran(&mut self, opts: &Options) -> Result<(), Error> {
+        if self.names.iter().any(|n| {
+            let c = n.as_bytes().first().map(u8::to_ascii_lowercase);
+            matches!(c, Some(b'o') | Some(b't'))
+        }) {
+            return Err(Error::IterLim);
+        }
+        let saved_kind = self.kind;
+        let saved_step = self.step;
+        let saved_trbdf2 = self.trbdf2;
+        let saved_method = self.method;
+        let saved_maxord = self.maxord;
+        let dev_noise = self.dev_noise.take();
+        self.set_tran_method(opts);
+        self.trbdf2 = false;
+        let r = self.op_tran_loop(opts);
+        self.kind = saved_kind;
+        self.step = saved_step;
+        self.trbdf2 = saved_trbdf2;
+        self.method = saved_method;
+        self.maxord = saved_maxord;
+        self.dev_noise = dev_noise;
+        self.ag = [0.0; 7];
+        r
+    }
+
+    fn op_tran_loop(&mut self, opts: &Options) -> Result<(), Error> {
+        let final_time = OPTRAN_FINAL;
+        let max_step = OPTRAN_STEP;
+        let (delmin, min_break) = (self.op_delmin, self.op_min_break);
+        self.step = OPTRAN_STEP;
+        let mut delta = f64::min(final_time / 100.0, self.step) / 10.0;
+        let mut breaks = vec![0.0, final_time];
+        let clr_break = |b: &mut Vec<f64>| {
+            if b.len() > 2 {
+                b.remove(0);
+            } else {
+                b[0] = b[1];
+                b[1] = final_time;
+            }
+        };
+        let mut firsttime = true;
+        self.order = 1;
+        self.delta_old = [max_step; 8];
+        self.delta = delta;
+        let mut save_delta = final_time / 50.0;
+        self.set_kind(AnKind::Tran, false);
+        self.ag = [0.0; 7];
+        self.states.copy01();
+        let mut optime = 0.0f64;
+
+        'next_time: loop {
+            if optime > breaks[0] {
+                clr_break(&mut breaks);
+            }
+            if almost_equal_ulps(optime, final_time, 100) {
+                return Ok(()); // "Transient op finished successfully"
+            }
+
+            // resume:
+            delta = f64::min(delta, max_step);
+            if almost_equal_ulps(optime, breaks[0], 100) || breaks[0] - optime <= delmin {
+                self.order = 1;
+                delta = f64::min(delta, 0.1 * f64::min(save_delta, breaks[1] - breaks[0]));
+                if firsttime {
+                    delta /= 10.0;
+                }
+            }
+            // XSPICE: throw out breakpoints at or before now, then
+            // force the next one.
+            while almost_equal_ulps(breaks[0], optime, 100) || breaks[0] <= optime + min_break {
+                clr_break(&mut breaks);
+                if breaks[0] == breaks[1] && breaks[0] <= optime + min_break {
+                    // Both entries spent (only possible at the end).
+                    break;
+                }
+            }
+            if optime + delta > breaks[0] {
+                save_delta = delta;
+                delta = breaks[0] - optime;
+            }
+
+            for i in (0..=5).rev() {
+                self.delta_old[i + 1] = self.delta_old[i];
+            }
+            self.delta_old[0] = delta;
+            self.states.rotate(self.maxord);
+
+            loop {
+                let olddelta = delta;
+                optime += delta;
+                self.delta_old[0] = delta;
+                self.delta = delta;
+                self.ag = com_cof(self.method, self.order, delta, &self.delta_old)?;
+                let start = if firsttime {
+                    InitMode::Tran
+                } else {
+                    InitMode::Pred
+                };
+                let converged = self.ni_iter(opts, start, ng_iter(opts.itl4), 0.0, 1.0);
+                if firsttime {
+                    self.states.copy1_to_23();
+                }
+                match converged {
+                    Err(_) => {
+                        optime -= delta;
+                        delta /= 8.0;
+                        self.order = 1;
+                    }
+                    Ok(_) => {
+                        if firsttime {
+                            firsttime = false;
+                            continue 'next_time; // no LTE check on the first point
+                        }
+                        let mut new = delta;
+                        self.trunc(opts, &mut new);
+                        if new > 0.9 * delta {
+                            if self.order == 1 && self.maxord > 1 {
+                                new = delta;
+                                self.order = 2;
+                                self.trunc(opts, &mut new);
+                                if new <= 1.05 * delta {
+                                    self.order = 1;
+                                }
+                            }
+                            delta = new;
+                            continue 'next_time;
+                        }
+                        optime -= delta;
+                        delta = new;
+                    }
+                }
+                if delta <= delmin {
+                    if olddelta > delmin {
+                        delta = delmin;
+                    } else {
+                        return Err(Error::Timestep { time: optime }); // "Timestep too small"
+                    }
+                }
+            }
+        }
     }
 
     /// `DCtrCurv`: sweep one or two variables, the first innermost.
@@ -937,7 +1524,15 @@ impl Engine {
             self.ckt_ic();
             self.ni_iter(opts, InitMode::Jct, opts.itl1, 0.0, 1.0)?;
         } else {
-            self.op(opts)?;
+            // `traninit.c`: `CKTdelmin = 1e-11·CKTmaxStep`; the XSPICE
+            // `dctran.c:163` sets `CKTminBreak = 10·CKTdelmin` before
+            // `CKTop` — what `OPtran` sees.
+            self.op_delmin = 1e-11 * max_step;
+            self.op_min_break = 10.0 * self.op_delmin;
+            let r = self.op(opts);
+            self.op_delmin = 0.0;
+            self.op_min_break = 0.0;
+            r?;
         }
 
         self.tran_loop(
@@ -2650,7 +3245,196 @@ pub(crate) struct TranParams {
 
 #[cfg(test)]
 mod tests {
-    use super::within_radius;
+    use super::{AnKind, Engine, GminWalk, InitMode, OpStep, SrcRamp, within_radius};
+    use crate::options::Options;
+
+    fn engine_for(deck: &str) -> (Engine, Options) {
+        let parsed = dune_netlist::parse_str("t.cir", deck);
+        let (ckt, _) = crate::Circuit::from_netlist(&parsed.netlist).unwrap();
+        let mut opts = Options::default();
+        let mut diags = Vec::new();
+        opts.apply(&parsed.netlist.options, &mut diags);
+        let built = ckt.build(&opts).unwrap();
+        (Engine::new(built), opts)
+    }
+
+    fn var(e: &Engine, name: &str) -> f64 {
+        let i = e.vars.names.iter().position(|n| n == name).unwrap();
+        e.sol[i]
+    }
+
+    fn close4(a: f64, b: f64) -> bool {
+        ((a - b) / b).abs() < 1e-4
+    }
+
+    /// The diagonal walk on ngspice-47's schmitt.cir path (`set
+    /// ngdebug` plus the iteration counts of an instrumented build):
+    /// the 1e-3 step fails, then converged steps of 11, 2, 3, 4, 3 and
+    /// 2 iterations.
+    #[test]
+    fn gmin_walk_retraces_ngspice_schmitt() {
+        let mut w = GminWalk::new(1e-12, 1.00005);
+        let want = [
+            1.0e-3, 5.6234e-3, 2.3714e-3, 6.4938e-4, 9.3057e-5, 9.3057e-6, 9.3057e-7, 9.3057e-8,
+            9.3057e-9, 9.3057e-10, 9.3057e-11, 9.3057e-12, 1.0e-12,
+        ];
+        let iters = [0, 11, 2, 3, 4, 3, 2, 2, 2, 2, 2, 2, 2];
+        for (k, (&g, &it)) in want.iter().zip(&iters).enumerate() {
+            assert!(close4(w.gmin, g), "step {k}: {} vs {g}", w.gmin);
+            let done = if k == 0 {
+                assert!(!w.failed());
+                false
+            } else {
+                w.converged(it, 50)
+            };
+            assert_eq!(done, k == want.len() - 1, "step {k}");
+        }
+    }
+
+    /// Every step failing (offbjt.cir in ngspice-47): the factor backs
+    /// off to its 4th root until it is below 1.00005 — nine tries.
+    #[test]
+    fn gmin_walk_gives_up_like_ngspice() {
+        let mut w = GminWalk::new(1e-12, 1.00005);
+        let want = [
+            1.0e-3, 5.6234e-3, 8.6596e-3, 9.6466e-3, 9.9105e-3, 9.9775e-3, 9.9944e-3, 9.9986e-3,
+            9.9996e-3,
+        ];
+        for (k, &g) in want.iter().enumerate() {
+            assert!(close4(w.gmin, g), "try {k}: {} vs {g}", w.gmin);
+            assert_eq!(w.failed(), k == want.len() - 1, "try {k}");
+        }
+    }
+
+    /// A slow step (> ¾·itl2 iterations) floors the factor at 1.00005
+    /// for the diagonal walk and at 3 for the true one (cktop.c:223 vs
+    /// cktop.c:412).
+    #[test]
+    fn gmin_walk_slow_floor() {
+        let mut d = GminWalk::new(1e-12, 1.00005);
+        let mut t = GminWalk::new(1e-12, 3.0);
+        assert!(!d.converged(40, 50) && !t.converged(40, 50));
+        assert!(close4(d.gmin, 1e-3 / 10f64.sqrt()));
+        assert!(close4(t.gmin, 1e-3 / 10f64.sqrt()));
+        for _ in 0..3 {
+            d.converged(40, 50);
+            t.converged(40, 50);
+        }
+        assert!(d.factor < 1.2, "{}", d.factor);
+        assert_eq!(t.factor, 3.0);
+    }
+
+    /// Gillespie's ramp on opfall_src.cir: every step converges in 2
+    /// iterations, and ngspice-47 prints "Supplies reduced to" these
+    /// percentages.
+    #[test]
+    fn src_ramp_retraces_ngspice() {
+        let want = [
+            0.1, 0.2, 0.35, 0.575, 0.9125, 1.4188, 2.1781, 3.3172, 5.0258, 7.5887, 11.4330,
+            17.1995, 25.8493, 38.8239, 58.2859, 87.4788, 100.0,
+        ];
+        let mut r = SrcRamp::new();
+        for (k, &p) in want.iter().enumerate() {
+            assert!(!r.finished(), "step {k}");
+            assert!(
+                close4(r.src_fact * 100.0, p),
+                "step {k}: {}",
+                r.src_fact * 100.0
+            );
+            r.converged(2, 50);
+        }
+        assert!(r.finished());
+        assert_eq!(r.conv_fact, 1.0);
+    }
+
+    /// A failure re-solves at the last converged factor with the
+    /// increment ÷10 (cktop.c:619-636), and a failure right at it ends
+    /// the ramp.
+    #[test]
+    fn src_ramp_backs_off() {
+        let mut r = SrcRamp::new();
+        r.converged(30, 50); // neither fast nor slow: raise stays 0.001
+        assert!(close4(r.src_fact, 0.002));
+        assert!(!r.failed());
+        assert!(close4(r.src_fact, 0.001));
+        r.converged(30, 50);
+        assert!(close4(r.src_fact, 0.0011));
+        let mut r = SrcRamp::new();
+        r.src_fact = r.conv_fact; // nothing to back off from
+        assert!(r.failed());
+    }
+
+    /// `spMNA_Preorder` + `LoadGmin`: the voltage source's incidence
+    /// twins take the diagonal gmin, so its node reads `V/(1+gmin)`
+    /// (ngspice-47's schmitt trace: −1.6 V → −1.59105 V at 5.6234e-3).
+    #[test]
+    fn diag_gmin_lands_on_source_twins() {
+        let (mut e, opts) = engine_for("t\nv1 1 0 -1.6\nr1 1 0 1k\n.op\n.end\n");
+        e.ni_iter(&opts, InitMode::Jct, 100, 5.6234e-3, 1.0)
+            .unwrap();
+        assert!(
+            (var(&e, "1") + 1.6 / 1.0056234).abs() < 1e-12,
+            "{}",
+            var(&e, "1")
+        );
+        e.ni_iter(&opts, InitMode::Jct, 100, 0.0, 1.0).unwrap();
+        assert_eq!(var(&e, "1"), -1.6);
+    }
+
+    fn degree(deck: &str, kind: AnKind) -> (Engine, Option<OpStep>) {
+        let (mut e, opts) = engine_for(deck);
+        e.set_kind(kind, false);
+        e.op(&opts).unwrap();
+        let step = e.op_step;
+        (e, step)
+    }
+
+    /// The probe decks close the operating point at the degree
+    /// ngspice-47 closes them (`set ngdebug`): Gillespie source
+    /// stepping for the off diode, the transient op for the off BJT
+    /// behind a pulse in `.op`, and source stepping again for the same
+    /// circuit's TRANOP (offbjt.cir: srcFact scales the pulse there).
+    #[test]
+    fn probes_close_at_the_ngspice_degree() {
+        let src = include_str!("../../../corpus/regress/opfall_src.cir");
+        let (e, step) = degree(src, AnKind::DcOp);
+        assert_eq!(step, Some(OpStep::GillespieSrc));
+        assert!((var(&e, "2") - 10.0).abs() < 1e-6);
+
+        let tran = include_str!("../../../corpus/regress/opfall_tran.cir");
+        let (e, step) = degree(tran, AnKind::DcOp);
+        assert_eq!(step, Some(OpStep::OpTran));
+        assert!((var(&e, "e") + 4.16e-10).abs() < 1e-12, "{}", var(&e, "e"));
+
+        let off = include_str!("../../../corpus/regress/offbjt.cir");
+        let (_, step) = degree(off, AnKind::TranOp);
+        assert_eq!(step, Some(OpStep::GillespieSrc));
+
+        // The floating off-diode chain: diagonal gmin fails at every
+        // factor; which later degree closes it is decided by LU
+        // roundoff in an INITFIX current test (docs/dune-core.md), so
+        // only the answer is pinned here.
+        let chain = include_str!("../../../corpus/regress/opfall_gmin.cir");
+        let (e, step) = degree(chain, AnKind::DcOp);
+        assert!(
+            !matches!(step, Some(OpStep::Direct | OpStep::DynamicGmin)),
+            "{step:?}"
+        );
+        assert!((var(&e, "3") - 1000.0).abs() < 1e-2, "{}", var(&e, "3"));
+    }
+
+    /// Without the defaults' degrees the same decks fail: the transient
+    /// op is the only one closing opfall_tran (srcsteps/gminsteps 0
+    /// leave just it, and it still closes).
+    #[test]
+    fn transient_op_alone_closes_the_off_bjt() {
+        let tran = include_str!("../../../corpus/regress/opfall_tran.cir");
+        let (mut e, mut opts) = engine_for(tran);
+        opts.gminsteps = 0;
+        opts.srcsteps = 0;
+        e.op(&opts).unwrap();
+        assert_eq!(e.op_step, Some(OpStep::OpTran));
+    }
 
     #[test]
     fn hygiene_dedupe_checks_both_neighbours() {
