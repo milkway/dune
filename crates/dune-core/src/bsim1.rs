@@ -105,12 +105,19 @@ pub struct Bsim1Model {
     /// `WDF`/`DELL` (accepted and unused by the load, like the C).
     pub wdf: f64,
     pub dell: f64,
+    /// `KF`/`AF` (noise only; ngspice-47's `b1noi.c` — the 3f5's
+    /// BSIM1 has no noise and no such parameters). Defaults 0 and 1
+    /// (`b1set.c` of ngspice) — `new` sets `AF`; the derived
+    /// `Default` leaves it 0.
+    pub kf: f64,
+    pub af: f64,
 }
 
 impl Bsim1Model {
     pub fn new(nmos: bool) -> Self {
         Bsim1Model {
             nmos,
+            af: 1.0,
             ..Default::default()
         }
     }
@@ -118,6 +125,75 @@ impl Bsim1Model {
     pub(crate) fn needs_prime(&self, squares: f64) -> bool {
         self.rsh != 0.0 && squares != 0.0
     }
+}
+
+/// Name suffixes of the BSIM1/BSIM2 noise generators (`B1nNames`,
+/// `B2nNames` of ngspice-47).
+pub(crate) const B12_NOISE_SUFFIXES: &[&str] = &["_rd", "_rs", "_id", "_1overf", ""];
+
+/// What `B1noise`/`B2noise` read.
+pub(crate) struct B12Noise {
+    pub drain: Var,
+    pub source: Var,
+    pub d_p: Var,
+    pub s_p: Var,
+    pub gdpr: f64,
+    pub gspr: f64,
+    /// `state0` gm and drain current.
+    pub gm: f64,
+    pub cd: f64,
+    pub kf: f64,
+    pub af: f64,
+    /// `(W − DW·1e-6)·(L − DL·1e-6)`, m².
+    pub flicker_area: f64,
+    /// `B*Cox`, F/cm².
+    pub cox: f64,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test hook reproducing ngspice-47's reading of `B1gm`/`B1cd`
+    /// (see [`b12_noise`]): `Some(GENstate)` makes the channel and
+    /// flicker terms use `GENstate + 7` and `GENstate + 4`.
+    pub(crate) static NGSPICE_STATE_OFFSET: std::cell::Cell<Option<f64>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// `B1noise` / `B2noise` (ngspice-47 `b1noi.c`/`b2noi.c`, the same
+/// file with the prefix renamed; the 3f5 has neither): thermal noise
+/// of the drain/source series resistances and of the channel
+/// `4kT·(2/3)|gm|`, at `CKTtemp` (plain `NevalSrc`); flicker
+/// `KF·|Id|^AF/(f·(W−DW)·(L−DL)·Cox²)` — the old 3f5-MOS form, with
+/// `Cox` in F/cm².
+///
+/// **Deliberate divergence from the oracle.** `bsim1def.h` defines
+/// `B1gm` and `B1cd` as *state offsets* (`#define B1gm B1states+ 7`),
+/// so the C's `fabs(inst->B1gm * inst->B1m)` evaluates to
+/// `GENstate + 7·m` and `(double)inst->B1cd` to `GENstate + 4` — the
+/// instance's index in the state vector, not its gm and current
+/// (measured: one BSIM1 in a deck, `GENstate = 0`, channel noise of a
+/// 7 S conductance). Dune reads the values those offsets point at,
+/// `*(CKTstate0 + B1gm)`, as the author evidently meant (and as
+/// `jfetnoi.c` does); everything else is the C's.
+pub(crate) fn b12_noise(ctx: &crate::matrix::NoiseCtx, n: &B12Noise) -> Vec<f64> {
+    const N_MINLOG: f64 = 1e-38;
+    let (gm, cd) = (n.gm, n.cd);
+    #[cfg(test)]
+    let (gm, cd) = match NGSPICE_STATE_OFFSET.get() {
+        Some(state) => (state + 7.0, state + 4.0),
+        None => (gm, cd),
+    };
+    let rd = ctx.thermal(n.d_p, n.drain, n.gdpr);
+    let rs = ctx.thermal(n.s_p, n.source, n.gspr);
+    let id = ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * gm.abs());
+    let flicker = ctx.flicker(
+        n.d_p,
+        n.s_p,
+        n.kf * f64::exp(n.af * f64::ln(f64::max(cd.abs(), N_MINLOG)))
+            / (n.flicker_area * n.cox * n.cox),
+        1.0,
+    );
+    vec![rd, rs, id, flicker, rd + rs + id + flicker]
 }
 
 /// Per-instance size-resolved parameters (`B1temp`).
@@ -171,6 +247,8 @@ pub(crate) struct Bsim1Size {
     pub cj: f64,
     pub cjsw: f64,
     pub xpart: f64,
+    pub kf: f64,
+    pub af: f64,
 }
 
 impl Bsim1Size {
@@ -260,6 +338,8 @@ impl Bsim1Size {
             cj: m.cj,
             cjsw: m.cjsw,
             xpart: m.xpart,
+            kf: m.kf,
+            af: m.af,
         })
     }
 }
@@ -1288,6 +1368,30 @@ impl crate::devices::Device for Bsim1I {
         crate::integ::terr(self.st + QD, t, time_step);
     }
 
+    /// `B1noise` (ngspice-47): see [`b12_noise`].
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(B12_NOISE_SUFFIXES)
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        let t = &self.t;
+        let n = B12Noise {
+            drain: self.drain,
+            source: self.source,
+            d_p: self.d_p,
+            s_p: self.s_p,
+            gdpr: t.drain_conductance,
+            gspr: t.source_conductance,
+            gm: ctx.states.get(0, self.st + GM),
+            cd: ctx.states.get(0, self.st + CD),
+            kf: t.kf,
+            af: t.af,
+            flicker_area: (self.geom.w - t.delta_w * 1e-6) * (self.geom.l - t.delta_l * 1e-6),
+            cox: t.cox,
+        };
+        b12_noise(ctx, &n)
+    }
+
     /// `B1dSetup` (`dev/bsim1/b1dset.c`): see `b1disto.rs`.
     fn disto_setup(&mut self, ctx: &crate::disto::DistoSetupCtx) -> Result<(), &'static str> {
         self.dist = crate::b1disto::dsetup(
@@ -1379,5 +1483,75 @@ impl crate::devices::Device for Bsim1I {
         ctx.add_g(self.s[SP_S], -gspr);
         ctx.add_g(self.s[SP_B], -gbs - (xnrm - xrev) * gmbs);
         ctx.add_g(self.s[SP_DP], -gds - xrev * (gm + gmbs));
+    }
+}
+
+#[cfg(test)]
+mod noise_tests {
+    use crate::{Circuit, Options};
+    use std::path::Path;
+
+    /// Run `regress/<stem>.cir` (one `.noise`) and compare every
+    /// vector of both plots with the ngspice-47 golden: relative
+    /// `1e-3` (the oracle's reltol; the residual is the 3f5-vs-CODATA
+    /// constants, ~2e-5) plus an absolute floor far below the
+    /// densities. Returns the worst relative error.
+    fn compare(stem: &str, ngspice_offsets: bool, only: &[&str]) -> Result<f64, String> {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus"));
+        let text = std::fs::read_to_string(root.join(format!("regress/{stem}.cir"))).unwrap();
+        let parsed = dune_netlist::parse_str(stem, &text);
+        assert!(parsed.is_clean(), "{:?}", parsed.diags);
+        let (c, _) = Circuit::from_netlist(&parsed.netlist).unwrap();
+        let mut opts = Options::default();
+        let mut d = Vec::new();
+        opts.apply(&parsed.netlist.options, &mut d);
+        super::NGSPICE_STATE_OFFSET.set(ngspice_offsets.then_some(0.0));
+        let run = c.run(&parsed.netlist.analyses[0], &opts);
+        super::NGSPICE_STATE_OFFSET.set(None);
+        let (sols, _) = run.unwrap();
+        let golden = dune_raw::Rawfile::read_from(root.join(format!("golden/{stem}.raw"))).unwrap();
+        assert_eq!(sols.len(), golden.plots.len());
+        let mut worst = 0.0f64;
+        for (sol, plot) in sols.iter().zip(&golden.plots) {
+            for v in &plot.variables {
+                if !only.is_empty() && !only.iter().any(|o| v.name.contains(o)) {
+                    continue;
+                }
+                let want = plot.real_values(&v.name).unwrap();
+                let got = sol
+                    .column(&v.name)
+                    .ok_or_else(|| format!("{stem}: Dune lacks {}", v.name))?;
+                for (k, (a, b)) in got.iter().zip(want).enumerate() {
+                    let e = (a - b).abs() / (b.abs() + 1e-30);
+                    if (a - b).abs() > 1e-3 * b.abs() + 1e-25 {
+                        return Err(format!("{stem} {}[{k}]: Dune {a} vs ngspice {b}", v.name));
+                    }
+                    worst = worst.max(e);
+                }
+            }
+        }
+        Ok(worst)
+    }
+
+    /// The gate of the `b1noise`/`b2noise` probes (in `corpus/SKIP`
+    /// for the oracle): with ngspice-47's state-offset reading of gm
+    /// and Id emulated (`GENstate = 0`, the only BSIM in each deck),
+    /// Dune reproduces the golden vector for vector — so the nodes,
+    /// conductances, coefficients, W/L/DW/DL/Cox and the integration
+    /// are b1noi.c/b2noi.c's — and without it, the channel and
+    /// flicker vectors leave the oracle by orders of magnitude while
+    /// rd/rs stay equal.
+    #[test]
+    fn b12_noise_matches_ngspice_offsets() {
+        for stem in ["b1noise", "b2noise"] {
+            let worst = compare(stem, true, &[]).unwrap();
+            eprintln!("{stem}: worst relative error {worst:.2e} (ngspice offsets emulated)");
+            assert!(worst < 1e-4, "{stem}: {worst}");
+            // Dune's own reading: series resistances (and frequency)
+            // unchanged, channel and flicker not.
+            compare(stem, false, &["frequency", "m1_rd", "m1_rs"]).unwrap();
+            compare(stem, false, &["m1_id"]).unwrap_err();
+            compare(stem, false, &["m1_1overf"]).unwrap_err();
+        }
     }
 }

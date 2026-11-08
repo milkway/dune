@@ -1421,6 +1421,9 @@ fn bsim1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim1::B
             "cjsw" => b.cjsw = v,
             "wdf" => b.wdf = v,
             "dell" => b.dell = v,
+            // ngspice-47 noise parameters (`b1.c`/`b2.c`; not in the 3f5).
+            "kf" => b.kf = v,
+            "af" => b.af = v,
             other => notes.push(format!(
                 "model `{}`: unrecognized parameter ({other}) - ignored",
                 m.name
@@ -1643,6 +1646,9 @@ fn bsim2_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim2::B
             "cjsw" => b.cjsw = v,
             "wdf" => b.wdf = v,
             "dell" => b.dell = v,
+            // ngspice-47 noise parameters (`b1.c`/`b2.c`; not in the 3f5).
+            "kf" => b.kf = v,
+            "af" => b.af = v,
             other => notes.push(format!(
                 "model `{}`: unrecognized parameter ({other}) - ignored",
                 m.name
