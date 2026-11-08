@@ -149,6 +149,12 @@ pub struct Options {
     /// `parallel` feature (native builds); without it (and on
     /// `wasm32`) the value is ignored and the load is sequential.
     pub load_threads: usize,
+    /// `KEEPOPINFO` (`cktsopt.c`): `.ac`, `.pz` and `.disto` (and,
+    /// as in ngspice-47, `.noise` and `.sp`) first emit their
+    /// operating point as a plot of its own ("AC Operating Point",
+    /// "Distortion Operating Point", "NOISE Operating Point").
+    /// Default false.
+    pub keepopinfo: bool,
 }
 
 impl Default for Options {
@@ -186,6 +192,7 @@ impl Default for Options {
             notrnoise: false,
             dev_noise: false,
             dev_noise_step: None,
+            keepopinfo: false,
         }
     }
 }
@@ -340,6 +347,8 @@ impl Options {
                     )),
                 },
                 "noopiter" => self.noopiter = true,
+                // IF_FLAG: a bare word (or `keepopinfo=0|1`).
+                "keepopinfo" => self.keepopinfo = num.is_none_or(|v| v != 0.0),
                 "nopage" => self.nopage = true,
                 // `cktsopt.c` has a copy-paste bug that makes `defas`
                 // set the drain area; ngspice fixed it and so do we
@@ -351,7 +360,7 @@ impl Options {
                 // Recognized 3f5 options that only matter to later
                 // phases (output formatting, statistics, devices).
                 "itl3" | "itl5" | "acct" | "list" | "nomod" | "node" | "opts" | "bypass"
-                | "badmos3" | "keepopinfo" => {}
+                | "badmos3" => {}
                 // `spiceif.c`'s `obsolete[]`: SPICE2 artifacts (lvlcod
                 // generated machine code for the solver) that must
                 // never do anything — the 3f5 words it "is obsolete".

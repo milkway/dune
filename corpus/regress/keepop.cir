@@ -1,0 +1,16 @@
+.options keepopinfo: the AC analysis dumps its operating point first
+* Coverage: CKTkeepOpInfo (acan.c:73 in the 3f5, acan.c:155 in
+* ngspice-47) writes a real "AC Operating Point" plot, no scale, the
+* CKTdump of the solution after the MODEINITSMSIG load, before the AC
+* plot. The diode makes the operating point non-trivial. (.pz/.disto
+* name theirs "Distortion Operating Point", .noise "NOISE Operating
+* Point" in ngspice only; unit tests pin those, one analysis per deck.)
+.options keepopinfo
+v1 1 0 dc 1.5 ac 1
+r1 1 2 1k
+d1 2 3 dmod
+r2 3 0 220
+c1 2 0 1n
+.model dmod d is=1e-14 rs=5 cjo=2p
+.ac dec 5 1k 10meg
+.end
