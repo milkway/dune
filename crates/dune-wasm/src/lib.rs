@@ -63,7 +63,7 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use dune_core::{Circuit, Options, PssParams, Solution};
+use dune_core::{CardOutput, Circuit, Options, Solution};
 use dune_netlist::{IncludeLoader, Severity};
 use dune_pic::{ExtractOptions, PicError};
 use dune_raw::{Data, Plot};
@@ -273,8 +273,10 @@ impl IncludeLoader for MapLoader<'_> {
 
 /// Parse, elaborate and run every analysis of `netlist`.
 ///
-/// Each card runs through [`Circuit::run`], the dispatch `dune-cli`
-/// shares (same plot order, title and empty date as its rawfile).
+/// Each card runs through [`Circuit::run_card`], the dispatch
+/// `dune-cli` shares through [`Circuit::run`] (same plot order, title
+/// and empty date as its rawfile); a `.pss` card's result also fills
+/// [`RawfileJson::pss`].
 pub fn run(netlist: &str, opts: &SimOptions) -> Result<RawfileJson, SimError> {
     Ok(run_data(netlist, opts)?.to_json())
 }
@@ -349,23 +351,10 @@ fn run_includes(
     prepared.override_diagnostics = override_diags;
     let mut out = Outcome::new(prepared.notes.clone());
     for analysis in &prepared.analyses {
-        let card = match pss_params(analysis) {
-            Some(p) => prepared
-                .circuit
-                .pss(&options, &p)
-                .map(|p| Card::Pss(Box::new(p))),
-            None => prepared.circuit.run(analysis, &options).map(Card::Plain),
-        };
+        let card = prepared.circuit.run_card(analysis, &options);
         out.push(card.map_err(SimError::analysis)?);
     }
     Ok(prepared.finish(out))
-}
-
-/// What one analysis card produced: a `.pss` keeps its engine result
-/// (period, history) besides the plots.
-pub(crate) enum Card {
-    Plain((Vec<Solution>, Vec<String>)),
-    Pss(Box<dune_core::Pss>),
 }
 
 /// The cards of a run so far, in deck order.
@@ -385,13 +374,15 @@ impl Outcome {
         }
     }
 
-    pub fn push(&mut self, card: Card) {
+    /// Add one card's output ([`Circuit::run_card`]): a `.pss` keeps
+    /// its period, `t0` and history for [`RawfileJson::pss`].
+    pub fn push(&mut self, card: CardOutput) {
         match card {
-            Card::Plain((sols, notes)) => {
+            CardOutput::Plots { plots, notes } => {
                 self.notes.extend(notes);
-                self.solutions.extend(sols);
+                self.solutions.extend(plots);
             }
-            Card::Pss(pss) => {
+            CardOutput::Pss(pss) => {
                 self.pss.push(PssJson::new(&pss, self.solutions.len()));
                 self.notes.extend(pss.notes);
                 self.solutions.push(pss.time);
@@ -399,46 +390,6 @@ impl Outcome {
             }
         }
     }
-}
-
-/// The [`PssParams`] a `.pss` card asks for — the mapping of
-/// [`Circuit::run`] (`dune_core::run`), repeated here because `run`
-/// returns only the plots and the period, `t0` and the shooting
-/// history travel in [`RawfileJson::pss`]. `None` for any other card.
-/// `pss_cards_run_as_the_engine_runs_them` (tests) pins the two
-/// mappings together on every `.pss` deck of the corpus.
-pub(crate) fn pss_params(analysis: &dune_netlist::ir::Analysis) -> Option<PssParams> {
-    let dune_netlist::ir::Analysis::Pss {
-        freq,
-        tstab,
-        osc_node,
-        points,
-        harmonics,
-        sc_iter,
-        steady_coeff,
-        uic,
-        ..
-    } = analysis
-    else {
-        return None;
-    };
-    let d = PssParams::default();
-    // ngspice reads the counts as IF_INTEGER (truncated).
-    let count = |v: Option<f64>, default: usize| match v {
-        Some(v) if v.is_finite() && v >= 0.0 => v.trunc().min(1e9) as usize,
-        Some(_) => 0,
-        None => default,
-    };
-    Some(PssParams {
-        freq: (*freq != 0.0).then_some(*freq),
-        tstab: *tstab,
-        osc_node: Some(osc_node.clone()),
-        points: count(*points, d.points),
-        harmonics: count(*harmonics, d.harmonics),
-        max_iter: count(*sc_iter, d.max_iter),
-        steady_coeff: steady_coeff.unwrap_or(d.steady_coeff),
-        uic: *uic,
-    })
 }
 
 /// A deck parsed and elaborated, ready to run: what a fresh run and a
