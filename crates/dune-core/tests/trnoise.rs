@@ -299,6 +299,38 @@ fn current_source_noise_adds_to_dc() {
     );
 }
 
+/// `.options notrnoise` (ngspice-47's variable): every TRNOISE —
+/// white, 1/f and RTS alike — collapses onto its DC value with no
+/// grid breakpoints, while TRRANDOM keeps drawing (ngspice's
+/// `trrandom_state_get` never reads the variable; measured on
+/// ngspice-47: v(2) still jumps every TS). The same deck without the
+/// option is noisy.
+#[test]
+fn notrnoise_silences_trnoise_only() {
+    let deck = "nt\nv1 1 0 dc 0.5 trnoise(0.1 1u 1 0.05 0.02 3u 5u)\n\
+                v2 2 0 dc 0.25 trrandom(2 1u 0 0.1 1)\nr1 1 0 1k\nr2 2 0 1k\n\
+                .tran 1u 100u\n.end\n";
+    let (noisy, n1) = run_str("nt", deck, |_| {});
+    let (quiet, n2) = run_str("nt", deck, |o| o.notrnoise = true);
+    let v1 = col(&quiet, "v(1)");
+    assert!(v1.iter().all(|&v| v == 0.5), "notrnoise v(1) not DC");
+    assert!(col(&noisy, "v(1)").iter().any(|&v| v != 0.5));
+    // TRRANDOM untouched: the same draws on the grid points.
+    assert_eq!(at_grid(&quiet, "v(2)", 1e-6), at_grid(&noisy, "v(2)", 1e-6));
+    assert!(n1.iter().any(|n| n.contains("2 source(s)")), "{n1:?}");
+    assert!(
+        n2.iter()
+            .any(|n| n.contains("1 source(s)") && n.contains("1 TRNOISE source(s) silenced")),
+        "{n2:?}"
+    );
+    // The card spelling reaches the same switch.
+    let (c, mut opts, an) = load_str("nt", &deck.replace(".tran", ".options notrnoise\n.tran"));
+    assert!(opts.notrnoise);
+    opts.notrnoise = true;
+    let (sols, _) = c.run(&an[0], &opts).unwrap();
+    assert!(col(&sols[0], "v(1)").iter().all(|&v| v == 0.5));
+}
+
 #[test]
 fn pss_refuses_transient_noise() {
     let deck = "pss\nvs 1 0 sin(0 1 1k)\nvn 1 2 trnoise(1m 1u)\nr1 2 0 1k\n.tran 1u 1m\n.end\n";

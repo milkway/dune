@@ -1478,7 +1478,7 @@ impl Circuit {
                     let pos = get(&node_ids, &s.nodes[0]);
                     let neg = get(&node_ids, &s.nodes[1]);
                     let br = branches[&s.name];
-                    let noise = NoiseWave::from_wave(s.wave.as_ref(), opts.seed, &s.name)?;
+                    let noise = NoiseWave::from_wave(s.wave.as_ref(), opts, &s.name)?;
                     let mut dev = VsourceI::new(s.dc, s.wave.clone(), s.ac, pos, neg, br)
                         .with_disto(s.distof1, s.distof2)
                         .with_noise(noise);
@@ -1498,7 +1498,7 @@ impl Circuit {
                 }
                 Spec::Isource(s) => {
                     sources.insert(s.name.clone(), (devices.len(), false));
-                    let noise = NoiseWave::from_wave(s.wave.as_ref(), opts.seed, &s.name)?;
+                    let noise = NoiseWave::from_wave(s.wave.as_ref(), opts, &s.name)?;
                     devices.push(Box::new(
                         IsourceI::new(
                             s.dc,

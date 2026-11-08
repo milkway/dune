@@ -119,6 +119,13 @@ pub struct Options {
     /// `docs/dune-core.md` §Ruído transiente); ngspice's
     /// `seed=random` (a clock seed) is refused with a warning.
     pub seed: u64,
+    /// `NOTRNOISE` (ngspice-47's `notrnoise` variable, read by
+    /// `trnoise_state_gen`): every `TRNOISE` source runs with all its
+    /// noise parameters zeroed — just its `DC` value, no grid, no
+    /// breakpoints —, so a deck compares with and without noise
+    /// without editing it. As in ngspice, `TRRANDOM` is untouched
+    /// (its state generator never reads the variable). Default false.
+    pub notrnoise: bool,
     /// Worker threads for the per-iteration device load (issue #9,
     /// lever 1; an API argument, not a SPICE option). `1` (default):
     /// the sequential load, exactly the 3f5's `CKTload`. `0`: one
@@ -165,6 +172,7 @@ impl Default for Options {
             load_threads: 1,
             tmax_divisor: None,
             seed: 1,
+            notrnoise: false,
         }
     }
 }
@@ -305,6 +313,9 @@ impl Options {
                         p.span,
                     )),
                 },
+                // ngspice-47 `set notrnoise` / `.options notrnoise`
+                // (a bare flag; `notrnoise=0|1` too).
+                "notrnoise" => self.notrnoise = num.is_none_or(|v| v != 0.0),
                 "noopiter" => self.noopiter = true,
                 "nopage" => self.nopage = true,
                 // `cktsopt.c` has a copy-paste bug that makes `defas`

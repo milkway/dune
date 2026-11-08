@@ -1109,11 +1109,22 @@ o LU em volta pode variar em ulps entre builds SIMD); regenerar com
 `corpus/SKIP` (fora do `--ci` do oráculo: não há golden ngspice
 comparável).
 
-**Pendências**: ruído transiente intrínseco dos dispositivos
-(térmico/shot/flicker de R, diodo, BJT, MOS como fontes no tempo —
-o ngspice só tem as fontes independentes; seria além dele);
-`.pss` com ruído (recusado nesta fase); `notrnoise` do ngspice (não
-portado — basta não ter a onda).
+**`.options notrnoise`** (issue #20; a variável `notrnoise` do
+ngspice-47, lida no `trnoise_state_gen` do `1-f-code.c`): todo
+`TRNOISE` é validado e depois perde TODOS os parâmetros de ruído
+(`NA = TS = NALPHA = NAMP = RTSAM = RTSCAPT = RTSEMT = 0`) — vale só o
+`DC`, sem grade, sem breakpoints —, para comparar com/sem ruído sem
+editar o deck. **O `TRRANDOM` não é afetado**, como no ngspice (o
+gerador dele nunca lê a variável; medido no ngspice-47: com
+`.options notrnoise` o `TRNOISE` fica em DC e o `TRRANDOM` segue
+sorteando a cada TS). `Options::notrnoise: bool` (flag ou `=0|1`); a
+nota da corrida conta as fontes ativas e diz `notrnoise: N TRNOISE
+source(s) silenced`. Ortogonal ao ruído de dispositivo (abaixo).
+Teste `notrnoise_silences_trnoise_only` (`tests/trnoise.rs`).
+Espelho nos bindings (listas de override Py/R/wasm): pendente — outro
+território.
+
+**Pendências**: `.pss` com ruído (recusado nesta fase).
 ## Load paralelo de dispositivos (issue #9, alavanca 1)
 
 `Options::load_threads` (API, não `.options`; feature nativa

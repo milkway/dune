@@ -218,14 +218,18 @@ pub(crate) const MAX_ONEF_SAMPLES: f64 = 8_388_608.0;
 const GRID_TOL: f64 = 1e-9;
 
 impl NoiseWave {
-    /// The realization of `wave` for source `name` under `seed`;
-    /// `None` for a deterministic wave. Errors on arguments ngspice
-    /// would run on garbage with.
+    /// The realization of `wave` for source `name` under
+    /// `opts.seed`; `None` for a deterministic wave. Errors on
+    /// arguments ngspice would run on garbage with. Under
+    /// `opts.notrnoise` a `TRNOISE` keeps its validation and then
+    /// loses every noise parameter (`trnoise_state_gen`: `NA = TS =
+    /// NALPHA = NAMP = RTSAM = RTSCAPT = RTSEMT = 0`).
     pub(crate) fn from_wave(
         wave: Option<&Wave>,
-        seed: u64,
+        opts: &Options,
         name: &str,
     ) -> Result<Option<NoiseWave>, Error> {
+        let seed = opts.seed;
         let bad = |m: String| Err(Error::Build(format!("source `{name}`: {m}")));
         match wave {
             Some(Wave::TrNoise(c)) => {
@@ -254,6 +258,11 @@ impl NoiseWave {
                         "TRNOISE random telegraph noise needs RTSCAPT > 0 and RTSEMT > 0".into(),
                     );
                 }
+                let (na, ts, alpha, namp, rts_am, capt, emt) = if opts.notrnoise {
+                    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                } else {
+                    (na, ts, alpha, namp, rts_am, capt, emt)
+                };
                 Ok(Some(NoiseWave::TrNoise(TrNoise {
                     na,
                     ts,
@@ -337,6 +346,15 @@ impl NoiseWave {
                 }
             }
             NoiseWave::TrRandom(r) => Some(r.ts),
+        }
+    }
+
+    /// Whether the realization is identically zero (a `TRNOISE` with
+    /// no white, 1/f or RTS part — e.g. under `notrnoise`).
+    pub(crate) fn is_silent(&self) -> bool {
+        match self {
+            NoiseWave::TrNoise(n) => !n.grid() && !n.rts(),
+            NoiseWave::TrRandom(_) => false,
         }
     }
 
@@ -591,15 +609,22 @@ impl Circuit {
     ) -> Result<(Option<Options>, Option<String>), Error> {
         let mut spacing = f64::INFINITY;
         let mut sources = 0;
+        let mut silenced = 0;
         for spec in &self.specs {
             let (name, wave) = match spec {
                 Spec::Vsource(v) => (&v.name, &v.wave),
                 Spec::Isource(i) => (&i.name, &i.wave),
                 _ => continue,
             };
-            let Some(n) = NoiseWave::from_wave(wave.as_ref(), opts.seed, name)? else {
+            let Some(n) = NoiseWave::from_wave(wave.as_ref(), opts, name)? else {
                 continue;
             };
+            if n.is_silent() {
+                if opts.notrnoise && matches!(wave, Some(Wave::TrNoise(_))) {
+                    silenced += 1;
+                }
+                continue;
+            }
             sources += 1;
             if n.onef_samples(tstop) > MAX_ONEF_SAMPLES {
                 return Err(Error::Build(format!(
@@ -611,13 +636,19 @@ impl Circuit {
                 spacing = spacing.min(s);
             }
         }
+        let silenced_note =
+            (silenced > 0).then(|| format!("notrnoise: {silenced} TRNOISE source(s) silenced"));
         if sources == 0 {
-            return Ok((None, None));
+            return Ok((None, silenced_note));
         }
-        let note = Some(format!(
+        let mut note = format!(
             "transient noise: {sources} source(s), seed {} (stream version {STREAM_VERSION})",
             opts.seed
-        ));
+        );
+        if let Some(s) = silenced_note {
+            note = format!("{note}; {s}");
+        }
+        let note = Some(note);
         if !spacing.is_finite() {
             return Ok((None, note));
         }
@@ -650,14 +681,21 @@ impl Circuit {
 mod tests {
     use super::*;
 
+    fn seeded(seed: u64) -> Options {
+        Options {
+            seed,
+            ..Options::default()
+        }
+    }
+
     fn trnoise(args: &[f64], seed: u64, name: &str) -> NoiseWave {
-        NoiseWave::from_wave(Some(&Wave::TrNoise(args.to_vec())), seed, name)
+        NoiseWave::from_wave(Some(&Wave::TrNoise(args.to_vec())), &seeded(seed), name)
             .unwrap()
             .unwrap()
     }
 
     fn trrandom(args: &[f64], seed: u64) -> TrRandom {
-        match NoiseWave::from_wave(Some(&Wave::TrRandom(args.to_vec())), seed, "v1") {
+        match NoiseWave::from_wave(Some(&Wave::TrRandom(args.to_vec())), &seeded(seed), "v1") {
             Ok(Some(NoiseWave::TrRandom(r))) => r,
             other => panic!("{other:?}"),
         }
@@ -893,7 +931,7 @@ mod tests {
     #[test]
     fn invalid_arguments_are_errors() {
         let e = |w: Wave| {
-            NoiseWave::from_wave(Some(&w), 1, "v")
+            NoiseWave::from_wave(Some(&w), &seeded(1), "v")
                 .unwrap_err()
                 .to_string()
         };
@@ -904,7 +942,7 @@ mod tests {
         assert!(e(Wave::TrRandom(vec![1.0, 0.0])).contains("positive"));
         assert!(e(Wave::TrRandom(vec![1.0, 1.0, -1.0])).contains("delay"));
         assert!(
-            NoiseWave::from_wave(Some(&Wave::Sin(vec![])), 1, "v")
+            NoiseWave::from_wave(Some(&Wave::Sin(vec![])), &seeded(1), "v")
                 .unwrap()
                 .is_none()
         );
