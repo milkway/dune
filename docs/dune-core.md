@@ -699,7 +699,9 @@ no Dune o rabo é opcional (defaults 128, 10, 50, 1). `FREQ = 0`
 colhe a fundamental das fontes (MDC das frequências: SIN/SFFM com
 frequência explícita, PULSE `1/PER`; EXP/PWL/PULSE sem PER assentam
 em constante e não contam; SIN amortecido ou sem frequência é erro).
-`OSCNODE` é conferido e reportado (reservado aos autônomos).
+`OSCNODE` é conferido; num circuito excitado só é reportado, num
+autônomo (nenhuma fonte periódica) carrega a condição de fase — ver
+"Osciladores autônomos" abaixo.
 `HARMS` conta o DC, como no ngspice. Semântica do STEADYCOEFF difere
 (ver convergência). `Circuit::pss(&Options, &PssParams) -> Pss`.
 
@@ -782,14 +784,175 @@ Rawfile e stdout dos 83 decks do corpus (examples, basic, regress,
 measure) **byte-idênticos** ao main com o refactor do `DCtran`
 (`tran_loop` extraído; log de passos opcional).
 
-**Limitações/pendências**: osciladores autônomos (período
-incógnito — shooting com T como incógnita + condição de fase no
-OSCNODE, ver relatório da issue); linhas de transmissão recusadas
+**Limitações/pendências**: linhas de transmissão recusadas
 (`Error::Unsupported`: o estado é o histórico da linha — com
 `ltrafit` a parte recursiva é finita, mas o atraso não; exigiria pôr
 o histórico/estados no vetor do shooting); chaves com histerese
 semeiam o estado pelo controle (dentro da banda pode escolher o ramo
 errado); ruído transiente fica para a outra leva da issue #13.
+
+### Osciladores autônomos (issue #20)
+
+**Detecção.** Um deck sem fonte periódica (nenhuma SIN/SFFM com
+frequência, nenhum PULSE com PER — a mesma colheita do `FREQ = 0`)
+é um oscilador livre: o período vira **incógnita** e resultado
+(`Pss::period`; `Pss::periods` traz o `T` de cada iteração, alinhado
+com `residuals`). OSCNODE e TSTAB > 0 passam a ser obrigatórios (o
+cartão já exige o nó). `FREQ ≠ 0` é chute; `FREQ = 0` estima. Um
+deck só com fontes DC e `FREQ` dado, que antes rodava como
+"excitado" e convergia na constante, agora é recusado com erro claro
+se não oscila (é o que ele é).
+
+**Partida (kick).** O Dune não injeta perturbação: o `.tran` de
+estabilização é o de sempre, e o deck tira o circuito do equilíbrio
+instável como na bancada — `.ic` + `UIC`, ou rampa de alimentação
+(PWL, ou PULSE sem PER, que não conta como periódico). É também a
+convenção do ngspice-47: o `dcpss.c` não tem kick, e todos os
+exemplos de `examples/pss/` partem de rampa PWL na fonte (`ring`,
+`colpitt`, `hartley`) ou de `ic=` com `uic` (`vdp`). Contar com o
+ruído numérico seria desonesto: num equilíbrio simétrico exato (anel
+de inversores idênticos) o erro de arredondamento pode levar
+centenas de constantes de tempo, ou nunca, para crescer. Se a janela
+não oscila, o erro diz isso e sugere o kick.
+
+**Estimativa de T** (janela = última metade do TSTAB). Contador de
+frequência: cruzamentos **ascendentes** de OSCNODE pelo nível
+médio-de-faixa `(max+min)/2`, T = espaçamento médio dos últimos 4
+períodos (dispersão reportada). Escolhido contra a autocorrelação
+porque (i) o cruzamento é onde `|dv/dt|` é máximo, então o instante é
+o mais bem condicionado do ciclo e a interpolação linear basta; (ii)
+vale para qualquer forma de onda (senoide, quadrada de anel, pulso de
+relaxação) sem reamostrar em malha uniforme; (iii) o pico da
+autocorrelação é largo (curvatura ~ω²) e enviesado pela amplitude
+ainda crescendo; (iv) é o mesmo ponto que serve de partida da
+condição de fase. O médio-de-faixa (não a média) garante cruzamento
+mesmo em forma de onda assimétrica; é tomado sobre os últimos
+4·T estimados, para que a amplitude ainda crescendo no começo da
+janela não o desloque. Sem FREQ, a estabilização roda com
+TMAX = TSTAB/1000 (o LTE refina) e a estimativa é **refinada** numa
+continuação de 5,5 períodos na malha do shooting (T/POINTS) a partir
+do estado final — Colpitts 5,2% → 7,7e-4, anel 3,3% → 4e-6 —, o que
+poupa iterações de Newton (Colpitts: 4 → 2). Com FREQ, a
+estabilização já roda na malha T/POINTS do chute; se a janela tem ≥3
+cruzamentos, **o T medido vence o chute** (nota "FREQ's guess was");
+o chute só semeia T quando não há o que medir. Medido: da partida com
+1,2 período de TSTAB (um cruzamento), o Newton traz T de ±10% em 5
+iterações (vdp; +20% falha com 1,2 T e converge com 2,2 T).
+
+**Método — Newton aumentado em [x₀; T].** Resíduo
+`[Φ_T(x₀) − x₀ ; x₀[osc] − v_ref]`. Condição de fase escolhida:
+**valor fixo** — OSCNODE preso no valor que tinha no último
+cruzamento ascendente do médio-de-faixa (o `t₀` reportado). Contra a
+derivada nula (`ẋ_osc(t₀) = 0`, pico): (i) a linha de borda do
+jacobiano é `e_oscᵀ`, constante, então a condição é satisfeita
+exatamente em toda iteração e sai do sistema — `δx[osc] = 0` e T
+ocupa o lugar de `x[osc]` entre as incógnitas: o sistema volta a ser
+quadrado, `n − 1` por `n − 1`, sem linha nova; (ii) a matriz
+aumentada é não singular sse `ẋ_osc(t₀) ≠ 0` (transversalidade), e
+no cruzamento do médio-de-faixa `|ẋ|` está perto do máximo — a
+condição de derivada nula fica justamente onde `ẋ_osc = 0` e, numa
+onda quadrada (anel), o patamar tem derivada nula num intervalo
+inteiro: a fase não é presa; (iii) a derivada nula exigiria `f(x₀)`
+(uma avaliação de dispositivo e sua derivada no produto de GMRES). O
+sistema de Newton é `(I − Φ′)δx − (∂Φ/∂T)δT = Φ_T(x₀) − x₀`, GMRES nas
+incógnitas escaladas (`x_i/tol_i`, `T/(RELTOL·T)`); T fica no slot de
+OSCNODE para o operador seguir identidade + posto baixo (com T no
+fim, a identidade vira um deslocamento cíclico e o GMRES perde a
+convergência em poucos produtos). **∂Φ/∂T pelo replay esticado**
+(previsto na D-0032): cada produto perturba x e T juntos num único
+replay; T + δT refaz a grade congelada com todos os tempos escalados
+por `(T+δT)/T` (TSTEP e TMAX também), então o mapa é suave em T como é
+em x — todos os passos e coeficientes de integração escalam junto.
+Salvaguardas: passo de Newton com |δT| > 20% de T é encolhido
+inteiro; backtracking em x e T juntos (até 4 metades, como no
+excitado). **Pelo menos um passo de Newton**: o critério de
+descasamento sozinho admite um erro de período de ~`tol/|ẋ|` (o
+anel "convergia" a 1,2e-4 do T discreto com resíduo 0,7); um passo
+a partir do estimado corrige T quadraticamente e o `δT` final vai na
+nota. Uma "órbita" convergida sem excursão em OSCNODE é o
+equilíbrio (periódico para todo T) e é recusada.
+
+**Saída e falha.** Plots idênticos aos do excitado, `t₀` = o
+cruzamento (fases dos harmônicos referidas a `t₀`, não a 0). Nota
+com `[resíduo/tolerância, T]` por iteração e a última correção de T.
+Falha = `Error::PssConvergence { iterations, residuals, period }`,
+`period = Some(último T)` (no excitado `None`; a mensagem só ganha o
+"last period" no autônomo).
+
+**Correção de fidelidade que veio junto — `.ic` com UIC.** O
+`CKTic` do 3f5 (`cktic.c`) põe os valores de `.nodeset`/`.ic` no
+CKTrhs antes do ponto UIC (que só troca rhs↔solução e carrega) e
+chama `DEVsetic`: o `CAPgetic` copia a tensão do nó para todo
+capacitor sem `IC=`. O Dune não fazia nenhum dos dois — um tanque LC
+chutado por `.ic v(1)=0.5` + UIC partia do repouso (ngspice oscila).
+Agora `Engine::ckt_ic` + `Device::set_ic` (portado só no capacitor;
+`diogetic`/`bjtgetic`/`mos*ic`/`b*getic`/`mesgetic` seguem como
+pendência — os `ic=` de instância desses já valiam, só a cópia do
+`.ic` do nó falta). Regressão `corpus/regress/uic_ic.cir` (LC + RC
+com `ic=` que vence o `.ic`): 6,1e-15 contra o ngspice-47. Nenhum
+deck do corpus usava `.ic` + UIC; o resto é byte-idêntico.
+
+**Validação** (`crates/dune-core/tests/pss_osc.rs`; decks
+`corpus/pss/osc_*.cir`, goldens por `tools/pss-golden.sh`, que ganhou
+`*pss-ngspice-card:` — o cartão inteiro que o ngspice roda, pois o
+FREQ dele é chute obrigatório — e `*tran-golden-vectors:`). Período
+de referência = contador de frequência (cruzamentos ascendentes do
+médio-de-faixa) sobre a janela salva de um `.tran` longo. Régua de
+período: erro de fase do trapezoidal por período, `(2π/N)²/12`
+relativo com N passos por período, somado sobre os dois cálculos
+comparados. Default = POINTS 256, tolerâncias SPICE.
+
+| Deck (OSCNODE) | T do `.pss` | vs `.tran` ngspice (régua) | vs `.tran` Dune no TMAX do PSS | iterações [resíduo] | `.pss` do ngspice-47 |
+|---|---|---|---|---|---|
+| `osc_vdp` LC + −G + diodos (v(1)) | 199,36609 µs | 3,0e-5 (1,3e-4) | 2,8e-7 | 2 [4,9e-3, 1,6e-7] | 4012,9 Hz: **−25%** |
+| `osc_ring` anel 3 CMOS MOS1 (v(1)) | 585,8960 ps | 1,9e-4 (2,9e-4) | 5,8e-7 | 2 [1,9e-2, 2,6e-6] | 1,5756 GHz: **−8,3%** |
+| `osc_phase` BJT + escada RC (v(c)) | 1,9157359 ms | 3,6e-5 (1,4e-4) | 2,0e-7 | 2 [1,7e-2, 1,9e-6] | 497,15 Hz: **−5,0%** |
+| `osc_wien` Wien + opamp_ideal + diodos (v(out)) | 633,96148 µs | 8,9e-6 (8,3e-5) | 2,0e-7 | 2 [8,1e-4, 2,1e-7] | não converge (estimativa vaga até 5,3 kHz) |
+| `osc_colpitts` (exemplo do ngspice) (v(3)) | 299,09398 ns | 1,6e-5 (8,7e-5) | 1,5e-6 | 2 [3,8, 2,3e-2] | 3,343602 MHz: 3,6e-5 do `.tran` dele, 5,1e-5 do Dune |
+
+- O `.tran` do Dune no mesmo cartão bate o do ngspice a 4e-12 (anel)
+  … 1,2e-6 (phase): a diferença PSS-vs-`.tran` é toda de malha (o
+  `.tran` do cartão tem ~117–320 passos por período, o PSS 256); no
+  mesmo TMAX = T/256 sobra 2e-7–1,5e-6.
+- **Apertado** (RELTOL 1e-6, POINTS 1024) contra o `.tran` do Dune
+  apertado com TMAX = T/1024: vdp 5,5e-9, Wien 5,2e-9 — os dois
+  métodos convergem um sobre o outro.
+- **Analítico (vdp):** `T0 = 2π√(LC)` = 198,6918 µs; o PSS fica
+  3,35e-3 acima — o puxão dos harmônicos (os diodos grampeiam
+  duro). Groszkowski é **exato** para tanque LC carregado só por
+  não-linearidades sem memória (Σ k·Q_k = 0 → ω²/ω₀² =
+  Σ|V_k|²/Σk²|V_k|²); com o espectro do próprio PSS (1024 pontos, 200
+  harmônicos, apertado) dá 3,4e-6 do T do shooting.
+- O `.pss` do ngspice, no território dele (oscilador livre), só
+  acerta no Colpitts — e só com o cartão do `colpitt_osc_pss_ctrl.cir`
+  (`1e6 50e-6`); com o do deck simples (`3.1e6 500e-6`) diverge para
+  11 MHz. Nos outros quatro declara convergência em frequências
+  5–25% erradas (vdp, anel, phase — conferido contra o `.tran` do
+  próprio ngspice) ou não converge (Wien). Com chute 1 kHz no vdp
+  (5× abaixo) o ngspice-47 não termina em 9 min.
+
+**Custo** (períodos simulados; a estabilização roda em malha grossa):
+
+| Deck | TSTAB | estabilização | refino | adaptativos + replays | `.tran` do golden |
+|---|---|---|---|---|---|
+| vdp | 4 ms | 20 T | 5,5 T | 2 + 3 | 200 T |
+| anel | 100 ns | 171 T | 5,5 T | 2 + 4 | 341 T |
+| phase | 100 ms | 52 T | 5,5 T | 2 + 4 | 104 T |
+| Wien | 10 ms | 16 T | 5,5 T | 2 + 4 | 158 T |
+| Colpitts | 500 µs | 1672 T | 5,5 T | 2 + 5 | 2006 T |
+
+O shooting em si custa 5–7 períodos; o resto é o TSTAB que o deck
+pede (o tempo físico de partida do oscilador — o Colpitts herdou os
+500 µs do cartão do ngspice). Com o T estimado, o Newton não espera a
+amplitude assentar.
+
+**Pendências:** LTRA/TRA no `.pss` (estado = histórico da linha,
+recusado como no excitado); ruído de dispositivo no tempo (issue #20
+itens 3–5); `getic` dos semicondutores; osciladores com fonte
+periódica que *não* é a fundamental (VCO travado, injeção) seguem o
+caminho excitado — não há opção para forçar o autônomo com fontes;
+bindings dedicados (spice.pss/spice_pss) não expõem `periods` nem o
+`period` da falha ainda (outro território).
 
 ## Ruído transiente — `TRNOISE`/`TRRANDOM` (issue #13, parte 2)
 
