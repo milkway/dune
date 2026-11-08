@@ -11,6 +11,7 @@ pub mod consts;
 pub mod linalg;
 
 mod ac;
+mod b1disto;
 mod bjt;
 mod bsim1;
 mod bsim2;

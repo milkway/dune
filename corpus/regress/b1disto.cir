@@ -1,0 +1,32 @@
+BSIM1 common-source stage with source degeneration: harmonics in .disto
+* Coverage: b1dset.c's Dderivs transcription of the BSIM1 drain current
+* in saturation with vds < VDD (the quadratic Beta0 interpolation and
+* its d_dummy quirk), body effect through the 1k source resistor
+* (vbs swings), Von's Eta*vds taken with Eta constant, the 40/60
+* charges (XPART absent) with b1dset.c's 1/15 saturation drain charge,
+* reverse bulk junctions; 2nd and 3rd harmonics of b1disto.c against
+* ngspice-47. (XPART=0 on the card would mean 0/100 in ngspice-47:
+* the parameter is a flag there, set by its mere presence.)
+vdd 5 0 5
+vin 1 0 0 distof1 0.02
+vbias 2 1 2.0
+rg 2 3 10k
+m1 4 3 7 6 nmos l=2u w=20u ad=40p as=40p pd=24u ps=24u
+rd 5 4 10k
+cl 4 0 0.2p
+vbb 6 0 -1
+rsrc 7 0 1k
+.model nmos nmos
++ level=4 tox=3.00000e-2 vdd=5 temp=27
++ dl=7.97991e-1 dw=4.77402e-1
++ vfb=-1.0087 phi=7.96434e-1 k1=1.31191 k2=1.46640e-1
++ eta=-1.0027e-3 muz=5.34334e+2 u0=4.38497e-2 u1=-5.7332e-2
++ x2e=-7.6911e-4 x3e=7.86777e-4 x2mz=8.25434
++ mus=5.40612e+2 x2ms=-1.2992e+1 x3ms=-9.4035
++ x2u0=1.06821e-3 x2u1=-1.9209e-2 x3u1=7.76925e-3
++ n0=1.55 nb=0.09 nd=0.0
++ cgdo=2.70000e-10 cgso=2.70000e-10 cgbo=1.40000e-10
++ rsh=0 cj=2.75e-4 cjsw=1.90e-10 js=1.0e-8
++ pb=0.7 pbsw=0.8 mj=0.5 mjsw=0.33 wdf=0.0
+.disto dec 10 1e3 1e10
+.end

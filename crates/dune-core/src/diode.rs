@@ -614,7 +614,8 @@ impl crate::devices::Device for DiodeI {
         const N_MINLOG: f64 = 1e-38;
         let cd = ctx.states.get(0, self.st + CURRENT);
         let m = self.sens.m;
-        let rs = ctx.thermal(self.pos_prime, self.pos, self.t.gspr);
+        // `dionoise.c` (ngspice-47): RS at the instance temperature.
+        let rs = ctx.thermal_at(self.pos_prime, self.pos, self.t.gspr, self.sens.temp);
         let id = ctx.shot(self.pos_prime, self.neg, cd);
         let model = &self.sens.model;
         let flicker = ctx.flicker(

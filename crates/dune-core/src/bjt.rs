@@ -152,6 +152,10 @@ impl BjtModel {
 
 /// Model- and temperature-derived values (`BJTtemp`).
 pub(crate) struct BjtTemp {
+    /// The instance temperature, kelvin (`*temp`: the card's
+    /// `TEMP=` or `CKTtemp`) — the thermal noise generators' T
+    /// (ngspice-47 `NevalSrcInstanceTemp`).
+    pub temp: f64,
     pub type_: f64, // +1 NPN, -1 PNP
     pub inv_early_f: f64,
     pub inv_early_r: f64,
@@ -271,6 +275,7 @@ impl BjtTemp {
         let t_vcrit = vt * f64::ln(vt / (ROOT2 * m.is));
 
         BjtTemp {
+            temp,
             type_: if m.npn { 1.0 } else { -1.0 },
             inv_early_f: inv(m.vaf),
             inv_early_r: inv(m.var),
@@ -573,9 +578,17 @@ impl crate::devices::Device for BjtI {
     fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
         const N_MINLOG: f64 = 1e-38;
         let st = self.st;
-        let rc = ctx.thermal(self.col_p, self.col, self.t.col_conduct * self.area);
-        let rb = ctx.thermal(self.base_p, self.base, ctx.states.get(0, st + GX));
-        let re = ctx.thermal(self.emit_p, self.emit, self.t.emit_conduct * self.area);
+        // `bjtnoise.c` (ngspice-47): the three resistors at the
+        // instance temperature.
+        let temp = self.t.temp;
+        let rc = ctx.thermal_at(self.col_p, self.col, self.t.col_conduct * self.area, temp);
+        let rb = ctx.thermal_at(self.base_p, self.base, ctx.states.get(0, st + GX), temp);
+        let re = ctx.thermal_at(
+            self.emit_p,
+            self.emit,
+            self.t.emit_conduct * self.area,
+            temp,
+        );
         let ic = ctx.shot(self.col_p, self.emit_p, ctx.states.get(0, st + CC));
         let ib = ctx.shot(self.base_p, self.emit_p, ctx.states.get(0, st + CB));
         let cb = ctx.states.get(0, st + CB);

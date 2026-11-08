@@ -196,6 +196,11 @@ pub struct Bsim2Model {
     /// `WDF`/`DELL` (accepted, unused by the load).
     pub wdf: f64,
     pub dell: f64,
+    /// `KF`/`AF` (noise only; ngspice-47's `b2noi.c` — the 3f5's
+    /// BSIM2 has no noise and no such parameters). Defaults 0 and 1;
+    /// `new` sets `AF`, the derived `Default` leaves it 0.
+    pub kf: f64,
+    pub af: f64,
 }
 
 impl Bsim2Model {
@@ -225,6 +230,7 @@ impl Bsim2Model {
             // lower Vbs clamp.
             vbb: 5.0,
             wdf: 10.0,
+            af: 1.0,
             ..Default::default()
         }
     }
@@ -311,6 +317,12 @@ pub(crate) struct Bsim2Size {
     pub cj: f64,
     pub cjsw: f64,
     pub xpart: f64,
+    /// Noise: `KF`, `AF`, `B2Cox` (F/cm²) and `DW`/`DL` (µm).
+    pub kf: f64,
+    pub af: f64,
+    pub cox: f64,
+    pub delta_w: f64,
+    pub delta_l: f64,
 }
 
 impl Bsim2Size {
@@ -453,6 +465,11 @@ impl Bsim2Size {
             cj: m.cj,
             cjsw: m.cjsw,
             xpart: m.xpart,
+            kf: m.kf,
+            af: m.af,
+            cox,
+            delta_w: m.dw,
+            delta_l: m.dl,
         })
     }
 }
@@ -1542,6 +1559,30 @@ impl crate::devices::Device for Bsim2I {
             -gbs - (xnrm - xrev) * gmbs - gc[9] - gc[10] - gc[11],
         );
         ctx.add(self.s[SP_DP], -gds - xrev * (gm + gmbs) + gc[10]);
+    }
+
+    /// `B2noise` (ngspice-47 `b2noi.c`): see [`crate::bsim1::b12_noise`].
+    fn noise_suffixes(&self) -> Option<&'static [&'static str]> {
+        Some(crate::bsim1::B12_NOISE_SUFFIXES)
+    }
+
+    fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
+        let t = &self.t;
+        let n = crate::bsim1::B12Noise {
+            drain: self.drain,
+            source: self.source,
+            d_p: self.d_p,
+            s_p: self.s_p,
+            gdpr: t.drain_conductance,
+            gspr: t.source_conductance,
+            gm: ctx.states.get(0, self.st + GM),
+            cd: ctx.states.get(0, self.st + CD),
+            kf: t.kf,
+            af: t.af,
+            flicker_area: (self.geom.w - t.delta_w * 1e-6) * (self.geom.l - t.delta_l * 1e-6),
+            cox: t.cox,
+        };
+        crate::bsim1::b12_noise(ctx, &n)
     }
 
     fn trunc(&self, t: &crate::integ::TerrCtx, time_step: &mut f64) {

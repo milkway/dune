@@ -1,0 +1,33 @@
+Instance temperature in the thermal noise generators
+* Coverage: ngspice-47's NevalSrcInstanceTemp - the resistive and
+* channel thermal generators of the BJT (rc/rb/re), diode (rs), JFET
+* (rd/rs/id) and MOS1/2/3 (rd/rs/id) use the instance TEMP= when the
+* card gives one (the 3f5's NevalSrc always used the circuit
+* temperature). Every device below sits at its own temperature and
+* drives the shared output node; one MOS2 stays at the circuit
+* temperature as the control. The instance temperature also moves
+* the operating point, which the density vectors check as well.
+vcc 9 0 10
+vin b1 bb dc 0 ac 1
+vbb bb 0 dc 0.68
+rl 9 out 2k
+q1 out b1 0 qn temp=100
+j1 out g1 s1 jn temp=80
+vg1 g1 0 dc 0
+rs1 s1 0 1k
+m1 out g2 0 0 nm1 l=4u w=20u nrd=2 nrs=2 temp=60
+vg2 g2 0 dc 1.1
+m2 out g3 0 0 nm2 l=4u w=10u nrd=2 nrs=2 temp=-20
+m3 out g3 0 0 nm3 l=4u w=10u nrd=2 nrs=2 temp=45
+m4 out g3 0 0 nm2 l=4u w=10u nrd=2 nrs=2
+vg3 g3 0 dc 1.0
+d1 out dx dm temp=120
+rdx dx 0 20k
+.model qn npn is=1e-16 bf=120 rb=200 rc=20 re=3 vaf=60
+.model jn njf vto=-2 beta=0.4e-3 lambda=0.02 rd=30 rs=20
+.model nm1 nmos level=1 vto=0.8 kp=50u lambda=0.02 rsh=40
+.model nm2 nmos level=2 vto=0.7 tox=40n nsub=1e16 uo=600 lambda=0.02 rsh=30
+.model nm3 nmos level=3 vto=0.7 tox=30n nsub=1e16 uo=500 theta=0.1 rsh=20
+.model dm d is=1e-14 rs=500 n=1.1
+.noise v(out) vin dec 5 1k 10meg 1
+.end

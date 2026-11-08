@@ -13,6 +13,7 @@
 
 use crate::consts::{BOLTZ, CHARGE, KOVERQ, REFTEMP, ROOT2};
 use crate::diode::pnjlim;
+use crate::disto::{DfCoeffs, DistoCtx, DistoSetupCtx, Kern, d1_term, df_term, jomega};
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
 use crate::mos1::fetlim;
 
@@ -49,6 +50,14 @@ pub struct JfetModel {
     /// `KF`/`AF` (noise only).
     pub kf: f64,
     pub af: f64,
+    /// `NLEV` (ngspice-47 only, default 2): noise equation selector
+    /// — `< 3` channel thermal `4kT·(2/3)|gm|`, `3` the
+    /// `GDSNOI`-scaled form; for the MOSFETs also the flicker form
+    /// (0/1/2–3).
+    pub nlev: i64,
+    /// `GDSNOI` (ngspice-47 only, default 1): channel noise
+    /// coefficient of `NLEV = 3`.
+    pub gdsnoi: f64,
     /// `TNOM` in kelvin (the card gives °C).
     pub tnom: Option<f64>,
 }
@@ -70,6 +79,8 @@ impl JfetModel {
             b: 1.0,
             kf: 0.0,
             af: 1.0,
+            nlev: 2,
+            gdsnoi: 1.0,
             tnom: None,
         }
     }
@@ -89,6 +100,10 @@ fn egfet(t: f64) -> f64 {
 /// block and the per-instance block).
 #[derive(Clone, Debug)]
 pub(crate) struct JfetTemp {
+    /// The instance temperature, kelvin (`*temp`: the card's
+    /// `TEMP=` or `CKTtemp`) — the thermal noise generators' T
+    /// (ngspice-47 `NevalSrcInstanceTemp`).
+    pub temp: f64,
     pub type_: f64,
     pub vt: f64,
     pub vto: f64,
@@ -111,6 +126,9 @@ pub(crate) struct JfetTemp {
     /// `KF`/`AF`: flicker-noise coefficient and exponent.
     pub kf: f64,
     pub af: f64,
+    /// `NLEV`/`GDSNOI` (noise only).
+    pub nlev: i64,
+    pub gdsnoi: f64,
     pub notes: Vec<String>,
 }
 
@@ -162,6 +180,7 @@ impl JfetTemp {
         let vcrit = vt * f64::ln(vt / (ROOT2 * t_sat_cur));
 
         JfetTemp {
+            temp,
             type_: if m.njf { 1.0 } else { -1.0 },
             vt,
             vto: m.vto,
@@ -182,6 +201,8 @@ impl JfetTemp {
             source_conduct: conduct(m.rs),
             kf: m.kf,
             af: m.af,
+            nlev: m.nlev,
+            gdsnoi: m.gdsnoi,
             notes,
         }
     }
@@ -630,10 +651,32 @@ pub(crate) fn fet3_pz(
 /// (`JFETnNames`, `MESnNames`).
 pub(crate) const FET3_NOISE_SUFFIXES: &[&str] = &["_rd", "_rs", "_id", "_1overf", ""];
 
-/// `JFETnoise` (ngspice-47, default `NLEV = 2`) / `MESnoise`:
-/// thermal noise of RD and RS, channel thermal noise
-/// `4kT·(2/3)|gm|`, flicker `KF·|Id|^AF/f` on the drain current of
-/// `state0`, and the total. `gdpr`/`gspr` already carry the area.
+/// How a FET's channel thermal noise is evaluated: the MESFET's
+/// `NevalSrc` at `CKTtemp` with `(2/3)|gm|`, or the JFET's
+/// `NevalSrcInstanceTemp` with its `NLEV` selector (ngspice-47
+/// `jfetnoi.c`).
+pub(crate) enum Fet3Channel {
+    /// `mesnoise.c`.
+    Mes,
+    /// `jfetnoi.c`: instance temperature; `NLEV < 3` → `(2/3)|gm|`,
+    /// `NLEV = 3` → `(2/3)·β·vgst·(1+α+α²)/(1+α)·GDSNOI` with
+    /// `α = 1 − vds/vgst` in the linear region (`vgst ≥ vds`), 0 in
+    /// saturation.
+    Jfet {
+        temp: f64,
+        nlev: i64,
+        gdsnoi: f64,
+        /// `tThreshold`, `tBeta·area`.
+        vto: f64,
+        beta: f64,
+    },
+}
+
+/// `JFETnoise` (ngspice-47) / `MESnoise`: thermal noise of RD and
+/// RS, channel thermal noise (see [`Fet3Channel`]), flicker
+/// `KF·|Id|^AF/f` on the drain current of `state0`, and the total.
+/// `gdpr`/`gspr` already carry the area.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn fet3_noise(
     ctx: &crate::matrix::NoiseCtx,
     n: &Fet3Nodes,
@@ -642,12 +685,43 @@ pub(crate) fn fet3_noise(
     gspr: f64,
     kf: f64,
     af: f64,
+    chan: &Fet3Channel,
 ) -> Vec<f64> {
     const N_MINLOG: f64 = 1e-38;
-    let rd = ctx.thermal(n.d_p, n.drain, gdpr);
-    let rs = ctx.thermal(n.s_p, n.source, gspr);
     let gm = ctx.states.get(0, st + GM);
-    let id = ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * gm.abs());
+    let (rd, rs, id) = match *chan {
+        Fet3Channel::Mes => (
+            ctx.thermal(n.d_p, n.drain, gdpr),
+            ctx.thermal(n.s_p, n.source, gspr),
+            ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * gm.abs()),
+        ),
+        Fet3Channel::Jfet {
+            temp,
+            nlev,
+            gdsnoi,
+            vto,
+            beta,
+        } => {
+            let sid = if nlev < 3 {
+                2.0 / 3.0 * gm.abs()
+            } else {
+                let vgs = ctx.states.get(0, st + VGS);
+                let vds = vgs - ctx.states.get(0, st + VGD);
+                let vgst = vgs - vto;
+                let alpha = if vgst >= vds {
+                    1.0 - vds / vgst // linear region
+                } else {
+                    0.0 // saturation region
+                };
+                2.0 / 3.0 * beta * vgst * (1.0 + alpha + alpha * alpha) / (1.0 + alpha) * gdsnoi
+            };
+            (
+                ctx.thermal_at(n.d_p, n.drain, gdpr, temp),
+                ctx.thermal_at(n.s_p, n.source, gspr, temp),
+                ctx.thermal_at(n.d_p, n.s_p, sid, temp),
+            )
+        }
+    };
     let cd = ctx.states.get(0, st + CD);
     let flicker = ctx.flicker(
         n.d_p,
@@ -656,6 +730,269 @@ pub(crate) fn fet3_noise(
         1.0,
     );
     vec![rd, rs, id, flicker, rd + rs + id + flicker]
+}
+
+/// The gate-charge part of a three-terminal FET's `.disto`
+/// coefficients: the JFET's two one-variable depletion charges, or the
+/// MESFET's two charges in `(vgs, vgd)`.
+#[derive(Clone, Copy, Debug)]
+#[allow(clippy::large_enum_variant)] // one per instance, never moved in bulk
+pub(crate) enum Fet3GateQ {
+    /// `jfetdset.c`: `capgs2/3` on `vgs`, `capgd2/3` on `vgd`
+    /// (Taylor coefficients of the depletion charges).
+    Junction {
+        capgs2: f64,
+        capgs3: f64,
+        capgd2: f64,
+        capgd3: f64,
+    },
+    /// `mesdset.c`: `qgs_*`/`qgd_*`, x = vgs, y = vgd.
+    Statz { qgs: DfCoeffs, qgd: DfCoeffs },
+}
+
+/// Taylor coefficients of a JFET/MESFET at the operating point (the
+/// `cdr_*`, `ggs2 …`, `capgs2 …`/`qgs_* …` instance fields of
+/// `jfetdefs.h`/`mesdefs.h`). The drain current is a function of
+/// x = vgs and y = vds (the C's `cdr_x2, cdr_y2, cdr_xy …` for the
+/// JFET, `cdr_x2, cdr_z2, cdr_xz …` for the MESFET — same slots).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Fet3DistoCoeffs {
+    pub cdr: DfCoeffs,
+    pub ggs2: f64,
+    pub ggs3: f64,
+    pub ggd2: f64,
+    pub ggd3: f64,
+    pub q: Fet3GateQ,
+}
+
+impl Default for Fet3DistoCoeffs {
+    fn default() -> Self {
+        Fet3DistoCoeffs {
+            cdr: DfCoeffs::default(),
+            ggs2: 0.0,
+            ggs3: 0.0,
+            ggd2: 0.0,
+            ggd3: 0.0,
+            q: Fet3GateQ::Junction {
+                capgs2: 0.0,
+                capgs3: 0.0,
+                capgd2: 0.0,
+                capgd3: 0.0,
+            },
+        }
+    }
+}
+
+/// The derivatives (not yet Taylor coefficients) of a mode-normalized
+/// drain current in (vgs, vds) that `jfetdset.c`/`mesdset.c` keep:
+/// `gm1, gds1, gm2, gds2, gmds, gm3, gds3, gm2ds, gmds2`.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Fet3DrainDerivs {
+    pub gm1: f64,
+    pub gds1: f64,
+    pub gm2: f64,
+    pub gds2: f64,
+    pub gmds: f64,
+    pub gm3: f64,
+    pub gds3: f64,
+    pub gm2ds: f64,
+    pub gmds2: f64,
+}
+
+/// The closing block of `JFETdSetup`/`MESdSetup` for the drain
+/// current: "taking into account type and mode" — inverse mode is
+/// the chain rule for `id(vgs, vds) = −f(vgs − vds, −vds)` — then the
+/// Taylor factors (type on the even orders).
+pub(crate) fn fet3_cdr(typ: f64, mode: f64, g: &Fet3DrainDerivs) -> DfCoeffs {
+    let mut c = DfCoeffs::default();
+    if mode == 1.0 {
+        c.cxx = g.gm2;
+        c.cyy = g.gds2;
+        c.cxy = g.gmds;
+        c.cxxx = g.gm3;
+        c.cyyy = g.gds3;
+        c.cxxy = g.gm2ds;
+        c.cxyy = g.gmds2;
+    } else {
+        c.cxx = -g.gm2;
+        c.cyy = -(g.gm2 + g.gds2 + 2.0 * g.gmds);
+        c.cxy = g.gm2 + g.gmds;
+        c.cxxx = -g.gm3;
+        c.cyyy = g.gm3 + g.gds3 + 3.0 * (g.gm2ds + g.gmds2);
+        c.cxxy = g.gm3 + g.gm2ds;
+        c.cxyy = -(g.gm3 + 2.0 * g.gm2ds + g.gmds2);
+    }
+    c.cxx *= 0.5 * typ;
+    c.cyy *= 0.5 * typ;
+    c.cxy *= typ;
+    c.cxxx /= 6.;
+    c.cyyy /= 6.;
+    c.cxxy *= 0.5;
+    c.cxyy *= 0.5;
+    c
+}
+
+/// One gate junction's `(lgg1, lgg2, lgg3)` as `jfetdset.c`/
+/// `mesdset.c` write it: the conductance with gmin, then the second-
+/// and third-order Taylor coefficients of the current (zero in the
+/// `−5·vt` reverse branch, where the current is linear).
+pub(crate) fn fet3_gate_diode_disto(v: f64, csat: f64, vt: f64, gmin: f64) -> (f64, f64, f64) {
+    if v <= -5.0 * vt {
+        (-csat / v + gmin, 0.0, 0.0)
+    } else {
+        let ev = f64::exp(v / vt);
+        let g1 = csat * ev / vt + gmin;
+        let g2 = (g1 - gmin) / (vt * 2.0);
+        let g3 = g2 / (3.0 * vt);
+        (g1, g2, g3)
+    }
+}
+
+/// `JFETdisto` / `MESdisto` in the load modes (`jfetdist.c`,
+/// `mesdisto.c` — the same file but for the gate charges): x = vgs,
+/// y = vds on the internal nodes; the drain current, the two gate
+/// diodes (on vgs and vgd = x − y) and the gate charges.
+pub(crate) fn fet3_disto_load(d: &Fet3DistoCoeffs, n: &Fet3Nodes, ctx: &mut DistoCtx) {
+    let mode = ctx.mode;
+    let omega = ctx.omega;
+    let kx = ctx.h.kern(mode, n.gate, n.s_p);
+    let ky = ctx.h.kern(mode, n.d_p, n.s_p);
+    let kz = Kern::default();
+    let kgd = kx.sub(&ky);
+    let cdrain = df_term(mode, &d.cdr, &kx, &ky, &kz);
+    ctx.stamp(n.d_p, n.s_p, cdrain);
+    let ggs = d1_term(mode, d.ggs2, d.ggs3, &kx);
+    ctx.stamp(n.gate, n.s_p, ggs);
+    let ggd = d1_term(mode, d.ggd2, d.ggd3, &kgd);
+    ctx.stamp(n.gate, n.d_p, ggd);
+    match &d.q {
+        Fet3GateQ::Junction {
+            capgs2,
+            capgs3,
+            capgd2,
+            capgd3,
+        } => {
+            let capgs = jomega(omega, d1_term(mode, *capgs2, *capgs3, &kx));
+            ctx.stamp(n.gate, n.s_p, capgs);
+            let capgd = jomega(omega, d1_term(mode, *capgd2, *capgd3, &kgd));
+            ctx.stamp(n.gate, n.d_p, capgd);
+        }
+        Fet3GateQ::Statz { qgs, qgd } => {
+            let q = jomega(omega, df_term(mode, qgs, &kx, &kgd, &kz));
+            ctx.stamp(n.gate, n.s_p, q);
+            let q = jomega(omega, df_term(mode, qgd, &kx, &kgd, &kz));
+            ctx.stamp(n.gate, n.d_p, q);
+        }
+    }
+}
+
+/// `JFETdSetup` (`dev/jfet/jfetdset.c`, 3f5 and ngspice-47 alike but
+/// for ngspice's `m` and temperature-adjusted beta/threshold, which
+/// Dune's JFET does not have): the Taylor coefficients at the
+/// operating point `(vgs, vgd)` (type-normalized, from `CKTrhsOld`).
+///
+/// Two quirks of the C are kept literally:
+/// - the drain current is plain Shichman–Hodges — the setup ignores
+///   the Sydney doping tail `B` that the load uses, so with `B ≠ 1`
+///   the distortion coefficients are not the load's derivatives;
+/// - inverse mode swaps `vgs`/`vgd` before the gate junctions are
+///   evaluated, but the local names keep their zero-bias caps
+///   (`czgs` on the local `vgs` = real `vgd`); the interchange block
+///   then crosses them back, and the closing "adjust for type" block
+///   rewrites the second orders `ggs2`/`ggd2`, `capgs2`/`capgd2` from
+///   the local values once more. Net effect in inverse mode: the gs
+///   branch gets the gd diode's second order (the third is right),
+///   `czgs`'s charge at the real `vgd` for its second order and
+///   `czgd`'s charge at the real `vgs` for its third.
+pub(crate) fn jfet_dsetup(
+    t: &JfetTemp,
+    area: f64,
+    gmin: f64,
+    vgs: f64,
+    vgd: f64,
+) -> Fet3DistoCoeffs {
+    let typ = t.type_;
+    let beta = t.beta * area;
+    let csat = t.t_sat_cur * area;
+    let vt = t.vt;
+    let lambda = t.lambda;
+    let (mut vgs, mut vgd) = (vgs, vgd);
+    let mut vds = vgs - vgd;
+    let mode = if vds < 0.0 {
+        vds = -vds;
+        std::mem::swap(&mut vgs, &mut vgd);
+        -1.0
+    } else {
+        1.0
+    };
+    let (_, lggs2, lggs3) = fet3_gate_diode_disto(vgs, csat, vt, gmin);
+    let (_, lggd2, lggd3) = fet3_gate_diode_disto(vgd, csat, vt, gmin);
+
+    let vgst = vgs - t.vto;
+    let mut g = Fet3DrainDerivs::default();
+    if vgst > 0.0 {
+        let betap = beta * (1.0 + lambda * vds);
+        let twob = betap + betap;
+        if vgst <= vds {
+            // Normal mode, saturation region.
+            g.gm1 = twob * vgst;
+            g.gm2 = twob;
+            g.gds1 = lambda * beta * vgst * vgst;
+            g.gm2ds = 2.0 * lambda * beta;
+            g.gmds = g.gm2ds * vgst;
+        } else {
+            // Normal mode, linear region.
+            g.gm1 = twob * vds;
+            g.gmds = (beta + beta) * (1.0 + 2.0 * lambda * vds);
+            g.gds2 = 2.0 * beta * (2.0 * lambda * vgst - 1.0 - 3.0 * lambda * vds);
+            g.gds1 =
+                beta * (2.0 * (vgst - vds) + 4.0 * vgst * vds * lambda - 3.0 * lambda * vds * vds);
+            g.gmds2 = 4.0 * beta * lambda;
+            g.gds3 = -6.0 * beta * lambda;
+        }
+    }
+
+    // Charge storage elements.
+    let czgs = t.t_cgs * area;
+    let czgd = t.t_cgd * area;
+    let pot = t.t_gate_pot;
+    let twop = pot + pot;
+    let junction = |v: f64, cz: f64| {
+        if v < t.cor_dep_cap {
+            let sarg = f64::sqrt(1.0 - v / pot);
+            let c1 = cz / sarg;
+            let c2 = c1 / (pot * 4.0 * sarg * sarg);
+            let c3 = c2 / (pot * 2.0 * sarg * sarg);
+            (c2, c3)
+        } else {
+            let czf2 = cz / t.f2;
+            (czf2 / twop * 0.5, 0.0)
+        }
+    };
+    let (lcapgs2, lcapgs3) = junction(vgs, czgs);
+    let (lcapgd2, lcapgd3) = junction(vgd, czgd);
+
+    let cdr = fet3_cdr(typ, mode, &g);
+    // `here->ggs3 = lggd3` etc. in inverse mode; the second orders
+    // are then overwritten from the local values (quirk above).
+    let (ggs3, ggd3, capgs3, capgd3) = if mode == 1.0 {
+        (lggs3, lggd3, lcapgs3, lcapgd3)
+    } else {
+        (lggd3, lggs3, lcapgd3, lcapgs3)
+    };
+    Fet3DistoCoeffs {
+        cdr,
+        ggs2: typ * lggs2,
+        ggs3,
+        ggd2: typ * lggd2,
+        ggd3,
+        q: Fet3GateQ::Junction {
+            capgs2: typ * lcapgs2,
+            capgs3,
+            capgd2: typ * lcapgd2,
+            capgd3,
+        },
+    }
 }
 
 /// A JFET instance (`JFETinstance`).
@@ -668,6 +1005,8 @@ pub(crate) struct JfetI {
     ic: (f64, f64),
     ic_given: crate::devices::IcGiven,
     st: usize,
+    /// `.disto` Taylor coefficients (`JFETdSetup`).
+    dist: Fet3DistoCoeffs,
 }
 
 impl JfetI {
@@ -688,6 +1027,7 @@ impl JfetI {
             ic,
             ic_given: crate::devices::IcGiven::ALL,
             st,
+            dist: Fet3DistoCoeffs::default(),
         }
     }
 }
@@ -809,12 +1149,35 @@ impl crate::devices::Device for JfetI {
     fn noise_dens(&self, ctx: &crate::matrix::NoiseCtx) -> Vec<f64> {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
-        fet3_noise(ctx, &self.n, self.st, gdpr, gspr, self.t.kf, self.t.af)
+        let t = &self.t;
+        let chan = Fet3Channel::Jfet {
+            temp: t.temp,
+            nlev: t.nlev,
+            gdsnoi: t.gdsnoi,
+            vto: t.vto,
+            beta: t.beta * self.area,
+        };
+        fet3_noise(ctx, &self.n, self.st, gdpr, gspr, t.kf, t.af, &chan)
+    }
+
+    /// `JFETdSetup`: see [`jfet_dsetup`].
+    fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        let n = &self.n;
+        let typ = self.t.type_;
+        let vgs = typ * (ctx.sol[n.gate] - ctx.sol[n.s_p]);
+        let vgd = typ * (ctx.sol[n.gate] - ctx.sol[n.d_p]);
+        self.dist = jfet_dsetup(&self.t, self.area, ctx.gmin, vgs, vgd);
+        Ok(())
+    }
+
+    /// `JFETdisto` (`jfetdist.c`).
+    fn disto_load(&self, ctx: &mut DistoCtx) {
+        fet3_disto_load(&self.dist, &self.n, ctx);
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -919,5 +1282,217 @@ mod tests {
         let e = (0.6 / vt).exp();
         assert_eq!(i, 1e-14 * (e - 1.0));
         assert_eq!(g, 1e-14 * e / vt);
+    }
+
+    /// The seven Taylor coefficients of a two-variable function at
+    /// `(x, y)` by central differences, in `DfCoeffs` order
+    /// `(cxx, cyy, cxy, cxxx, cyyy, cxxy, cxyy)` — ½f_xx, ½f_yy, f_xy,
+    /// ⅙f_xxx, ⅙f_yyy, ½f_xxy, ½f_xyy.
+    pub(crate) fn taylor2_fd(f: &dyn Fn(f64, f64) -> f64, x: f64, y: f64, h: f64) -> [f64; 7] {
+        let fxx = (f(x + h, y) - 2.0 * f(x, y) + f(x - h, y)) / (h * h);
+        let fyy = (f(x, y + h) - 2.0 * f(x, y) + f(x, y - h)) / (h * h);
+        let fxy =
+            (f(x + h, y + h) - f(x + h, y - h) - f(x - h, y + h) + f(x - h, y - h)) / (4.0 * h * h);
+        let d3 = |dx: f64, dy: f64| {
+            // Third difference along a direction.
+            (f(x + 2.0 * h * dx, y + 2.0 * h * dy) - 2.0 * f(x + h * dx, y + h * dy)
+                + 2.0 * f(x - h * dx, y - h * dy)
+                - f(x - 2.0 * h * dx, y - 2.0 * h * dy))
+                / (2.0 * h * h * h)
+        };
+        let fxxx = d3(1.0, 0.0);
+        let fyyy = d3(0.0, 1.0);
+        // Mixed thirds from the directional ones: D(1,1)³ = fxxx +
+        // 3fxxy + 3fxyy + fyyy, D(1,−1)³ = fxxx − 3fxxy + 3fxyy − fyyy.
+        let dp = d3(1.0, 1.0);
+        let dm = d3(1.0, -1.0);
+        let fxxy = (dp - dm - 2.0 * fyyy) / 6.0;
+        let fxyy = (dp + dm - 2.0 * fxxx) / 6.0;
+        [
+            0.5 * fxx,
+            0.5 * fyy,
+            fxy,
+            fxxx / 6.0,
+            fyyy / 6.0,
+            0.5 * fxxy,
+            0.5 * fxyy,
+        ]
+    }
+
+    /// [`taylor2_fd`] with one Richardson step (`(4·T(h/2) − T(h))/3`,
+    /// O(h⁴)), for the non-polynomial branches.
+    pub(crate) fn taylor2_fd_rich(f: &dyn Fn(f64, f64) -> f64, x: f64, y: f64, h: f64) -> [f64; 7] {
+        let a = taylor2_fd(f, x, y, h);
+        let b = taylor2_fd(f, x, y, h / 2.0);
+        std::array::from_fn(|k| (4.0 * b[k] - a[k]) / 3.0)
+    }
+
+    pub(crate) fn df_seven(c: &DfCoeffs) -> [f64; 7] {
+        [c.cxx, c.cyy, c.cxy, c.cxxx, c.cyyy, c.cxxy, c.cxyy]
+    }
+
+    /// Compare against finite differences; the scale is the largest
+    /// coefficient of the same order, so near-zero entries are
+    /// judged against their siblings.
+    pub(crate) fn assert_taylor(got: [f64; 7], want: [f64; 7], tol: f64, what: &str) -> f64 {
+        let s2 = got[..3]
+            .iter()
+            .chain(&want[..3])
+            .fold(0.0f64, |a, v| a.max(v.abs()));
+        let s3 = got[3..]
+            .iter()
+            .chain(&want[3..])
+            .fold(0.0f64, |a, v| a.max(v.abs()));
+        let mut worst = 0.0f64;
+        for k in 0..7 {
+            let s = if k < 3 { s2 } else { s3 };
+            if s == 0.0 {
+                continue;
+            }
+            let e = (got[k] - want[k]).abs() / s;
+            worst = worst.max(e);
+            assert!(
+                e <= tol,
+                "{what}[{k}]: setup {} vs finite difference {} (rel {e:.2e})",
+                got[k],
+                want[k]
+            );
+        }
+        worst
+    }
+
+    fn jfet_model() -> JfetModel {
+        let mut m = JfetModel::new(true);
+        m.vto = -2.0;
+        m.beta = 1.3e-3;
+        m.lambda = 0.03;
+        m.cgs = 3e-12;
+        m.cgd = 1.5e-12;
+        m.pb = 0.8;
+        m.is = 1e-13;
+        m
+    }
+
+    /// The drain-current coefficients of `JFETdSetup` are the Taylor
+    /// coefficients of the load's Shichman–Hodges current (B = 1) in
+    /// the real node voltages (x = vgs, y = vds), in every region,
+    /// both modes and both polarities; the gate-diode and depletion-
+    /// charge coefficients are those of the load's diode current and
+    /// charge — on the right branch in normal mode, and on the
+    /// interchanged one for the second order in inverse mode (the
+    /// C's quirk, see [`jfet_dsetup`]).
+    #[test]
+    fn jfet_dsetup_matches_finite_differences() {
+        let gmin = 1e-12;
+        let mut worst = 0.0f64;
+        for njf in [true, false] {
+            let mut m = jfet_model();
+            m.njf = njf;
+            let t = JfetTemp::new("j1", &m, REFTEMP, REFTEMP);
+            let typ = t.type_;
+            let area = 1.7;
+            let beta = t.beta * area;
+            let csat = t.t_sat_cur * area;
+            // Real (signed) node voltages vgs, vds of the device.
+            for &(vgs_n, vds_n) in &[
+                (-0.7, 0.6),  // normal linear
+                (-0.7, 4.0),  // normal saturation
+                (-0.7, -0.5), // inverse linear
+                (-1.2, -5.0), // inverse saturation
+                (0.3, 3.0),   // forward gate diode, saturation
+                (0.6, 3.0),   // past FC·PB (linearized charge)
+                (-3.0, 2.0),  // cutoff
+            ] {
+                let (vgs_a, vds_a) = (typ * vgs_n, typ * vds_n);
+                let d = jfet_dsetup(&t, area, gmin, vgs_n, vgs_n - vds_n);
+                let id = |x: f64, y: f64| {
+                    typ * jfet_ids(typ * x, typ * (x - y), t.vto, beta, t.lambda, 1.0, 0.0).0
+                };
+                let want = taylor2_fd(&id, vgs_a, vds_a, 1e-2);
+                worst = worst.max(assert_taylor(
+                    df_seven(&d.cdr),
+                    want,
+                    1e-6,
+                    &format!("cdr njf={njf} at ({vgs_n},{vds_n})"),
+                ));
+                // One-variable branches: gate diodes and charges.
+                let diode = |v: f64| typ * gate_diode(typ * v, csat, t.vt, gmin).1;
+                let pot = t.t_gate_pot;
+                let charge = |cz: f64| {
+                    move |v: f64| {
+                        let v = typ * v;
+                        let q = if v < t.cor_dep_cap {
+                            2.0 * pot * cz * (1.0 - f64::sqrt(1.0 - v / pot))
+                        } else {
+                            let czf2 = cz / t.f2;
+                            let fcpb2 = t.cor_dep_cap * t.cor_dep_cap;
+                            cz * t.f1
+                                + czf2
+                                    * (t.f3 * (v - t.cor_dep_cap) + (v * v - fcpb2) / (4.0 * pot))
+                        };
+                        typ * q
+                    }
+                };
+                let one = |f: &dyn Fn(f64) -> f64, v: f64, h: f64| {
+                    let c2 = 0.5 * (f(v + h) - 2.0 * f(v) + f(v - h)) / (h * h);
+                    let c3 = (f(v + 2.0 * h) - 2.0 * f(v + h) + 2.0 * f(v - h) - f(v - 2.0 * h))
+                        / (2.0 * h * h * h)
+                        / 6.0;
+                    (c2, c3)
+                };
+                let (vgd_a, inverse) = (vgs_a - vds_a, typ * vds_a < 0.0);
+                let (gs2, gs3) = one(&diode, vgs_a, 2e-4);
+                let (gd2, gd3) = one(&diode, vgd_a, 2e-4);
+                let qgs = charge(t.t_cgs * area);
+                let qgd = charge(t.t_cgd * area);
+                // Normal mode: each charge on its own branch. Inverse
+                // mode, as the C computes it: the local (swapped)
+                // names keep czgs/czgd, so the second orders are
+                // czgs's charge at the real vgd on the gs branch (and
+                // czgd's at vgs on gd), the third orders czgd's charge
+                // at the real vgs on gs (czgs's at vgd on gd).
+                let (cs2, cd2, cs3, cd3) = if inverse {
+                    (
+                        one(&qgs, vgd_a, 1e-3).0,
+                        one(&qgd, vgs_a, 1e-3).0,
+                        one(&qgd, vgs_a, 1e-3).1,
+                        one(&qgs, vgd_a, 1e-3).1,
+                    )
+                } else {
+                    let (cs2, cs3) = one(&qgs, vgs_a, 1e-3);
+                    let (cd2, cd3) = one(&qgd, vgd_a, 1e-3);
+                    (cs2, cd2, cs3, cd3)
+                };
+                // Diodes (one saturation current): the second orders
+                // swap branches in inverse mode, the thirds do not.
+                let (wgs2, wgd2) = if inverse { (gd2, gs2) } else { (gs2, gd2) };
+                // (absolute floor: FD rounding where the branch is
+                // linear — reverse diode, flat charge — or the third
+                // difference of a 1e-12 quantity)
+                let close = |a: f64, b: f64, floor: f64, what: &str| {
+                    let s = a.abs().max(b.abs());
+                    assert!((a - b).abs() <= 2e-3 * s + floor, "{what}: {a} vs {b}");
+                };
+                close(d.ggs2, wgs2, 1e-15, "ggs2");
+                close(d.ggd2, wgd2, 1e-15, "ggd2");
+                close(d.ggs3, gs3, 1e-15, "ggs3");
+                close(d.ggd3, gd3, 1e-15, "ggd3");
+                let Fet3GateQ::Junction {
+                    capgs2,
+                    capgs3,
+                    capgd2,
+                    capgd3,
+                } = d.q
+                else {
+                    panic!("JFET charges are one-variable")
+                };
+                close(capgs2, cs2, 1e-17, "capgs2");
+                close(capgd2, cd2, 1e-17, "capgd2");
+                close(capgs3, cs3, 1e-17, "capgs3");
+                close(capgd3, cd3, 1e-17, "capgd3");
+            }
+        }
+        assert!(worst < 1e-6, "worst {worst}");
+        eprintln!("JFET cdr worst FD relative error {worst:.2e}");
     }
 }

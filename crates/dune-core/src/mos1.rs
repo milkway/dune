@@ -34,32 +34,88 @@ pub(crate) struct MosNoise {
     pub s_p: Var,
     pub gdpr: f64,
     pub gspr: f64,
+    /// `MOS*gm`, `MOS*cd` (instance fields of the last load).
     pub gm: f64,
+    pub cd: f64,
     pub kf: f64,
     pub af: f64,
+    /// `NLEV`, `GDSNOI` (ngspice-47).
+    pub nlev: i64,
+    pub gdsnoi: f64,
     /// Channel width and effective length (`W`, `L − 2·LD`).
     pub w: f64,
     pub eff_l: f64,
     /// Oxide capacitance per area used by the flicker term.
     pub cox: f64,
+    /// Instance temperature, kelvin (the thermal generators').
+    pub temp: f64,
+    /// What `NLEV = 3` reads: `state0` `vgs`/`vds` (type-normalized),
+    /// `MOS*mode`, `type·von`/`type·vdsat` as stored, the type, and
+    /// `tTransconductance`.
+    pub vgs: f64,
+    pub vds: f64,
+    pub mode: f64,
+    pub von: f64,
+    pub vdsat: f64,
+    pub typ: f64,
+    pub t_transconductance: f64,
 }
 
-/// `MOS1noise`/`MOS2noise`/`MOS3noise` (ngspice-47) at their
-/// default `NLEV = 2`: thermal noise of RD and RS, channel thermal
-/// noise `4kT·(2/3)|gm|` (`nlev < 3`), and the flicker density
-/// `KF·gm²/(f^AF·W·Leff·Cox)`. The 3f5 used
-/// `KF·|Id|^AF/(f·W·Leff·Cox²)` instead (ngspice keeps that form
-/// only under `ngbehavior=spice3`); the goldens hold ngspice's.
+/// `MOS1noise`/`MOS2noise`/`MOS3noise` (ngspice-47): thermal noise
+/// of RD and RS and the channel at the instance temperature
+/// (`NevalSrcInstanceTemp`), then the flicker term by `NLEV`:
+///
+/// - channel: `NLEV < 3` → `(2/3)|gm|`; `NLEV = 3` →
+///   `(2/3)·β·vgst·(1+α+α²)/(1+α)·GDSNOI` (`α = 0` in saturation,
+///   `1 − vds/vdsat` in the linear region, zero below threshold);
+/// - flicker: `0` → `KF·|Id|^AF/(f·Leff²·Cox)`, `1` →
+///   `KF·|Id|^AF/(f·W·Leff·Cox)`, `2`/`3` (default 2) →
+///   `KF·gm²/(f^AF·W·Leff·Cox)`; any other `NLEV` falls through the
+///   C's `switch` and leaves the bare gain (`N_GAIN`, a density of
+///   1 A²/Hz) — kept.
+///
+/// The 3f5 used `KF·|Id|^AF/(f·W·Leff·Cox²)` (ngspice keeps it only
+/// under `ngbehavior=spice3`, which Dune does not model); the
+/// goldens hold ngspice's.
 pub(crate) fn mos_noise(ctx: &crate::matrix::NoiseCtx, n: &MosNoise) -> Vec<f64> {
-    let rd = ctx.thermal(n.d_p, n.drain, n.gdpr);
-    let rs = ctx.thermal(n.s_p, n.source, n.gspr);
-    let id = ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * n.gm.abs());
-    let flicker = ctx.flicker(
-        n.d_p,
-        n.s_p,
-        n.kf * n.gm * n.gm / (n.w * n.eff_l * n.cox),
-        n.af,
-    );
+    const N_MINLOG: f64 = 1e-38;
+    let rd = ctx.thermal_at(n.d_p, n.drain, n.gdpr, n.temp);
+    let rs = ctx.thermal_at(n.s_p, n.source, n.gspr, n.temp);
+    let sid = if n.nlev < 3 {
+        2.0 / 3.0 * n.gm.abs()
+    } else {
+        let vgd = n.vgs - n.vds;
+        let vgst = (if n.mode == 1.0 { n.vgs } else { vgd }) - n.typ * n.von;
+        if vgst > 0.0 {
+            let alpha = if vgst <= n.vds * n.mode {
+                0.0 // saturation
+            } else {
+                1.0 - (n.vds * n.mode / (n.typ * n.vdsat))
+            };
+            let beta = n.t_transconductance * n.w / n.eff_l;
+            2.0 / 3.0 * beta * vgst * (1.0 + alpha + alpha * alpha) / (1.0 + alpha) * n.gdsnoi
+        } else {
+            0.0 // subthreshold
+        }
+    };
+    let id = ctx.thermal_at(n.d_p, n.s_p, sid, n.temp);
+    let id_af = || f64::exp(n.af * f64::ln(f64::max(n.cd.abs(), N_MINLOG)));
+    let flicker = match n.nlev {
+        0 => ctx.flicker(
+            n.d_p,
+            n.s_p,
+            n.kf * id_af() / (n.eff_l * n.eff_l * n.cox),
+            1.0,
+        ),
+        1 => ctx.flicker(n.d_p, n.s_p, n.kf * id_af() / (n.w * n.eff_l * n.cox), 1.0),
+        2 | 3 => ctx.flicker(
+            n.d_p,
+            n.s_p,
+            n.kf * n.gm * n.gm / (n.w * n.eff_l * n.cox),
+            n.af,
+        ),
+        _ => ctx.flicker(n.d_p, n.s_p, 1.0, 0.0),
+    };
     vec![rd, rs, id, flicker, rd + rs + id + flicker]
 }
 
@@ -131,6 +187,14 @@ pub struct Mos1Model {
     /// `KF`/`AF` (noise only).
     pub kf: f64,
     pub af: f64,
+    /// `NLEV` (ngspice-47 only, default 2): noise equation selector
+    /// — `< 3` channel thermal `4kT·(2/3)|gm|`, `3` the
+    /// `GDSNOI`-scaled form; for the MOSFETs also the flicker form
+    /// (0/1/2–3).
+    pub nlev: i64,
+    /// `GDSNOI` (ngspice-47 only, default 1): channel noise
+    /// coefficient of `NLEV = 3`.
+    pub gdsnoi: f64,
     /// `TNOM` in kelvin.
     pub tnom: Option<f64>,
 }
@@ -168,6 +232,8 @@ impl Mos1Model {
             nss: None,
             kf: 0.0,
             af: 1.0,
+            nlev: 2,
+            gdsnoi: 1.0,
             tnom: None,
         }
     }
@@ -201,6 +267,10 @@ pub(crate) struct MosGeom {
 /// Model- and temperature-derived values (`MOS1temp`, both the
 /// model-level preprocessing and the per-instance block).
 pub(crate) struct Mos1Temp {
+    /// The instance temperature, kelvin (`*temp`: the card's
+    /// `TEMP=` or `CKTtemp`) — the thermal noise generators' T
+    /// (ngspice-47 `NevalSrcInstanceTemp`).
+    pub temp: f64,
     pub type_: f64, // +1 NMOS, -1 PMOS
     pub vt: f64,
     // Model copies the load needs.
@@ -208,6 +278,9 @@ pub(crate) struct Mos1Temp {
     /// `KF`/`AF`: flicker-noise coefficient and exponent.
     pub kf: f64,
     pub af: f64,
+    /// `NLEV`/`GDSNOI` (noise only).
+    pub nlev: i64,
+    pub gdsnoi: f64,
     pub cgso: f64,
     pub cgdo: f64,
     pub cgbo: f64,
@@ -424,11 +497,14 @@ impl Mos1Temp {
         let source_conductance = series(m.rs, g.nrs);
 
         Ok(Mos1Temp {
+            temp,
             type_: typ,
             vt,
             lat_diff: m.ld,
             kf: m.kf,
             af: m.af,
+            nlev: m.nlev,
+            gdsnoi: m.gdsnoi,
             cgso: m.cgso,
             cgdo: m.cgdo,
             cgbo: m.cgbo,
@@ -1286,10 +1362,21 @@ impl crate::devices::Device for Mos1I {
             gdpr: self.t.drain_conductance,
             gspr: self.t.source_conductance,
             gm: self.gm,
+            cd: self.cd,
             kf: self.t.kf,
             af: self.t.af,
+            nlev: self.t.nlev,
+            gdsnoi: self.t.gdsnoi,
             w: self.geom.w,
             eff_l: self.geom.l - 2.0 * self.t.lat_diff,
+            temp: self.t.temp,
+            vgs: ctx.states.get(0, self.st + VGS),
+            vds: ctx.states.get(0, self.st + VDS),
+            mode: self.mode,
+            von: self.von,
+            vdsat: self.vdsat,
+            typ: self.t.type_,
+            t_transconductance: self.t.t_transconductance,
             cox: if self.t.oxide_cap_factor == 0.0 {
                 // `mos1noi.c`: a level-1 model without TOX assumes
                 // tox = 1e-7 m for the flicker term.
