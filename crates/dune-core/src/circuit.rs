@@ -1723,9 +1723,12 @@ impl Circuit {
                         get(&node_ids, &format!("{}#i1", s.name)),
                         get(&node_ids, &format!("{}#i2", s.name)),
                     ];
-                    let p =
+                    let mut p =
                         crate::ltra::LtraParams::new(&s.name, &s.model, opts.reltol, opts.abstol)
                             .map_err(Error::Build)?;
+                    if opts.trytocompact {
+                        p.try_to_compact();
+                    }
                     notes.extend(p.notes.iter().cloned());
                     devices.push(Box::new(
                         crate::ltra::LtraI::new(p, n, br).with_fit(opts.ltra_fit),

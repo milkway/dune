@@ -160,6 +160,14 @@ pub struct Options {
     /// "Distortion Operating Point", "NOISE Operating Point").
     /// Default false.
     pub keepopinfo: bool,
+    /// `TRYTOCOMPACT` (`cktsopt.c`, IF_FLAG; `CKTtryToCompact`): LTRA
+    /// lines without an explicit interpolation flag interpolate
+    /// linearly, and after every accepted timepoint where the last
+    /// three points of every LTRA port voltage and current lie on a
+    /// straight line within `COMPACTREL`/`COMPACTABS`, the middle
+    /// point is dropped from the shared history (`ltraacct.c`). Default
+    /// false. Ignored under [`Options::ltra_fit`] and in `.pss`.
+    pub trytocompact: bool,
 }
 
 impl Default for Options {
@@ -198,6 +206,7 @@ impl Default for Options {
             dev_noise: false,
             dev_noise_step: None,
             keepopinfo: false,
+            trytocompact: false,
         }
     }
 }
@@ -354,6 +363,7 @@ impl Options {
                 "noopiter" => self.noopiter = true,
                 // IF_FLAG: a bare word (or `keepopinfo=0|1`).
                 "keepopinfo" => self.keepopinfo = num.is_none_or(|v| v != 0.0),
+                "trytocompact" => self.trytocompact = num.is_none_or(|v| v != 0.0),
                 "nopage" => self.nopage = true,
                 // `cktsopt.c` has a copy-paste bug that makes `defas`
                 // set the drain area; ngspice fixed it and so do we

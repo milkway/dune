@@ -405,6 +405,9 @@ pub(crate) struct Engine {
     /// matrix *after* Sparse's `spMNA_Preorder` column swaps, fixed at
     /// the first load like the C's `NIDIDPREORDER` ([`gmin_slots`]).
     gmin_slots: Option<Vec<Slot>>,
+    /// `trytocompact` compactions in the current transient (tests and
+    /// statistics).
+    pub(crate) compactions: usize,
     /// `CKTdelmin`/`CKTminBreak` as `OPtran` sees them: 0 for `.op` and
     /// `.dc` (the task defaults), `.tran`'s during its operating point.
     op_delmin: f64,
@@ -478,6 +481,7 @@ impl Engine {
             dev_noise: None,
             op_step: None,
             gmin_slots: None,
+            compactions: 0,
             op_delmin: 0.0,
             op_min_break: 0.0,
         }
@@ -1006,9 +1010,7 @@ impl Engine {
                 mode = InitMode::Float;
             }
         }
-        if let Err(e) = r {
-            return Err(e); // "source stepping failed"
-        }
+        r?; // "source stepping failed"
         let mut last = Error::IterLim;
         let mut ramp = SrcRamp::new();
         let mut saved_sol = self.sol.clone();
@@ -1451,6 +1453,24 @@ impl Engine {
         for d in &mut self.devices {
             d.accept(&mut ctx);
         }
+        // `.options trytocompact` (`ltraacct.c:262`): when the last
+        // three points of every LTRA line are straight, the middle one
+        // leaves the (shared) history.
+        if opts.trytocompact && !opts.ltra_fit {
+            let ready: Vec<bool> = self
+                .devices
+                .iter()
+                .filter_map(|d| d.compact_ready())
+                .collect();
+            if !ready.is_empty() && ready.iter().all(|&r| r) {
+                for d in &mut self.devices {
+                    if d.compact_ready().is_some() {
+                        d.compact();
+                    }
+                }
+                self.compactions += 1;
+            }
+        }
         if let Some(dn) = self.dev_noise.as_mut() {
             dn.accept(
                 self.time,
@@ -1598,6 +1618,7 @@ impl Engine {
         let mut delta = lp.delta;
         // Switch to transient proper (`MODETRAN | MODEINITTRAN`).
         self.set_kind(AnKind::Tran, lp.uic);
+        self.compactions = 0;
         self.order = 1;
         self.ag = [0.0; 7];
         self.states.copy01();
@@ -3245,7 +3266,7 @@ pub(crate) struct TranParams {
 
 #[cfg(test)]
 mod tests {
-    use super::{AnKind, Engine, GminWalk, InitMode, OpStep, SrcRamp, within_radius};
+    use super::{AnKind, Engine, GminWalk, InitMode, OpStep, SrcRamp, TranParams, within_radius};
     use crate::options::Options;
 
     fn engine_for(deck: &str) -> (Engine, Options) {
@@ -3446,5 +3467,45 @@ mod tests {
         assert!(!within_radius(&breaks, 10.2, 0.1)); // past the end
         assert!(within_radius(&breaks, 10.05, 0.1));
         assert!(!within_radius(&[], 1.0, 0.1));
+    }
+
+    /// One `.tran 0.2ns 100ns` of an LTRA deck: (accepted points,
+    /// compactions, final history length of the line).
+    fn ltra_history(deck: &str) -> (usize, usize, usize) {
+        let (mut e, opts) = engine_for(deck);
+        let p = TranParams {
+            tstep: 0.2e-9,
+            tstop: 100e-9,
+            tstart: 0.0,
+            tmax: None,
+            uic: false,
+        };
+        let rows = e.tran(&opts, &p).unwrap();
+        let hist = e.devices.iter().find_map(|d| d.history_len()).unwrap();
+        (rows.len(), e.compactions, hist)
+    }
+
+    /// `.options trytocompact` (ltraacct.c): the history of the line
+    /// loses one sample per compaction and ends shorter than the run's
+    /// accepted points, while the uncompacted run keeps every one.
+    /// Both decks are pinned against ngspice-47 by the oracle
+    /// (corpus/regress/ltra_compact.cir, ltra_lin.cir).
+    #[test]
+    fn trytocompact_shrinks_the_ltra_history() {
+        let (pts_c, n_c, hist_c) =
+            ltra_history(include_str!("../../../corpus/regress/ltra_compact.cir"));
+        let (pts_l, n_l, hist_l) =
+            ltra_history(include_str!("../../../corpus/regress/ltra_lin.cir"));
+        assert_eq!(n_l, 0);
+        assert_eq!(
+            hist_l, pts_l,
+            "every accepted point stays without the option"
+        );
+        assert!(n_c > 0);
+        assert_eq!(hist_c, pts_c - n_c, "one sample per compaction");
+        eprintln!(
+            "trytocompact: {pts_c} points, {n_c} compactions, history {hist_c}; \
+             lininterp alone: {pts_l} points, history {hist_l}"
+        );
     }
 }
