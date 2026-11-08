@@ -50,8 +50,10 @@ test_that("FALSE clears the deck's flags", {
 })
 
 test_that("the new names are listed and bad values are errors", {
+  # ::: because the helper is internal (@noRd): the test must also
+  # pass against the installed package, not only under load_all().
   expect_true(all(c("seed", "notrnoise", "devnoise", "devnt", "keepopinfo") %in%
-    spice_option_names()))
+    spice:::spice_option_names()))
   bad <- list(
     list(seed = 0), list(seed = -2), list(seed = 1.5), list(seed = 2^53),
     list(seed = "random"), list(seed = TRUE),
