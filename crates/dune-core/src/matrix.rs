@@ -391,6 +391,16 @@ impl NoiseCtx<'_> {
         self.gain2(n1, n2) * density
     }
 
+    /// `NevalSrcInstanceTemp(THERMNOISE)` (ngspice-47): `4k·T·g` at
+    /// the device's own temperature `temp` (kelvin) — `CKTtemp +
+    /// dtemp`, i.e. the instance `TEMP=` when given, else `CKTtemp`.
+    /// The 3f5's `NevalSrc` always used `CKTtemp`.
+    pub fn thermal_at(&self, n1: Var, n2: Var, g: f64, temp: f64) -> f64 {
+        let density = 4.0 * crate::consts::BOLTZ * temp * g;
+        self.record(n1, n2, density);
+        self.gain2(n1, n2) * density
+    }
+
     /// `NevalSrc(SHOTNOISE)`: `2q|I|` times the squared gain.
     pub fn shot(&self, n1: Var, n2: Var, current: f64) -> f64 {
         let density = 2.0 * crate::consts::CHARGE * current.abs();

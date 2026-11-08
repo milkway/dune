@@ -1085,6 +1085,9 @@ fn mos1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos1::Mos
             "nss" => mm.nss = Some(v),
             "kf" => mm.kf = v,
             "af" => mm.af = v,
+            // ngspice-47 noise selectors (IF_INTEGER: `floor(0.5 + v)`).
+            "nlev" => mm.nlev = (0.5 + v).floor() as i64,
+            "gdsnoi" => mm.gdsnoi = v,
             "tnom" => mm.tnom = Some(v + CTOK),
             other => notes.push(format!(
                 "model `{}`: unrecognized parameter ({other}) - ignored",
@@ -1183,6 +1186,9 @@ fn mos2_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos2::Mos
             "nfs" => mm.nfs = v,
             "kf" => mm.kf = v,
             "af" => mm.af = v,
+            // ngspice-47 noise selectors (IF_INTEGER: `floor(0.5 + v)`).
+            "nlev" => mm.nlev = (0.5 + v).floor() as i64,
+            "gdsnoi" => mm.gdsnoi = v,
             "tnom" => mm.tnom = Some(v + CTOK),
             other => notes.push(format!(
                 "model `{}`: unrecognized parameter ({other}) - ignored",
@@ -1246,6 +1252,9 @@ fn mos3_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos3::Mos
             "kappa" => mm.kappa = v,
             "kf" => mm.kf = v,
             "af" => mm.af = v,
+            // ngspice-47 noise selectors (IF_INTEGER: `floor(0.5 + v)`).
+            "nlev" => mm.nlev = (0.5 + v).floor() as i64,
+            "gdsnoi" => mm.gdsnoi = v,
             "tnom" => mm.tnom = Some(v + CTOK),
             other => notes.push(format!(
                 "model `{}`: unrecognized parameter ({other}) - ignored",
@@ -1778,6 +1787,9 @@ fn jfet_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::jfet::Jfe
             "tnom" => jm.tnom = Some(v + CTOK),
             "kf" => jm.kf = v,
             "af" => jm.af = v,
+            // ngspice-47 noise selectors (IF_INTEGER: `floor(0.5 + v)`).
+            "nlev" => jm.nlev = (0.5 + v).floor() as i64,
+            "gdsnoi" => jm.gdsnoi = v,
             other => notes.push(format!(
                 "model `{}`: unrecognized parameter ({other}) - ignored",
                 m.name

@@ -109,6 +109,14 @@ pub struct Mos3Model {
     /// `KF`/`AF` (noise only).
     pub kf: f64,
     pub af: f64,
+    /// `NLEV` (ngspice-47 only, default 2): noise equation selector
+    /// — `< 3` channel thermal `4kT·(2/3)|gm|`, `3` the
+    /// `GDSNOI`-scaled form; for the MOSFETs also the flicker form
+    /// (0/1/2–3).
+    pub nlev: i64,
+    /// `GDSNOI` (ngspice-47 only, default 1): channel noise
+    /// coefficient of `NLEV = 3`.
+    pub gdsnoi: f64,
     /// `TNOM` in kelvin.
     pub tnom: Option<f64>,
 }
@@ -152,6 +160,8 @@ impl Mos3Model {
             kappa: 0.2,
             kf: 0.0,
             af: 1.0,
+            nlev: 2,
+            gdsnoi: 1.0,
             tnom: None,
         }
     }
@@ -169,6 +179,10 @@ fn egfet(t: f64) -> f64 {
 /// Model- and temperature-derived values (`MOS3temp`).
 #[derive(Debug)]
 pub(crate) struct Mos3Temp {
+    /// The instance temperature, kelvin (`*temp`: the card's
+    /// `TEMP=` or `CKTtemp`) — the thermal noise generators' T
+    /// (ngspice-47 `NevalSrcInstanceTemp`).
+    pub temp: f64,
     pub type_: f64,
     pub vt: f64,
     // Model copies the load needs.
@@ -176,6 +190,9 @@ pub(crate) struct Mos3Temp {
     /// `KF`/`AF`: flicker-noise coefficient and exponent.
     pub kf: f64,
     pub af: f64,
+    /// `NLEV`/`GDSNOI` (noise only).
+    pub nlev: i64,
+    pub gdsnoi: f64,
     pub cgso: f64,
     pub cgdo: f64,
     pub cgbo: f64,
@@ -394,11 +411,14 @@ impl Mos3Temp {
         };
 
         Ok(Mos3Temp {
+            temp,
             type_: typ,
             vt,
             lat_diff: m.ld,
             kf: m.kf,
             af: m.af,
+            nlev: m.nlev,
+            gdsnoi: m.gdsnoi,
             cgso: m.cgso,
             cgdo: m.cgdo,
             cgbo: m.cgbo,
@@ -1725,11 +1745,22 @@ impl crate::devices::Device for Mos3I {
             gdpr: self.t.drain_conductance,
             gspr: self.t.source_conductance,
             gm: self.gm,
+            cd: self.cd,
             kf: self.t.kf,
             af: self.t.af,
+            nlev: self.t.nlev,
+            gdsnoi: self.t.gdsnoi,
             w: self.geom.w,
             eff_l: self.geom.l - 2.0 * self.t.lat_diff,
             cox: self.t.oxide_cap_factor,
+            temp: self.t.temp,
+            vgs: ctx.states.get(0, self.st + VGS),
+            vds: ctx.states.get(0, self.st + VDS),
+            mode: self.mode,
+            von: self.von,
+            vdsat: self.vdsat,
+            typ: self.t.type_,
+            t_transconductance: self.t.t_transconductance,
         };
         crate::mos1::mos_noise(ctx, &n)
     }
