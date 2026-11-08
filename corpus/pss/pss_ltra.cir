@@ -1,0 +1,30 @@
+pulse train into lossy lines (ltrafit), periodic steady state
+* written for Dune (.pss with transmission lines, issue #20); not from Berkeley
+* The lines of corpus/regress/ltrafit.cir (RLC o1, RC o2) plus a
+* lossless LTRA (o3, LC regime) behind a diode clamp, driven by a
+* 40 ns pulse train. Inside .pss the lossy lines need the recursive
+* convolution (.options ltrafit): their history is the orbit over
+* the whole past, which the recursive states sum in closed form.
+* ngspice-47 ignores the option and runs the exact convolution.
+* Reference: the last period of a long .tran (golden, ngspice-47)
+*tran-golden: .tran 0.1n 2u 1.96u
+v1 1 0 pulse(0 4 1ns 1ns 1ns 20ns 40ns)
+rs 1 2 10
+o1 2 0 3 0 rlcline
+rl 3 0 100
+cl 3 0 2pF
+rs2 1 4 10
+o2 4 0 5 0 rcline
+rl2 5 0 100
+cl2 5 0 2pF
+rs3 1 6 30
+o3 6 0 7 0 lcline
+d1 7 0 dmod
+rl3 7 0 500
+.model dmod d(is=1e-14 cjo=1p)
+.model rlcline ltra r=0.2 l=9.13e-9 c=3.65e-12 len=24
+.model rcline ltra r=0.2 l=0 c=3.65e-12 len=24
+.model lcline ltra r=0 l=9.13e-9 c=3.65e-12 len=24
+.options ltrafit
+.pss 25meg 400n 3 256 10
+.end

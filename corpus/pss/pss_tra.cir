@@ -1,0 +1,24 @@
+pulse train into mismatched ideal lines, periodic steady state
+* written for Dune (.pss with transmission lines, issue #20); not from Berkeley
+* t1 (Z0=50, TD=7ns, shorter than the 40 ns period) is driven
+* through 25 ohms and loaded by 200 ohms || 2pF: the reflections
+* (source -1/3, load ~0.6) ring over each period. t2 (Z0=75,
+* TD=55ns, longer than the period: every delayed read comes from the
+* past) ends in a diode clamp. The lines' history in the periodic
+* regime is the orbit itself. Reference: the last period of a long
+* .tran (golden, ngspice-47)
+*tran-golden: .tran 0.1n 4u 3.96u
+*tran-golden-vectors: v(2) v(3) v(4) v(5)
+v1 1 0 pulse(0 2 0 1n 1n 15n 40n)
+rs1 1 2 25
+t1 2 0 3 0 z0=50 td=7n
+rl1 3 0 200
+cl1 3 0 2p
+rs2 1 4 100
+t2 4 0 5 0 z0=75 td=55n
+d1 5 0 dmod
+rl2 5 0 1k
+cl2 5 0 1p
+.model dmod d(is=1e-14 cjo=1p)
+.pss 25meg 400n 3 256 10
+.end

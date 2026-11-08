@@ -1,0 +1,24 @@
+delay-line ring: one cmos inverter closed through an ideal line, autonomous pss
+* written for Dune (.pss with transmission lines, issue #20); not from Berkeley
+* The MOS1 inverter of osc_ring.cir drives a unity buffer (E) behind
+* 50 ohms into a 50-ohm line (TD = 1 ns) that ends on the inverter's
+* gate: the open end reflects, the matched source absorbs, so the
+* gate sees the inverter's output one delay late and the loop
+* oscillates at about 1/(2 (TD + gate delay)). The line's history is
+* the orbit, with the period an unknown. Kick: the PWL supply ramp.
+*tran-golden: .tran 2p 100n 90n
+*tran-golden-vectors: v(1) v(3)
+vdd vdd 0 pwl(0 0 1n 3.3)
+mp1 1 3 vdd vdd pch w=4u l=1u
+mn1 1 3 0 0 nch w=2u l=1u
+c1 1 0 10f
+e1 4 0 1 0 1
+rs 4 2 50
+t1 2 0 3 0 z0=50 td=1n
+c3 3 0 5f
+.model nch nmos level=1 vto=0.7 kp=110u gamma=0.4 lambda=0.04 phi=0.7
++ cgso=0.3n cgdo=0.3n cbd=5f cbs=5f
+.model pch pmos level=1 vto=-0.7 kp=50u gamma=0.5 lambda=0.05 phi=0.7
++ cgso=0.3n cgdo=0.3n cbd=5f cbs=5f
+.pss 0 40n 3 256 10
+.end
