@@ -20,7 +20,7 @@ pub fn supported(c: &CorpusCircuit) -> bool {
     ];
     const DEVICES: &[char] = &[
         'r', 'c', 'l', 'k', 'v', 'i', 'e', 'f', 'g', 'h', 'd', 'q', 'j', 'z', 'm', 'o', 's', 'w',
-        't', 'x',
+        't', 'u', 'b', 'x',
     ];
     // MOS levels implemented so far.
     const MOS_LEVELS: &[u32] = &[1, 2, 3, 4, 5, 6, 8, 49];

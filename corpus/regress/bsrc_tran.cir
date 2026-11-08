@@ -1,0 +1,19 @@
+B source, transient: expressions of time-varying nodes and branch currents
+* Coverage: V= and I= sources driven by a sine, with a reactive load
+* and an i() reference, through the transient Newton (asrcload.c).
+v1 1 0 dc 0 sin(0 1 1meg)
+r1 1 0 1k
+b1 2 0 v=0.5*v(1)^2+0.1*abs(v(1))+0.2
+r2 2 3 1k
+c3 3 0 100p
+b2 0 4 i=1m*tanh(2*v(3))+0.5*i(v1)
+r4 4 0 1k
+c4 4 0 50p
+b3 5 0 v=uramp(v(1)-0.2)*(1+v(4))
+r5 5 0 1k
+l5 5 6 10u
+r6 6 0 100
+b4 7 0 i=1m*(v(7)-0.3)^2*sgn(v(7)-0.3)+0.2*i(v1)
+r7 2 7 1k
+.tran 10n 3u
+.end
