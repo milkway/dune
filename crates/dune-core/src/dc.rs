@@ -1,11 +1,14 @@
-//! `.dc` — DC transfer curves (`ckt/dctrcurv.c`): one or two V/I
-//! sources swept, first source innermost, operating point at every
-//! step.
+//! `.dc` — DC transfer curves (`ckt/dctrcurv.c`): one or two
+//! variables swept, first innermost, operating point at every step.
+//! The 3f5 sweeps V/I sources only; ngspice-47 adds resistors and
+//! the circuit temperature (`.dc temp …`), which Dune follows
+//! (corpus/KNOWN_DIFFS.md).
 
 use dune_raw::VarType;
 
-use crate::circuit::{Circuit, VarKind};
-use crate::engine::{Engine, SweepRef};
+use crate::circuit::{Circuit, Spec, VarKind};
+use crate::consts::CTOK;
+use crate::engine::{Engine, SweepRef, SweepTarget};
 use crate::error::Error;
 use crate::options::Options;
 use crate::solution::Solution;
@@ -27,7 +30,8 @@ pub struct Dc {
 }
 
 impl Circuit {
-    /// Run a DC transfer-curve analysis over one or two sources.
+    /// Run a DC transfer-curve analysis over one or two sweep
+    /// variables: V/I sources, resistors or `temp` (°C).
     pub fn dc(&self, opts: &Options, sweeps: &[DcSweep]) -> Result<Dc, Error> {
         if sweeps.is_empty() || sweeps.len() > 2 {
             return Err(Error::Build(".dc takes one or two sweep sources".into()));
@@ -36,11 +40,33 @@ impl Circuit {
         let notes = built.notes.clone();
         let mut engine = Engine::new(built);
 
+        // ngspice-47 `dctrcurv.c` looks the name up as a resistor,
+        // then a V and an I source, then the word `temp`; the 3f5
+        // only knows the sources (corpus/KNOWN_DIFFS.md).
+        enum Scale {
+            V,
+            I,
+            Res,
+            Temp,
+        }
         let mut refs = Vec::new();
-        let mut scale_is_vsrc = true;
+        let mut scale = Scale::V;
         for (level, s) in sweeps.iter().enumerate() {
             let name = s.src.to_ascii_lowercase();
-            let Some(&(dev_index, is_vsrc)) = engine.sources.get(&name) else {
+            let resistor = self
+                .specs
+                .iter()
+                .position(|sp| matches!(sp, Spec::Resistor(r) if r.name == name));
+            let (target, kind) = if let Some(d) = resistor {
+                (SweepTarget::Device(d), Scale::Res)
+            } else if let Some(&(d, is_vsrc)) = engine.sources.get(&name) {
+                (
+                    SweepTarget::Device(d),
+                    if is_vsrc { Scale::V } else { Scale::I },
+                )
+            } else if name == "temp" {
+                (SweepTarget::Temp, Scale::Temp)
+            } else {
                 // The C's "DCtrCurv: source %s not in circuit".
                 return Err(Error::Build(format!(
                     "dc sweep source `{name}` not in circuit"
@@ -54,24 +80,40 @@ impl Circuit {
                 )));
             }
             if level == 0 {
-                scale_is_vsrc = is_vsrc;
+                scale = kind;
             }
             refs.push(SweepRef {
-                dev_index,
+                target,
                 start: s.start,
                 stop: s.stop,
                 step: s.step,
             });
         }
 
-        let rows = engine.dc(opts, &refs)?;
+        // A temperature level rebuilds the devices at each point
+        // (`CKTtemp`): instance `TEMP=` values stay, everything that
+        // follows the circuit temperature moves.
+        let mut retemp = |celsius: f64| -> Result<Vec<Box<dyn crate::devices::Device>>, Error> {
+            let mut o = opts.clone();
+            o.temp = celsius + CTOK;
+            Ok(self.build(&o)?.devices)
+        };
+        let rows = engine.dc(opts, &refs, &mut retemp)?;
 
-        // ngspice calls the sweep vector `v-sweep` / `i-sweep` and
-        // saves it like any node/branch vector.
-        let (scale_name, scale_type) = if scale_is_vsrc {
-            ("v(v-sweep)".to_string(), VarType::Voltage)
-        } else {
-            ("i(i-sweep)".to_string(), VarType::Current)
+        // ngspice calls the sweep vector `v-sweep` / `i-sweep` (saved
+        // like any node/branch vector) and `res-sweep` /
+        // `temp-sweep`, typed by their own names.
+        let (scale_name, scale_type) = match scale {
+            Scale::V => ("v(v-sweep)".to_string(), VarType::Voltage),
+            Scale::I => ("i(i-sweep)".to_string(), VarType::Current),
+            Scale::Res => (
+                "res-sweep".to_string(),
+                VarType::Other("res-sweep".to_string()),
+            ),
+            Scale::Temp => (
+                "temp-sweep".to_string(),
+                VarType::Other("temp-sweep".to_string()),
+            ),
         };
         let mut variables = vec![(scale_name, scale_type)];
         let mut columns = vec![rows.iter().map(|(scale, _)| *scale).collect::<Vec<f64>>()];

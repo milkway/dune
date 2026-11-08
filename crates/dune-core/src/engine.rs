@@ -616,11 +616,15 @@ impl Engine {
             .map(|_| ())
     }
 
-    /// `DCtrCurv`: sweep one or two sources, the first innermost.
+    /// `DCtrCurv`: sweep one or two variables, the first innermost.
+    /// A [`SweepTarget::Temp`] level calls `retemp` with the new
+    /// temperature (°C) for a freshly built device list — the
+    /// `CKTtemp` of ngspice's `TEMP_CODE` sweep.
     pub fn dc(
         &mut self,
         opts: &Options,
         sweeps: &[SweepRef],
+        retemp: &mut dyn FnMut(f64) -> Result<Vec<Box<dyn Device>>, Error>,
     ) -> Result<Vec<(f64, Vec<f64>)>, Error> {
         assert!(!sweeps.is_empty() && sweeps.len() <= 2);
         // Refuse before the first solve when the planned grid alone
@@ -639,8 +643,8 @@ impl Engine {
         let sign = |x: f64| if x >= 0.0 { 1.0 } else { -1.0 };
 
         let mut cur: Vec<f64> = sweeps.iter().map(|s| s.start).collect();
-        for (s, v) in sweeps.iter().zip(&cur) {
-            self.devices[s.dev_index].set_dc(*v);
+        for level in 0..sweeps.len() {
+            self.set_sweep(sweeps, &cur, level, false, retemp)?;
         }
         let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
         let mut start_mode = InitMode::Jct;
@@ -658,13 +662,13 @@ impl Engine {
                     break;
                 }
                 cur[i] += sweeps[i].step;
-                self.devices[sweeps[i].dev_index].set_dc(cur[i]);
+                self.set_sweep(sweeps, &cur, i, true, retemp)?;
                 continue;
             }
             while i > 0 {
                 i -= 1;
                 cur[i] = sweeps[i].start;
-                self.devices[sweeps[i].dev_index].set_dc(cur[i]);
+                self.set_sweep(sweeps, &cur, i, false, retemp)?;
             }
             if self.ni_iter(opts, start_mode, opts.itl2, 0.0, 1.0).is_err() {
                 self.op(opts)?;
@@ -684,9 +688,69 @@ impl Engine {
             }
             rows.push((cur[0], self.sol.clone()));
             cur[0] += sweeps[0].step;
-            self.devices[sweeps[0].dev_index].set_dc(cur[0]);
+            self.set_sweep(sweeps, &cur, 0, true, retemp)?;
         }
         Ok(rows)
+    }
+
+    /// Drive sweep level `level` to `cur[level]`. A temperature
+    /// level swaps in devices rebuilt at the new temperature and
+    /// re-applies the device levels' current values to them; on an
+    /// increment (`stepped`) that already passed the stop it does
+    /// nothing, like ngspice's `nextstep` ("discard Temp
+    /// evaluation": the value is never solved at).
+    fn set_sweep(
+        &mut self,
+        sweeps: &[SweepRef],
+        cur: &[f64],
+        level: usize,
+        stepped: bool,
+        retemp: &mut dyn FnMut(f64) -> Result<Vec<Box<dyn Device>>, Error>,
+    ) -> Result<(), Error> {
+        let s = &sweeps[level];
+        match s.target {
+            SweepTarget::Device(d) => self.devices[d].set_dc(cur[level]),
+            SweepTarget::Temp => {
+                let sign = if s.step >= 0.0 { 1.0 } else { -1.0 };
+                if stepped && sign * (cur[level] - s.stop) > f64::EPSILON * 1e3 {
+                    return Ok(());
+                }
+                let devices = retemp(cur[level])?;
+                self.replace_devices(devices)?;
+                for (s, v) in sweeps.iter().zip(cur) {
+                    if let SweepTarget::Device(d) = s.target {
+                        self.devices[d].set_dc(*v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Swap in a device list built from the same circuit (same
+    /// order, nodes and state offsets — only temperature-derived
+    /// values differ): the `CKTtemp` pass. Matrix slots are
+    /// re-derived on a fresh builder, which yields the identical
+    /// numbering because allocation is deterministic.
+    pub(crate) fn replace_devices(
+        &mut self,
+        mut devices: Vec<Box<dyn Device>>,
+    ) -> Result<(), Error> {
+        let mut mb = MatrixBuilder::new(self.vars.len() - 1);
+        for d in &mut devices {
+            d.alloc(&mut mb);
+        }
+        if devices.len() != self.devices.len() || mb.num_slots() > self.mb.num_slots() {
+            return Err(Error::Build(
+                "internal: rebuilt device list does not match the circuit".into(),
+            ));
+        }
+        self.devices = devices;
+        #[cfg(feature = "parallel")]
+        {
+            self.par = None;
+        }
+        Ok(())
     }
 
     /// `CKTsetBreak` (`cktsetbk.c`): sorted insert with `minBreak`
@@ -2514,9 +2578,19 @@ pub enum AcStepType {
     Linear,
 }
 
+/// What one `.dc` level drives.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SweepTarget {
+    /// A V/I source's DC value or (ngspice) a resistor's
+    /// resistance, through [`Device::set_dc`].
+    Device(usize),
+    /// The circuit temperature, °C (ngspice's `TEMP_CODE`).
+    Temp,
+}
+
 /// One resolved `.dc` sweep level.
 pub(crate) struct SweepRef {
-    pub dev_index: usize,
+    pub target: SweepTarget,
     pub start: f64,
     pub stop: f64,
     pub step: f64,

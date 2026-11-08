@@ -1,0 +1,20 @@
+DC sweep of the circuit temperature: .dc temp nested under a source
+* Coverage: the 3f5 DCtrCurv sweeps only V/I sources; ngspice-47
+* (dctrcurv.c TEMP_CODE) also takes `temp`, re-running CKTtemp at each
+* point (corpus/KNOWN_DIFFS.md). Inner level temp (-25..125 C), outer
+* level v1. The diode, the BJT and the TC resistor follow the circuit
+* temperature; rfix has an instance temp= and must not move; the scale
+* vector is ngspice's `temp-sweep`.
+v1 1 0 dc 1
+r1 1 2 rtc l=20u w=2u
+d1 2 0 dmod
+rfix 1 3 rtc l=20u w=2u temp=27
+q1 3 3 0 qmod
+v2 4 0 dc 5
+rc 4 5 2k
+q2 5 3 0 qmod
+.model rtc r rsh=100 tc1=3e-3 tc2=1e-5
+.model dmod d is=1e-14 n=1.05 eg=1.11 xti=3
+.model qmod npn is=1e-16 bf=120 xtb=1.5
+.dc temp -25 125 25 v1 1 3 1
+.end
