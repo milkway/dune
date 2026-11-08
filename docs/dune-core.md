@@ -203,15 +203,43 @@ resultados espelhando o rawfile).
   nomes ngspice `_thermal`/`_1overf`), BJT (rc/rb/re térmicos com
   `gx` do estado, shot em Ic/Ib, flicker em Ib, total), diodo (7
   vetores do ngspice — os 3 `*sw` sempre nomeados, zero sem RSW),
-  MOS1/2/3 (térmico de canal 8kT·gm/3, flicker **NLEV=2 do
-  ngspice** `KF·gm²/(f^AF·W·Leff·Cox)` — o 3f5 usava Id^AF/Cox²;
-  fallback tox=1e-7 sem TOX; `NLEV`/`GDSNOI` não portados),
-  JFET/MESFET (`fet3_noise` compartilhado) e chave S/W (um gerador
-  térmico, integrado como no `swnoise.c` — dispositivo de gerador
-  único integra o próprio total). BSIM1/2 ficam silenciosos (o 3f5
-  não tem ruído deles; `b1noi.c`/`b2noi.c` são ngspice — deck
-  `.noise` com BSIM divergiria do oráculo); MOS6 não tem em
-  nenhum dos dois. Integração
+  MOS1/2/3 (`mos*noi.c` do ngspice-47 com os seletores `NLEV`/
+  `GDSNOI`, parâmetros só do ngspice, default NLEV=2: canal
+  `(2/3)|gm|` para NLEV<3 e `(2/3)·β·vgst·(1+α+α²)/(1+α)·GDSNOI` para
+  NLEV=3 — α=0 na saturação, `1−vds/vdsat` na região linear, zero
+  abaixo do limiar —; flicker NLEV=0 `KF·|Id|^AF/(f·Leff²·Cox)`, 1
+  `KF·|Id|^AF/(f·W·Leff·Cox)`, 2/3 `KF·gm²/(f^AF·W·Leff·Cox)`; NLEV
+  fora de 0..3 cai fora do `switch` do C e deixa o ganho cru, 1 A²/Hz
+  — mantido; o 3f5 usava Id^AF/Cox², que no ngspice só volta com
+  `ngbehavior=spice3`, não modelado; fallback tox=1e-7 sem TOX no
+  MOS1), JFET/MESFET (`fet3_noise` compartilhado; o JFET com o
+  `NLEV=3`/`GDSNOI` do `jfetnoi.c`, `α = 1 − vds/vgst` com os vgs/vds
+  crus do state0; o MESFET sem seletor), BSIM1/BSIM2 (`b1noi.c`/
+  `b2noi.c` do ngspice-47 — o 3f5 não tem ruído deles nem `KF`/`AF`:
+  rd/rs, canal `(2/3)|gm|`, flicker `KF·|Id|^AF/(f·(W−DW)·(L−DL)·
+  Cox²)` com Cox em F/cm²; ver a divergência abaixo) e chave S/W (um
+  gerador térmico, integrado como no `swnoise.c` — dispositivo de
+  gerador único integra o próprio total); MOS6 não tem em nenhum dos
+  dois. **Temperatura dos térmicos** (`NevalSrcInstanceTemp` do
+  ngspice-47): R, BJT (rc/rb/re), diodo (rs), JFET (rd/rs/id) e
+  MOS1/2/3 (rd/rs/id) usam o `TEMP=` da instância quando o cartão o
+  dá (`*Temp::temp`, `NoiseCtx::thermal_at`); MESFET, chaves, BSIM1/2
+  e BSIM3 ficam em `CKTtemp` (`NevalSrc` puro), como no C; shot e
+  flicker não dependem de T. O R do Dune não tem `TEMP=` por
+  instância e `DTEMP` não é lido (no ngspice `T = CKTtemp + DTEMP`
+  sem `TEMP=`), então hoje é sempre `CKTtemp` ou o `TEMP=` dado.
+  **BSIM1/2 contra o oráculo:** o `bsim1def.h` define `B1gm`/`B1cd`
+  como *offsets* de estado (`#define B1gm B1states+ 7`), e o
+  `b1noi.c` lê `fabs(inst->B1gm * inst->B1m)` = `GENstate + 7` e
+  `(double)inst->B1cd` = `GENstate + 4` — o índice da instância no
+  vetor de estados, não gm e Id (medido: um BSIM1 sozinho no deck dá
+  o ruído de canal de 7 S). O Dune lê os valores (`state0`), como o
+  autor queria e como o `jfetnoi.c` faz; `regress/b1noise`/`b2noise`
+  ficam no `corpus/SKIP` e o teste `bsim1.rs::noise_tests` reproduz
+  os goldens do ngspice-47 vetor a vetor (≤1.24e-5) emulando a
+  leitura do offset (`GENstate = 0`, um BSIM por deck, sem BJT —
+  na tabela de dispositivos do ngspice só URC/ASRC/BJT/BSIM1 vêm
+  antes) e confirma rd/rs iguais sem a emulação. Integração
   espectral por segmento log-log (`Nintegrate`, limiares
   `N_INTFTHRESH`/`N_INTUSELOG`), somatórios por fonte e por
   circuito, sumários a cada `pts_per_summary` pontos. A saída segue
@@ -262,9 +290,51 @@ resultados espelhando o rawfile).
   as leituras indefinidas do MOS2 dSetup lidas como zero
   (medido), vbc do nó externo no BJT, kernels vbb/vsc não
   conjugados no F1MF2, `ufact=0` abaixo do campo crítico no MOS2
-  — detalhes no KNOWN_DIFFS. JFET/MES/BSIM1 têm código de
-  distorção no C mas seguem não portados (erro estruturado);
-  MOS6/BSIM2 não têm no C. Sondas: `mixdisto_hd`/`mixdisto_im`
+  — detalhes no KNOWN_DIFFS. **JFET/MESFET** (2026-11-08,
+  `jfet.rs::jfet_dsetup`/`mes.rs::mes_dsetup` + `fet3_disto_load` ←
+  `jfetdset.c`/`jfetdist.c`, `mesdset.c`/`mesdisto.c`; o ngspice-47
+  só acrescenta `m` e beta/limiar ajustados por temperatura, que o
+  JFET do Dune não tem — idênticos nos defaults): corrente de dreno
+  em x=vgs, y=vds (o JFET em fórmulas fechadas por região, o MESFET
+  pela cadeia `Dderivs` do C), os dois diodos de porta (`vgd = x−y`)
+  e as cargas de porta — no JFET duas depleções de uma variável, no
+  MESFET duas cargas em (vgs, vgd). Quirks literais (os dois
+  simuladores têm o mesmo código): o setup do JFET é
+  Shichman–Hodges puro (ignora o `B` de Sydney que o load usa); no
+  modo inverso ele troca vgs/vgd *antes* das junções mas os nomes
+  locais guardam czgs/czgd, e o bloco final reescreve as 2ªs ordens
+  dos locais — o ramo gs fica com a 2ª ordem do diodo gd, a carga de
+  czgs no vgd real (2ª) e a de czgd no vgs real (3ª); o MESFET
+  troca o `qggnew` do load por `qgs = vgs·cgsnew` ("probably wrong",
+  diz o comentário) com `czgs/(qroot·par1)` onde o `qggnew` tem
+  `czgs/qroot·par1`. **BSIM1** (2026-11-08, `b1disto.rs` ←
+  `b1dset.c`/`b1disto.c`, idênticos no 3f5 e no ngspice-47 fora o
+  `M` que o Dune não tem): o setup é uma transcrição própria do
+  `B1evaluate` com `Dderivs` (p=vgs, q=vbs, r=vds do dispositivo
+  normalizado), corrente de dreno e cargas qg/qb/qd nas duas
+  partições, junções de corpo, regra da cadeia do modo inverso e
+  fatores de Taylor; o load contrai com os kernels (dreno, três
+  cargas com jω, dois diodos). Não é o `B1evaluate` derivado:
+  quirks portados literalmente — Beta0 quadrático multiplicado por
+  `d_dummy` (1+Ugs·VgsVth) em vez de vds (`b1dset.c:397`), `−Eta·vds`
+  derivado com Eta constante (`:307`), sublimiar só na janela
+  −40·N0·vt < VgsVth < 20·N0·vt, `co4v15 = 1/15` na carga de dreno
+  40/60 saturada (`:744`; o load usa 4/15), `capbd2` direto lido das
+  áreas de fonte (`:991`) e o termo `gbd` estampado a partir do
+  **gate** em TWOF1/F1PF2/F1MF2 (`b1disto.c:284/995/1307`).
+  **MOS6 e BSIM2 não têm `DEVdisto`** nem no 3f5 nem no ngspice-47
+  (sem `*dset.c`; conferido) e seguem com o erro estruturado.
+  Derivadas vs diferenças finitas: JFET 4.4e-8 relativo (polinomial,
+  arredondamento), MESFET 2.5e-6 (corrente) e 2.7e-6 (cargas, com
+  Richardson), BSIM1 ≤8e-5 (truncamento, h=5e-4); valores do setup
+  do BSIM1 = `B1evaluate` a 1e-12 fora dos quirks. Sondas novas:
+  `jfetdisto` (harmônicos; NJF saturado, NJF em modo inverso com as
+  duas junções dentro de −5·vt, PJF com porta além de FC·PB; PASS
+  0.168/0.148), `mesdisto` (IM; NMF saturado, NMF com porta direta e
+  `vnew1` grampeado, NMF inverso, PMF linear; PASS 0.301/0.046/
+  0.077), `b1disto` (harmônicos, 40/60, degeneração de fonte; PASS
+  0.000) e `b1disto_im` (modo inverso, XPART=1, junção dreno-corpo
+  direta, IM; PASS 0.084/0.084/0.007). Sondas: `mixdisto_hd`/`mixdisto_im`
   (derivadas do mixdisto do corpus, antes em SKIP), `bjtdisto2`
   (NPN IM, fontes Norton — cruzamento de zero do Im de corrente
   não tem régua), `bjtdisto3` (PNP harmônicos, CJS=0 pela
@@ -447,8 +517,9 @@ resultados espelhando o rawfile).
   spice.txt documenta 1e-4 errado). Nós primos `#source`/`#drain`
   (source primeiro, ordem do C). `LEVEL≠1` (Parker–Skellern, MESA,
   HFET do ngspice) difere como os níveis MOS: só erra se
-  instanciado. Ruído via `fet3_noise` (pinado por `regress/fetnoise`); sem
-  `.pz` ou `.disto`. Sondas: `regress/jfet_iv` (famílias I-V NJF/PJF/quente,
+  instanciado. Ruído via `fet3_noise` (pinado por `regress/fetnoise`,
+  `nlevnoise`, `noisetemp`); `.disto` pelo `jfetdset.c`/`mesdset.c`
+  (`regress/jfetdisto`, `mesdisto`); sem `.pz`. Sondas: `regress/jfet_iv` (famílias I-V NJF/PJF/quente,
   margem 0.27 — constantes físicas ×v/vt no diodo de porta),
   `jfet_amp` (op/ac/tran), `mes_iv`, `mes_amp` (carga de Statz com
   porta direta além de `vmax`), todas PASS.
@@ -579,13 +650,17 @@ oráculo contra o ngspice.
 
 ## Pendências (fases seguintes)
 
-- Ruído de BSIM1/2 (`b1noi.c`/`b2noi.c`, só ngspice — hoje
-  silenciosos, deck `.noise` com BSIM divergiria do oráculo);
-  `NLEV`/`GDSNOI`; temp/dtemp de instância no `NevalSrc` (os
-  térmicos usam a temperatura do circuito); `.pz` dos semicondutores restantes (BJT/
-  MOS têm `pzLoad` no C, aqui ainda não); `.disto` de JFET/MES/BSIM1
-  (`jfetdset.c`/`mesdset.c`/`b1dset.c` no C, não portados —
-  MOS6/BSIM2 não têm no C); `.dc` varrendo TEMP e parâmetro de
+- ~~Ruído de BSIM1/2~~ (feito 2026-11-08, `b1noi.c`/`b2noi.c` do
+  ngspice com gm/Id lidos do estado — ver `.noise`); ~~`NLEV`/
+  `GDSNOI`~~ (feito); ~~temp de instância no `NevalSrc`~~ (feito;
+  falta `DTEMP` no parser e `TEMP=` por instância no R, que mudam
+  superfície de API); ~~`.disto` de JFET/MES/BSIM1~~ (feito —
+  MOS6/BSIM2 não têm no C); `ngbehavior=spice3` (forma 3f5 do
+  flicker MOS no ngspice) não modelado; `XPART` do BSIM1 é flag no
+  ngspice-47 (`IF_FLAG`: `xpart=0` presente já liga 0/100, medido)
+  e valor no Dune (`≥1`) — ver KNOWN_DIFFS, sondas evitam
+  `xpart=0`; `.pz` dos semicondutores restantes (BJT/
+  MOS têm `pzLoad` no C, aqui ainda não); `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
 - Linha U (URC) e fonte B (Fase 3, sem deck); JFET nível 2
@@ -1311,7 +1386,8 @@ ulps). Cobertura = a do `.noise`: R, diodo (RS, shot, flicker), BJT
 (RC/RB/RE, Ic/Ib shot, flicker em Ib), MOS1/2/3 (RD/RS, canal ⅔gm,
 flicker `KF·gm²/(f^AF·W·L·Cox)`), JFET/MES, chaves, BSIM3 (térmicos;
 flicker só nos `noiMod` 1/4/5 — o 2/3/6 não é lei de potência:
-nota `no transient form`); BSIM1/2 e MOS6 seguem silenciosos, como no
+nota `no transient form`), BSIM1/2 (térmicos + flicker
+`KF·|Id|^AF/f`, desde 2026-11-08); MOS6 segue silencioso, como no
 `.noise`.
 
 **Discretização.** Uma grade `k·NT` para todos, breakpoint em cada
