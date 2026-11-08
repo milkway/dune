@@ -1,0 +1,13 @@
+Reported iterate: .op of a slowly converging Newton (triple root)
+* The C's NIiter returns converged WITHOUT its final rhs/rhsOld swap
+* (niiter.c) and CKTdump reads CKTrhsOld: the reported operating
+* point is the iterate the convergence test passed against, one solve
+* behind the last one. Here Newton converges linearly (the root of
+* the cubic B source is triple, the 1e14 resistor barely lifts it),
+* so the two differ by ~1.7e-4 V; ngspice-47 matches to ~1e-16
+* (crates/dune-core/tests/iterate.rs).
+v1 1 0 dc 1
+r1 1 2 1e14
+b1 2 0 i=1m*(v(2)-0.5)*(v(2)-0.5)*(v(2)-0.5)
+.op
+.end

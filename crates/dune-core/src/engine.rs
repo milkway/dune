@@ -333,10 +333,13 @@ pub(crate) struct Engine {
     mb: MatrixBuilder,
     solver: Box<dyn LinearSolver>,
     values: Vec<f64>,
-    /// `CKTrhs`: overwritten by each solve with the new solution.
+    /// `CKTrhs`: overwritten by each solve with the new solution;
+    /// after a converged `NIiter`, the last solve.
     rhs: Vec<f64>,
-    /// `CKTrhsOld`: the previous solution; the final solution after
-    /// a successful solve.
+    /// `CKTrhsOld`: the iterate the devices load at. After a
+    /// converged `NIiter` it is the reported solution — the iterate
+    /// the convergence test passed against, one solve behind `rhs`
+    /// (the C returns without its final swap).
     pub sol: Vec<f64>,
     states: States,
     nodesets: Vec<(Var, f64)>,
@@ -719,7 +722,17 @@ impl Engine {
                         ipass = false;
                     }
                     if !noncon {
-                        std::mem::swap(&mut self.sol, &mut self.rhs);
+                        // Converged: return WITHOUT the swap
+                        // (`niiter.c` 3f5:198-200, ngspice-47:
+                        // 330-336). `sol` (`CKTrhsOld`) keeps the
+                        // iterate the passing convergence test was
+                        // measured against — the one every device was
+                        // just loaded at — and that is what the
+                        // analyses read (`CKTdump`, the small-signal
+                        // passes, the next point); `rhs` (`CKTrhs`)
+                        // keeps the last solve, read only by `.sens`
+                        // DC (`cktsens.c`: `E = ckt->CKTrhs`).
+                        // docs/dune-core.md §Qual iterado.
                         return Ok(iterno);
                     }
                 }
@@ -1238,6 +1251,18 @@ impl Engine {
             self.set_sweep(sweeps, &cur, level, false, retemp)?;
         }
         let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
+        // `CKTdelta = TRCVvStep[0]`, every `CKTdeltaOld` the same and
+        // `CKTorder = 1` (dctrcurv.c, 3f5:59-66, ngspice-47:79-85):
+        // the INITPRED loads of the later points extrapolate with
+        // `xfact = delta/deltaOld[1] = 1`, i.e. `2·state1 − state2`.
+        // Set once: an `OPtran` fallback overwrites them and the C
+        // carries its values on.
+        self.delta = sweeps[0].step;
+        self.delta_old = [sweeps[0].step; 8];
+        self.order = 1;
+        // The banks rotated per point: `CKTmaxOrder + 1` of them
+        // (`.options maxord`, whatever the method).
+        let maxord = opts.maxord.clamp(1, 6);
         let mut start_mode = InitMode::Jct;
         let mut i = 0usize;
         loop {
@@ -1261,17 +1286,26 @@ impl Engine {
                 cur[i] = sweeps[i].start;
                 self.set_sweep(sweeps, &cur, i, false, retemp)?;
             }
+            // `DCtrCurv` (3f5:166-183, 224-228; ngspice-47:285-312,
+            // 370, 430-436): rotate the state banks, so state1 is the
+            // previous point's state0 (and state2 the one before);
+            // one `NIiter` in the mode left by the previous point —
+            // INITJCT at the first point of every inner sweep, then
+            // MODEINITPRED, whose loads predict their junction
+            // voltages from state1/state2 like a transient step —
+            // with `CKTop` as the fallback; after the first point
+            // (`firstTime`) state1 := state0, so the second point
+            // predicts flat. The switches read the previous point's
+            // state from state1 (`swload.c`) through the same banks.
+            self.states.rotate(maxord);
+            let first = start_mode == InitMode::Jct;
             if self.ni_iter(opts, start_mode, opts.itl2, 0.0, 1.0).is_err() {
                 self.op(opts)?;
             }
-            start_mode = InitMode::Float;
-            // `DCtrCurv` rotates the state banks before every point,
-            // so state1 there is the previous point's state0. We keep
-            // state0 in place instead (the loads start in INITFLOAT
-            // from it), but the switches read the previous point's
-            // state from state1 (ngspice `cswload.c`), so mirror it.
-            // No other device reads state1 in a DC mode.
-            self.states.copy01();
+            start_mode = InitMode::Pred;
+            if first {
+                self.states.copy01();
+            }
             if (rows.len() + 1).saturating_mul(self.vars.len()) > MAX_OUTPUT_VALUES {
                 return Err(Error::Build(
                     "dc sweep produces too many points; refusing".into(),
@@ -3011,7 +3045,9 @@ impl Engine {
     /// parameter `suffix` moved from `value` by `delta`, loaded again,
     /// restored; then `delta_E = Y⁻¹·(ΔI − ΔY·E) / delta`. The loads
     /// see `CKTrhsOld` — the iterate the last Jacobian was built at,
-    /// which `op` leaves in `rhs` — and `E` is the converged solution.
+    /// which `op` leaves in `sol` — and `E` is `CKTrhs`, the last
+    /// solve, which `op` leaves in `rhs` (`cktsens.c`: `E =
+    /// ckt->CKTrhs`, ngspice-47:323; 3f5:221).
     pub fn sens_dc_column(
         &mut self,
         opts: &Options,
@@ -3021,7 +3057,8 @@ impl Engine {
         delta: f64,
     ) -> Result<Vec<f64>, Error> {
         let saved = self.states.snapshot0();
-        let load_at = self.rhs.clone();
+        let load_at = self.sol.clone();
+        let e = self.rhs.clone();
         let one = |engine: &mut Engine| {
             let mut values = vec![0.0; engine.values.len()];
             let mut rhs = vec![0.0; engine.rhs.len()];
@@ -3065,7 +3102,7 @@ impl Engine {
         let (y1, i1) = perturbed?;
 
         let dy: Vec<f64> = y1.iter().zip(&y0).map(|(a, b)| a - b).collect();
-        let dye = self.slot_product(&dy, &self.sol);
+        let dye = self.slot_product(&dy, &e);
         let mut w: Vec<f64> = i1
             .iter()
             .zip(&i0)

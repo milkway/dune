@@ -14,7 +14,9 @@ resultados espelhando o rawfile).
   o ngspice-47 (1 e 1, não os 10 do 3f5 — ver "Cadeia do op");
   `temp`/`tnom` chegam em °C no cartão.
 - **Laço de Newton** (`engine.rs` ← `ni/niiter.c`): estados
-  `INITJCT → INITFIX → INITFLOAT`, troca `rhs`/`rhsOld` por iteração,
+  `INITJCT → INITFIX → INITFLOAT`, troca `rhs`/`rhsOld` por iteração
+  — **exceto na saída convergida**, que volta sem a troca: o iterado
+  reportado é o penúltimo (seção "Qual iterado cada análise lê"),
   convergência exige `iterno != 1`, o passe extra `ipass` quando há
   `.nodeset`. Convergência (`ni/niconv.c`): `vntol` para tensões de
   nó, `abstol` para correntes de ramo, ambos com o termo `reltol`.
@@ -518,9 +520,10 @@ resultados espelhando o rawfile).
   limita o passo ao se aproximar do limiar; AC/pz/ruído leem
   state1 (um gerador térmico, `onoise_s1`). GOFF default = gmin;
   RON/ROFF zero ou não-finito é erro estruturado na elaboração
-  (o C faria 1/0). O `.dc` do Dune espelha a rotação de bancos do
-  `DCtrCurv` com um `copy01` por ponto (só as chaves leem state1
-  em DC). Sondas: `regress/sw_hyst` (janela varrida nos dois
+  (o C faria 1/0). O `.dc` do Dune roda os bancos de estado a cada
+  ponto como o `DCtrCurv` (desde 2026-11-08; antes era um `copy01`
+  por ponto com os pontos em INITFLOAT — ver "Qual iterado cada
+  análise lê"), e as chaves leem o ponto anterior em state1. Sondas: `regress/sw_hyst` (janela varrida nos dois
   sentidos via nó espelhado, VH negativo, defaults) e `csw_rly`
   (relé por corrente, IH negativo), PASS a ~1e-14. Nota de deck:
   o ngspice agrupa análises por tipo e roda cada tipo em ordem
@@ -744,6 +747,61 @@ oráculo contra o ngspice.
   com `Error::StepLimit`. Decks biestáveis no oráculo: flags
   `bistable`/`accept-error=` do `corpus/XFAIL` (formato de 5
   campos, ver docs/dune-oracle.md).
+
+## Qual iterado cada análise lê (2026-11-08)
+
+O `NIiter` dos dois C sai convergido **sem** a troca final
+`rhs`/`rhsOld` (3f5 `ni/niiter.c:198-200`; ngspice-47
+`maths/ni/niiter.c:330-336`; a troca só acontece no fim de uma
+iteração não-convergida, 3f5:226-228, ngspice:363). Na saída,
+`CKTrhsOld` é o iterado contra o qual o teste de convergência passou
+— aquele em que todo dispositivo acabou de ser carregado, e cujos
+`state0` estão gravados — e `CKTrhs` é o último solve, um passo de
+Newton à frente. No Dune, `Engine::sol` é o `CKTrhsOld` e
+`Engine::rhs` o `CKTrhs`; até 2026-11-08 o Dune trocava também na
+saída e reportava o último solve (desvio dos dois C, corrigido).
+
+| Análise | O que lê | 3f5 | ngspice-47 | Dune |
+|---|---|---|---|---|
+| `.op` (saída) | `CKTdump` → `rhsOld` (após um `CKTload` INITSMSIG, que só escreve `rhs`) | `ckt/dcop.c:42,65-66`, `cktdump.c:30` | `dcop.c:87,113-116`, `cktdump.c:43` | `op.rs` lê `sol` |
+| `.dc` (cada ponto) | `CKTdump` → `rhsOld`; o ponto seguinte carrega a partir dele | `dctrcurv.c:173,221` | `dctrcurv.c:306,425` | `rows.push(sol)` |
+| `.tran` (ponto aceito, t=0 incl.) | `CKTdump` → `rhsOld`; `DEVtrunc`/`DEVaccept` do LTRA/TRA leem `rhsOld` | `dctran.c:213`, `ltratrun.c:48-50`, `ltraacct.c:97-105` | `dctran.c:418`, `ltratrun.c:41-53`, `ltraacct.c:73-77` | `rows.push(sol)`; `trunc`/`accept` recebem `sol` |
+| `.ac` | `CKTload` MODEINITSMSIG sobre `rhsOld` (os dispositivos leem `rhsOld`), depois `NIacIter` | `acan.c:66-67` | `acan.c:148-149` | `load_all(Smsig)` sobre `sol` |
+| `.pz` | idem | `pzan.c:40-41` | `pzan.c:47-48` | `pz.rs` idem |
+| `.noise` | 3f5: sem passe INITSMSIG — o `NIacIter` usa os `state0` do último load do `NIiter` (feito em `rhsOld`); ngspice: INITSMSIG sobre `rhsOld` | `noisean.c:107,199` | `noisean.c:217-218` | `noise.rs`: como o ngspice (mesmo iterado nos dois) |
+| `.disto` | INITSMSIG sobre `rhsOld`; o `DSETUP` lê `rhsOld` (ex. `bjtdset.c:176-189`) | `distoan.c:119-120,144` | `distoan.c:97-98` | `disto` passa `sol` ao `disto_setup` |
+| `.tf` | sem recarga (o `CKTload`+`SMPluFac` está em `#ifdef notdef`): resolve contra a fatoração que o último `NIiter` deixou — a matriz montada em `rhsOld` | `tfanal.c:45-57,102,170` | `tfanal.c:44` e seguintes | `solve_factored` (inalterado pela correção) |
+| `.sens` DC | `E = CKTrhs` (o **último** solve); as cargas perturbadas leem `rhsOld`. O 3f5 ainda faz `CKTrhsOld = E` (carrega no último solve); o ngspice-47 não (carrega no penúltimo) | `cktsens.c:221-224` | `cktsens.c:323-325` | como o ngspice: carga em `sol`, `E` = `rhs` |
+| `.sens` AC | INITSMSIG sobre `rhsOld` após `CKTsetup`, depois `NIacIter` | `cktsens.c:272-288` | `cktsens.c:399` | `load_all(Smsig)` sobre `sol` |
+
+Consequências: o fallback do op (`dynamic_gmin`/`gillespie_src`
+guardam `CKTrhsOld`, ngspice `cktop.c`), o warm start da `Session` e
+o `.pss` leem `sol` e passam a ver o mesmo iterado que o C. A
+bit-identidade (mesmo deck 2× = mesmos bytes) não depende disso.
+
+**Pontos seguintes do `.dc`** (`DCtrCurv`, 3f5 `dctrcurv.c:59-66,
+166-183, 224-228`; ngspice-47 `dctrcurv.c:79-85, 285-312, 370,
+430-436`, idênticos fora do ramo `newcompat.hs`): antes de todo
+ponto, os bancos `CKTstates[0..=CKTmaxOrder+1]` rodam (state1 = o
+state0 do ponto anterior, state2 o de antes); o `NIiter` parte do
+modo que o ponto anterior deixou — INITJCT no primeiro ponto de cada
+varredura interna (`firstTime`), **MODEINITPRED** nos seguintes —
+com `CKTop` como fallback; depois do primeiro ponto, `state1 :=
+state0`. Em INITPRED os dispositivos com preditor (diodo, BJT, MOS,
+JFET/MES, BSIM) partem de `(1+xfact)·state1 − xfact·state2` com
+`xfact = CKTdelta/CKTdeltaOld[1] = 1` (`CKTdelta = TRCVvStep[0]` e
+todo `CKTdeltaOld` igual, setados uma vez no começo — um fallback
+`OPtran` os sobrescreve e o C segue com os valores dele); as chaves
+leem o estado anterior em state1 pela própria rotação (antes o Dune
+fazia um `copy01` por ponto e partia de INITFLOAT). Sondas:
+`regress/iter_op` (`.op` com raiz tripla — Newton linear, penúltimo
+e último diferem 1.7e-4; Dune bate o ngspice a 1e-16) e
+`regress/iter_dcpred` (inversor MOS1 + chave varridos: 5e-4 → 1e-15),
+pinadas a 1e-12 em `crates/dune-core/tests/iterate.rs`.
+
+O `pnjlim` **não** muda com isto: o ramo direto do ngspice
+(`devsup.c:54-61`, `vold + vt·(2+ln(arg−2))`) é heurística, não bug;
+o Dune mantém o 3f5 (KNOWN_DIFFS).
 
 ## Cadeia do op (`CKTop` do ngspice-47, 2026-11-08)
 
