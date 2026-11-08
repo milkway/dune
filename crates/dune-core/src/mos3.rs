@@ -25,7 +25,7 @@ use crate::dderivs::Dderivs;
 use crate::diode::pnjlim;
 use crate::disto::{DistoCtx, DistoSetupCtx};
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
-use crate::mos1::{MosGeom, fetlim, limvds, qmeyer};
+use crate::mos1::{MeyerPzCaps, MosGeom, MosPzConductances, fetlim, limvds, meyer_pz_load, qmeyer};
 use crate::mosdisto::{
     DrainDerivs, MosDistoCoeffs, MosJunctions, bulk_diode as disto_bulk_diode, mos_disto_load,
     setup_tail,
@@ -1799,6 +1799,42 @@ impl crate::devices::Device for Mos3I {
         ctx.add_g(self.s[SP_S], -gspr);
         ctx.add_g(self.s[SP_B], -gbs - (xnrm - xrev) * gmbs);
         ctx.add_g(self.s[SP_DP], -gds - xrev * (gm + gmbs));
+    }
+
+    /// `MOS3pzLoad` (`mos3pzld.c`, the MOS1 file renamed): see
+    /// [`meyer_pz_load`] — always in the normal-mode orientation.
+    /// `CKTpzSetup` re-runs every device's setup after the operating
+    /// point, and `mos3set.c` (3f5 and ngspice-47 alike) resets
+    /// `MOS3mode = 1` under a `MOS3modeGiven` flag nothing ever sets;
+    /// MOS1/MOS2's setups don't touch the mode. A MOS3 conducting
+    /// source-to-drain (vds < 0) is therefore stamped with `xnrm = 1`
+    /// in `.pz`, unlike in `.ac` (gate: honoring the operating-point
+    /// mode fails `regress/pz_mos3` at 995× its ruler).
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let t = &self.t;
+        let st = self.st;
+        let (xnrm, xrev) = (1.0, 0.0);
+        let eff_l = self.geom.l - 2.0 * t.lat_diff;
+        let caps = MeyerPzCaps {
+            capgs: 2.0 * ctx.states.get(0, st + CAPGS) + t.cgso * self.geom.w,
+            capgd: 2.0 * ctx.states.get(0, st + CAPGD) + t.cgdo * self.geom.w,
+            capgb: 2.0 * ctx.states.get(0, st + CAPGB) + t.cgbo * eff_l,
+            capbd: self.capbd,
+            capbs: self.capbs,
+        };
+        let g = MosPzConductances {
+            xnrm,
+            xrev,
+            gm: self.gm,
+            gds: self.gds,
+            gmbs: self.gmbs,
+            gbd: self.gbd,
+            gbs: self.gbs,
+            gdpr: t.drain_conductance,
+            gspr: t.source_conductance,
+        };
+        meyer_pz_load(ctx, &self.s, &caps, &g);
+        Ok(())
     }
 }
 

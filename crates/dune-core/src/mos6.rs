@@ -1018,6 +1018,14 @@ impl crate::devices::Device for Mos6I {
     /// The 3f5 has no `mos6acld.c`; a MOS6 contributes nothing to
     /// the AC matrix, exactly like the C's null `DEVacLoad`.
     fn load_ac(&mut self, _ctx: &mut AcCtx) {}
+
+    /// Neither the 3f5 nor ngspice-47 has a `mos6pzld.c`: the C skips
+    /// the device and the determinant comes out without it. Dune
+    /// refuses the deck instead (a silently missing device is a wrong
+    /// answer).
+    fn load_pz(&mut self, _ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        Err("the level-6 MOSFET has no pole-zero load (no mos6pzld.c in the 3f5 or ngspice)")
+    }
 }
 
 #[cfg(test)]

@@ -582,6 +582,50 @@ pub(crate) fn fet3_ac(ctx: &mut AcCtx, n: &Fet3Nodes, st: usize, gdpr: f64, gspr
     ctx.add_g(n.s[SP_DP], -gds);
 }
 
+/// `JFETpzLoad` / `MESpzLoad` (`jfetpzld.c`, `mespzld.c`): the AC
+/// stamps with `s` in place of `jω`. `gdpr`/`gspr` are the series
+/// *conductances* times the area, as `mespzld.c` and ngspice's
+/// `jfetpzld.c` read them; the 3f5's `jfetpzld.c` reads
+/// `JFETdrainResist·area` — ohms stamped as siemens
+/// (`corpus/KNOWN_DIFFS.md`).
+pub(crate) fn fet3_pz(
+    ctx: &mut crate::matrix::PzCtx,
+    n: &Fet3Nodes,
+    st: usize,
+    gdpr: f64,
+    gspr: f64,
+) {
+    let s0 = |o: usize| ctx.states.get(0, st + o);
+    let gm = s0(GM);
+    let gds = s0(GDS);
+    let ggs = s0(GGS);
+    let xgs = s0(QGS);
+    let ggd = s0(GGD);
+    let xgd = s0(QGD);
+    ctx.add_g(n.s[D_D], gdpr);
+    ctx.add_g(n.s[G_G], ggd + ggs);
+    ctx.add_cap(n.s[G_G], xgd + xgs);
+    ctx.add_g(n.s[S_S], gspr);
+    ctx.add_g(n.s[DP_DP], gdpr + gds + ggd);
+    ctx.add_cap(n.s[DP_DP], xgd);
+    ctx.add_g(n.s[SP_SP], gspr + gds + gm + ggs);
+    ctx.add_cap(n.s[SP_SP], xgs);
+    ctx.add_g(n.s[D_DP], -gdpr);
+    ctx.add_g(n.s[G_DP], -ggd);
+    ctx.add_cap(n.s[G_DP], -xgd);
+    ctx.add_g(n.s[G_SP], -ggs);
+    ctx.add_cap(n.s[G_SP], -xgs);
+    ctx.add_g(n.s[S_SP], -gspr);
+    ctx.add_g(n.s[DP_D], -gdpr);
+    ctx.add_g(n.s[DP_G], -ggd + gm);
+    ctx.add_cap(n.s[DP_G], -xgd);
+    ctx.add_g(n.s[DP_SP], -gds - gm);
+    ctx.add_g(n.s[SP_G], -ggs - gm);
+    ctx.add_cap(n.s[SP_G], -xgs);
+    ctx.add_g(n.s[SP_S], -gspr);
+    ctx.add_g(n.s[SP_DP], -gds);
+}
+
 /// Name suffixes of the JFET/MESFET noise generators
 /// (`JFETnNames`, `MESnNames`).
 pub(crate) const FET3_NOISE_SUFFIXES: &[&str] = &["_rd", "_rs", "_id", "_1overf", ""];
@@ -747,6 +791,14 @@ impl crate::devices::Device for JfetI {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
         fet3_ac(ctx, &self.n, self.st, gdpr, gspr);
+    }
+
+    /// `JFETpzLoad` (`jfetpzld.c`): see [`fet3_pz`].
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let gdpr = self.t.drain_conduct * self.area;
+        let gspr = self.t.source_conduct * self.area;
+        fet3_pz(ctx, &self.n, self.st, gdpr, gspr);
+        Ok(())
     }
 
     /// `JFETnoise`: see [`fet3_noise`].

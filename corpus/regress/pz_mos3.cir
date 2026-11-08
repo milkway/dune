@@ -1,0 +1,18 @@
+MOS3 pole-zero: common-source stage and a reversed follower
+* Coverage: .pz through mos3pzld.c, on the mos3_inv n3 card (VMAX,
+* KAPPA, THETA, ETA, NFS; CJ/CJSW junctions through RSH-free AD/AS).
+* m1 is a resistively loaded common-source stage driven from a source
+* resistance; m2 follows m1's drain with its drain and source pins
+* swapped on the card (vds < 0: the reversed-mode xrev stamps).
+vdd 1 0 dc 3.3
+vin 2 0 dc 0.9
+rsig 2 3 10k
+m1 4 3 0 0 n3 l=1u w=10u ad=20p as=20p pd=24u ps=24u
+rl 1 4 20k
+m2 5 4 1 0 n3 l=1u w=20u ad=40p as=40p pd=44u ps=44u
+rf 5 0 10k
+.pz 3 0 5 0 vol pz
+.model n3 nmos level=3 vto=0.6 nsub=4e16 tox=1.5e-8 xj=0.15u ld=0.05u u0=450
++ theta=0.06 eta=0.2 delta=0.6 vmax=1.6e5 kappa=0.4 nfs=6e11 rd=20 rs=15
++ cj=4e-4 mj=0.45 cjsw=3e-10 mjsw=0.3 cgso=2e-10 cgdo=2e-10 cgbo=1e-10
+.end

@@ -619,6 +619,97 @@ const DP_B: usize = 19;
 const SP_B: usize = 20;
 const SP_DP: usize = 21;
 
+/// The small-signal conductances of a four-terminal MOS instance as
+/// its pole-zero load reads them; `xnrm`/`xrev` are the C's mode
+/// flags (1/0 in normal mode, 0/1 with source and drain swapped).
+pub(crate) struct MosPzConductances {
+    pub xnrm: f64,
+    pub xrev: f64,
+    pub gm: f64,
+    pub gds: f64,
+    pub gmbs: f64,
+    pub gbd: f64,
+    pub gbs: f64,
+    pub gdpr: f64,
+    pub gspr: f64,
+}
+
+/// The conductance half of every four-terminal MOS pole-zero load —
+/// identical, statement for statement, in `mos1pzld.c`,
+/// `mos2pzld.c`, `mos3pzld.c`, `b1pzld.c` and `b2pzld.c` (and in the
+/// AC loads). `s` is the 22-slot TSTALLOC list the five devices
+/// share (`D_D` … `SP_DP`).
+pub(crate) fn mos_pz_conductances(
+    ctx: &mut crate::matrix::PzCtx,
+    s: &[Slot; 22],
+    c: &MosPzConductances,
+) {
+    let (xnrm, xrev) = (c.xnrm, c.xrev);
+    let (gm, gds, gmbs, gbd, gbs) = (c.gm, c.gds, c.gmbs, c.gbd, c.gbs);
+    let (gdpr, gspr) = (c.gdpr, c.gspr);
+    ctx.add_g(s[D_D], gdpr);
+    ctx.add_g(s[S_S], gspr);
+    ctx.add_g(s[B_B], gbd + gbs);
+    ctx.add_g(s[DP_DP], gdpr + gds + gbd + xrev * (gm + gmbs));
+    ctx.add_g(s[SP_SP], gspr + gds + gbs + xnrm * (gm + gmbs));
+    ctx.add_g(s[D_DP], -gdpr);
+    ctx.add_g(s[S_SP], -gspr);
+    ctx.add_g(s[B_DP], -gbd);
+    ctx.add_g(s[B_SP], -gbs);
+    ctx.add_g(s[DP_D], -gdpr);
+    ctx.add_g(s[DP_G], (xnrm - xrev) * gm);
+    ctx.add_g(s[DP_B], -gbd + (xnrm - xrev) * gmbs);
+    ctx.add_g(s[DP_SP], -gds - xnrm * (gm + gmbs));
+    ctx.add_g(s[SP_G], -(xnrm - xrev) * gm);
+    ctx.add_g(s[SP_S], -gspr);
+    ctx.add_g(s[SP_B], -gbs - (xnrm - xrev) * gmbs);
+    ctx.add_g(s[SP_DP], -gds - xrev * (gm + gmbs));
+}
+
+/// The Meyer capacitances of a level 1/2/3 MOS at the operating
+/// point: `capgs`/`capgd`/`capgb` already doubled and with the
+/// overlaps added (`2·state0 + C*O·W` or `·Leff`), `capbd`/`capbs`
+/// the junction capacitances the `INITSMSIG` load left.
+pub(crate) struct MeyerPzCaps {
+    pub capgs: f64,
+    pub capgd: f64,
+    pub capgb: f64,
+    pub capbd: f64,
+    pub capbs: f64,
+}
+
+/// `MOS1pzLoad` (`mos1pzld.c`; `mos2pzld.c` and `mos3pzld.c` are the
+/// same file renamed): the AC stamps with `s` in place of `jω` —
+/// every capacitance enters as `s·C` on both the real and imaginary
+/// halves.
+pub(crate) fn meyer_pz_load(
+    ctx: &mut crate::matrix::PzCtx,
+    s: &[Slot; 22],
+    caps: &MeyerPzCaps,
+    g: &MosPzConductances,
+) {
+    let xgs = caps.capgs;
+    let xgd = caps.capgd;
+    let xgb = caps.capgb;
+    let xbd = caps.capbd;
+    let xbs = caps.capbs;
+    ctx.add_cap(s[G_G], xgd + xgs + xgb);
+    ctx.add_cap(s[B_B], xgb + xbd + xbs);
+    ctx.add_cap(s[DP_DP], xgd + xbd);
+    ctx.add_cap(s[SP_SP], xgs + xbs);
+    ctx.add_cap(s[G_B], -xgb);
+    ctx.add_cap(s[G_DP], -xgd);
+    ctx.add_cap(s[G_SP], -xgs);
+    ctx.add_cap(s[B_G], -xgb);
+    ctx.add_cap(s[B_DP], -xbd);
+    ctx.add_cap(s[B_SP], -xbs);
+    ctx.add_cap(s[DP_G], -xgd);
+    ctx.add_cap(s[DP_B], -xbd);
+    ctx.add_cap(s[SP_G], -xgs);
+    ctx.add_cap(s[SP_B], -xbs);
+    mos_pz_conductances(ctx, s, g);
+}
+
 pub(crate) struct Mos1I {
     drain: Var,
     gate: Var,
@@ -1267,6 +1358,38 @@ impl crate::devices::Device for Mos1I {
         ctx.add_g(self.s[SP_S], -gspr);
         ctx.add_g(self.s[SP_B], -gbs - (xnrm - xrev) * gmbs);
         ctx.add_g(self.s[SP_DP], -gds - xrev * (gm + gmbs));
+    }
+
+    /// `MOS1pzLoad` (`mos1pzld.c`): see [`meyer_pz_load`].
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let t = &self.t;
+        let st = self.st;
+        let (xnrm, xrev) = if self.mode < 0.0 {
+            (0.0, 1.0)
+        } else {
+            (1.0, 0.0)
+        };
+        let eff_l = self.geom.l - 2.0 * t.lat_diff;
+        let caps = MeyerPzCaps {
+            capgs: 2.0 * ctx.states.get(0, st + CAPGS) + t.cgso * self.geom.w,
+            capgd: 2.0 * ctx.states.get(0, st + CAPGD) + t.cgdo * self.geom.w,
+            capgb: 2.0 * ctx.states.get(0, st + CAPGB) + t.cgbo * eff_l,
+            capbd: self.capbd,
+            capbs: self.capbs,
+        };
+        let g = MosPzConductances {
+            xnrm,
+            xrev,
+            gm: self.gm,
+            gds: self.gds,
+            gmbs: self.gmbs,
+            gbd: self.gbd,
+            gbs: self.gbs,
+            gdpr: t.drain_conductance,
+            gspr: t.source_conductance,
+        };
+        meyer_pz_load(ctx, &self.s, &caps, &g);
+        Ok(())
     }
 
     /// `MOS1dSetup` (`dev/mos1/mos1dset.c`): the Shichman–Hodges

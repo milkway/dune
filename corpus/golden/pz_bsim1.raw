@@ -1,0 +1,27 @@
+Title: bsim1 pole-zero: common-source stage and a reversed follower
+Date: Sun Nov  8 09:08:24  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 9
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(pole(4))	voltage
+	4	v(pole(5))	voltage
+	5	v(zero(1))	voltage
+	6	v(zero(2))	voltage
+	7	v(zero(3))	voltage
+	8	v(zero(4))	voltage
+Values:
+0		-2.499687927431752e+12,0.000000000000000e+00
+	-1.309232350022052e+12,0.000000000000000e+00
+	-2.632555945493511e+11,0.000000000000000e+00
+	-1.255773755773952e+10,0.000000000000000e+00
+	-7.164467851398122e+08,0.000000000000000e+00
+	-1.074461311201150e+12,0.000000000000000e+00
+	-2.878041579031627e+11,0.000000000000000e+00
+	-4.100596481297830e+10,0.000000000000000e+00
+	3.379783348331590e+10,0.000000000000000e+00

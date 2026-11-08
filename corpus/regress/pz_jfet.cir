@@ -1,0 +1,16 @@
+JFET pole-zero: common-source stage with series resistances
+* Coverage: .pz through jfetpzld.c. A resistively loaded N-channel
+* JFET common-source stage driven from a source resistance, with
+* CGS/CGD gate junction capacitances and RD/RS series resistances
+* (stamped as conductances times AREA, like ngspice: the 3f5's
+* jfetpzld.c stamps RD*area and RS*area instead, see KNOWN_DIFFS).
+vdd 1 0 dc 12
+vin 2 0 dc -0.5
+rsig 2 3 10k
+j1 4 3 0 jn area=1.5
+rl 1 4 2k
+cl 4 0 1p
+.pz 3 0 4 0 vol pz
+.model jn njf vto=-2 beta=1e-3 lambda=0.01 rd=50 rs=30 cgs=2p cgd=1p
++ pb=0.8 is=1e-14
+.end

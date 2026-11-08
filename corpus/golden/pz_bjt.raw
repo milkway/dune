@@ -1,0 +1,23 @@
+Title: bjt pole-zero: common-emitter stage with series resistances
+Date: Sun Nov  8 09:08:24  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 7
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(pole(4))	voltage
+	4	v(zero(1))	voltage
+	5	v(zero(2))	voltage
+	6	v(zero(3))	voltage
+Values:
+0		-7.912164962095198e+11,0.000000000000000e+00
+	-1.490454155265070e+11,0.000000000000000e+00
+	-1.575613608679199e+09,0.000000000000000e+00
+	-1.588605955876660e+08,0.000000000000000e+00
+	-6.301960521724493e+11,0.000000000000000e+00
+	-1.386041381943870e+10,0.000000000000000e+00
+	1.098864718849227e+10,0.000000000000000e+00

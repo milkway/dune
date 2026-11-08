@@ -14,7 +14,7 @@
 use crate::consts::{ROOT2, VT0};
 use crate::jfet::{
     CQGD, CQGS, FET3_NUM_STATES, Fet3Nodes, Fet3Op, QGD, QGS, VGD, VGS, fet3_ac, fet3_bias,
-    fet3_charge, fet3_finish, gate_diode,
+    fet3_charge, fet3_finish, fet3_pz, gate_diode,
 };
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Var};
 
@@ -358,6 +358,14 @@ impl crate::devices::Device for MesI {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
         fet3_ac(ctx, &self.n, self.st, gdpr, gspr);
+    }
+
+    /// `MESpzLoad` (`mespzld.c`): see [`crate::jfet::fet3_pz`].
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let gdpr = self.t.drain_conduct * self.area;
+        let gspr = self.t.source_conduct * self.area;
+        fet3_pz(ctx, &self.n, self.st, gdpr, gspr);
+        Ok(())
     }
 
     /// `MESnoise`: see [`crate::jfet::fet3_noise`].

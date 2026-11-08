@@ -15,7 +15,7 @@ use crate::dderivs::Dderivs;
 use crate::diode::pnjlim;
 use crate::disto::{DistoCtx, DistoSetupCtx};
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
-use crate::mos1::{MosGeom, fetlim, limvds, qmeyer};
+use crate::mos1::{MeyerPzCaps, MosGeom, MosPzConductances, fetlim, limvds, meyer_pz_load, qmeyer};
 use crate::mosdisto::{
     DrainDerivs, MosDistoCoeffs, MosJunctions, bulk_diode, mos_disto_load, setup_tail,
 };
@@ -2212,6 +2212,39 @@ impl crate::devices::Device for Mos2I {
         ctx.add_g(self.s[SP_S], -gspr);
         ctx.add_g(self.s[SP_B], -gbs - (xnrm - xrev) * gmbs);
         ctx.add_g(self.s[SP_DP], -gds - xrev * (gm + gmbs));
+    }
+
+    /// `MOS2pzLoad` (`mos2pzld.c`, the MOS1 file renamed): see
+    /// [`meyer_pz_load`].
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let t = &self.t;
+        let st = self.st;
+        let (xnrm, xrev) = if self.mode < 0.0 {
+            (0.0, 1.0)
+        } else {
+            (1.0, 0.0)
+        };
+        let eff_l = self.geom.l - 2.0 * t.lat_diff;
+        let caps = MeyerPzCaps {
+            capgs: 2.0 * ctx.states.get(0, st + CAPGS) + t.cgso * self.geom.w,
+            capgd: 2.0 * ctx.states.get(0, st + CAPGD) + t.cgdo * self.geom.w,
+            capgb: 2.0 * ctx.states.get(0, st + CAPGB) + t.cgbo * eff_l,
+            capbd: self.capbd,
+            capbs: self.capbs,
+        };
+        let g = MosPzConductances {
+            xnrm,
+            xrev,
+            gm: self.gm,
+            gds: self.gds,
+            gmbs: self.gmbs,
+            gbd: self.gbd,
+            gbs: self.gbs,
+            gdpr: t.drain_conductance,
+            gspr: t.source_conductance,
+        };
+        meyer_pz_load(ctx, &self.s, &caps, &g);
+        Ok(())
     }
 }
 
