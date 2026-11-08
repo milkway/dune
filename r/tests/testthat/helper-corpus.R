@@ -1,7 +1,6 @@
 # Locate the dune repository's corpus/: next to the package sources
-# (tests/testthat -> r/ -> repo root), or through DUNE_ROOT (R CMD
-# check runs the tests from a copy outside the repository). Tests that
-# need it skip when it is absent, so a check outside the repo passes.
+# (tests/testthat -> r/ -> repo root), or through DUNE_ROOT. The whole-
+# corpus test (test-corpus.R) needs this and skips without it.
 dune_root <- function() {
   candidates <- c(
     Sys.getenv("DUNE_ROOT"),
@@ -15,8 +14,24 @@ dune_root <- function() {
   NULL
 }
 
-corpus_path <- function(...) {
+# Where corpus_path() reads: the repository, else the subset that a
+# release tarball carries in tests/testthat/corpus (tools/r-vendor.sh
+# copies what the tests below ask for), so R CMD check away from the
+# repository runs them instead of skipping.
+corpus_root <- function() {
   root <- dune_root()
+  if (!is.null(root)) {
+    return(root)
+  }
+  bundled <- testthat::test_path(".")
+  if (file.exists(file.path(bundled, "corpus", "ORACLE"))) {
+    return(normalizePath(bundled))
+  }
+  NULL
+}
+
+corpus_path <- function(...) {
+  root <- corpus_root()
   if (is.null(root)) {
     testthat::skip("the dune corpus is not available (set DUNE_ROOT)")
   }
