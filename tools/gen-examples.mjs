@@ -549,6 +549,54 @@ function robustDeck(deck) {
   return `${deck.replace(/\s*$/, '')}\n.options method=trbdf2\n`;
 }
 
+/** INPevaluate's number: mantissa plus one scale suffix, rest ignored. */
+function spiceNum(tok) {
+  const m = /^([+-]?(?:[0-9]*\.)?[0-9]+(?:e[+-]?[0-9]+)?)(meg|mil|[tgkmunpf])?/i.exec(tok);
+  if (!m) return NaN;
+  const scale = { '': 1, t: 1e12, g: 1e9, meg: 1e6, k: 1e3, mil: 25.4e-6, m: 1e-3, u: 1e-6, n: 1e-9, p: 1e-12, f: 1e-15 };
+  return parseFloat(m[1]) * scale[(m[2] || '').toLowerCase()];
+}
+
+const DISPLAY_PTS = 600; // ≥ this many timepoints across every tran chart
+
+/**
+ * The display grid: tran output lands on the internal timepoints, whose
+ * ceiling is TMAX = min(tstep, span/50) by default — ~50 segments on
+ * many corpus decks, visibly angular and clipping ringing peaks. For the
+ * charts only, cap TMAX at span/600 (same engine, same contract, just
+ * more timepoints). Decks already that dense, and cards whose arguments
+ * this cannot parse, are left alone.
+ */
+function displayDeck(deck) {
+  return deck.replace(/^([ \t]*)\.tran\b([^\r\n]*)/gim, (line, ind, rest) => {
+    const toks = rest.trim().split(/\s+/).filter(Boolean);
+    const uic = toks.length && /^uic$/i.test(toks[toks.length - 1]) ? toks.pop() : '';
+    if (toks.length < 2 || toks.length > 4 || toks.some((t) => !Number.isFinite(spiceNum(t)))) return line;
+    const [tstep, tstop] = [spiceNum(toks[0]), spiceNum(toks[1])];
+    const tstart = toks.length > 2 ? spiceNum(toks[2]) : 0;
+    const span = tstop - tstart;
+    if (!(span > 0)) return line;
+    const effTmax = toks.length > 3 ? spiceNum(toks[3]) : Math.min(tstep, span / 50);
+    if (!(effTmax > span / DISPLAY_PTS)) return line; // already dense
+    const tmax = (span / DISPLAY_PTS).toExponential(6);
+    return `${ind}.tran ${toks[0]} ${toks[1]} ${toks.length > 2 ? toks[2] : '0'} ${tmax}${uic ? ' uic' : ''}`;
+  });
+}
+
+/** Simulate on the display grid, falling back to the deck's own run. */
+function simulateDisplay(deck, faithful = () => simulate(deck)) {
+  const dense = displayDeck(deck);
+  if (dense !== deck) {
+    try {
+      return simulate(dense);
+    } catch {
+      // A grid the deck does not survive (step-kill corner cases):
+      // the deck's own grid, then.
+    }
+  }
+  return faithful();
+}
+
 function runResults(deck, stem, run) {
   const requests = deckRequests(deck);
   const out = [];
@@ -577,7 +625,7 @@ function runResults(deck, stem, run) {
     // property of the faithful contract, not of the engine.
     if (xf) {
       try {
-        const res2 = simulate(robustDeck(deck));
+        const res2 = simulateDisplay(robustDeck(deck));
         out.push(
           `<div class="notebox"><b>Solved by the robust mode</b> <span class="ptag">.options method=trbdf2</span>` +
             `<p>The same deck with Dune's opt-in L-stable TR-BDF2 integrator (D-0027, ` +
@@ -623,7 +671,7 @@ function exampleHtml(rel, groupId) {
   const id = `${groupId}-${slug(stem)}`;
   stats.total++;
   const pills = analysesOf(deck).map((a) => `<span class="pill">.${a}</span>`).join('');
-  const results = runResults(deck, stem, () => simulate(deck));
+  const results = runResults(deck, stem, () => simulateDisplay(deck));
   return {
     id,
     stem,
@@ -665,7 +713,7 @@ function picHtml(file) {
     title += ' ' + comment[k];
   }
   title = title.replace(/[.:,]$/, '');
-  const results = runResults(ex.netlist, stem, () => simulatePic(src, { includes }));
+  const results = runResults(ex.netlist, stem, () => simulateDisplay(ex.netlist, () => simulatePic(src, { includes })));
   const incPanels = Object.entries(includes)
     .map(([n, t]) => `<div class="panel src"><div class="cap">${esc(n)} — pulled in by .include</div><pre><code>${esc(t.replace(/\s+$/, ''))}</code></pre></div>`)
     .join('');
@@ -763,7 +811,9 @@ const extraCss = `
   .notes { margin: 0; padding: 0 0 0 18px; color: var(--muted); font-size: 12.5px; }
   .panel.canvas { background: var(--card); }
   .canvas .fig svg { max-width: 460px; }
-  .canvas .fig { min-height: 200px; }
+  /* The schematic reads like ink on paper: a fixed light sheet in both
+     themes, so the hairline strokes keep their contrast on the dark page. */
+  .canvas .fig { min-height: 200px; display: flex; align-items: center; justify-content: center; padding: 18px 14px; background: #f7f1e3; color: #241c0e; }
   @media (max-width: 860px) {
     .ex-grid { grid-template-columns: minmax(0, 1fr); }
     .toc-group > a.gname { min-width: 0; width: 100%; }
@@ -812,7 +862,7 @@ const html = `<!doctype html>
     <div class="wrap">
       <a href="../">← dune home</a>
       <h1>Examples</h1>
-      <p class="lead">Every circuit in the oracle corpus — ${stats.total - picItems.length} decks — plus ${picItems.length} pic schematics: the netlist, and what Dune computes for it. Each result was produced by Dune's WebAssembly build (dune-sim ${esc(pkgVersion)}) when this page was generated; the same decks are checked point by point against ngspice-47 in CI.</p>
+      <p class="lead">Every circuit in the oracle corpus — ${stats.total - picItems.length} decks — plus ${picItems.length} pic schematics: the netlist, and what Dune computes for it. Each result was produced by Dune's WebAssembly build (dune-sim ${esc(pkgVersion)}) when this page was generated; the same decks are checked point by point against ngspice-47 in CI. Transient charts are re-run with the max internal step capped at 1/${DISPLAY_PTS} of the window, so the curves carry enough timepoints to draw smoothly — the deck shown, on its own grid, is what CI compares.</p>
       <p class="note">Charts show at most ${MAX_TRACES} vectors (the deck's own <code>.plot</code>/<code>.print</code> choice when it has one), decimated to min/max per pixel column; complex plots show magnitude. Known-marginal circuits (<code>corpus/XFAIL</code>) and failures are shown as they are.</p>
       <nav class="toc" aria-label="Contents">
 ${tocHtml}
