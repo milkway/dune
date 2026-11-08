@@ -595,6 +595,11 @@ pub struct Circuit {
     /// `.ic` entries (node, volts), applied at the transient
     /// operating point.
     pub(crate) ics: Vec<(String, f64)>,
+    /// Instance name → which `IC=` components its card gave (the
+    /// C's `*icXGiven` bits), recorded by the netlist front end for
+    /// the semiconductors' `DEVsetic`. A device without an entry
+    /// (built from a typed spec) has every component given.
+    pub(crate) ic_given: HashMap<String, crate::devices::IcGiven>,
     /// The warm-start channel of a [`Session`](crate::Session):
     /// empty for a plain circuit (the engine then runs exactly the
     /// 3f5 path).
@@ -645,6 +650,12 @@ impl Circuit {
     /// point; `.tran … UIC` ignores it in favor of device ICs).
     pub fn ic(&mut self, node: impl Into<String>, value: f64) {
         self.ics.push((node.into().to_ascii_lowercase(), value));
+    }
+
+    /// Record which `IC=` components instance `name`'s card gave
+    /// (the netlist front end; see [`Circuit::ic_given`]).
+    pub(crate) fn set_ic_given(&mut self, name: &str, given: crate::devices::IcGiven) {
+        self.ic_given.insert(name.to_ascii_lowercase(), given);
     }
 }
 
@@ -1651,6 +1662,13 @@ impl Circuit {
                         base,
                     )));
                 }
+            }
+        }
+
+        // `*param.c`'s `*icXGiven` bits for `DEVsetic`.
+        for (spec, dev) in self.specs.iter().zip(devices.iter_mut()) {
+            if let Some(&g) = self.ic_given.get(spec.name()) {
+                dev.set_ic_given(g);
             }
         }
 

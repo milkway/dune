@@ -115,6 +115,7 @@ pub(crate) struct Bsim3I {
     ic_vds: f64,
     ic_vgs: f64,
     ic_vbs: f64,
+    ic_given: crate::devices::IcGiven,
     drain_conductance: f64,
     source_conductance: f64,
     vjsm: f64,
@@ -200,6 +201,7 @@ impl Bsim3I {
             ic_vds: ic.0,
             ic_vgs: ic.1,
             ic_vbs: ic.2,
+            ic_given: crate::devices::IcGiven::ALL,
             drain_conductance,
             source_conductance,
             vjsm,
@@ -323,6 +325,20 @@ fn junction_charge(
 impl crate::devices::Device for Bsim3I {
     fn par_load(&self) -> bool {
         true
+    }
+
+    /// `BSIM3getic` (ngspice-47 `b3getic.c`): VBS, VDS, VGS not given
+    /// on the card from the external nodes.
+    fn set_ic(&mut self, rhs: &[f64]) {
+        use crate::devices::getic;
+        let g = self.ic_given;
+        getic(g, 2, &mut self.ic_vbs, rhs, self.bulk, self.source);
+        getic(g, 0, &mut self.ic_vds, rhs, self.drain, self.source);
+        getic(g, 1, &mut self.ic_vgs, rhs, self.gate, self.source);
+    }
+
+    fn set_ic_given(&mut self, given: crate::devices::IcGiven) {
+        self.ic_given = given;
     }
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {

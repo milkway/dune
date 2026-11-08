@@ -60,9 +60,14 @@ pub(crate) trait Device: Send {
     /// `DEVsetic` (`*getic.c`), called by `CKTic` under UIC with the
     /// right-hand side holding the `.nodeset`/`.ic` node values (zero
     /// elsewhere): an initial condition not given on the instance is
-    /// taken from the nodes. Default: none (only the capacitor is
-    /// ported; docs/dune-core.md).
+    /// taken from the external nodes. Default: none (the devices
+    /// whose `*itf.h` has no `DEVsetic`).
     fn set_ic(&mut self, _rhs: &[f64]) {}
+    /// Which `IC=` components the card gave (the C's `*icXGiven`
+    /// bits, set by `*param.c`), for [`Device::set_ic`]. Devices
+    /// are built with every component given (a programmatic spec's
+    /// tuple is taken as given); the netlist path narrows it.
+    fn set_ic_given(&mut self, _given: IcGiven) {}
     /// Device convergence test (`*conv.c`, NEWCONV): called once
     /// the node voltages pass `NIconvTest`; returns false when the
     /// device's current disagrees with its own linearization.
@@ -126,6 +131,42 @@ pub(crate) trait Device: Send {
     /// temperature-dependent derived values. Parameters with no
     /// effect on Dune's equations are no-ops.
     fn sens_set(&mut self, _suffix: &str, _value: f64) {}
+}
+
+/// The given-ness of an instance's `IC=` components: bit `i` is
+/// component `i` of the device's `ic` tuple (BJT `VBE, VCE`; MOS
+/// `VDS, VGS, VBS`; JFET/MES `VDS, VGS`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct IcGiven(pub u8);
+
+impl IcGiven {
+    /// Every component given (the programmatic default).
+    pub(crate) const ALL: IcGiven = IcGiven(u8::MAX);
+    /// No component given.
+    pub(crate) const NONE: IcGiven = IcGiven(0);
+
+    /// An `IC=` list of `n` values: the `*param.c` switch falls
+    /// through from `case n` down to `case 1`, so the first `n`
+    /// components are given.
+    pub(crate) fn first(n: usize) -> IcGiven {
+        IcGiven(((1u16 << n.min(8)) - 1) as u8)
+    }
+
+    pub(crate) fn with(self, i: usize) -> IcGiven {
+        IcGiven(self.0 | (1 << i))
+    }
+
+    pub(crate) fn has(self, i: usize) -> bool {
+        self.0 & (1 << i) != 0
+    }
+}
+
+/// One `*getic.c` assignment: `if (!icGiven) ic = rhs[a] − rhs[b]`
+/// (external nodes: "user specified, so use external nodes").
+pub(crate) fn getic(given: IcGiven, i: usize, ic: &mut f64, rhs: &[f64], a: Var, b: Var) {
+    if !given.has(i) {
+        *ic = rhs[a] - rhs[b];
+    }
 }
 
 /// One perturbable parameter of a device instance (`sgen`): the

@@ -619,6 +619,7 @@ pub(crate) struct JfetI {
     off: bool,
     /// `IC=VDS,VGS`.
     ic: (f64, f64),
+    ic_given: crate::devices::IcGiven,
     st: usize,
 }
 
@@ -638,6 +639,7 @@ impl JfetI {
             area,
             off,
             ic,
+            ic_given: crate::devices::IcGiven::ALL,
             st,
         }
     }
@@ -646,6 +648,20 @@ impl JfetI {
 impl crate::devices::Device for JfetI {
     fn par_load(&self) -> bool {
         true
+    }
+
+    /// `JFETgetic` (`jfetic.c`): VDS and VGS not given on the card from the
+    /// external nodes.
+    fn set_ic(&mut self, rhs: &[f64]) {
+        use crate::devices::getic;
+        let g = self.ic_given;
+        let n = &self.n;
+        getic(g, 0, &mut self.ic.0, rhs, n.drain, n.source);
+        getic(g, 1, &mut self.ic.1, rhs, n.gate, n.source);
+    }
+
+    fn set_ic_given(&mut self, given: crate::devices::IcGiven) {
+        self.ic_given = given;
     }
 
     fn alloc(&mut self, mb: &mut MatrixBuilder) {

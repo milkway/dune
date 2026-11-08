@@ -387,7 +387,7 @@ resultados espelhando o rawfile).
   de `examples/mos/modelcard.*` do ngspice — todas PASS (pior
   margem 0.211, piso de abstol em sublimiar profundo); gates
   medidos no ruído (PMOS→noiMod 1 falha a 17; KF=0 a 476).
-  Resta do BSIM3: NQS, ACM, `.disto`/`.sens`, b3getic/UIC.
+  Resta do BSIM3: NQS, ACM, `.disto`/`.sens`.
 
 - **Chaves S/W** (`switch.rs` ← `swload.c`/`cswload.c` do
   **ngspice-47** — o 3f5 tem outra máquina, ver KNOWN_DIFFS):
@@ -885,12 +885,32 @@ CKTrhs antes do ponto UIC (que só troca rhs↔solução e carrega) e
 chama `DEVsetic`: o `CAPgetic` copia a tensão do nó para todo
 capacitor sem `IC=`. O Dune não fazia nenhum dos dois — um tanque LC
 chutado por `.ic v(1)=0.5` + UIC partia do repouso (ngspice oscila).
-Agora `Engine::ckt_ic` + `Device::set_ic` (portado só no capacitor;
-`diogetic`/`bjtgetic`/`mos*ic`/`b*getic`/`mesgetic` seguem como
-pendência — os `ic=` de instância desses já valiam, só a cópia do
-`.ic` do nó falta). Regressão `corpus/regress/uic_ic.cir` (LC + RC
-com `ic=` que vence o `.ic`): 6,1e-15 contra o ngspice-47. Nenhum
-deck do corpus usava `.ic` + UIC; o resto é byte-idêntico.
+Agora `Engine::ckt_ic` + `Device::set_ic`. Regressão
+`corpus/regress/uic_ic.cir` (LC + RC com `ic=` que vence o `.ic`):
+6,1e-15 contra o ngspice-47. Nenhum deck do corpus usava `.ic` +
+UIC; o resto é byte-idêntico.
+
+**`getic` dos semicondutores (issue #20).** Portados todos os
+`DEVsetic` do 3f5 (`*itf.h`): `DIOgetic`, `BJTgetic`, `MOS1/2/3/6getic`
+(`mos*ic.c`), `JFETgetic` (`jfetic.c`), `MESgetic`, `B1getic`,
+`B2getic`, e o `BSIM3getic` do ngspice-47 (`b3getic.c`). Todos fazem
+`if (!icXGiven) icX = rhs[a] − rhs[b]` sobre os nós EXTERNOS
+(BJT: `VBE = b−e`, `VCE = c−e`; MOS/BSIM: `VBS = b−s`, `VDS = d−s`,
+`VGS = g−s`; JFET/MES: `VDS = d−s`, `VGS = g−s`). Os bits `*Given`
+são os do `*param.c`: `IC=a,b,c` dá os n primeiros (o `switch` cai de
+`case n` a `case 1`); `IC=a` só o primeiro; os `icvds=`/`icvgs=` do
+MESFET um a um. Esses bits vivem numa tabela interna do `Circuit`
+preenchida pela elaboração do netlist; um spec tipado montado pela
+API (tupla `ic` sem "dado/não dado") conta como tudo dado — a API
+pública não mudou (trocar as tuplas por `Option` por componente
+ficaria a decidir). **Pega do diodo:** o `DIO_IC` do `dioparam.c`
+grava `DIOinitCond` sem nunca ligar `DIOinitCondGiven` — no 3f5 E no
+ngspice-47 —, então sob UIC o `IC=` do diodo é SEMPRE substituído
+pela diferença dos nós (0 sem `.ic`). Medido no ngspice: `d1 … ic=0.65`
+e `d1 …` sem `ic` dão rawfiles idênticos sob UIC. O Dune segue (antes
+honrava o `IC=`). Regressão `corpus/regress/uic_getic.cir` (BJT com
+`IC=VBE` parcial, BJT sem IC, diodo com `IC=` sobrescrito, MOS1, todos
+polarizados por `.ic` + UIC): margem 0,013 (FAIL a 19× sem o porte).
 
 **Validação** (`crates/dune-core/tests/pss_osc.rs`; decks
 `corpus/pss/osc_*.cir`, goldens por `tools/pss-golden.sh`, que ganhou
@@ -948,7 +968,7 @@ amplitude assentar.
 
 **Pendências:** LTRA/TRA no `.pss` (estado = histórico da linha,
 recusado como no excitado); ruído de dispositivo no tempo (issue #20
-itens 3–5); `getic` dos semicondutores; osciladores com fonte
+itens 3–5); osciladores com fonte
 periódica que *não* é a fundamental (VCO travado, injeção) seguem o
 caminho excitado — não há opção para forçar o autônomo com fontes;
 bindings dedicados (spice.pss/spice_pss) não expõem `periods` nem o

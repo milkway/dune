@@ -1,0 +1,28 @@
+uic: .ic biases the semiconductors through their getic (bjtgetic.c ...)
+* regression (issue #20): under UIC the 3f5 copies the .ic node
+* values into every BJT/diode/MOS/JFET initial condition not given on
+* the card (DEVsetic); Dune ported only CAPgetic, so these devices
+* started from zero junction voltages and their charges kicked the
+* first steps. q2 keeps its own IC= VBE (VCE still from the nodes);
+* the diode's IC= is overwritten by its nodes in both C codes (the
+* DIO_IC case never sets DIOinitCondGiven).
+vcc 9 0 5
+rc 9 2 2k
+rb 9 1 200k
+cb 1 0 10p
+q1 2 1 0 qn
+rc2 9 4 2k
+q2 4 1 0 qn ic=0.6
+d1 5 0 dd ic=0.2
+rd 9 5 10k
+cd 5 0 20p
+m1 6 7 0 0 nm l=2u w=20u
+rm 9 6 5k
+rg 9 7 100k
+cg 7 0 5p
+.model qn npn bf=100 cje=2p cjc=1p tf=0.3n is=1e-15 rb=50
+.model dd d is=1e-14 cjo=5p tt=1n
+.model nm nmos level=1 vto=0.8 kp=50u cgso=1n cgdo=1n cbd=50f cbs=50f
+.ic v(1)=0.72 v(2)=2.5 v(4)=1.5 v(5)=0.65 v(6)=3 v(7)=2
+.tran 0.2n 40n uic
+.end

@@ -480,6 +480,7 @@ pub(crate) struct Mos6I {
     ic_vds: f64,
     ic_vgs: f64,
     ic_vbs: f64,
+    ic_given: crate::devices::IcGiven,
     st: usize,
     s: [Slot; 22],
     // Values that persist between iterations (`MOS6instance`).
@@ -522,6 +523,7 @@ impl Mos6I {
             ic_vds: ic.0,
             ic_vgs: ic.1,
             ic_vbs: ic.2,
+            ic_given: crate::devices::IcGiven::ALL,
             st,
             s: [TRASH; 22],
             mode: 1.0,
@@ -544,6 +546,20 @@ impl Mos6I {
 impl crate::devices::Device for Mos6I {
     fn par_load(&self) -> bool {
         true
+    }
+
+    /// `MOS6getic` (`mos6ic.c`): VBS, VDS, VGS not given
+    /// on the card from the external nodes.
+    fn set_ic(&mut self, rhs: &[f64]) {
+        use crate::devices::getic;
+        let g = self.ic_given;
+        getic(g, 2, &mut self.ic_vbs, rhs, self.bulk, self.source);
+        getic(g, 0, &mut self.ic_vds, rhs, self.drain, self.source);
+        getic(g, 1, &mut self.ic_vgs, rhs, self.gate, self.source);
+    }
+
+    fn set_ic_given(&mut self, given: crate::devices::IcGiven) {
+        self.ic_given = given;
     }
 
     /// `MOS6convTest` (same shape as MOS1's).

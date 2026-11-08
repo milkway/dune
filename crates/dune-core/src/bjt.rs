@@ -364,6 +364,7 @@ pub(crate) struct BjtI {
     off: bool,
     ic_vbe: f64,
     ic_vce: f64,
+    ic_given: crate::devices::IcGiven,
     st: usize,
     s: [Slot; 23],
     d: BjtDistoCoeffs,
@@ -512,6 +513,7 @@ impl BjtI {
             off,
             ic_vbe: ic.0,
             ic_vce: ic.1,
+            ic_given: crate::devices::IcGiven::ALL,
             st,
             s: [TRASH; 23],
             d: BjtDistoCoeffs::default(),
@@ -522,6 +524,19 @@ impl BjtI {
 impl crate::devices::Device for BjtI {
     fn par_load(&self) -> bool {
         true
+    }
+
+    /// `BJTgetic` (`bjtgetic.c`): VBE and VCE not given on the card
+    /// from the external nodes.
+    fn set_ic(&mut self, rhs: &[f64]) {
+        use crate::devices::getic;
+        let g = self.ic_given;
+        getic(g, 0, &mut self.ic_vbe, rhs, self.base, self.emit);
+        getic(g, 1, &mut self.ic_vce, rhs, self.col, self.emit);
+    }
+
+    fn set_ic_given(&mut self, given: crate::devices::IcGiven) {
+        self.ic_given = given;
     }
 
     /// `BJTconvTest`: predicted vs computed collector and base

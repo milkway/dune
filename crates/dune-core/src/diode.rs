@@ -360,6 +360,15 @@ impl crate::devices::Device for DiodeI {
         true
     }
 
+    /// `DIOgetic` (`diogetic.c`): `if(!DIOinitCondGiven) DIOinitCond
+    /// = rhs[pos] − rhs[neg]`. `DIO_IC` in `dioparam.c` stores the
+    /// value without ever raising `DIOinitCondGiven` (3f5 and
+    /// ngspice-47 alike), so under UIC the card's `IC=` is always
+    /// replaced by the node values (0 without a `.ic`/`.nodeset`).
+    fn set_ic(&mut self, rhs: &[f64]) {
+        self.init_cond = rhs[self.pos] - rhs[self.neg];
+    }
+
     /// `DIOconvTest`: predicted vs computed junction current,
     /// evaluated at the previous solution (`CKTrhsOld`).
     fn conv_test(&self, ctx: &crate::matrix::ConvCtx) -> bool {

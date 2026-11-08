@@ -12,6 +12,7 @@ use crate::circuit::{
     Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Tra, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
+use crate::devices::IcGiven;
 use crate::diode::DiodeModel;
 use crate::error::Error;
 
@@ -421,15 +422,20 @@ impl Circuit {
                     };
                     let mut temp = None;
                     let mut ic = (0.0, 0.0);
+                    let mut icg = IcGiven::NONE;
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
-                            ("ic", ParamValue::Num(v)) => ic = (*v, 0.0),
+                            ("ic", ParamValue::Num(v)) => {
+                                ic = (*v, 0.0);
+                                icg = IcGiven::first(1);
+                            }
                             ("ic", ParamValue::NumList(v)) => {
                                 ic = (
                                     v.first().copied().unwrap_or(0.0),
                                     v.get(1).copied().unwrap_or(0.0),
                                 );
+                                icg = IcGiven::first(v.len().min(2));
                             }
                             ("area", ParamValue::Num(_)) => {}
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
@@ -444,7 +450,7 @@ impl Circuit {
                     if let Some(s) = el.nodes.get(3) {
                         nodes4[3] = s.clone();
                     }
-                    add(
+                    add_ic(
                         &mut ckt,
                         Bjt {
                             name,
@@ -455,6 +461,7 @@ impl Circuit {
                             ic,
                             temp,
                         },
+                        icg,
                         &mut problems,
                     );
                 }
@@ -529,20 +536,24 @@ impl Circuit {
                             ("nrs", ParamValue::Num(v)) => inst.nrs = *v,
                             ("off", ParamValue::Flag) => inst.off = true,
                             ("temp", ParamValue::Num(v)) => inst.temp = Some(v + CTOK),
-                            ("ic", ParamValue::Num(v)) => inst.ic = (*v, 0.0, 0.0),
+                            ("ic", ParamValue::Num(v)) => {
+                                inst.ic = (*v, 0.0, 0.0);
+                                inst.ic_given = IcGiven::first(1);
+                            }
                             ("ic", ParamValue::NumList(v)) => {
                                 inst.ic = (
                                     v.first().copied().unwrap_or(0.0),
                                     v.get(1).copied().unwrap_or(0.0),
                                     v.get(2).copied().unwrap_or(0.0),
                                 );
+                                inst.ic_given = IcGiven::first(v.len().min(3));
                             }
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
                     let nodes = four(&el.nodes);
                     match mm {
-                        MosModel::M1(m1) => add(
+                        MosModel::M1(m1) => add_ic(
                             &mut ckt,
                             Mos1 {
                                 name,
@@ -560,9 +571,10 @@ impl Circuit {
                                 ic: inst.ic,
                                 temp: inst.temp,
                             },
+                            inst.ic_given,
                             &mut problems,
                         ),
-                        MosModel::M2(m2) => add(
+                        MosModel::M2(m2) => add_ic(
                             &mut ckt,
                             Mos2 {
                                 name,
@@ -580,9 +592,10 @@ impl Circuit {
                                 ic: inst.ic,
                                 temp: inst.temp,
                             },
+                            inst.ic_given,
                             &mut problems,
                         ),
-                        MosModel::M3(m3) => add(
+                        MosModel::M3(m3) => add_ic(
                             &mut ckt,
                             Mos3 {
                                 name,
@@ -600,9 +613,10 @@ impl Circuit {
                                 ic: inst.ic,
                                 temp: inst.temp,
                             },
+                            inst.ic_given,
                             &mut problems,
                         ),
-                        MosModel::M6(m6) => add(
+                        MosModel::M6(m6) => add_ic(
                             &mut ckt,
                             Mos6 {
                                 name,
@@ -620,9 +634,10 @@ impl Circuit {
                                 ic: inst.ic,
                                 temp: inst.temp,
                             },
+                            inst.ic_given,
                             &mut problems,
                         ),
-                        MosModel::B1(b1) => add(
+                        MosModel::B1(b1) => add_ic(
                             &mut ckt,
                             Bsim1 {
                                 name,
@@ -639,9 +654,10 @@ impl Circuit {
                                 off: inst.off,
                                 ic: inst.ic,
                             },
+                            inst.ic_given,
                             &mut problems,
                         ),
-                        MosModel::B3(b3) => add(
+                        MosModel::B3(b3) => add_ic(
                             &mut ckt,
                             Bsim3 {
                                 name,
@@ -661,9 +677,10 @@ impl Circuit {
                                 off: inst.off,
                                 ic: inst.ic,
                             },
+                            inst.ic_given,
                             &mut problems,
                         ),
-                        MosModel::B2(b2) => add(
+                        MosModel::B2(b2) => add_ic(
                             &mut ckt,
                             Bsim2 {
                                 name,
@@ -680,6 +697,7 @@ impl Circuit {
                                 off: inst.off,
                                 ic: inst.ic,
                             },
+                            inst.ic_given,
                             &mut problems,
                         ),
                     }
@@ -703,18 +721,23 @@ impl Circuit {
                     let mut area = *area;
                     let mut temp = None;
                     let mut ic = (0.0, 0.0);
+                    let mut icg = IcGiven::NONE;
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
                             ("area", ParamValue::Num(v)) => area = Some(*v),
-                            ("ic", ParamValue::Num(v)) => ic.0 = *v,
+                            ("ic", ParamValue::Num(v)) => {
+                                ic.0 = *v;
+                                icg = icg.with(0);
+                            }
                             ("ic", ParamValue::NumList(v)) if (1..=2).contains(&v.len()) => {
                                 ic = (v[0], v.get(1).copied().unwrap_or(ic.1));
+                                icg = IcGiven(icg.0 | IcGiven::first(v.len()).0);
                             }
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
-                    add(
+                    add_ic(
                         &mut ckt,
                         Jfet {
                             name,
@@ -725,6 +748,7 @@ impl Circuit {
                             ic,
                             temp,
                         },
+                        icg,
                         &mut problems,
                     );
                 }
@@ -746,19 +770,30 @@ impl Circuit {
                     };
                     let mut area = *area;
                     let mut ic = (0.0, 0.0);
+                    let mut icg = IcGiven::NONE;
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("area", ParamValue::Num(v)) => area = Some(*v),
-                            ("icvds", ParamValue::Num(v)) => ic.0 = *v,
-                            ("icvgs", ParamValue::Num(v)) => ic.1 = *v,
-                            ("ic", ParamValue::Num(v)) => ic.0 = *v,
+                            ("icvds", ParamValue::Num(v)) => {
+                                ic.0 = *v;
+                                icg = icg.with(0);
+                            }
+                            ("icvgs", ParamValue::Num(v)) => {
+                                ic.1 = *v;
+                                icg = icg.with(1);
+                            }
+                            ("ic", ParamValue::Num(v)) => {
+                                ic.0 = *v;
+                                icg = icg.with(0);
+                            }
                             ("ic", ParamValue::NumList(v)) if (1..=2).contains(&v.len()) => {
                                 ic = (v[0], v.get(1).copied().unwrap_or(ic.1));
+                                icg = IcGiven(icg.0 | IcGiven::first(v.len()).0);
                             }
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
-                    add(
+                    add_ic(
                         &mut ckt,
                         Mes {
                             name,
@@ -768,6 +803,7 @@ impl Circuit {
                             off: *off,
                             ic,
                         },
+                        icg,
                         &mut problems,
                     );
                 }
@@ -1074,6 +1110,8 @@ struct MosInst {
     nrs: f64,
     off: bool,
     ic: (f64, f64, f64),
+    /// Which `IC=` components the card gave.
+    ic_given: IcGiven,
     temp: Option<f64>,
     /// BSIM3 only: `M`, `DELVTO`, `MULU0`.
     m: f64,
@@ -1084,6 +1122,7 @@ struct MosInst {
 impl MosInst {
     fn new() -> Self {
         MosInst {
+            ic_given: IcGiven::NONE,
             nrd: 1.0,
             nrs: 1.0,
             m: 1.0,
@@ -1607,6 +1646,22 @@ fn bsim2_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim2::B
 fn add(ckt: &mut Circuit, spec: impl Into<crate::circuit::Spec>, problems: &mut Vec<String>) {
     if let Err(e) = ckt.add(spec) {
         problems.push(e.to_string());
+    }
+}
+
+/// [`add`] for a device with `IC=` components, recording which ones
+/// the card gave (for its `DEVsetic`).
+fn add_ic(
+    ckt: &mut Circuit,
+    spec: impl Into<crate::circuit::Spec>,
+    given: IcGiven,
+    problems: &mut Vec<String>,
+) {
+    let spec = spec.into();
+    let name = spec.name().to_string();
+    match ckt.add(spec) {
+        Ok(()) => ckt.set_ic_given(&name, given),
+        Err(e) => problems.push(e.to_string()),
     }
 }
 
