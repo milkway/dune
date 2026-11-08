@@ -333,10 +333,13 @@ pub(crate) struct Engine {
     mb: MatrixBuilder,
     solver: Box<dyn LinearSolver>,
     values: Vec<f64>,
-    /// `CKTrhs`: overwritten by each solve with the new solution.
+    /// `CKTrhs`: overwritten by each solve with the new solution;
+    /// after a converged `NIiter`, the last solve.
     rhs: Vec<f64>,
-    /// `CKTrhsOld`: the previous solution; the final solution after
-    /// a successful solve.
+    /// `CKTrhsOld`: the iterate the devices load at. After a
+    /// converged `NIiter` it is the reported solution — the iterate
+    /// the convergence test passed against, one solve behind `rhs`
+    /// (the C returns without its final swap).
     pub sol: Vec<f64>,
     states: States,
     nodesets: Vec<(Var, f64)>,
@@ -719,7 +722,17 @@ impl Engine {
                         ipass = false;
                     }
                     if !noncon {
-                        std::mem::swap(&mut self.sol, &mut self.rhs);
+                        // Converged: return WITHOUT the swap
+                        // (`niiter.c` 3f5:198-200, ngspice-47:
+                        // 330-336). `sol` (`CKTrhsOld`) keeps the
+                        // iterate the passing convergence test was
+                        // measured against — the one every device was
+                        // just loaded at — and that is what the
+                        // analyses read (`CKTdump`, the small-signal
+                        // passes, the next point); `rhs` (`CKTrhs`)
+                        // keeps the last solve, read only by `.sens`
+                        // DC (`cktsens.c`: `E = ckt->CKTrhs`).
+                        // docs/dune-core.md §Qual iterado.
                         return Ok(iterno);
                     }
                 }
@@ -3011,7 +3024,9 @@ impl Engine {
     /// parameter `suffix` moved from `value` by `delta`, loaded again,
     /// restored; then `delta_E = Y⁻¹·(ΔI − ΔY·E) / delta`. The loads
     /// see `CKTrhsOld` — the iterate the last Jacobian was built at,
-    /// which `op` leaves in `rhs` — and `E` is the converged solution.
+    /// which `op` leaves in `sol` — and `E` is `CKTrhs`, the last
+    /// solve, which `op` leaves in `rhs` (`cktsens.c`: `E =
+    /// ckt->CKTrhs`, ngspice-47:323; 3f5:221).
     pub fn sens_dc_column(
         &mut self,
         opts: &Options,
@@ -3021,7 +3036,8 @@ impl Engine {
         delta: f64,
     ) -> Result<Vec<f64>, Error> {
         let saved = self.states.snapshot0();
-        let load_at = self.rhs.clone();
+        let load_at = self.sol.clone();
+        let e = self.rhs.clone();
         let one = |engine: &mut Engine| {
             let mut values = vec![0.0; engine.values.len()];
             let mut rhs = vec![0.0; engine.rhs.len()];
@@ -3065,7 +3081,7 @@ impl Engine {
         let (y1, i1) = perturbed?;
 
         let dy: Vec<f64> = y1.iter().zip(&y0).map(|(a, b)| a - b).collect();
-        let dye = self.slot_product(&dy, &self.sol);
+        let dye = self.slot_product(&dy, &e);
         let mut w: Vec<f64> = i1
             .iter()
             .zip(&i0)
