@@ -1,0 +1,168 @@
+The spice package statically links compiled Rust code. The Rust
+dependencies ('crates') below are vendored into src/rust/vendor.tar.xz
+for the offline build; their authors are copyright holders of the
+compiled code. Each crate's full license text ships inside the
+vendored sources. The simulation engine itself (the dune-core,
+dune-netlist, dune-raw and dune-pic crates, also in the archive) is
+part of this package: see DESCRIPTION and LICENSE.
+
+crate                        version    license                            authors
+----------------------------------------------------------------------------------------------------
+ab_glyph                     0.2.32     Apache-2.0                         Alex Butler <alexheretic@gmail.com>
+ab_glyph_rasterizer          0.1.10     Apache-2.0                         Alex Butler <alexheretic@gmail.com>
+aho-corasick                 1.1.5      Unlicense OR MIT                   Andrew Gallant <jamslam@gmail.com>
+autocfg                      1.5.1      Apache-2.0 OR MIT                  Josh Stone <cuviper@gmail.com>
+base64                       0.22.1     MIT OR Apache-2.0                  Marshall Pierce <marshall@mpierce.org>
+bit-set                      0.8.0      Apache-2.0 OR MIT                  Alexis Beingessner <a.beingessner@gmail.com>
+bit-vec                      0.8.0      Apache-2.0 OR MIT                  Alexis Beingessner <a.beingessner@gmail.com>
+bitflags                     2.13.2     MIT OR Apache-2.0                  The Rust Project Developers
+block-buffer                 0.12.1     MIT OR Apache-2.0                  RustCrypto Developers
+bumpalo                      3.20.3     MIT OR Apache-2.0                  Nick Fitzgerald <fitzgen@gmail.com>
+bytemuck                     1.25.2     Zlib OR Apache-2.0 OR MIT          Lokathor <zefria@gmail.com>
+bytemuck_derive              1.12.1     Zlib OR Apache-2.0 OR MIT          Lokathor <zefria@gmail.com>
+byteorder                    1.5.0      Unlicense OR MIT                   Andrew Gallant <jamslam@gmail.com>
+cc                           1.11.1     MIT OR Apache-2.0                  (not stated)
+cfg-if                       1.0.5      MIT OR Apache-2.0                  Alex Crichton <alex@alexcrichton.com>
+const-oid                    0.10.2     Apache-2.0 OR MIT                  RustCrypto Developers
+core_maths                   0.1.1      MIT                                Robert Bastian <me@robertbastian.dev
+cpufeatures                  0.3.1      MIT OR Apache-2.0                  RustCrypto Developers
+crossbeam-deque              0.8.8      MIT OR Apache-2.0                  (not stated)
+crossbeam-epoch              0.9.21     MIT OR Apache-2.0                  (not stated)
+crossbeam-utils              0.8.23     MIT OR Apache-2.0                  (not stated)
+crunchy                      0.2.4      MIT                                Eira Fransham <jackefransham@gmail.com>
+crypto-common                0.2.2      MIT OR Apache-2.0                  RustCrypto Developers
+defer                        0.2.1      MIT/Apache-2.0                     Andrew Hickman <andrew.hickman1@sky.com>; Zakarum <zaq.dev@icloud.com>
+digest                       0.11.3     MIT OR Apache-2.0                  RustCrypto Developers
+dyn-stack                    0.13.2     MIT                                sarah <>
+dyn-stack-macros             0.1.3      MIT                                sarah quiñones<sarah@veganb.tw>
+either                       1.19.0     MIT OR Apache-2.0                  (not stated)
+enum-as-inner                0.6.1      MIT/Apache-2.0                     Benjamin Fry <benjaminfry@me.com>
+equator                      0.2.2      MIT                                sarah <>
+equator                      0.6.0      MIT                                sarah <>
+equator-macro                0.2.1      MIT                                sarah <>
+equator-macro                0.6.0      MIT                                sarah <>
+faer                         0.24.4     MIT                                sarah quiñones <sarah@veganb.tw>
+faer-traits                  0.24.0     MIT                                sarah quiñones <sarah@veganb.tw>
+fancy-regex                  0.14.0     MIT                                Raph Levien <raph@google.com>; Robin Stocker <robin@nibor.org>
+find-msvc-tools              0.1.15     MIT OR Apache-2.0                  (not stated)
+fontconfig-parser            0.5.8      MIT                                (not stated)
+fontdb                       0.23.0     MIT                                Yevhenii Reizner <razrfalcon@gmail.com>
+futures-core                 0.3.34     MIT OR Apache-2.0                  (not stated)
+futures-task                 0.3.34     MIT OR Apache-2.0                  (not stated)
+futures-util                 0.3.34     MIT OR Apache-2.0                  (not stated)
+gemm                         0.19.0     MIT                                sarah <>
+gemm-c32                     0.19.0     MIT                                sarah <>
+gemm-c64                     0.19.0     MIT                                sarah <>
+gemm-common                  0.19.0     MIT                                sarah <>
+gemm-f16                     0.19.0     MIT                                sarah <>
+gemm-f32                     0.19.0     MIT                                sarah <>
+gemm-f64                     0.19.0     MIT                                sarah <>
+generativity                 1.2.1      MIT OR Apache-2.0                  (not stated)
+half                         2.7.1      MIT OR Apache-2.0                  Kathryn Long <squeeself@gmail.com>
+heck                         0.5.0      MIT OR Apache-2.0                  (not stated)
+hermit-abi                   0.5.3      MIT OR Apache-2.0                  (not stated)
+hybrid-array                 0.4.15     MIT OR Apache-2.0                  RustCrypto Developers
+interpol                     0.2.1      MIT                                Hideyuki Tanaka <tanaka.hideyuki@gmail.com>
+itoa                         1.0.18     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+js-sys                       0.3.107    MIT OR Apache-2.0                  The wasm-bindgen Developers
+libc                         0.2.191    MIT OR Apache-2.0                  (not stated)
+libm                         0.2.16     MIT                                Alex Crichton <alex@alexcrichton.com>; Amanieu d'Antras <amanieu@gmail.com>; Jorge Aparicio <japaricious@gmail.com>; Trevor Gross <tg@trevorgross.com>
+log                          0.4.35     MIT OR Apache-2.0                  The Rust Project Developers
+memchr                       2.8.3      Unlicense OR MIT                   Andrew Gallant <jamslam@gmail.com>; bluss
+memmap2                      0.9.12     MIT OR Apache-2.0                  Dan Burkert <dan@danburkert.com>; Yevhenii Reizner <razrfalcon@gmail.com>; The Contributors
+mime                         0.3.18     MIT OR Apache-2.0                  Sean McArthur <sean@seanmonstar.com>
+mime_guess                   2.0.5      MIT                                Austin Bonander <austin.bonander@gmail.com>
+nano-gemm                    0.2.2      MIT                                (not stated)
+nano-gemm-c32                0.2.1      MIT                                sarah <>
+nano-gemm-c64                0.2.1      MIT                                sarah <>
+nano-gemm-codegen            0.2.1      MIT                                sarah <>
+nano-gemm-core               0.2.1      MIT                                sarah <>
+nano-gemm-f32                0.2.1      MIT                                sarah <>
+nano-gemm-f64                0.2.1      MIT                                sarah <>
+num_cpus                     1.17.0     MIT OR Apache-2.0                  Sean McArthur <sean@seanmonstar.com>
+num-complex                  0.4.6      MIT OR Apache-2.0                  The Rust Project Developers
+num-traits                   0.2.19     MIT OR Apache-2.0                  The Rust Project Developers
+once_cell                    1.21.4     MIT OR Apache-2.0                  Aleksey Kladov <aleksey.kladov@gmail.com>
+owned_ttf_parser             0.25.1     Apache-2.0                         Alex Butler <alexheretic@gmail.com>
+paste                        1.0.15     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+phf                          0.11.3     MIT                                Steven Fackler <sfackler@gmail.com>
+phf_generator                0.11.3     MIT                                Steven Fackler <sfackler@gmail.com>
+phf_macros                   0.11.3     MIT                                Steven Fackler <sfackler@gmail.com>
+phf_shared                   0.11.3     MIT                                Steven Fackler <sfackler@gmail.com>
+pin-project-lite             0.2.17     Apache-2.0 OR MIT                  (not stated)
+private-gemm-x86             0.1.22     MIT                                sarah quiñones <sarah@veganb.tw>
+proc-macro2                  1.0.107    MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>; Alex Crichton <alex@alexcrichton.com>
+pulp                         0.22.3     MIT                                sarah quiñones <sarah@veganb.tw>
+pulp-wasm-simd-flag          0.1.1      MIT                                sarah quiñones <sarah@veganb.tw>
+qd                           0.8.0      MIT                                sarah <>
+quote                        1.0.47     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+rand                         0.8.8      MIT OR Apache-2.0                  The Rand Project Developers; The Rust Project Developers
+rand_core                    0.6.4      MIT OR Apache-2.0                  The Rand Project Developers; The Rust Project Developers
+ratex-font                   0.1.15     MIT                                (not stated)
+ratex-font-loader            0.1.15     MIT                                (not stated)
+ratex-katex-fonts            0.1.15     MIT                                (not stated)
+ratex-layout                 0.1.15     MIT                                (not stated)
+ratex-lexer                  0.1.15     MIT                                (not stated)
+ratex-parser                 0.1.15     MIT                                (not stated)
+ratex-svg                    0.1.15     MIT                                (not stated)
+ratex-types                  0.1.15     MIT                                (not stated)
+ratex-unicode-font           0.1.15     MIT                                (not stated)
+raw-cpuid                    11.6.0     MIT                                Gerd Zellweger <mail@gerdzellweger.com>
+rayon                        1.12.0     MIT OR Apache-2.0                  (not stated)
+rayon-core                   1.13.0     MIT OR Apache-2.0                  (not stated)
+reborrow                     0.5.5      MIT                                sarah <>
+regex                        1.13.1     MIT OR Apache-2.0                  The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>
+regex-automata               0.4.18     MIT OR Apache-2.0                  The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>
+regex-lite                   0.1.9      MIT OR Apache-2.0                  The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>
+regex-syntax                 0.8.11     MIT OR Apache-2.0                  The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>
+roxmltree                    0.20.0     MIT OR Apache-2.0                  Yevhenii Reizner <razrfalcon@gmail.com>
+rpic-core                    0.16.1     BSD-2-Clause                       André Leite <leite@de.ufpe.br>
+rpic-render                  0.16.1     BSD-2-Clause                       André Leite <leite@de.ufpe.br>
+rust-embed                   8.13.0     MIT                                pyrossh
+rust-embed-impl              8.13.0     MIT                                pyrossh
+rust-embed-utils             8.13.0     MIT                                pyrossh
+rustversion                  1.0.23     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+same-file                    1.0.6      Unlicense/MIT                      Andrew Gallant <jamslam@gmail.com>
+savvy                        0.11.0     MIT                                Hiroaki Yutani
+savvy-bindgen                0.11.0     MIT                                Hiroaki Yutani
+savvy-ffi                    0.11.0     MIT                                Hiroaki Yutani
+savvy-macro                  0.11.0     MIT                                Hiroaki Yutani
+seq-macro                    0.3.6      MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+serde                        1.0.229    MIT OR Apache-2.0                  Erick Tryzelaar <erick.tryzelaar@gmail.com>; David Tolnay <dtolnay@gmail.com>
+serde_core                   1.0.229    MIT OR Apache-2.0                  Erick Tryzelaar <erick.tryzelaar@gmail.com>; David Tolnay <dtolnay@gmail.com>
+serde_derive                 1.0.229    MIT OR Apache-2.0                  Erick Tryzelaar <erick.tryzelaar@gmail.com>; David Tolnay <dtolnay@gmail.com>
+serde_json                   1.0.154    MIT OR Apache-2.0                  (not stated)
+sha2                         0.11.1     MIT OR Apache-2.0                  RustCrypto Developers
+shlex                        2.0.1      MIT OR Apache-2.0                  comex <comexk@gmail.com>; Fenhl <fenhl@fenhl.net>; Adrian Taylor <adetaylor@chromium.org>; Alex Touchet <alextouchet@outlook.com>; Daniel Parks <dp+git@oxidized.org>; Garrett Berg <googberg@gmail.com>
+siphasher                    1.0.4      MIT OR Apache-2.0                  Frank Denis <github@pureftpd.org>
+slab                         0.4.12     MIT                                Carl Lerche <me@carllerche.com>
+slotmap                      1.1.1      Zlib                               Orson Peters <orsonpeters@gmail.com>
+syn                          1.0.109    MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+syn                          2.0.119    MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+syn                          3.0.9      MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+sys-locale                   0.3.2      MIT OR Apache-2.0                  1Password
+sysctl                       0.6.0      MIT                                Johannes Lundberg <johalun0@gmail.com>; Ivan Temchenko <ivan.temchenko@yandex.ua>; Fabian Freyer <fabian.freyer@physik.tu-berlin.de>
+system-fonts                 0.1.2      MIT OR Apache-2.0                  (not stated)
+thiserror                    1.0.69     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+thiserror                    2.0.21     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+thiserror-impl               1.0.69     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+thiserror-impl               2.0.21     MIT OR Apache-2.0                  David Tolnay <dtolnay@gmail.com>
+tinyvec                      1.13.3     Zlib OR Apache-2.0 OR MIT          Lokathor <zefria@gmail.com>
+ttf-parser                   0.25.1     MIT OR Apache-2.0                  Caleb Maclennan <caleb@alerque.com>; Laurenz Stampfl <laurenz.stampfl@gmail.com>; Yevhenii Reizner <razrfalcon@gmail.com>; خالد حسني (Khaled Hosny) <khaled@aliftype.com>
+typenum                      1.20.1     MIT OR Apache-2.0                  (not stated)
+unicase                      2.10.0     MIT OR Apache-2.0                  Sean McArthur <sean@seanmonstar.com>
+unicode-ident                1.0.27     (MIT OR Apache-2.0) AND Unicode-3.0 David Tolnay <dtolnay@gmail.com>
+unicode-normalization        0.1.26     (MIT OR Apache-2.0) AND Unicode-3.0 kwantam <kwantam@gmail.com>; Manish Goregaokar <manishsmail@gmail.com>
+version_check                0.9.5      MIT/Apache-2.0                     Sergio Benitez <sb@sergio.bz>
+walkdir                      2.5.0      Unlicense/MIT                      Andrew Gallant <jamslam@gmail.com>
+wasm-bindgen                 0.2.130    MIT OR Apache-2.0                  The wasm-bindgen Developers
+wasm-bindgen-macro           0.2.130    MIT OR Apache-2.0                  The wasm-bindgen Developers
+wasm-bindgen-macro-support   0.2.130    MIT OR Apache-2.0                  The wasm-bindgen Developers
+wasm-bindgen-shared          0.2.130    MIT OR Apache-2.0                  The wasm-bindgen Developers
+web-sys                      0.3.107    MIT OR Apache-2.0                  The wasm-bindgen Developers
+winapi-util                  0.1.11     Unlicense OR MIT                   Andrew Gallant <jamslam@gmail.com>
+windows-link                 0.2.1      MIT OR Apache-2.0                  (not stated)
+windows-sys                  0.61.2     MIT OR Apache-2.0                  (not stated)
+zerocopy                     0.8.63     BSD-2-Clause OR Apache-2.0 OR MIT  (not stated)
+zerocopy-derive              0.8.63     BSD-2-Clause OR Apache-2.0 OR MIT  (not stated)
+zmij                         1.0.23     MIT                                David Tolnay <dtolnay@gmail.com>

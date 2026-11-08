@@ -65,36 +65,61 @@ if [ "$(uname)" = "Darwin" ]; then
   BEFORE_CARGO_BUILD="${BEFORE_CARGO_BUILD}"' export MACOSX_DEPLOYMENT_TARGET="'"${MACOSX_DEPLOYMENT_TARGET}"'" \&\&'
 fi
 
+# --- spice: vendored sources (CRAN) --------------------------------
+# tools/r-vendor.sh writes src/rust/vendor.tar.xz (crates.io sources +
+# the dune engine crates); with it the build is offline (Makevars).
+if [ -f "src/rust/vendor.tar.xz" ]; then
+  VENDORED=1
+  CARGO_OFFLINE="--offline -j 2"
+  echo "using vendored Rust sources: src/rust/vendor.tar.xz (offline build)"
+else
+  VENDORED=0
+  CARGO_OFFLINE=""
+fi
+
 # --- spice: locate the dune engine crates -------------------------
 # Inside the dune repository src/rust/Cargo.toml points at
-# ../../../crates/*. A tarball built from it (R CMD build/check) is
-# unpacked elsewhere, so the paths are rewritten from DUNE_ROOT (the
-# repository root). Vendoring the crates for CRAN is a later task.
+# ../../../crates/*. Away from it (an unpacked tarball) the paths are
+# rewritten to the vendored copy (src/dune, unpacked by Makevars from
+# the vendor archive) or, without one, to DUNE_ROOT (the root of a
+# dune checkout; the repository's CI check does this).
 if [ ! -f "src/rust/../../../crates/dune-core/Cargo.toml" ]; then
-  if [ -n "${DUNE_ROOT}" ] && [ -f "${DUNE_ROOT}/crates/dune-core/Cargo.toml" ]; then
+  if [ "${VENDORED}" = "1" ]; then
+    DUNE_CRATES="../dune/crates/"
+  elif [ -n "${DUNE_ROOT}" ] && [ -f "${DUNE_ROOT}/crates/dune-core/Cargo.toml" ]; then
     echo "using dune crates from DUNE_ROOT: '${DUNE_ROOT}'"
-    sed -e "s|\.\./\.\./\.\./crates/|${DUNE_ROOT}/crates/|g" \
-      src/rust/Cargo.toml > src/rust/Cargo.toml.tmp && \
-      mv src/rust/Cargo.toml.tmp src/rust/Cargo.toml
+    DUNE_CRATES="${DUNE_ROOT}/crates/"
   else
     echo "-------------- ERROR: CONFIGURATION FAILED --------------------"
     echo ""
-    echo "The dune engine crates were not found next to the package."
-    echo "Build from the dune repository (r/), or set DUNE_ROOT to the"
-    echo "root of a dune checkout."
+    echo "The dune engine crates were not found next to the package, and"
+    echo "src/rust/vendor.tar.xz is missing. Build from the dune repository"
+    echo "(r/), run tools/r-vendor.sh there before R CMD build, or set"
+    echo "DUNE_ROOT to the root of a dune checkout."
     echo ""
     echo "---------------------------------------------------------------"
     exit 1
   fi
+  sed -e "s|\.\./\.\./\.\./crates/|${DUNE_CRATES}|g" \
+    src/rust/Cargo.toml > src/rust/Cargo.toml.tmp && \
+    mv src/rust/Cargo.toml.tmp src/rust/Cargo.toml
 fi
 
 # --- spice: cargo's own target directory ---------------------------
-# Honour CARGO_TARGET_DIR and the user's cargo config (target-dir);
-# cargo's default is src/rust/target.
-CARGO_METADATA=$(cd src/rust && cargo metadata --format-version 1 --no-deps --offline 2>/dev/null)
-TARGET_DIR=$(printf '%s' "${CARGO_METADATA}" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
-if [ -z "${TARGET_DIR}" ]; then
+# Vendored (CRAN): src/rust/target, removed after the build — nothing
+# is written outside the package directory. Otherwise honour
+# CARGO_TARGET_DIR and the user's cargo config (target-dir); cargo's
+# default is src/rust/target.
+if [ "${VENDORED}" = "1" ]; then
   TARGET_DIR="$(pwd)/src/rust/target"
+  CLEAN_TARGET='$(TARGET_DIR)'
+else
+  CARGO_METADATA=$(cd src/rust && cargo metadata --format-version 1 --no-deps --offline 2>/dev/null)
+  TARGET_DIR=$(printf '%s' "${CARGO_METADATA}" | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+  if [ -z "${TARGET_DIR}" ]; then
+    TARGET_DIR="$(pwd)/src/rust/target"
+  fi
+  CLEAN_TARGET=""
 fi
 echo "using cargo target directory: '${TARGET_DIR}'"
 
@@ -103,5 +128,8 @@ sed \
   -e "s/@TARGET@/${TARGET}/" \
   -e "s/@PROFILE@/${PROFILE}/" \
   -e "s/@FEATURE_FLAGS@/${FEATURE_FLAGS}/" \
+  -e "s/@VENDORED@/${VENDORED}/" \
+  -e "s/@CARGO_OFFLINE@/${CARGO_OFFLINE}/" \
+  -e "s/@CLEAN_TARGET@/${CLEAN_TARGET}/" \
   -e "s|@BEFORE_CARGO_BUILD@|${BEFORE_CARGO_BUILD}|" \
   src/Makevars.in > src/Makevars
