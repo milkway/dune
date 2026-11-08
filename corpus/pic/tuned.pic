@@ -9,14 +9,14 @@ In:   (0.3,2)
 Pri:  (1.4,2)
 Vout: (4.8,2)
 
-V1: acsource((0.3,2), (0.3,0), AC 1)
-RS: resistor((0.3,2), (1.4,2), 1k)
-C1: capacitor((1.4,2), (1.4,0), 10n)
+V1: acsource(In, (0.3,0), AC 1)
+RS: resistor(In, Pri, 1k)
+C1: capacitor(Pri, (1.4,0), 10n)
 L1: inductor((2.2,2), (2.2,0), 10u)
 L2: inductor((3.2,2), (3.2,0), 10u)
 K1: coupling(L1, L2, 0.1)
 C2: capacitor((4,2), (4,0), 10n)
-RL: resistor((4.8,2), (4.8,0), 1k)
+RL: resistor(Vout, (4.8,0), 1k)
 
 line from C1.P to L1.P
 line from L2.P to RL.P

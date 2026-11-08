@@ -9,12 +9,12 @@ Vin:  (1,1.5)
 Vout: (3.16,2.4)
 
 V2: acsource((0.3,1.5), (0.3,0), SIN(0 10m 1k), "G₁")
-C1: capacitor((1,1.5), (2,1.5), 10u)
-R1: resistor((2,3.5), (2,1.5), 47k)
-R2: resistor((2,1.5), (2,0), 10k)
-R3: resistor((3.16,3.5), (3.16,2.4), 4.7k)
+C1: capacitor(Vin, Vb, 10u)
+R1: resistor((2,3.5), Vb, 47k)
+R2: resistor(Vb, (2,0), 10k)
+R3: resistor((3.16,3.5), Vout, 4.7k)
 R4: resistor(Q1.E, (3.16,0), 1k)
-V1: vsource((5,3.5), (5,0), DC 12, "VCC")
+V1: vsource(Vcc, (5,0), DC 12, "VCC")
 
 line from V2.P to C1.P
 line from C1.N to Q1.B

@@ -8,9 +8,9 @@ Vc: (1.1,2)
 Vl: (2.5,2)
 
 C1: capacitor((0.3,2), (0.3,0), 1u ic=2)
-R1: resistor((1.1,2), (1.1,0), 1k)
-L1: inductor((1.1,2), (2.5,2), 1m ic=1m)
-R2: resistor((2.5,2), (2.5,0), 50)
+R1: resistor(Vc, (1.1,0), 1k)
+L1: inductor(Vc, Vl, 1m ic=1m)
+R2: resistor(Vl, (2.5,0), 50)
 
 line from C1.P to R1.P
 line from C1.N to R2.N

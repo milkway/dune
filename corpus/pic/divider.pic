@@ -7,10 +7,10 @@ Vs:   (0.3,2)
 Vdiv: (1.5,2)
 Vi:   (2.8,2)
 
-V1: vsource((0.3,2), (0.3,0), dc 5)
-R1: resistor((0.3,2), (1.5,2), 1k)
-R2: resistor((1.5,2), (1.5,0), 2k)
-I1: isource((2.8,0), (2.8,2), dc 1m)
+V1: vsource(Vs, (0.3,0), dc 5)
+R1: resistor(Vs, Vdiv, 1k)
+R2: resistor(Vdiv, (1.5,0), 2k)
+I1: isource((2.8,0), Vi, dc 1m)
 R3: resistor((3.8,2), (3.8,0), 4.7k)
 
 line from I1.N to R3.P

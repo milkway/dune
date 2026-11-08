@@ -9,13 +9,13 @@ Vs: (1.5,2)
 Va: (3.6,2)
 Vb: (5.6,2)
 
-V1: vsource((0.3,2), (0.3,0), DC 2)
-R1: resistor((0.3,2), (1.5,2), 1k)
-V0: vsource((1.5,2), (1.5,0), DC 0)
+V1: vsource(In, (0.3,0), DC 2)
+R1: resistor(In, Vs, 1k)
+V0: vsource(Vs, (1.5,0), DC 0)
 F1: cccs((2.8,2), (2.8,0), V0 3)
-R2: resistor((3.6,2), (3.6,0), 1k)
+R2: resistor(Va, (3.6,0), 1k)
 H1: ccvs((4.8,2), (4.8,0), V0 500)
-R3: resistor((5.6,2), (5.6,0), 1k)
+R3: resistor(Vb, (5.6,0), 1k)
 
 line from F1.P to R2.P
 line from H1.P to R3.P

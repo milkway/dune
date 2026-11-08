@@ -9,11 +9,11 @@ In: (0.3,1.5)
 Vg: (2.3,1.5)
 Vd: (2.86,2.3)
 
-Vdd: vsource((4.8,3.2), (4.8,0), dc 5, "VDD")
-Vin: vsource((0.3,1.5), (0.3,0), dc -0.5 ac 1 sin(-0.5 1.5 1g), "G₁")
-Rsig: resistor((0.3,1.5), (2.3,1.5), 50)
+Vdd: vsource(Vp, (4.8,0), dc 5, "VDD")
+Vin: vsource(In, (0.3,0), dc -0.5 ac 1 sin(-0.5 1.5 1g), "G₁")
+Rsig: resistor(In, Vg, 50)
 Z1: nmes((2.7,1.5), zn, "T₁")
-RL: resistor((2.86,3.2), (2.86,2.3), 1k)
+RL: resistor((2.86,3.2), Vd, 1k)
 CL: capacitor((3.7,2.3), (3.7,0), 50f)
 
 line from RL.N to Z1.D
