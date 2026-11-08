@@ -1,0 +1,23 @@
+Switch pole-zero: S and W switches in an RC ladder
+* Coverage: .pz through swpzload.c/cswpzld.c, which stamp the
+* conductance of the state the INITSMSIG load left in state0 (ngspice
+* copies state1 there: zero after a bare operating point, so both
+* switches show their ROFF here even though their controls are above
+* threshold). s1 couples the input RC to the middle node, w1 (sensing
+* the current of vsense) the middle node to the output RC.
+vctl 10 0 dc 5
+rctl 10 11 1k
+vsense 11 0 dc 0
+rsig 1 2 1k
+c2 2 0 10p
+s1 2 3 10 0 smod
+c3 3 0 20p
+r3 3 0 10k
+w1 3 4 vsense wmod
+c4 4 0 5p
+r4 4 0 5k
+vin 1 0 dc 0
+.pz 2 0 4 0 vol pz
+.model smod sw vt=2.5 vh=0.2 ron=100 roff=1meg
+.model wmod csw it=2m ih=0.5m ron=50 roff=2meg
+.end
