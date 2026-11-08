@@ -48,7 +48,9 @@ use crate::integ::TerrCtx;
 use crate::ltrafit::{
     ExpFit, RC_WINDOW_FRACTION, fit_rc, fit_rlc, i0e, i1e, i1e_over_x, rc_integrals, segment,
 };
-use crate::matrix::{AcCtx, AcceptCtx, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
+use crate::matrix::{
+    AcCtx, AcceptCtx, InitMode, LoadCtx, MatrixBuilder, PeriodicPast, Slot, TRASH, Var,
+};
 
 // Every transcendental in this file goes through the pure-Rust `libm`
 // crate (fdlibm lineage — what `f64::exp` already lowers to on wasm32),
@@ -62,7 +64,7 @@ use crate::matrix::{AcCtx, AcceptCtx, InitMode, LoadCtx, MatrixBuilder, Slot, TR
 // a breakpoint at `t+T` on nearly every step, which forces tiny steps
 // at `t+T`, which ring and plant more — a cascade faithful to
 // ltraacct.c that never ends inside the output guard.
-use libm::{atan, cos, exp, sin};
+use libm::{atan, cos, exp, expm1, sin};
 
 /// How the delayed port values `v(t−T)`, `i(t−T)` are interpolated
 /// from the accepted timepoints (`LININTERP`/`QUADINTERP`/
@@ -1045,7 +1047,19 @@ pub(crate) struct LtraI {
     /// Why the recursive mode does not apply to this line, if it was
     /// asked for (LC/RG have no history convolution).
     fit_skip: Option<&'static str>,
+    /// `.pss` (issue #20): the history of this run is the periodic
+    /// past of a shooting interval (see [`LtraI::seed_periodic`]).
+    periodic: bool,
+    /// Why the periodic past could not be set up, reported at the
+    /// first load.
+    periodic_fault: Option<&'static str>,
 }
+
+/// The recursive model's horizon in a periodic run, in periods: the
+/// infinite periodic past is summed in closed form, and lags beyond
+/// the horizon (where the fit stops tracking the `τ^{−3/2}` tails) see
+/// a zero-mean deviation, so what they miss cancels over each period.
+const PERIODIC_HORIZON_PERIODS: f64 = 1000.0;
 
 /// Wave blocks of a state snapshot.
 const V1: usize = 0;
@@ -1117,6 +1131,34 @@ impl FitState {
         )
     }
 
+    /// `.pss`: the states at a period boundary under the infinite
+    /// periodic past. With `P` the states one period of the deviation
+    /// builds from zero (`segs` = that period's segments), periodicity
+    /// `S = e^{−xT}·S + P` gives `S = P/(1 − e^{−xT})` exactly — the
+    /// geometric sum over every earlier period. Replaces the snapshots
+    /// by that single one.
+    fn periodic_start(&mut self, period: f64, segs: &[(f64, [f64; 4], [f64; 4])]) {
+        let n = self.n();
+        let mut s = vec![0.0; 4 * n];
+        for &(h, dn, dp) in segs {
+            for j in 0..n {
+                let (e, a, b) = segment(self.fit.rates[j] * h);
+                for w in 0..4 {
+                    let v = &mut s[w * n + j];
+                    *v = e * *v + h * (a * dn[w] + b * dp[w]);
+                }
+            }
+        }
+        for j in 0..n {
+            let g = -expm1(-self.fit.rates[j] * period);
+            for w in 0..4 {
+                s[w * n + j] /= g;
+            }
+        }
+        self.snaps = s;
+        self.base = 0;
+    }
+
     /// Advance one accepted segment of length `h`: `dn`/`dp` are the
     /// four wave deviations at the new and the previous point.
     fn advance(&mut self, h: f64, dn: [f64; 4], dp: [f64; 4]) {
@@ -1172,6 +1214,8 @@ impl LtraI {
             fit_on: false,
             fit: None,
             fit_skip: None,
+            periodic: false,
+            periodic_fault: None,
         }
     }
 
@@ -1186,10 +1230,14 @@ impl LtraI {
     /// or whose kernels live entirely inside the exact window, keep
     /// the exact path and say why.
     fn start_fit(&mut self, final_time: f64) {
+        self.build_fit(final_time.max(f64::MIN_POSITIVE));
+    }
+
+    /// The recursive model for lags up to `horizon` (see `start_fit`).
+    fn build_fit(&mut self, horizon: f64) {
         self.fit = None;
         self.fit_skip = None;
         let p = &self.p;
-        let horizon = final_time.max(f64::MIN_POSITIVE);
         match p.case {
             LtraCase::Lc | LtraCase::Rg => {
                 self.fit_skip = Some("no history convolution in this regime");
@@ -1214,9 +1262,10 @@ impl LtraI {
         }
     }
 
-    /// The deviation `w − w_init` of history point `k` (0 at `k = 0`).
+    /// The deviation `w − w_init` of history point `k` (0 at `k = 0`,
+    /// the operating point, outside a periodic run).
     fn dev(&self, wave: usize, k: usize) -> f64 {
-        if k == 0 {
+        if k == 0 && !self.periodic {
             return 0.0;
         }
         match wave {
@@ -1828,9 +1877,26 @@ impl Device for LtraI {
             ctx.fault = Some("LTRA: transient load before the operating point was stored");
             return;
         }
+        if self.periodic {
+            if let Some(f) = self.periodic_fault {
+                ctx.fault = Some(f);
+                return;
+            }
+            if self.fit.is_none() && matches!(self.p.case, LtraCase::Rlc | LtraCase::Rc) {
+                // The exact walk sums a history that starts at an
+                // operating point; the periodic past has none.
+                ctx.fault = Some(
+                    "LTRA: a lossy (RLC/RC) line in .pss needs the recursive convolution \
+                     (.options ltrafit)",
+                );
+                return;
+            }
+        }
         let first = matches!(ctx.mode, InitMode::Tran | InitMode::Pred);
         let time_index = self.times.len() - 1;
-        let tdover = matches!(self.p.case, LtraCase::Lc | LtraCase::Rlc) && ctx.time > self.p.td;
+        // `.pss`: the periodic past reaches back past every delay.
+        let tdover = matches!(self.p.case, LtraCase::Lc | LtraCase::Rlc)
+            && (ctx.time > self.p.td || self.periodic);
         let mut del = None;
         if first && self.fit.is_some() {
             // Recursive mode (issue #8): coefficients and inputs at once.
@@ -1885,7 +1951,7 @@ impl Device for LtraI {
         }
 
         // First timepoint after zero: record the operating point.
-        if ctx.mode == InitMode::Tran && !ctx.uic {
+        if ctx.mode == InitMode::Tran && !ctx.uic && !self.periodic {
             self.init_v1 = ctx.sol[self.pos1] - ctx.sol[self.neg1];
             self.init_v2 = ctx.sol[self.pos2] - ctx.sol[self.neg2];
             self.init_i1 = ctx.sol[self.br1];
@@ -2096,6 +2162,12 @@ impl Device for LtraI {
             self.i1.clear();
             self.v2.clear();
             self.i2.clear();
+            self.periodic = false;
+            self.periodic_fault = None;
+            if let Some(past) = ctx.periodic {
+                self.seed_periodic(past, ctx);
+                return;
+            }
         }
         let sol = ctx.sol;
         self.times.push(ctx.time);
@@ -2115,6 +2187,19 @@ impl Device for LtraI {
         if idx == 0 {
             return;
         }
+        if self.slope_changed(idx, ctx.reltol, ctx.abstol) {
+            let t = self.times[idx - 1] + self.p.td;
+            ctx.set_slope_break(t);
+        }
+    }
+}
+
+impl LtraI {
+    /// `LTRAaccept`'s test at history point `idx ≥ 1`: whether the
+    /// slope of an incident wave changed enough (and the wave is not
+    /// a straight line within tolerance) to want a breakpoint one
+    /// delay after point `idx − 1`.
+    fn slope_changed(&self, idx: usize, reltol: f64, abstol: f64) -> bool {
         let p = &self.p;
         let wave1 = |k: usize| (self.v1[k] + self.i1[k] * p.imped) * p.attenuation;
         let wave2 = |k: usize| (self.v2[k] + self.i2[k] * p.imped) * p.attenuation;
@@ -2138,15 +2223,128 @@ impl Device for LtraI {
         };
         let check = |a: f64, b: f64, c: f64| {
             f64::max(f64::max(a, b), c) - f64::min(f64::min(a, b), c)
-                >= (50.0 * (ctx.reltol / 3.0 * (a + b + c) + ctx.abstol)).abs()
+                >= (50.0 * (reltol / 3.0 * (a + b + c) + abstol)).abs()
         };
         let test1 = (d1 - d2).abs() >= p.reltol * f64::max(d1.abs(), d2.abs()) + p.abstol
             && check(v1, v2, v3);
         let test2 = (d3 - d4).abs() >= p.reltol * f64::max(d3.abs(), d4.abs()) + p.abstol
             && check(v4, v5, v6);
-        if test1 || test2 {
-            let t = self.times[idx - 1] + p.td;
-            ctx.set_slope_break(t);
+        test1 || test2
+    }
+
+    /// `.pss` (issue #20): the history of a shooting interval starting
+    /// at `ctx.time = t₀` is the periodic past. The port histories get
+    /// whole periods of the orbit back to the oldest lag a load can
+    /// reach (one delay; the exact window of an RC fit), then the
+    /// shooting state at `t₀`. The deviations are taken from the
+    /// orbit's mean (not the operating point: there is none), so the
+    /// constant part is the closed-form `∫h` term as always and the
+    /// recursive states see a zero-mean periodic input, which
+    /// [`FitState::periodic_start`] sums over the infinite past in
+    /// closed form. The breakpoints the slope rule would have planted
+    /// one delay after the past's slope changes are planted where they
+    /// fall inside the interval.
+    fn seed_periodic(&mut self, past: &PeriodicPast, ctx: &mut AcceptCtx) {
+        self.periodic = true;
+        let t0 = ctx.time;
+        let period = past.period;
+        let mut reach = self.p.td;
+        if self.fit_on && self.p.case == LtraCase::Rc {
+            reach = reach.max(RC_WINDOW_FRACTION * self.p.rclsqr);
+        }
+        // A sliver more than the reach, so a delay of exactly k periods
+        // still finds a point before its target (quadratic interpolation).
+        let from = t0 - reach - 1e-6 * period;
+        let Some(samples) = past.samples(t0, from, ctx.sol) else {
+            self.periodic_fault = Some("LTRA: the delay spans too many periods for .pss");
+            return;
+        };
+        let (p1, n1, p2, n2, b1, b2) = (
+            self.pos1, self.neg1, self.pos2, self.neg2, self.br1, self.br2,
+        );
+        for (t, x) in samples.into_iter().chain([(t0, ctx.sol)]) {
+            self.times.push(t);
+            self.v1.push(x[p1] - x[n1]);
+            self.v2.push(x[p2] - x[n2]);
+            self.i1.push(x[b1]);
+            self.i2.push(x[b2]);
+        }
+        // One period is points 0..=per of the first copy.
+        let per = past.phase.len() + 1;
+        let mean = |w: &[f64]| {
+            let mut acc = 0.0;
+            for k in 1..=per {
+                acc += 0.5 * (w[k] + w[k - 1]) * (self.times[k] - self.times[k - 1]);
+            }
+            acc / (self.times[per] - self.times[0])
+        };
+        self.init_v1 = mean(&self.v1);
+        self.init_v2 = mean(&self.v2);
+        self.init_i1 = mean(&self.i1);
+        self.init_i2 = mean(&self.i2);
+        if matches!(self.p.case, LtraCase::Rlc | LtraCase::Rc) {
+            // The DC pin. With G = 0 the characteristic form loses the
+            // line's DC drop: `Y0(0) = 0`, so at s = 0 both branch
+            // equations reduce to `i1 + i2 = 0`, and the drop
+            // `v1 − v2 = R·LEN·i1` lives only in the `√s` order — in
+            // the time domain, the `τ^{−3/2}` tails integrated over a
+            // history that starts at an operating point (whose DC
+            // stamps are that resistor). A past that has always been
+            // periodic carries no such start: its mean drop is a
+            // neutral mode the orbit just copies (measured: the line's
+            // apparent DC resistance drifting a fixed amount per
+            // iteration, the period mismatch never closing at tight
+            // tolerances). The past is pinned to the exact DC
+            // relation instead: its mean voltages are shifted
+            // symmetrically, the mean current kept, so that the mean
+            // drop is `R·LEN` times the mean current. A fixed point of
+            // the iteration then has the past equal to the orbit, so
+            // the orbit itself meets the DC relation — the shift is
+            // only nonzero while iterating.
+            let i = 0.5 * (self.init_i1 - self.init_i2);
+            let drop = self.p.resist * self.p.length * i;
+            let avg = 0.5 * (self.init_v1 + self.init_v2);
+            let (s1, s2) = (
+                avg + 0.5 * drop - self.init_v1,
+                avg - 0.5 * drop - self.init_v2,
+            );
+            let last = self.times.len() - 1;
+            for k in 0..last {
+                self.v1[k] += s1;
+                self.v2[k] += s2;
+            }
+            self.init_v1 += s1;
+            self.init_v2 += s2;
+        }
+        if self.fit_on {
+            self.build_fit(ctx.final_time.max(PERIODIC_HORIZON_PERIODS * period));
+            let seg = |k: usize| {
+                (
+                    self.times[k] - self.times[k - 1],
+                    [V1, V2, I1, I2].map(|w| self.dev(w, k)),
+                    [V1, V2, I1, I2].map(|w| self.dev(w, k - 1)),
+                )
+            };
+            let first: Vec<_> = (1..=per).map(seg).collect();
+            let rest: Vec<_> = (1..self.times.len()).map(seg).collect();
+            let keep = self.oldest_needed();
+            let span = self.times[per] - self.times[0];
+            if let Some(fs) = self.fit.as_mut() {
+                fs.periodic_start(span, &first);
+                for (h, dn, dp) in rest {
+                    fs.advance(h, dn, dp);
+                }
+                fs.prune(keep);
+            }
+        }
+        for idx in 1..self.times.len() {
+            let t = self.times[idx - 1] + self.p.td;
+            if t > t0 + ctx.min_break
+                && t < ctx.final_time - ctx.min_break
+                && self.slope_changed(idx, ctx.reltol, ctx.abstol)
+            {
+                ctx.set_slope_break(t);
+            }
         }
     }
 }

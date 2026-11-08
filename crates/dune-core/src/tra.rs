@@ -45,7 +45,9 @@
 use crate::devices::Device;
 use crate::disto::DistoSetupCtx;
 use crate::integ::TerrCtx;
-use crate::matrix::{AcCtx, AcceptCtx, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
+use crate::matrix::{
+    AcCtx, AcceptCtx, InitMode, LoadCtx, MatrixBuilder, PeriodicPast, Slot, TRASH, Var,
+};
 
 /// `TRAsetup` defaults for the output-only breakpoint tolerances
 /// (`TRAreltol`, `TRAabstol`).
@@ -213,6 +215,10 @@ pub(crate) struct TraI {
     /// `TRAdelays[0..=TRAsizeDelay]`; empty until the first
     /// transient load (the C's freshly allocated, zeroed table).
     delays: Vec<Entry>,
+    /// `.pss` (issue #20): the table was seeded from the periodic past
+    /// at the first accept, so `MODEINITTRAN` reads it like any later
+    /// timepoint instead of seeding the operating point.
+    periodic: bool,
 }
 
 impl TraI {
@@ -233,6 +239,7 @@ impl TraI {
             input1: 0.0,
             input2: 0.0,
             delays: Vec::new(),
+            periodic: false,
         }
     }
 
@@ -264,6 +271,44 @@ impl TraI {
             f1 * a.in1 + f2 * b.in1 + f3 * c.in1,
             f1 * a.in2 + f2 * b.in2 + f3 * c.in2,
         ))
+    }
+
+    /// `.pss` (issue #20): the delay table of a shooting interval
+    /// starting at `ctx.time = t₀` is the periodic past — the orbit's
+    /// waves over `[t₀ − TD, t₀)` (whole periods back from `t₀`, so
+    /// the oldest entry is at or before `t₀ − TD`) and the shooting
+    /// state's at `t₀`. The breakpoints `TRAaccept` would have
+    /// planted one delay after every slope change of that past are
+    /// planted too, where they fall inside the interval.
+    fn seed_periodic(&mut self, past: &PeriodicPast, ctx: &mut AcceptCtx) {
+        let t0 = ctx.time;
+        let td = self.p.td;
+        // Without the samples (a delay of more periods than the guard
+        // takes) the table stays empty; `.pss` refuses such lines first.
+        self.delays.clear();
+        self.periodic = true;
+        let Some(samples) = past.samples(t0, t0 - td, ctx.sol) else {
+            return; // the empty table faults at the first load
+        };
+        for (t, x) in samples.into_iter().chain([(t0, ctx.sol)]) {
+            let (in1, in2) = self.waves(x);
+            self.delays.push(Entry { t, in1, in2 });
+        }
+        for w in self.delays.windows(3) {
+            let (e2, e1, e0) = (w[0], w[1], w[2]);
+            let (h0, h1) = (e0.t - e1.t, e1.t - e2.t);
+            let d1 = (e0.in1 - e1.in1) / h0;
+            let d2 = (e1.in1 - e2.in1) / h1;
+            let d3 = (e0.in2 - e1.in2) / h0;
+            let d4 = (e1.in2 - e2.in2) / h1;
+            let when = e1.t + td;
+            if (slope_changed(d1, d2) || slope_changed(d3, d4))
+                && when > t0 + ctx.min_break
+                && when < ctx.final_time - ctx.min_break
+            {
+                ctx.set_break(when);
+            }
+        }
     }
 }
 
@@ -339,6 +384,18 @@ impl Device for TraI {
         }
 
         match ctx.mode {
+            // `.pss`: the table holds the periodic past already.
+            InitMode::Tran | InitMode::Pred if self.periodic => match self.predict(ctx.time) {
+                Some((a, b)) => {
+                    self.input1 = a;
+                    self.input2 = b;
+                }
+                None if self.delays.is_empty() => {
+                    ctx.fault = Some("TRA: the delay spans too many periods for .pss");
+                    return;
+                }
+                None => return,
+            },
             InitMode::Tran => {
                 if ctx.uic {
                     let [v1, i1, v2, i2] = self.p.ic;
@@ -437,7 +494,14 @@ impl Device for TraI {
         // zeroed allocation (`TRAsizeDelay == 0`), on which neither
         // the shift (`0 − TD > 0`) nor the append (`0 − 0 >
         // CKTminBreak`) fires.
-        if ctx.first || self.delays.len() < 3 {
+        if ctx.first {
+            self.periodic = false;
+            if let Some(past) = ctx.periodic {
+                self.seed_periodic(past, ctx);
+            }
+            return;
+        }
+        if self.delays.len() < 3 {
             return;
         }
         let td = self.p.td;

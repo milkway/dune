@@ -495,6 +495,63 @@ pub(crate) struct AcceptCtx<'a> {
     /// LTRA slope-rule ones (`ltraacct.c`) that the opt-in hygiene
     /// may thin out.
     pub requests: &'a mut Vec<(f64, bool)>,
+    /// `.pss` with transmission lines (issue #20): at the first accept
+    /// of a shooting interval, the periodic past the lines take as
+    /// their history (`None` everywhere else).
+    pub periodic: Option<&'a PeriodicPast>,
+}
+
+/// The history of a periodic steady state (`.pss` with transmission
+/// lines, issue #20): in the periodic regime the past *is* the orbit,
+/// `x(t − τ) = x(t − τ + kT)`. One period of the orbit is kept as its
+/// interior samples (phases strictly inside `(0, 1)`) with the full
+/// solution vectors; every period boundary carries the shooting state
+/// `x₀` itself — the solution a line's first accept sees at `t₀` —, so
+/// the replicated waveform is closed and ends on the state the
+/// interval starts from. Lines read their delayed values (and the
+/// recursive `ltrafit` states sum their infinite past) from it.
+#[derive(Clone, Debug)]
+pub(crate) struct PeriodicPast {
+    /// The period the past repeats with (the run's, stretched with it).
+    pub period: f64,
+    /// Phases `u ∈ (0, 1)` of the interior samples, increasing.
+    pub phase: Vec<f64>,
+    /// The solution at each phase.
+    pub rows: Vec<Vec<f64>>,
+}
+
+/// Most past samples a line may synthesize (guard, CLAUDE.md
+/// princípio 4: a delay of many periods must not cost unbounded memory).
+pub(crate) const MAX_PAST_SAMPLES: usize = 2_000_000;
+
+impl PeriodicPast {
+    /// The past samples `(t, x)` from the last period boundary at or
+    /// before `from` up to — not including — `t0`, increasing: whole
+    /// copies of the period, boundaries at `x0`. `None` when that
+    /// would exceed [`MAX_PAST_SAMPLES`].
+    pub fn samples<'s>(
+        &'s self,
+        t0: f64,
+        from: f64,
+        x0: &'s [f64],
+    ) -> Option<Vec<(f64, &'s [f64])>> {
+        let t = self.period;
+        let copies = ((t0 - from) / t).ceil().max(1.0);
+        let per = self.phase.len() + 1;
+        if !(copies.is_finite() && copies * per as f64 <= MAX_PAST_SAMPLES as f64) {
+            return None;
+        }
+        let copies = copies as usize;
+        let mut out = Vec::with_capacity(copies * per);
+        for k in (1..=copies).rev() {
+            let start = t0 - k as f64 * t;
+            out.push((start, x0));
+            for (u, row) in self.phase.iter().zip(&self.rows) {
+                out.push((start + u * t, row.as_slice()));
+            }
+        }
+        Some(out)
+    }
 }
 
 impl AcceptCtx<'_> {

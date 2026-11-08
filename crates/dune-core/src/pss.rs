@@ -34,6 +34,15 @@
 //! period `T` is a Newton unknown, the phase pinned by holding
 //! OSCNODE at its value on a rising mid-range crossing — see
 //! `Circuit::pss_autonomous` and docs/dune-core.md.
+//!
+//! **Transmission lines** (issue #20): a line's state is its history,
+//! and in the periodic regime the history is the orbit itself,
+//! `x(t − τ) = x(t − τ + kT)`. The lines read the previous orbit as
+//! their past (`matrix::PeriodicPast`), a fixed point iterated (Picard) on a
+//! frozen step grid while Newton solves `x₀` — see
+//! `Shooter::lines_excited`. Lossy LTRA lines need `.options
+//! ltrafit` (their infinite periodic past is summed in closed form by
+//! the recursive model) and have their DC drop pinned (`ltra.rs`).
 
 use dune_raw::{Data, VarType};
 use num_complex::Complex64;
@@ -41,6 +50,7 @@ use num_complex::Complex64;
 use crate::circuit::{Circuit, Spec, VarKind, saved_node};
 use crate::engine::{Engine, MAX_OUTPUT_VALUES, PeriodRun, StepRec, TranParams};
 use crate::error::Error;
+use crate::matrix::PeriodicPast;
 use crate::options::Options;
 use crate::solution::Solution;
 use crate::srcfn::Wave;
@@ -179,11 +189,26 @@ impl Circuit {
                         .into(),
                 });
             }
-            if matches!(spec, Spec::Ltra(_) | Spec::Tra(_)) {
-                return Err(Error::Unsupported {
-                    name: spec.name().to_string(),
-                    what: "a transmission line in .pss (its state is the line's history)".into(),
-                });
+            if let Spec::Ltra(l) = spec
+                && !opts.ltra_fit
+            {
+                // Issue #20: the periodic past of a lossy line is
+                // infinite; only the recursive model sums it.
+                let lp = crate::ltra::LtraParams::new(&l.name, &l.model, opts.reltol, opts.abstol)
+                    .map_err(Error::Build)?;
+                if matches!(
+                    lp.case,
+                    crate::ltra::LtraCase::Rlc | crate::ltra::LtraCase::Rc
+                ) {
+                    return Err(Error::Build(format!(
+                        ".pss: the lossy (RLC/RC) line `{}` needs `.options ltrafit`: in the \
+                         periodic regime its history is the orbit repeated over the whole past, \
+                         which the exact convolution (a walk over a history that starts at an \
+                         operating point) cannot hold, and the recursive model sums in closed \
+                         form",
+                        l.name
+                    )));
+                }
             }
         }
         let mut notes = Vec::new();
@@ -252,12 +277,16 @@ impl Circuit {
                 "pss: oscnode `{lc}` is for autonomous circuits; the driven shooting does not use it"
             ));
         }
-        engine.tran(
+        let ports = self.line_ports(&engine.vars.names);
+        let lines = !ports.is_empty();
+        // With lines, the last stabilization period is the first guess
+        // of the periodic past (only the rows kept change).
+        let stab = engine.tran(
             opts,
             &TranParams {
                 tstep,
                 tstop: t0,
-                tstart: t0,
+                tstart: if lines { t0 - period } else { t0 },
                 tmax: Some(max_step),
                 uic: p.uic,
             },
@@ -276,58 +305,73 @@ impl Circuit {
             adaptive: 0,
             replays: 0,
             krylov: Vec::new(),
+            past: if lines {
+                Some(
+                    Past::from_rows(&stab, None, t0 - period, period, max_step)
+                        .ok_or_else(|| Error::Build(".pss: no stabilization period".into()))?,
+                )
+            } else {
+                None
+            },
+            ports,
+            history: Vec::new(),
+            refresh: Vec::new(),
         };
         let mut residuals = Vec::new();
-        // The last Newton step taken: (base point, step, base residual, fraction).
-        let mut last: Option<(Vec<f64>, Vec<f64>, f64, f64)> = None;
-        let min_frac = 0.5f64.powi(MAX_BACKTRACK as i32);
-        let converged = loop {
-            // A transient that fails from a Newton iterate (an
-            // overshoot into a region the step control cannot cross)
-            // counts as an infinite residual and is backtracked.
-            let (mut period_run, rnorm) = match shooter.adaptive(&x) {
-                Ok(r) => {
-                    let n = r.rnorm;
-                    (Some(r), n)
+        let converged = if lines {
+            shooter.lines_excited(&mut x, p, &mut residuals)?
+        } else {
+            // The last Newton step taken: (base point, step, base residual, fraction).
+            let mut last: Option<(Vec<f64>, Vec<f64>, f64, f64)> = None;
+            let min_frac = 0.5f64.powi(MAX_BACKTRACK as i32);
+            loop {
+                // A transient that fails from a Newton iterate (an
+                // overshoot into a region the step control cannot cross)
+                // counts as an infinite residual and is backtracked.
+                let (mut period_run, rnorm) = match shooter.adaptive(&x) {
+                    Ok(r) => {
+                        let n = r.rnorm;
+                        (Some(r), n)
+                    }
+                    Err(e) => match &last {
+                        Some((_, _, _, frac)) if *frac > min_frac => (None, f64::INFINITY),
+                        _ => return Err(e),
+                    },
+                };
+                residuals.push(rnorm);
+                if rnorm <= p.steady_coeff
+                    && let Some(r) = period_run.take()
+                {
+                    break r;
                 }
-                Err(e) => match &last {
-                    Some((_, _, _, frac)) if *frac > min_frac => (None, f64::INFINITY),
-                    _ => return Err(e),
-                },
-            };
-            residuals.push(rnorm);
-            if rnorm <= p.steady_coeff
-                && let Some(r) = period_run.take()
-            {
-                break r;
-            }
-            if residuals.len() >= p.max_iter {
-                return Err(Error::PssConvergence {
-                    iterations: residuals.len(),
-                    residuals,
-                    period: None,
-                });
-            }
-            // Backtrack a Newton step that did not reduce the residual.
-            if let Some((base, step, base_norm, frac)) = &mut last
-                && rnorm > *base_norm
-                && *frac > min_frac
-            {
-                *frac *= 0.5;
-                for i in 0..x.len() {
-                    x[i] = base[i] + *frac * step[i];
+                if residuals.len() >= p.max_iter {
+                    return Err(Error::PssConvergence {
+                        iterations: residuals.len(),
+                        residuals,
+                        period: None,
+                    });
                 }
-                continue;
+                // Backtrack a Newton step that did not reduce the residual.
+                if let Some((base, step, base_norm, frac)) = &mut last
+                    && rnorm > *base_norm
+                    && *frac > min_frac
+                {
+                    *frac *= 0.5;
+                    for i in 0..x.len() {
+                        x[i] = base[i] + *frac * step[i];
+                    }
+                    continue;
+                }
+                let Some(period_run) = period_run else {
+                    unreachable!("a failed run is always backtracked")
+                };
+                let step = shooter.newton_step(&x, &period_run)?;
+                let base = x.clone();
+                for i in 1..x.len() {
+                    x[i] += step[i];
+                }
+                last = Some((base, step, rnorm, 1.0));
             }
-            let Some(period_run) = period_run else {
-                unreachable!("a failed run is always backtracked")
-            };
-            let step = shooter.newton_step(&x, &period_run)?;
-            let base = x.clone();
-            for i in 1..x.len() {
-                x[i] += step[i];
-            }
-            last = Some((base, step, rnorm, 1.0));
         };
 
         notes.push(format!(
@@ -341,6 +385,7 @@ impl Circuit {
             t0 + period
         ));
         notes.push(shooter.summary(&residuals));
+        notes.extend(shooter.lines_note());
 
         let (time, spectrum) = outputs(&converged, &names, &kinds, p, t0, period);
         let periods = vec![period; residuals.len()];
@@ -353,6 +398,36 @@ impl Circuit {
             periods,
             notes,
         })
+    }
+
+    /// The port unknowns of the transmission lines (issue #20) — the
+    /// four terminals and the two port-current equations of every
+    /// T/O line, ground left out —, whose orbit must reproduce the
+    /// periodic past the lines read.
+    fn line_ports(&self, names: &[String]) -> Vec<usize> {
+        let find = |n: &str| names.iter().position(|v| v.eq_ignore_ascii_case(n));
+        let mut out = Vec::new();
+        for spec in &self.specs {
+            let (name, nodes) = match spec {
+                Spec::Ltra(l) => (&l.name, &l.nodes),
+                Spec::Tra(t) => (&t.name, &t.nodes),
+                _ => continue,
+            };
+            let branches = [format!("{name}#i1"), format!("{name}#i2")];
+            for n in nodes
+                .iter()
+                .map(String::as_str)
+                .chain(branches.iter().map(String::as_str))
+            {
+                if let Some(i) = find(n)
+                    && i != 0
+                    && !out.contains(&i)
+                {
+                    out.push(i);
+                }
+            }
+        }
+        out
     }
 
     /// The frequencies the independent sources repeat at: SIN and
@@ -487,13 +562,34 @@ impl Circuit {
         )?;
         let names = engine.vars.names.clone();
         let kinds = engine.vars.kinds.clone();
+        let ports = self.line_ports(&names);
         drop(engine);
+        // Lines: a continuation from the stabilization (the refine
+        // run, and the shooting) reads the last period before it as
+        // its periodic past.
+        let no_past = || {
+            Error::Build(
+                ".pss: the stabilization window holds less than one period before the \
+                 shooting start; lengthen TSTAB"
+                    .into(),
+            )
+        };
+        let past_before = |rows: &[(f64, Vec<f64>)], at: f64, t: f64, max_step: f64| {
+            if ports.is_empty() {
+                Ok(None)
+            } else {
+                Past::from_rows(rows, None, at - t, t, max_step)
+                    .map(Some)
+                    .ok_or_else(no_past)
+            }
+        };
         let mut start = osc_start(&rows, osc, &lc, guess, opts)?;
+        let mut start_rows = rows;
         if guess.is_none() {
             // The stabilization grid knew no period: refine the
             // estimate (and the start) on a short continuation at
             // the shooting's own grid, T/POINTS, from where it ended.
-            let (t_end, x_end) = rows.last().expect("the stabilization has rows");
+            let (t_end, x_end) = start_rows.last().expect("the stabilization has rows");
             let t = start.period;
             let tstep = t / p.points as f64;
             let refine = PeriodRun {
@@ -502,14 +598,13 @@ impl Circuit {
                 tstep,
                 max_step: f64::min(tstep, t / 50.0),
             };
-            let fine = Engine::new(self.build(opts)?).tran_period(
-                opts,
-                &refine,
-                x_end,
-                &mut Vec::new(),
-            )?;
+            let past = past_before(&start_rows, *t_end, t, max_step)?;
+            let mut engine = Engine::new(self.build(opts)?);
+            engine.set_periodic_past(past.as_ref().map(|p| p.at(t)));
+            let fine = engine.tran_period(opts, &refine, x_end, &mut Vec::new())?;
             notes.push(start.note);
             start = osc_start(&fine, osc, &lc, None, opts)?;
+            start_rows = fine;
             start.note = format!(
                 "{} (refined over {REFINE_PERIODS} periods continued from TSTAB at T/POINTS)",
                 start.note
@@ -526,6 +621,8 @@ impl Circuit {
             tstep: t / p.points as f64,
             max_step: f64::min(t / p.points as f64, t / 50.0),
         };
+        let first_past = past_before(&start_rows, t0, period, run_for(period).max_step)?;
+        drop(start_rows);
         let mut shooter = Shooter {
             circuit: self,
             opts,
@@ -535,6 +632,10 @@ impl Circuit {
             adaptive: 0,
             replays: 0,
             krylov: Vec::new(),
+            past: first_past,
+            ports: ports.clone(),
+            history: Vec::new(),
+            refresh: Vec::new(),
         };
         let mut residuals = Vec::new();
         let mut periods = Vec::new();
@@ -545,75 +646,96 @@ impl Circuit {
             residuals,
             period: Some(period),
         };
-        let converged = loop {
-            shooter.run = run_for(period);
-            let (mut period_run, rnorm) = match shooter.adaptive(&x) {
-                Ok(r) => {
-                    let n = r.rnorm;
-                    (Some(r), n)
-                }
-                Err(e) => match &last {
-                    Some(l) if l.frac > min_frac => (None, f64::INFINITY),
-                    Some(_) => {
-                        residuals.push(f64::INFINITY);
-                        periods.push(period);
-                        return Err(fail(residuals, period));
-                    }
-                    None => return Err(e),
-                },
-            };
-            residuals.push(rnorm);
-            periods.push(period);
-            // At least one Newton step: an estimate already within
-            // the tolerance still gets its T corrected (quadratically)
-            // — the mismatch criterion alone admits a period error of
-            // about tol/|dx/dt| — and the step's δT is reported.
-            if rnorm <= p.steady_coeff
-                && last.is_some()
-                && let Some(r) = period_run.take()
-            {
-                break r;
-            }
-            if residuals.len() >= p.max_iter {
-                return Err(fail(residuals, period));
-            }
-            if let Some(l) = &mut last
-                && rnorm > l.base_norm
-                && l.frac > min_frac
-            {
-                l.frac *= 0.5;
-                for ((xi, bx), sx) in x.iter_mut().zip(&l.x).zip(&l.dx) {
-                    *xi = bx + l.frac * sx;
-                }
-                period = l.t + l.frac * l.dt;
-                continue;
-            }
-            let Some(period_run) = period_run else {
-                unreachable!("a failed run is always backtracked")
-            };
-            let (mut sx, mut st) = shooter.newton_step_osc(&x, period, osc, &period_run)?;
-            // A Newton step never moves T by more than MAX_DT of itself
-            // (far from the orbit the linearized phase drift is not
-            // to be trusted); the whole step is scaled.
-            if st.abs() > MAX_DT * period {
-                let k = MAX_DT * period / st.abs();
-                sx.iter_mut().for_each(|v| *v *= k);
-                st *= k;
-            }
-            let base = x.clone();
-            for i in 1..x.len() {
-                x[i] += sx[i];
-            }
-            let bt = period;
-            period += st;
+        let converged = if shooter.past.is_some() {
+            let (r, dt) = shooter.lines_autonomous(
+                &mut x,
+                &mut period,
+                osc,
+                p,
+                &run_for,
+                &mut residuals,
+                &mut periods,
+            )?;
             last = Some(OscStep {
-                x: base,
-                t: bt,
-                dx: sx,
-                dt: st,
-                base_norm: rnorm,
+                x: Vec::new(),
+                t: period,
+                dx: Vec::new(),
+                dt,
+                base_norm: 0.0,
                 frac: 1.0,
             });
+            r
+        } else {
+            loop {
+                shooter.run = run_for(period);
+                let (mut period_run, rnorm) = match shooter.adaptive(&x) {
+                    Ok(r) => {
+                        let n = r.rnorm;
+                        (Some(r), n)
+                    }
+                    Err(e) => match &last {
+                        Some(l) if l.frac > min_frac => (None, f64::INFINITY),
+                        Some(_) => {
+                            residuals.push(f64::INFINITY);
+                            periods.push(period);
+                            return Err(fail(residuals, period));
+                        }
+                        None => return Err(e),
+                    },
+                };
+                residuals.push(rnorm);
+                periods.push(period);
+                // At least one Newton step: an estimate already within
+                // the tolerance still gets its T corrected (quadratically)
+                // — the mismatch criterion alone admits a period error of
+                // about tol/|dx/dt| — and the step's δT is reported.
+                if rnorm <= p.steady_coeff
+                    && last.is_some()
+                    && let Some(r) = period_run.take()
+                {
+                    break r;
+                }
+                if residuals.len() >= p.max_iter {
+                    return Err(fail(residuals, period));
+                }
+                if let Some(l) = &mut last
+                    && rnorm > l.base_norm
+                    && l.frac > min_frac
+                {
+                    l.frac *= 0.5;
+                    for ((xi, bx), sx) in x.iter_mut().zip(&l.x).zip(&l.dx) {
+                        *xi = bx + l.frac * sx;
+                    }
+                    period = l.t + l.frac * l.dt;
+                    continue;
+                }
+                let Some(period_run) = period_run else {
+                    unreachable!("a failed run is always backtracked")
+                };
+                let (mut sx, mut st) = shooter.newton_step_osc(&x, period, osc, &period_run)?;
+                // A Newton step never moves T by more than MAX_DT of itself
+                // (far from the orbit the linearized phase drift is not
+                // to be trusted); the whole step is scaled.
+                if st.abs() > MAX_DT * period {
+                    let k = MAX_DT * period / st.abs();
+                    sx.iter_mut().for_each(|v| *v *= k);
+                    st *= k;
+                }
+                let base = x.clone();
+                for i in 1..x.len() {
+                    x[i] += sx[i];
+                }
+                let bt = period;
+                period += st;
+                last = Some(OscStep {
+                    x: base,
+                    t: bt,
+                    dx: sx,
+                    dt: st,
+                    base_norm: rnorm,
+                    frac: 1.0,
+                });
+            }
         };
 
         // The trivial periodic solution — the equilibrium — is
@@ -647,6 +769,7 @@ impl Circuit {
             x[osc]
         ));
         notes.push(shooter.summary(&residuals));
+        notes.extend(shooter.lines_note());
         let (time, spectrum) = outputs(&converged, &names, &kinds, p, t0, period);
         Ok(Pss {
             time,
@@ -671,6 +794,9 @@ const EST_PERIODS: usize = 4;
 /// Length, in estimated periods, of the continuation that refines a
 /// period estimated on the stabilization grid.
 const REFINE_PERIODS: f64 = 5.5;
+/// Grids the shooting with transmission lines converges on: the
+/// first adaptive run's, then one refreshed from the converged orbit.
+const GRID_PASSES: usize = 2;
 /// Largest relative change of `T` in one Newton step.
 const MAX_DT: f64 = 0.2;
 
@@ -876,7 +1002,167 @@ struct PeriodOut {
     resid: Vec<f64>,
     /// Per-unknown tolerance (index 0, ground, is 1).
     tol: Vec<f64>,
+    /// The period mismatch `max_i |x_i(t₀+T) − x_i(t₀)| / tol_i`.
     rnorm: f64,
+    /// Lines (issue #20): how far the orbit is from the periodic past
+    /// it read, `max |x_i(t) − past_i(t)| / tol_i` over the lines' port
+    /// unknowns (0 without lines).
+    hnorm: f64,
+    /// The period of the run.
+    period: f64,
+}
+
+impl PeriodOut {
+    /// The residual reported per iteration: the period mismatch, and
+    /// the lines' history mismatch when there are lines.
+    fn total(&self) -> f64 {
+        self.rnorm.max(self.hnorm)
+    }
+}
+
+/// The periodic past of the transmission lines (issue #20) — the
+/// device-facing orbit — and the breakpoint rows to interpolate it on
+/// when checking the next orbit against it.
+struct Past {
+    orbit: PeriodicPast,
+    /// Breakpoint indices into the closed period (0 = the start
+    /// boundary, 1… the interior samples, `m + 1` the end boundary;
+    /// only the ends for a past from the stabilization, which has no
+    /// step log).
+    breaks: Vec<usize>,
+}
+
+impl Past {
+    /// The past from `rows` over `[start, start + period]`: its
+    /// interior samples (boundaries are the shooting state). Samples
+    /// within `CKTminBreak` of a boundary are left out, as an accept
+    /// there would be. `log` (a shooting run's) marks the breakpoint
+    /// rows (`rows[j]` is `log[j − 1]`'s point). `None` when `rows` do
+    /// not reach back to within a step (`max_step`) of `start`.
+    fn from_rows(
+        rows: &[(f64, Vec<f64>)],
+        log: Option<&[StepRec]>,
+        start: f64,
+        period: f64,
+        max_step: f64,
+    ) -> Option<Past> {
+        let mb = 5e-5 * max_step;
+        // The first row may land up to a step after the boundary (the
+        // boundary sample is the shooting state anyway).
+        if rows.first().is_none_or(|r| r.0 > start + max_step + mb) {
+            return None;
+        }
+        let mut phase = Vec::new();
+        let mut kept = Vec::new();
+        let mut breaks = vec![0usize];
+        for (j, (t, x)) in rows.iter().enumerate() {
+            if *t - start <= mb || start + period - *t <= mb {
+                continue;
+            }
+            phase.push((*t - start) / period);
+            kept.push(x.clone());
+            if let Some(log) = log
+                && j >= 1
+                && log.get(j - 1).is_some_and(|r| r.brk)
+            {
+                breaks.push(phase.len());
+            }
+        }
+        breaks.push(phase.len() + 1);
+        Some(Past {
+            orbit: PeriodicPast {
+                period,
+                phase,
+                rows: kept,
+            },
+            breaks,
+        })
+    }
+
+    /// The device-facing past for a run of period `period`.
+    fn at(&self, period: f64) -> PeriodicPast {
+        PeriodicPast {
+            period,
+            ..self.orbit.clone()
+        }
+    }
+
+    /// `max_i |x_i(t) − past_i(t)| / tol_i` over the lines' `ports`
+    /// at the interior rows of a run from `x` at `t0` on the past's own
+    /// grid ([`interp`] reproduces a sample exactly at its time).
+    fn mismatch(
+        &self,
+        rows: &[(f64, Vec<f64>)],
+        x: &[f64],
+        t0: f64,
+        period: f64,
+        ports: &[usize],
+        tol: &[f64],
+    ) -> f64 {
+        let mut closed: Vec<(f64, Vec<f64>)> = Vec::with_capacity(self.orbit.phase.len() + 2);
+        closed.push((0.0, x.to_vec()));
+        for (u, r) in self.orbit.phase.iter().zip(&self.orbit.rows) {
+            closed.push((u * period, r.clone()));
+        }
+        closed.push((period, x.to_vec()));
+        let mut worst = 0.0f64;
+        let n = rows.len();
+        for (t, sol) in rows.iter().take(n.saturating_sub(1)).skip(1) {
+            let v = interp(&closed, &self.breaks, t - t0);
+            for &i in ports {
+                worst = worst.max((sol[i] - v[i]).abs() / tol[i]);
+            }
+        }
+        worst
+    }
+}
+
+/// A frozen step grid (an adaptive period run's log) and the run it
+/// was taken on, replayable at any period by uniform stretching.
+struct Grid {
+    run: PeriodRun,
+    log: Vec<StepRec>,
+}
+
+impl Grid {
+    fn of(run: PeriodRun, log: &[StepRec]) -> Grid {
+        Grid {
+            run,
+            log: log.to_vec(),
+        }
+    }
+
+    /// The run and log at period `t`: every time from `t₀` scaled by
+    /// `t/T` (TSTEP and TMAX too), the end pinned to `t₀ + t`.
+    fn at(&self, t: f64) -> (PeriodRun, Vec<StepRec>) {
+        stretch(&self.run, &self.log, t)
+    }
+}
+
+/// `run`/`log` stretched to period `t` (see [`Grid::at`]); unchanged
+/// at the run's own period.
+fn stretch(run: &PeriodRun, log: &[StepRec], t: f64) -> (PeriodRun, Vec<StepRec>) {
+    if t == run.period {
+        return (*run, log.to_vec());
+    }
+    let k = t / run.period;
+    let stretched = PeriodRun {
+        t0: run.t0,
+        period: t,
+        tstep: run.tstep * k,
+        max_step: run.max_step * k,
+    };
+    let mut log: Vec<StepRec> = log
+        .iter()
+        .map(|r| StepRec {
+            time: run.t0 + (r.time - run.t0) * k,
+            ..*r
+        })
+        .collect();
+    if let Some(end) = log.last_mut() {
+        end.time = run.t0 + t;
+    }
+    (stretched, log)
 }
 
 struct Shooter<'a> {
@@ -889,11 +1175,59 @@ struct Shooter<'a> {
     replays: usize,
     /// GMRES dimension of each Newton step.
     krylov: Vec<usize>,
+    /// Transmission lines (issue #20): the periodic past they read
+    /// (`None` without lines), their port unknowns, and the history
+    /// mismatch of every run.
+    past: Option<Past>,
+    ports: Vec<usize>,
+    history: Vec<f64>,
+    /// The period mismatch of each grid-refresh run.
+    refresh: Vec<f64>,
+}
+
+/// A fresh engine for one shooting run, with the lines' periodic past
+/// (if any) at the run's period.
+fn period_engine(
+    circuit: &Circuit,
+    opts: &Options,
+    past: Option<&Past>,
+    period: f64,
+) -> Result<Engine, Error> {
+    let mut e = Engine::new(circuit.build(opts)?);
+    e.set_periodic_past(past.map(|p| p.at(period)));
+    Ok(e)
 }
 
 impl Shooter<'_> {
     fn engine(&self) -> Result<Engine, Error> {
-        Ok(Engine::new(self.circuit.build(self.opts)?))
+        period_engine(self.circuit, self.opts, self.past.as_ref(), self.run.period)
+    }
+
+    /// The lines' note: the history mismatch per frozen-grid
+    /// iteration and the period mismatch of the grid refresh.
+    fn lines_note(&self) -> Option<String> {
+        self.past.as_ref()?;
+        let fmt = |v: &[f64]| -> String {
+            if v.is_empty() {
+                "-".to_string()
+            } else {
+                v.iter()
+                    .map(|r| format!("{r:.3e}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+        Some(format!(
+            "pss: transmission lines read the orbit as their history (x(t − τ) = \
+             x(t − τ + kT)): Picard on it, Newton on x0, on a frozen grid (the first \
+             guess is the stabilization's last period); history mismatch per replay over {} \
+             line port unknown(s): {}; grid refreshed once from the converged orbit, the \
+             refresh run's period mismatch (the cross-grid discretization of the lines, not \
+             iterated on): {}",
+            self.ports.len(),
+            fmt(&self.history),
+            fmt(&self.refresh)
+        ))
     }
 
     /// The adaptive transient over the period from `x`.
@@ -903,6 +1237,12 @@ impl Shooter<'_> {
         let rows = self
             .engine()?
             .tran_period(self.opts, &self.run, x, &mut log)?;
+        Ok(self.measure(rows, log, x))
+    }
+
+    /// What the shooting reads off a period run from `x`: the period
+    /// mismatch and the per-unknown tolerances.
+    fn measure(&self, rows: Vec<(f64, Vec<f64>)>, log: Vec<StepRec>, x: &[f64]) -> PeriodOut {
         let n = x.len();
         let last = &rows.last().expect("the period has its end point").1;
         let mut peak = vec![0.0f64; n];
@@ -923,13 +1263,187 @@ impl Shooter<'_> {
             resid[i] = last[i] - x[i];
             rnorm = rnorm.max(resid[i].abs() / tol[i]);
         }
-        Ok(PeriodOut {
+        PeriodOut {
             rows,
             log,
             resid,
             tol,
             rnorm,
-        })
+            hnorm: 0.0,
+            period: self.run.period,
+        }
+    }
+
+    /// Lines (issue #20): one replay of the interval from `x` on the
+    /// frozen `grid` (an adaptive run's step log, stretched to the
+    /// current period), the lines reading the orbit `cur` as their
+    /// periodic past — the Picard half. The replay's rows sit at the
+    /// times of the past's samples, so the mismatch between the orbit
+    /// and the history it read is measured exactly. That past stays
+    /// the shooter's for the Newton half.
+    fn replay_on(&mut self, x: &[f64], grid: &Grid, cur: &PeriodOut) -> Result<PeriodOut, Error> {
+        let (t0, max_step) = (self.run.t0, self.run.max_step);
+        let past = Past::from_rows(&cur.rows, Some(&cur.log), t0, cur.period, max_step)
+            .expect("a period run starts at t0");
+        let (run, log) = grid.at(self.run.period);
+        self.replays += 1;
+        let rows = period_engine(self.circuit, self.opts, Some(&past), run.period)?
+            .tran_replay_rows(self.opts, &run, x, &log)?;
+        let mut r = self.measure(rows, log, x);
+        r.hnorm = past.mismatch(&r.rows, x, t0, run.period, &self.ports, &r.tol);
+        self.history.push(r.hnorm);
+        self.past = Some(past);
+        Ok(r)
+    }
+
+    /// The driven shooting with transmission lines (issue #20). The
+    /// lines' state is their history, which in the periodic regime is
+    /// the orbit itself, `x(t − τ) = x(t − τ + kT)`; the shooting
+    /// unknown stays `x₀` and the history is a fixed point solved
+    /// alongside. An adaptive run (its past: the stabilization's last
+    /// period) fixes the grid; on that frozen grid each iteration
+    /// replays the interval with the previous orbit as the past
+    /// (Picard) and, while the period mismatch exceeds the tolerance,
+    /// takes a Newton step on `x₀` with that past frozen (the excited
+    /// shooting's GMRES). Converged on the grid when both the period
+    /// mismatch and the history mismatch are within tolerance. The
+    /// grid is then refreshed once — an adaptive run from the result
+    /// picks one for the converged orbit — and the iteration converges
+    /// again on it; that orbit is the result.
+    ///
+    /// The frozen grid is what lets the history converge at all.
+    /// Across grids the lines are not reproducible to the SPICE
+    /// tolerance: the slope rule plants echo breakpoints on the *sign*
+    /// of a slope (so two runs place a delayed corner up to a step
+    /// apart — tens of tolerances at the corner), and the LTRA
+    /// convolution's error is set by its grid, not by RELTOL (it has no
+    /// LTE control). The refresh run's period mismatch is that
+    /// cross-grid discretization, and is reported, not iterated on.
+    fn lines_excited(
+        &mut self,
+        x: &mut [f64],
+        p: &PssParams,
+        residuals: &mut Vec<f64>,
+    ) -> Result<PeriodOut, Error> {
+        let fail = |residuals: &[f64]| Error::PssConvergence {
+            iterations: residuals.len(),
+            residuals: residuals.to_vec(),
+            period: None,
+        };
+        let mut seed = self.adaptive(x)?;
+        residuals.push(seed.rnorm);
+        for pass in 0..GRID_PASSES {
+            let grid = Grid::of(self.run, &seed.log);
+            let mut cur = seed;
+            let done = loop {
+                if residuals.len() >= p.max_iter {
+                    return Err(fail(residuals));
+                }
+                let r = self.replay_on(x, &grid, &cur)?;
+                residuals.push(r.total());
+                if r.total() <= p.steady_coeff {
+                    break r;
+                }
+                if r.rnorm > p.steady_coeff {
+                    let step = self.newton_step(x, &r)?;
+                    for i in 1..x.len() {
+                        x[i] += step[i];
+                    }
+                }
+                cur = r;
+            };
+            if pass + 1 == GRID_PASSES {
+                return Ok(done);
+            }
+            self.past = Some(self.past_of(&done));
+            seed = self.adaptive(x)?;
+            residuals.push(seed.rnorm);
+            self.refresh.push(seed.rnorm);
+        }
+        unreachable!("the last pass returns")
+    }
+
+    /// The autonomous shooting with transmission lines: the scheme of
+    /// [`Shooter::lines_excited`] with the Newton step of
+    /// [`Shooter::newton_step_osc`] (`x₀` and `T`; the frozen grid and
+    /// the past stretch with `T`, both being functions of phase), at
+    /// least one Newton step (D-0035). Returns the orbit and the last
+    /// period correction.
+    #[allow(clippy::too_many_arguments)]
+    fn lines_autonomous(
+        &mut self,
+        x: &mut [f64],
+        period: &mut f64,
+        osc: usize,
+        p: &PssParams,
+        run_for: &dyn Fn(f64) -> PeriodRun,
+        residuals: &mut Vec<f64>,
+        periods: &mut Vec<f64>,
+    ) -> Result<(PeriodOut, f64), Error> {
+        let fail = |residuals: &[f64], period: f64| Error::PssConvergence {
+            iterations: residuals.len(),
+            residuals: residuals.to_vec(),
+            period: Some(period),
+        };
+        self.run = run_for(*period);
+        let mut seed = self.adaptive(x)?;
+        residuals.push(seed.rnorm);
+        periods.push(*period);
+        let mut dt = 0.0;
+        for pass in 0..GRID_PASSES {
+            let grid = Grid::of(self.run, &seed.log);
+            let mut cur = seed;
+            let mut stepped = false;
+            let done = loop {
+                if residuals.len() >= p.max_iter {
+                    return Err(fail(residuals, *period));
+                }
+                self.run = run_for(*period);
+                let r = self.replay_on(x, &grid, &cur)?;
+                residuals.push(r.total());
+                periods.push(*period);
+                if r.total() <= p.steady_coeff && stepped {
+                    break r;
+                }
+                if r.rnorm > p.steady_coeff || !stepped {
+                    let (mut sx, mut st) = self.newton_step_osc(x, *period, osc, &r)?;
+                    if st.abs() > MAX_DT * *period {
+                        let k = MAX_DT * *period / st.abs();
+                        sx.iter_mut().for_each(|v| *v *= k);
+                        st *= k;
+                    }
+                    for i in 1..x.len() {
+                        x[i] += sx[i];
+                    }
+                    *period += st;
+                    dt = st;
+                    stepped = true;
+                }
+                cur = r;
+            };
+            if pass + 1 == GRID_PASSES {
+                return Ok((done, dt));
+            }
+            self.run = run_for(*period);
+            self.past = Some(self.past_of(&done));
+            seed = self.adaptive(x)?;
+            residuals.push(seed.rnorm);
+            periods.push(*period);
+            self.refresh.push(seed.rnorm);
+        }
+        unreachable!("the last pass returns")
+    }
+
+    /// The periodic past a converged orbit leaves for the next run.
+    fn past_of(&self, done: &PeriodOut) -> Past {
+        Past::from_rows(
+            &done.rows,
+            Some(&done.log),
+            self.run.t0,
+            done.period,
+            self.run.max_step,
+        )
+        .expect("a period run starts at t0")
     }
 
     /// The Newton step `δ` of `(I − Φ′) δ = Φ(x) − x`, by GMRES on the
@@ -952,12 +1466,14 @@ impl Shooter<'_> {
     ) -> Result<Vec<f64>, Error> {
         let opts = if tight { &self.tight } else { self.opts };
         let (circuit, build_opts, run) = (self.circuit, self.opts, self.run);
+        let past = self.past.as_ref();
         let n = x.len();
         let d = &at.tol;
         let replays = std::cell::Cell::new(0usize);
         let replay = |x0: &[f64]| -> Result<Vec<f64>, Error> {
             replays.set(replays.get() + 1);
-            Engine::new(circuit.build(build_opts)?).tran_replay(opts, &run, x0, &at.log)
+            period_engine(circuit, build_opts, past, run.period)?
+                .tran_replay(opts, &run, x0, &at.log)
         };
         let base = replay(x)?;
         // Scaled residual, unknowns 1..n.
@@ -1028,9 +1544,12 @@ impl Shooter<'_> {
         let slot = |i: usize| i - 1;
         let t_slot = osc - 1;
         let replays = std::cell::Cell::new(0usize);
+        let past = self.past.as_ref();
         let replay = |x0: &[f64], t: f64| -> Result<Vec<f64>, Error> {
             replays.set(replays.get() + 1);
-            let mut engine = Engine::new(circuit.build(build_opts)?);
+            // Lines: the past stretches with the period (it is the
+            // orbit as a function of phase).
+            let mut engine = period_engine(circuit, build_opts, past, t)?;
             if t == period {
                 return engine.tran_replay(opts, &run, x0, &at.log);
             }

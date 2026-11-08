@@ -122,6 +122,9 @@ pub(crate) struct Engine {
     /// The session warm-start channel (empty outside a
     /// [`Session`](crate::Session) with warm starts on).
     warm: crate::session::WarmSlot,
+    /// `.pss` with transmission lines: the periodic past the lines
+    /// take as history at the first accept of a shooting interval.
+    periodic: Option<crate::matrix::PeriodicPast>,
     /// Per device, its window of state offsets (`Built::state_ranges`).
     #[cfg(feature = "parallel")]
     state_ranges: Vec<(usize, usize)>,
@@ -193,6 +196,7 @@ impl Engine {
             slope_break_radius: None,
             fault: None,
             warm,
+            periodic: None,
             #[cfg(feature = "parallel")]
             state_ranges,
             #[cfg(feature = "parallel")]
@@ -789,6 +793,7 @@ impl Engine {
             delta_old,
             min_break: self.min_break,
             requests: &mut requests,
+            periodic: if first { self.periodic.as_ref() } else { None },
         };
         for d in &mut self.devices {
             d.accept(&mut ctx);
@@ -1110,6 +1115,12 @@ impl Engine {
 }
 
 impl Engine {
+    /// The periodic past the transmission lines read as history in
+    /// the next [`Engine::tran_period`]/[`Engine::tran_replay`].
+    pub(crate) fn set_periodic_past(&mut self, past: Option<crate::matrix::PeriodicPast>) {
+        self.periodic = past;
+    }
+
     /// The device states the transient operating point would leave
     /// had it converged on `x0`: load passes in `MODETRANOP |
     /// MODEINITFLOAT` over the fixed solution `x0` (no solve), repeated
@@ -1209,6 +1220,32 @@ impl Engine {
         x0: &[f64],
         log: &[StepRec],
     ) -> Result<Vec<f64>, Error> {
+        self.replay_loop(opts, run, x0, log, None)
+    }
+
+    /// [`Engine::tran_replay`] keeping every row: `(t0, x0)` and the
+    /// solution at each logged step (the rows of the logged run, on its
+    /// own grid).
+    pub fn tran_replay_rows(
+        &mut self,
+        opts: &Options,
+        run: &PeriodRun,
+        x0: &[f64],
+        log: &[StepRec],
+    ) -> Result<Vec<(f64, Vec<f64>)>, Error> {
+        let mut rows = Vec::with_capacity(log.len() + 1);
+        self.replay_loop(opts, run, x0, log, Some(&mut rows))?;
+        Ok(rows)
+    }
+
+    fn replay_loop(
+        &mut self,
+        opts: &Options,
+        run: &PeriodRun,
+        x0: &[f64],
+        log: &[StepRec],
+        mut rows: Option<&mut Vec<(f64, Vec<f64>)>>,
+    ) -> Result<Vec<f64>, Error> {
         self.period_setup(opts, run, x0)?;
         let max_step = run.max_step;
         self.set_kind(AnKind::Tran, false);
@@ -1222,6 +1259,9 @@ impl Engine {
         self.accept(true, true, opts)?;
         if self.time > self.breaks[0] {
             self.clr_break();
+        }
+        if let Some(rows) = rows.as_deref_mut() {
+            rows.push((self.time, self.sol.clone()));
         }
         for rec in log {
             let delta = rec.time - self.time;
@@ -1266,6 +1306,9 @@ impl Engine {
             self.accept(rec.brk, false, opts)?;
             if self.time > self.breaks[0] {
                 self.clr_break();
+            }
+            if let Some(rows) = rows.as_deref_mut() {
+                rows.push((self.time, self.sol.clone()));
             }
         }
         Ok(self.sol.clone())
