@@ -1251,6 +1251,18 @@ impl Engine {
             self.set_sweep(sweeps, &cur, level, false, retemp)?;
         }
         let mut rows: Vec<(f64, Vec<f64>)> = Vec::new();
+        // `CKTdelta = TRCVvStep[0]`, every `CKTdeltaOld` the same and
+        // `CKTorder = 1` (dctrcurv.c, 3f5:59-66, ngspice-47:79-85):
+        // the INITPRED loads of the later points extrapolate with
+        // `xfact = delta/deltaOld[1] = 1`, i.e. `2·state1 − state2`.
+        // Set once: an `OPtran` fallback overwrites them and the C
+        // carries its values on.
+        self.delta = sweeps[0].step;
+        self.delta_old = [sweeps[0].step; 8];
+        self.order = 1;
+        // The banks rotated per point: `CKTmaxOrder + 1` of them
+        // (`.options maxord`, whatever the method).
+        let maxord = opts.maxord.clamp(1, 6);
         let mut start_mode = InitMode::Jct;
         let mut i = 0usize;
         loop {
@@ -1274,17 +1286,26 @@ impl Engine {
                 cur[i] = sweeps[i].start;
                 self.set_sweep(sweeps, &cur, i, false, retemp)?;
             }
+            // `DCtrCurv` (3f5:166-183, 224-228; ngspice-47:285-312,
+            // 370, 430-436): rotate the state banks, so state1 is the
+            // previous point's state0 (and state2 the one before);
+            // one `NIiter` in the mode left by the previous point —
+            // INITJCT at the first point of every inner sweep, then
+            // MODEINITPRED, whose loads predict their junction
+            // voltages from state1/state2 like a transient step —
+            // with `CKTop` as the fallback; after the first point
+            // (`firstTime`) state1 := state0, so the second point
+            // predicts flat. The switches read the previous point's
+            // state from state1 (`swload.c`) through the same banks.
+            self.states.rotate(maxord);
+            let first = start_mode == InitMode::Jct;
             if self.ni_iter(opts, start_mode, opts.itl2, 0.0, 1.0).is_err() {
                 self.op(opts)?;
             }
-            start_mode = InitMode::Float;
-            // `DCtrCurv` rotates the state banks before every point,
-            // so state1 there is the previous point's state0. We keep
-            // state0 in place instead (the loads start in INITFLOAT
-            // from it), but the switches read the previous point's
-            // state from state1 (ngspice `cswload.c`), so mirror it.
-            // No other device reads state1 in a DC mode.
-            self.states.copy01();
+            start_mode = InitMode::Pred;
+            if first {
+                self.states.copy01();
+            }
             if (rows.len() + 1).saturating_mul(self.vars.len()) > MAX_OUTPUT_VALUES {
                 return Err(Error::Build(
                     "dc sweep produces too many points; refusing".into(),
