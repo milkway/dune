@@ -1,0 +1,12 @@
+device noise: a noisy resistor across a capacitor (kT/C)
+* Dune-only probe (issue #20 item 3, .options devnoise): seed 3,
+* golden from Dune itself (corpus/regress/golden/devnoise_rc.dune.raw);
+* neither the 3f5 nor ngspice has device noise in the time domain.
+* Statistics (kT/C at 5 sigma) in crates/dune-core/tests/devnoise.rs.
+.options devnoise devnt=20n seed=3
+r1 1 0 1k
+c1 1 0 1n
+r2 1 2 10k
+c2 2 0 100p
+.tran 20n 4u
+.end

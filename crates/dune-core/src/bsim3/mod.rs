@@ -945,13 +945,15 @@ impl crate::devices::Device for Bsim3I {
         };
         let gain = ctx.gain2(self.d_p, self.s_p);
         let flicker = match model.noi_mod {
-            1 | 4 | 5 => {
-                gain * m
-                    * model.kf
-                    * f64::exp(model.af * f64::ln(f64::max(self.cd.abs(), N_MINLOG)))
-                    / (ctx.freq.powf(model.ef) * pp.leff * pp.leff * model.cox)
-            }
+            1 | 4 | 5 => ctx.flicker(
+                self.d_p,
+                self.s_p,
+                m * model.kf * f64::exp(model.af * f64::ln(f64::max(self.cd.abs(), N_MINLOG)))
+                    / (pp.leff * pp.leff * model.cox),
+                model.ef,
+            ),
             2 | 3 | 6 => {
+                ctx.flicker_unsupported("BSIM3 noimod 2/3/6 flicker (not a power law)");
                 let vds = ctx.states.get(0, self.st + VDS).abs();
                 let ssi = self.strong_inversion_noise(vds, ctx.freq, ctx.temp);
                 let t10 = model.oxide_trap_density_a * 8.62e-5 * ctx.temp;

@@ -617,11 +617,12 @@ impl crate::devices::Device for DiodeI {
         let rs = ctx.thermal(self.pos_prime, self.pos, self.t.gspr);
         let id = ctx.shot(self.pos_prime, self.neg, cd);
         let model = &self.sens.model;
-        let flicker = ctx.gain2(self.pos_prime, self.neg)
-            * model.kf
-            * f64::exp(model.af * f64::ln(f64::max((cd / m).abs(), N_MINLOG)))
-            / ctx.freq
-            * m;
+        let flicker = ctx.flicker(
+            self.pos_prime,
+            self.neg,
+            model.kf * f64::exp(model.af * f64::ln(f64::max((cd / m).abs(), N_MINLOG))) * m,
+            1.0,
+        );
         vec![rs, id, flicker, 0.0, 0.0, 0.0, rs + id + flicker]
     }
 

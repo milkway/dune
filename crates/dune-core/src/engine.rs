@@ -129,6 +129,9 @@ pub(crate) struct Engine {
     /// first load that asks for it.
     #[cfg(feature = "parallel")]
     par: Option<crate::parload::ParLoad>,
+    /// The transient device-noise injector (`.options devnoise`;
+    /// set by `Circuit::tran` only).
+    dev_noise: Option<crate::devnoise::DevNoise>,
 }
 
 impl Engine {
@@ -194,7 +197,21 @@ impl Engine {
             state_ranges,
             #[cfg(feature = "parallel")]
             par: None,
+            dev_noise: None,
         }
+    }
+
+    /// Run the next `.tran` with transient device noise.
+    pub fn set_dev_noise(&mut self, dn: crate::devnoise::DevNoise) {
+        self.dev_noise = Some(dn);
+    }
+
+    /// The device-noise injector's remarks (empty without one).
+    pub fn dev_noise_notes(&self) -> Vec<String> {
+        self.dev_noise
+            .as_ref()
+            .map(|d| d.notes().to_vec())
+            .unwrap_or_default()
     }
 
     pub fn set_kind(&mut self, kind: AnKind, uic: bool) {
@@ -296,6 +313,11 @@ impl Engine {
             fault = ctx.fault;
         }
         self.fault = fault;
+        if self.kind == AnKind::Tran
+            && let Some(dn) = &self.dev_noise
+        {
+            dn.stamp(self.time, &mut self.rhs);
+        }
 
         // Nodesets hold during INITJCT/INITFIX of DC solutions;
         // `.ic` nodes hold throughout the transient operating point
@@ -770,6 +792,16 @@ impl Engine {
         };
         for d in &mut self.devices {
             d.accept(&mut ctx);
+        }
+        if let Some(dn) = self.dev_noise.as_mut() {
+            dn.accept(
+                self.time,
+                self.min_break,
+                &self.devices,
+                &self.names,
+                &self.states,
+                &mut requests,
+            )?;
         }
         for (t, slope) in requests {
             if slope && self.near_break(t) {
@@ -1598,6 +1630,7 @@ impl Engine {
             temp,
             states: &self.states,
             sp_sink: None,
+            flicker_sink: None,
         };
         self.devices[d].noise_dens(&ctx)
     }
@@ -1617,6 +1650,7 @@ impl Engine {
             temp,
             states: &self.states,
             sp_sink: Some(&sink),
+            flicker_sink: None,
         };
         for d in &self.devices {
             if d.noise_suffixes().is_some() {

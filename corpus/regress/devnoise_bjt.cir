@@ -1,0 +1,17 @@
+device noise: common-emitter stage (RB/RC/RE thermal, Ic/Ib shot, flicker)
+* Dune-only probe (issue #20 item 3, .options devnoise): golden from
+* Dune itself (corpus/regress/golden/devnoise_bjt.dune.raw); the
+* output noise against .noise of the same circuit is checked in
+* crates/dune-core/tests/devnoise.rs.
+.options devnoise seed=21 devnt=100n
+vcc 9 0 5
+rb1 9 3 100k
+rb2 3 0 22k
+rc 9 4 4.7k
+re 5 0 1k
+ce 5 0 100u
+q1 4 3 5 qn
+cl 4 0 1n
+.model qn npn is=1e-15 bf=150 rb=200 rc=20 re=2 kf=1e-15 af=1
+.tran 100n 20u
+.end

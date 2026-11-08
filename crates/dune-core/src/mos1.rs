@@ -54,8 +54,12 @@ pub(crate) fn mos_noise(ctx: &crate::matrix::NoiseCtx, n: &MosNoise) -> Vec<f64>
     let rd = ctx.thermal(n.d_p, n.drain, n.gdpr);
     let rs = ctx.thermal(n.s_p, n.source, n.gspr);
     let id = ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * n.gm.abs());
-    let flicker = ctx.gain2(n.d_p, n.s_p) * n.kf * n.gm * n.gm
-        / (ctx.freq.powf(n.af) * n.w * n.eff_l * n.cox);
+    let flicker = ctx.flicker(
+        n.d_p,
+        n.s_p,
+        n.kf * n.gm * n.gm / (n.w * n.eff_l * n.cox),
+        n.af,
+    );
     vec![rd, rs, id, flicker, rd + rs + id + flicker]
 }
 

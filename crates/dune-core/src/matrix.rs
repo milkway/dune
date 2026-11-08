@@ -336,6 +336,21 @@ impl PzCtx<'_> {
 /// `2q|I|` forms of `NevalSrc`.
 pub(crate) type NoiseGen = (Var, Var, f64);
 
+/// A flicker generator between two nodes as a power law,
+/// `coef / f^ef` A²/Hz (`coef` = the density at 1 Hz), or the mark
+/// of a flicker form that is no power law (BSIM3 `noiMod` 2/3/6), for
+/// the transient device noise (`devnoise.rs`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum FlickerGen {
+    PowerLaw {
+        n1: Var,
+        n2: Var,
+        coef: f64,
+        ef: f64,
+    },
+    Unsupported(&'static str),
+}
+
 /// What a device's noise evaluation sees (`CKTnoise` → `*noise.c`):
 /// the adjoint AC solution (transfer from each internal source to
 /// the output) and the shared per-frequency data.
@@ -354,6 +369,10 @@ pub(crate) struct NoiseCtx<'a> {
     /// through the plain gain (`N_GAIN`) and is not recorded, as in
     /// the C.
     pub sp_sink: Option<&'a std::cell::RefCell<Vec<NoiseGen>>>,
+    /// The flicker generators, recorded like `sp_sink` records the
+    /// thermal and shot ones (the transient device noise collects
+    /// both; `.noise` and `.sp` leave it `None`).
+    pub flicker_sink: Option<&'a std::cell::RefCell<Vec<FlickerGen>>>,
 }
 
 impl NoiseCtx<'_> {
@@ -377,6 +396,30 @@ impl NoiseCtx<'_> {
         let density = 2.0 * crate::consts::CHARGE * current.abs();
         self.record(n1, n2, density);
         self.gain2(n1, n2) * density
+    }
+
+    /// A power-law flicker generator: `coef / f^ef` A²/Hz between
+    /// `n1` and `n2`, times the squared gain (`NevalSrc(N_GAIN)` ×
+    /// the device's `KF·…/f^EF` factor).
+    pub fn flicker(&self, n1: Var, n2: Var, coef: f64, ef: f64) -> f64 {
+        if let Some(sink) = self.flicker_sink {
+            sink.borrow_mut()
+                .push(FlickerGen::PowerLaw { n1, n2, coef, ef });
+        }
+        let f_ef = if ef == 1.0 {
+            self.freq
+        } else {
+            self.freq.powf(ef)
+        };
+        self.gain2(n1, n2) * coef / f_ef
+    }
+
+    /// Mark a flicker generator with no power-law form (it then has
+    /// no transient counterpart).
+    pub fn flicker_unsupported(&self, what: &'static str) {
+        if let Some(sink) = self.flicker_sink {
+            sink.borrow_mut().push(FlickerGen::Unsupported(what));
+        }
     }
 
     fn record(&self, n1: Var, n2: Var, density: f64) {

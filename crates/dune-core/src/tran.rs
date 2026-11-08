@@ -48,6 +48,16 @@ impl Circuit {
         let mut notes = built.notes.clone();
         notes.extend(noise_note);
         let mut engine = Engine::new(built);
+        if opts.dev_noise {
+            let nt = opts.dev_noise_step.unwrap_or(tstep);
+            engine.set_dev_noise(crate::devnoise::DevNoise::new(
+                nt,
+                opts.seed,
+                opts.temp,
+                tstop,
+                engine.vars.len(),
+            ));
+        }
         let rows = engine.tran(
             opts,
             &TranParams {
@@ -59,6 +69,7 @@ impl Circuit {
             },
         )?;
         notes.extend(engine.tran_notes());
+        notes.extend(engine.dev_noise_notes());
 
         let mut variables = vec![("time".to_string(), VarType::Time)];
         let mut columns = vec![rows.iter().map(|(t, _)| *t).collect::<Vec<f64>>()];

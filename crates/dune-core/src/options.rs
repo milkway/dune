@@ -126,6 +126,17 @@ pub struct Options {
     /// without editing it. As in ngspice, `TRRANDOM` is untouched
     /// (its state generator never reads the variable). Default false.
     pub notrnoise: bool,
+    /// Dune's transient device noise (`.options devnoise`; not a
+    /// SPICE option — neither the 3f5 nor ngspice has it, issue #20):
+    /// every generator `.noise` knows (thermal `4kT·g`, shot `2q|I|`,
+    /// flicker `KF·…/f^EF`) becomes a stochastic current source in
+    /// `.tran`, drawn from the counted streams of `seed`. `false`
+    /// (default): devices are noiseless in time, as in SPICE.
+    pub dev_noise: bool,
+    /// The grid step of the device noise (`.options devnt=NT`,
+    /// seconds): white up to `1/(2·NT)`, a breakpoint every `NT`.
+    /// `None` (default): the `.tran` card's TSTEP.
+    pub dev_noise_step: Option<f64>,
     /// Worker threads for the per-iteration device load (issue #9,
     /// lever 1; an API argument, not a SPICE option). `1` (default):
     /// the sequential load, exactly the 3f5's `CKTload`. `0`: one
@@ -173,6 +184,8 @@ impl Default for Options {
             tmax_divisor: None,
             seed: 1,
             notrnoise: false,
+            dev_noise: false,
+            dev_noise_step: None,
         }
     }
 }
@@ -316,6 +329,16 @@ impl Options {
                 // ngspice-47 `set notrnoise` / `.options notrnoise`
                 // (a bare flag; `notrnoise=0|1` too).
                 "notrnoise" => self.notrnoise = num.is_none_or(|v| v != 0.0),
+                // Dune's transient device noise (issue #20): a bare
+                // flag or `devnoise=0|1`, and its grid step.
+                "devnoise" => self.dev_noise = num.is_none_or(|v| v != 0.0),
+                "devnt" => match num {
+                    Some(v) if v > 0.0 && v.is_finite() => self.dev_noise_step = Some(v),
+                    _ => diags.push(Diagnostic::warning(
+                        "option devnt needs a positive time step".to_string(),
+                        p.span,
+                    )),
+                },
                 "noopiter" => self.noopiter = true,
                 "nopage" => self.nopage = true,
                 // `cktsopt.c` has a copy-paste bug that makes `defas`

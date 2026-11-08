@@ -1,0 +1,11 @@
+device noise: shot, flicker and RS thermal of a forward diode
+* Dune-only probe (issue #20 item 3, .options devnoise): golden from
+* Dune itself (corpus/regress/golden/devnoise_diode.dune.raw). Shot
+* 2qI and KF*I/f through r_d checked in crates/dune-core/tests/devnoise.rs.
+.options devnoise seed=5
+i1 0 1 dc 1m
+d1 1 0 dd
+c1 1 0 1n
+.model dd d is=1e-14 rs=10 kf=1e-10 af=1 cjo=2p
+.tran 50n 10u
+.end

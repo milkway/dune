@@ -1125,6 +1125,89 @@ Espelho nos bindings (listas de override Py/R/wasm): pendente — outro
 território.
 
 **Pendências**: `.pss` com ruído (recusado nesta fase).
+
+## Ruído de dispositivo no tempo (issue #20 item 3) — além do ngspice
+
+Nem o 3f5 nem o ngspice-47 têm (o ngspice só as fontes independentes
+`TRNOISE`/`TRRANDOM`). **Opção proposta (pausa de naming):**
+`.options devnoise` (flag ou `=0|1`; `Options::dev_noise`) e
+`.options devnt=NT` (`Options::dev_noise_step`, default = TSTEP do
+cartão). Default desligado: sem a opção, tudo byte-idêntico. Módulo
+`devnoise.rs`; o injetor vive no `Engine` (`set_dev_noise`, só o
+`Circuit::tran` liga — o `.pss` não injeta).
+
+**Os geradores não são descritos duas vezes.** Cada dispositivo já
+sabe os seus para o `.noise` (`noise_dens`); o injetor chama esse
+mesmo código com um adjunto nulo e os coletores do `NoiseCtx`:
+`sp_sink` (já existente, do `.sp`) devolve `(n1, n2, densidade)` de
+todo térmico/shot (`4kT·g`, `2q|I|`), e o novo `flicker_sink`
+devolve `(n1, n2, coef, EF)` de todo flicker (`NoiseCtx::flicker`,
+para onde migraram os fatores `KF·…/f^EF` de diodo, BJT, JFET/MES,
+MOS1/2/3 e BSIM3 `noiMod` 1/4/5 — o `.noise` sai igual a menos de
+ulps). Cobertura = a do `.noise`: R, diodo (RS, shot, flicker), BJT
+(RC/RB/RE, Ic/Ib shot, flicker em Ib), MOS1/2/3 (RD/RS, canal ⅔gm,
+flicker `KF·gm²/(f^AF·W·L·Cox)`), JFET/MES, chaves, BSIM3 (térmicos;
+flicker só nos `noiMod` 1/4/5 — o 2/3/6 não é lei de potência:
+nota `no transient form`); BSIM1/2 e MOS6 seguem silenciosos, como no
+`.noise`.
+
+**Discretização.** Uma grade `k·NT` para todos, breakpoint em cada
+ponto (como o `TRNOISE`), corrente linear entre amostras, amostra 0
+nula (ponto de operação sem ruído). Branco de densidade unilateral
+`S`: amostras `σ·gₖ`, `σ² = S/(2NT)` (a sequência tem densidade
+`2σ²NT = S` até `1/(2NT)`; a interpolação linear molda por
+`sinc⁴(f·NT)`). Flicker `coef/f^α`: sequência de Kasdin unitária
+(`yₖ − y₀`, a mesma `kasdin` do `TRNOISE`, α = EF) escalada por `√Q`,
+`Q = coef·(2π·NT)^α/(2·NT)` (densidade de Kasdin `2·NT·Q/(2 sin πfNT)^α
+≈ coef/f^α`; α = 1 → `Q = π·coef`). Injeção no RHS depois de todos
+os loads (`rhs[n1] −= i, rhs[n2] += i`), só em `MODETRAN`.
+
+**Aproximação de polarização (documentada).** As densidades
+acompanham o circuito: reavaliadas em cada ponto da grade a partir da
+solução aceita ali (estados `0`), e a amostra `k+1` usa a amplitude
+do ponto `k` — corrente contínua, ruído de um intervalo fixado pela
+polarização no início dele (atraso de um NT; um shot cuja corrente
+muda ΔI num NT erra `ΔI/2I` na variância daquele intervalo). Para o
+flicker (memória longa) o modelo é o estacionário modulado
+`√Q(t)·y(t)`. Pontos aceitos entre os da grade não mexem nas
+amplitudes, então elas não dependem de onde o controle de passo
+pisou.
+
+**Fluxos.** O PRNG contado da D-0033: gerador `j` do dispositivo
+`nome` usa `stream_key(seed, nome, 0x100 + j)` (branco) ou
+`0x10000 + j` (flicker), amostra `k` = `Stream::at(chave, k)`. Mesma
+seed ⇒ mesmos bits; dispositivo ou fonte que entra/sai/troca de ordem
+não muda os outros; rejeição de passo não muda nada. A nota da
+corrida: `device noise: G generator(s) on D device(s), devnt …, seed
+S (stream version 1)`. Orçamento de passos: a grade entra no
+`noise_tran_options` como mais uma grade de ruído (50 passos por
+ponto; recusa se estourar o guarda de memória).
+
+**Validação** (`crates/dune-core/tests/devnoise.rs`, réguas 5σ do
+erro amostral medido — σ das médias de banda vem do espalhamento
+entre segmentos do Welch, sem supor correlação entre bins):
+
+| Caso | Referência | Resultado |
+|---|---|---|
+| R = 10 kΩ sozinho, 2¹⁷ amostras, NT = 1 ns | variância na grade `2kTR/NT`; DSP `4kTR`; variância na banda [0,1; 0,2]/NT = `4kTR·Δf` | 0,99661 (σ 0,0039); 0,99477 (σ 0,0058); 0,98868 (σ 0,0116) |
+| **RC: R = 1 kΩ, C = 1 nF, NT = τ/50** | **kT/C = 4,1439e-12 V² (2,036 µV rms)**; valor exato da grade (retentor de 1ª ordem) = 0,99007·kT/C | 4·10⁵ amostras, seed 3: 0,96767·kT/C (σ 1,6%; FOH 0,97738). 4·10⁶ (`DEVNOISE_LONG=10`): 0,98024·kT/C, FOH 0,99008 (σ 0,50%). 2·10⁶ ad hoc, seeds 4/9: FOH 0,99884 / 1,00200 (σ 0,71%) |
+| diodo 1 mA (fonte I ideal, sem C) | shot `2qI·r_d²`, `r_d` = 25,864 Ω do op | DSP 1,00258 (σ 0,0058); o `.noise` do mesmo deck dá 0,999995 |
+| diodo 1 mA, KF = 1e-10, AF = 1, 2¹⁸ amostras | inclinação −1; nível = lei discreta de Kasdin `r_d²·[2qI + KF·I·π·2NT/(2 sin πfNT)]` | −0,9956; 0,99854 (σ 0,0094) |
+| emissor comum (RB/RC/RE, Ic/Ib shot, flicker), 2¹⁸ amostras a 100 ns | `.noise` do mesmo deck em [10 k, 100 k] Hz | 1,0285 (σ 0,029); 3× mais longo: 1,0155 (σ 0,019) |
+| fonte comum MOS1 (canal ⅔gm, RD/RS, flicker) | idem | 1,0273 (σ 0,034); 3×: 1,0058 (σ 0,018) |
+| reprodutibilidade | mesma seed = mesmos bits; seed 2 ≠ (só t = 0); sem a opção = zero; R1 sozinho igual com diodo, R, TRNOISE entrando | ok |
+
+**Sondas** (`corpus/regress/devnoise_rc.cir`, `devnoise_diode.cir`,
+`devnoise_bjt.cir`): golden do próprio Dune
+(`corpus/regress/golden/<stem>.dune.raw`, 1e-12 relativo), no
+`corpus/SKIP`; regenerar com `DUNE_BLESS=1 cargo test -p dune-core
+--test devnoise`.
+
+**Pendências:** espelho nos bindings (Py/R/wasm — outro território);
+`.pss` com `devnoise` não injeta (o `.pss` não passa pelo
+`Circuit::tran`; recusar lá é do dono do `pss.rs`); flicker do BSIM3
+`noiMod` 2/3/6; correlação entre geradores (nenhum dispositivo do
+3f5/ngspice a tem no `.noise`, então não há o que portar).
 ## Load paralelo de dispositivos (issue #9, alavanca 1)
 
 `Options::load_threads` (API, não `.options`; feature nativa

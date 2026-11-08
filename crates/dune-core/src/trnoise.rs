@@ -88,7 +88,7 @@ fn fnv1a(name: &str) -> u64 {
 }
 
 /// The key of stream `sub` of source `name` under `seed`.
-fn stream_key(seed: u64, name: &str, sub: u64) -> u64 {
+pub(crate) fn stream_key(seed: u64, name: &str, sub: u64) -> u64 {
     let k = mix64(seed ^ GAMMA);
     let k = mix64(k ^ fnv1a(name));
     mix64(k.wrapping_add(sub.wrapping_mul(GAMMA)))
@@ -133,7 +133,7 @@ impl Stream {
 
     /// Standard gaussian, Marsaglia's polar method (one of the pair is
     /// used, so each item costs a fixed-distribution number of draws).
-    fn gauss(&mut self) -> f64 {
+    pub(crate) fn gauss(&mut self) -> f64 {
         loop {
             let u = 2.0 * self.uniform() - 1.0;
             let v = 2.0 * self.uniform() - 1.0;
@@ -215,7 +215,7 @@ pub(crate) const MAX_ONEF_SAMPLES: f64 = 8_388_608.0;
 
 /// Relative slack on grid-index rounding: a timepoint within this
 /// fraction of a step of a grid point counts as on it.
-const GRID_TOL: f64 = 1e-9;
+pub(crate) const GRID_TOL: f64 = 1e-9;
 
 impl NoiseWave {
     /// The realization of `wave` for source `name` under
@@ -518,7 +518,7 @@ impl TrRandom {
 /// Kasdin's `1/f^α` sequence of `n` samples: white noise of rms `q`
 /// through the filter `h₀ = 1, hₖ = hₖ₋₁·(α/2 + k − 1)/k` (`f_alpha`
 /// of `1-f-code.c`), as a linear convolution by zero-padded FFT.
-fn kasdin(n: usize, q: f64, alpha: f64, key: u64) -> Vec<f64> {
+pub(crate) fn kasdin(n: usize, q: f64, alpha: f64, key: u64) -> Vec<f64> {
     let m = (2 * n).next_power_of_two();
     let ha = alpha / 2.0;
     let mut hb = vec![Complex64::new(0.0, 0.0); m];
@@ -638,17 +638,30 @@ impl Circuit {
         }
         let silenced_note =
             (silenced > 0).then(|| format!("notrnoise: {silenced} TRNOISE source(s) silenced"));
-        if sources == 0 {
+        // Dune's device noise (`devnoise.rs`) plants a breakpoint on
+        // every point of its own grid.
+        if opts.dev_noise {
+            let nt = opts.dev_noise_step.unwrap_or(tstep);
+            if !(nt > 0.0 && nt.is_finite()) {
+                return Err(Error::Build("devnt must be a positive time step".into()));
+            }
+            spacing = spacing.min(nt);
+        }
+        if sources == 0 && !opts.dev_noise {
             return Ok((None, silenced_note));
         }
         let mut note = format!(
             "transient noise: {sources} source(s), seed {} (stream version {STREAM_VERSION})",
             opts.seed
         );
-        if let Some(s) = silenced_note {
+        if let Some(s) = &silenced_note {
             note = format!("{note}; {s}");
         }
-        let note = Some(note);
+        let note = if sources == 0 {
+            silenced_note
+        } else {
+            Some(note)
+        };
         if !spacing.is_finite() {
             return Ok((None, note));
         }

@@ -605,9 +605,12 @@ pub(crate) fn fet3_noise(
     let gm = ctx.states.get(0, st + GM);
     let id = ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * gm.abs());
     let cd = ctx.states.get(0, st + CD);
-    let flicker =
-        ctx.gain2(n.d_p, n.s_p) * kf * f64::exp(af * f64::ln(f64::max(cd.abs(), N_MINLOG)))
-            / ctx.freq;
+    let flicker = ctx.flicker(
+        n.d_p,
+        n.s_p,
+        kf * f64::exp(af * f64::ln(f64::max(cd.abs(), N_MINLOG))),
+        1.0,
+    );
     vec![rd, rs, id, flicker, rd + rs + id + flicker]
 }
 

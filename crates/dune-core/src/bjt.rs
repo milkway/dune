@@ -579,10 +579,12 @@ impl crate::devices::Device for BjtI {
         let ic = ctx.shot(self.col_p, self.emit_p, ctx.states.get(0, st + CC));
         let ib = ctx.shot(self.base_p, self.emit_p, ctx.states.get(0, st + CB));
         let cb = ctx.states.get(0, st + CB);
-        let flicker = ctx.gain2(self.base_p, self.emit_p)
-            * self.t.kf
-            * f64::exp(self.t.af * f64::ln(f64::max(cb.abs(), N_MINLOG)))
-            / ctx.freq;
+        let flicker = ctx.flicker(
+            self.base_p,
+            self.emit_p,
+            self.t.kf * f64::exp(self.t.af * f64::ln(f64::max(cb.abs(), N_MINLOG))),
+            1.0,
+        );
         let total = rc + rb + re + ic + ib + flicker;
         vec![rc, rb, re, ic, ib, flicker, total]
     }

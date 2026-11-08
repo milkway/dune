@@ -19,6 +19,7 @@ mod circuit;
 mod dc;
 mod dderivs;
 mod devices;
+mod devnoise;
 mod diode;
 mod disto;
 mod elaborate;
