@@ -1425,7 +1425,7 @@ impl Circuit {
                 Spec::Capacitor(s) => {
                     devices.push(Box::new(CapacitorI::new(
                         s.value,
-                        s.ic.unwrap_or(0.0),
+                        s.ic,
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                         base,

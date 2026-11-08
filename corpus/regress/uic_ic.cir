@@ -1,0 +1,12 @@
+uic: .ic seeds capacitors without ic= (cktic.c + capgetic.c)
+* regression (issue #20): under UIC the .ic node values never reached
+* CKTrhs nor the capacitors' initial conditions, so an LC tank kicked
+* by .ic started at rest. c2's own ic= wins over the .ic of its node.
+l1 1 0 1m
+c1 1 0 1u
+r1 1 0 100
+c2 2 0 1u ic=0.2
+r2 2 0 1k
+.ic v(1)=0.5 v(2)=0.7
+.tran 5u 1m uic
+.end

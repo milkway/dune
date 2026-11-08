@@ -831,6 +831,7 @@ impl Engine {
         // Transient operating point.
         self.set_kind(AnKind::TranOp, p.uic);
         if p.uic {
+            self.ckt_ic();
             self.ni_iter(opts, InitMode::Jct, opts.itl1, 0.0, 1.0)?;
         } else {
             self.op(opts)?;
@@ -849,6 +850,24 @@ impl Engine {
             },
             None,
         )
+    }
+
+    /// `CKTic` (`cktic.c`) under UIC: the right-hand side holds the
+    /// `.nodeset` values, then the `.ic` ones (which win), zero
+    /// elsewhere — the UIC operating point swaps it into the solution
+    /// without solving — and every device takes the initial
+    /// conditions it was not given from it (`DEVsetic`).
+    fn ckt_ic(&mut self) {
+        self.rhs.iter_mut().for_each(|v| *v = 0.0);
+        for &(var, v) in &self.nodesets {
+            self.rhs[var] = v;
+        }
+        for &(var, v) in &self.ics {
+            self.rhs[var] = v;
+        }
+        for d in &mut self.devices {
+            d.set_ic(&self.rhs);
+        }
     }
 
     /// The integration method fields of `DCtran`'s setup.

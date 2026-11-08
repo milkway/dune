@@ -57,6 +57,12 @@ pub(crate) trait Device: Send {
     }
     /// Overwrite the DC value (`.dc` sweep). No-op elsewhere.
     fn set_dc(&mut self, _value: f64) {}
+    /// `DEVsetic` (`*getic.c`), called by `CKTic` under UIC with the
+    /// right-hand side holding the `.nodeset`/`.ic` node values (zero
+    /// elsewhere): an initial condition not given on the instance is
+    /// taken from the nodes. Default: none (only the capacitor is
+    /// ported; docs/dune-core.md).
+    fn set_ic(&mut self, _rhs: &[f64]) {}
     /// Device convergence test (`*conv.c`, NEWCONV): called once
     /// the node voltages pass `NIconvTest`; returns false when the
     /// device's current disagrees with its own linearization.
@@ -301,6 +307,8 @@ pub(crate) struct CapacitorI {
     m: f64,
     scale: f64,
     ic: f64,
+    /// `CAPicGiven`: an `IC=` on the card, which `CAPgetic` keeps.
+    ic_given: bool,
     pos: Var,
     neg: Var,
     slots: [Slot; 4],
@@ -308,13 +316,14 @@ pub(crate) struct CapacitorI {
 }
 
 impl CapacitorI {
-    pub fn new(capac: f64, ic: f64, pos: Var, neg: Var, q: usize) -> Self {
+    pub fn new(capac: f64, ic: Option<f64>, pos: Var, neg: Var, q: usize) -> Self {
         CapacitorI {
             capac,
             c: capac,
             m: 1.0,
             scale: 1.0,
-            ic,
+            ic: ic.unwrap_or(0.0),
+            ic_given: ic.is_some(),
             pos,
             neg,
             slots: [TRASH; 4],
@@ -326,6 +335,13 @@ impl CapacitorI {
 impl Device for CapacitorI {
     fn par_load(&self) -> bool {
         true
+    }
+
+    /// `CAPgetic` (`capgetic.c`).
+    fn set_ic(&mut self, rhs: &[f64]) {
+        if !self.ic_given {
+            self.ic = rhs[self.pos] - rhs[self.neg];
+        }
     }
 
     disto_linear!();
