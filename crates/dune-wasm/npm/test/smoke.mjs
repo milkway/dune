@@ -262,4 +262,38 @@ assert.deepEqual(fs2.run(), simulate(ex.netlist));
 assert.deepEqual(fs2.run().plots, simulatePic(rc).plots);
 fs2.free();
 
+// The noise and keepopinfo cards as overrides: each is the deck with the
+// `.options` card edited, bit for bit (mirrors python/tests/test_options.py
+// and r/tests/testthat/test-options.R).
+const noisy = (card) =>
+  `parity\nvn 1 0 dc 0.5 trnoise(10m 1u 0 0)\nr1 1 2 1k\nc1 2 0 2n\n${card}\n.tran 1u 20u\n.end\n`;
+const keepDeck = (card) => `keep\nv1 1 0 dc 1 ac 1\nr1 1 2 1k\nc1 2 0 1n\n${card}\n.ac dec 2 1k 100k\n.end\n`;
+for (const [deck, options, card] of [
+  [keepDeck, { keepopinfo: true }, '.options keepopinfo'],
+  [noisy, { seed: 9 }, '.options seed=9'],
+  [noisy, { notrnoise: true }, '.options notrnoise'],
+  [noisy, { DevNoise: true, devnt: 2e-7, seed: 5 }, '.options devnoise devnt=0.2u seed=5'],
+  [noisy, { devnoise: true, devnt: '0.2u', seed: 5 }, '.options devnoise devnt=0.2u seed=5'],
+  [noisy, { method: 'trbdf2' }, '.options method=trbdf2'],
+]) {
+  const got = simulateTyped(deck(''), { options });
+  assert.equal(got.diagnostics.length, 0, JSON.stringify(got.diagnostics));
+  assert.deepEqual(bits(got), bits(simulateTyped(deck(card))), card);
+  assert.notDeepEqual(bits(got), bits(simulateTyped(deck(''))), card);
+  const ns = Session.fromDeck(deck(''), { options });
+  assert.deepEqual(bits(ns.runTyped()), bits(got), card);
+  ns.free();
+}
+assert.deepEqual(
+  simulate(keepDeck(''), { options: { keepopinfo: true } }).plots.map((p) => p.plotname),
+  ['AC Operating Point', 'AC Analysis'],
+);
+assert.deepEqual(
+  bits(simulateTyped(noisy('.options notrnoise devnoise'), { options: { notrnoise: false, devnoise: false } })),
+  bits(simulateTyped(noisy(''))),
+  'false clears the deck flags',
+);
+const badNoise = simulate(noisy(''), { options: { seed: 0, devnt: -1, notrnoise: 'yes' } });
+assert.equal(badNoise.diagnostics.filter((x) => x.message.startsWith('opts.options: ')).length, 3);
+
 console.log('dune-sim smoke: ok');
