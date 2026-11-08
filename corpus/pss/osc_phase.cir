@@ -1,0 +1,21 @@
+bjt rc phase-shift oscillator, autonomous periodic steady state
+* written for Dune (.pss of autonomous oscillators, issue #20); not from Berkeley
+* common-emitter stage, collector-feedback bias, three-section RC
+* ladder back to the base (textbook f = 1/(2 pi RC sqrt 6) = 650 Hz
+* for an ideal ladder; the base input and the collector resistance
+* load it). Kick: the PWL supply ramp.
+*tran-golden: .tran 10u 200m 180m
+*tran-golden-vectors: v(c) v(b)
+*pss-ngspice-card: .pss 520 100e-3 c 256 10 50 5e-3
+vcc vcc 0 pwl(0 0 10u 12)
+rc vcc c 10k
+rb c b 1meg
+q1 c b 0 qn
+c1 c n1 10n
+r1 n1 0 10k
+c2 n1 n2 10n
+r2 n2 0 10k
+c3 n2 b 10n
+.model qn npn(is=1e-15 bf=100 vaf=80 cje=5p cjc=3p tf=0.3n)
+.pss 0 100m c 256 10
+.end

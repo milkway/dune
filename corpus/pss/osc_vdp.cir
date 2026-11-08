@@ -1,0 +1,19 @@
+van der pol-type lc oscillator, autonomous periodic steady state
+* written for Dune (.pss of autonomous oscillators, issue #20); not from Berkeley
+* LC tank (f0 = 1/(2 pi sqrt(LC)) = 5032.92 Hz) with a negative
+* conductance (G1) limited by antiparallel diodes: a resistive
+* nonlinearity, so the period is 2 pi sqrt(LC) up to O(eps^2),
+* eps = (g1 - 1/R1) sqrt(L/C) = 0.068. Kick: .ic + UIC.
+*tran-golden: .tran 1u 40m 37m uic
+*tran-golden-vectors: v(1)
+*pss-ngspice-card: .pss 5e3 4e-3 1 256 10 50 5e-3 uic
+l1 1 0 1m
+c1 1 0 1u
+r1 1 0 1k
+g1 1 0 1 0 -3.16m
+d1 1 0 dmod
+d2 0 1 dmod
+.model dmod d(is=1e-14)
+.ic v(1)=0.5
+.pss 0 4m 1 256 10 uic
+.end

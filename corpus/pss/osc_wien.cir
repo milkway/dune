@@ -1,0 +1,27 @@
+wien-bridge oscillator with an ideal op-amp, autonomous periodic steady state
+* written for Dune (.pss of autonomous oscillators, issue #20); not from Berkeley
+* f = 1/(2 pi RC) = 1591.55 Hz; small-signal gain 1 + 25k/10k = 3.5,
+* the antiparallel diodes across rf2 bring it to 3 at the amplitude.
+* Op-amp: corpus/pic/opamp_ideal.sub inlined. Kick: .ic + UIC.
+*tran-golden: .tran 2u 100m 94m uic
+*tran-golden-vectors: v(out) v(p)
+*pss-ngspice-card: .pss 1.58e3 10e-3 out 256 10 50 5e-3 uic
+.subckt opamp_ideal inp inm out
+rin inp inm 2meg
+e1 int 0 inp inm 200k
+rout int out 75
+.ends opamp_ideal
+x1 p m out opamp_ideal
+rs out a 10k
+cs a p 10n
+rp p 0 10k
+cp p 0 10n
+rg m 0 10k
+rf1 out f 15k
+rf2 f m 10k
+d1 f m dmod
+d2 m f dmod
+.model dmod d(is=1e-14)
+.ic v(p)=0.1
+.pss 0 10m out 256 10 uic
+.end
