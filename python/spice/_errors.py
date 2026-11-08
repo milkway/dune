@@ -110,14 +110,19 @@ class PssConvergenceError(SpiceError):
         iterations: The shooting iterations run.
         residuals: The mismatch of each iteration, in units of the
             convergence tolerance (converged would be ``<= steady_coeff``):
-            what :attr:`spice.PssResult.residuals` holds on success. A
-            residual that stalls well above 1 usually means a non-periodic
-            circuit (an autonomous oscillator, a source that is not a
-            harmonic of ``freq``) or too few ``points``.
+            what :attr:`spice.PssResult.residuals` holds on success
+            (``inf`` for an iteration whose transient failed). A residual
+            that stalls well above 1 usually means a source that is not a
+            harmonic of ``freq``, an oscillator that does not settle in
+            ``tstab``, or too few ``points``.
+        period: The last period iterate of an autonomous oscillator (where
+            the period is a Newton unknown) in seconds; ``None`` for a driven
+            circuit, whose period is fixed.
     """
 
     iterations: int
     residuals: tuple[float, ...]
+    period: float | None
 
     def __init__(
         self,
@@ -125,8 +130,10 @@ class PssConvergenceError(SpiceError):
         *,
         iterations: int,
         residuals: tuple[float, ...],
+        period: float | None = None,
         diagnostics: tuple[Diagnostic, ...] = (),
     ) -> None:
         super().__init__(message, kind="pss", diagnostics=diagnostics)
         self.iterations = iterations
         self.residuals = residuals
+        self.period = period

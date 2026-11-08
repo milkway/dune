@@ -1,4 +1,4 @@
-"""``spice.pss``: the periodic steady state of a driven circuit."""
+"""``spice.pss``: the periodic steady state of a driven circuit or an oscillator."""
 
 from __future__ import annotations
 
@@ -31,10 +31,12 @@ class PssResult(Result):
     :func:`spice.measure`).
     """
 
-    __slots__ = ("period", "residuals", "t0")
+    __slots__ = ("period", "periods", "residuals", "t0")
 
     period: float
-    """The period ``T`` in seconds (``1/freq``)."""
+    """The period ``T`` in seconds: the drive's (``1/freq``) for a driven
+    circuit, the shooting's result for an autonomous oscillator (where ``T``
+    is a Newton unknown)."""
     t0: float
     """Start of the reported period: the first multiple of ``T`` at or after
     ``tstab`` (at least one period of plain transient comes before it)."""
@@ -42,13 +44,19 @@ class PssResult(Result):
     """The period mismatch ``max_i |x_i(t0+T) - x_i(t0)| / tol_i`` of each
     shooting iteration (``tol_i = reltol * peak_i + vntol`` for nodes,
     ``+ abstol`` for branches); the last one is ``<= steady_coeff``. A
-    linear circuit converges in one Newton step: two entries."""
+    linear circuit converges in one Newton step: two entries. ``inf`` marks
+    an iteration whose transient failed and was backtracked."""
+    periods: tuple[float, ...]
+    """The period of each shooting iteration, aligned with :attr:`residuals`:
+    constant (``period``) for a driven circuit, the Newton iterate of an
+    autonomous one -- the last is :attr:`period`."""
 
     def __init__(self, native: dict[str, Any]) -> None:
         super().__init__(native)
         self.period = float(native["period"])
         self.t0 = float(native["t0"])
         self.residuals = tuple(float(r) for r in native["residuals"])
+        self.periods = tuple(float(t) for t in native["periods"])
 
     @property
     def time(self) -> Plot:
@@ -106,7 +114,7 @@ def pss(
     options: Mapping[str, OptionValue] | None = None,
     tmax_divisor: float | None = None,
 ) -> PssResult:
-    """The periodic steady state of a driven circuit, by shooting-Newton.
+    """The periodic steady state of a driven circuit or an oscillator, by shooting-Newton.
 
     The arguments are those of the card ``.pss FREQ TSTAB OSCNODE POINTS
     HARMS SCITER STEADYCOEFF UIC``, and the result is, value for value, what
@@ -121,8 +129,18 @@ def pss(
     transient. A linear circuit converges in one step. ``points`` is the
     accuracy knob: the error left is the integrator's phase error,
     ``(2 pi / points)**2 / 12`` of the amplitude with the default
-    trapezoidal rule. Autonomous oscillators and transmission lines are not
-    supported yet. The simulation releases the GIL.
+    trapezoidal rule.
+
+    A circuit without a periodic source (``freq=0`` finds none) is an
+    autonomous oscillator: the period becomes a Newton unknown, with the
+    phase pinned where ``v(osc_node)`` rises through its mid-range, and is
+    first estimated by counting the crossings of ``osc_node`` over the
+    second half of ``tstab`` (both are required then; a ``freq`` given is
+    only a fallback for fewer than three crossings). The deck must start the
+    oscillation itself (``.ic`` with ``uic=True``, or a ramp): there is no
+    automatic kick. :attr:`PssResult.periods` follows ``T`` per iteration.
+    Transmission lines are not supported yet. The simulation releases the
+    GIL.
 
     >>> import spice
     >>> res = spice.pss(\"\"\"rc low-pass
@@ -151,8 +169,9 @@ def pss(
         tstab: Stabilization time: a plain transient runs to the first
             multiple of the period at or after ``tstab`` (at least one
             period) before the shooting starts there.
-        osc_node: ngspice's oscillation node, for autonomous circuits (not
-            solved yet): checked to exist and reported in the notes only.
+        osc_node: ngspice's oscillation node. Required for an autonomous
+            oscillator: its phase condition and period estimate (see above).
+            A driven circuit only checks that it exists.
         points: Samples per period, ``4 ... 10_000_000``: the time plot has
             ``points + 1`` rows, and the period transient steps at most
             ``period / points``.
@@ -171,15 +190,17 @@ def pss(
 
     Returns:
         The two plots (:attr:`PssResult.time`, :attr:`PssResult.spectrum`),
-        the notes (method summary, Newton and GMRES counts) and the period.
+        the notes (method summary, Newton and GMRES counts), the period and
+        the history (:attr:`PssResult.residuals`, :attr:`PssResult.periods`).
 
     Raises:
         PssConvergenceError: ``max_iter`` shooting iterations did not converge
             (a :class:`SpiceError` of kind ``"pss"`` with the residual
-            history).
+            history and, for an oscillator, the last period iterate).
         SpiceError: the deck does not parse or build, or the analysis fails
-            otherwise (kind ``"analysis"``: no periodic source with
-            ``freq=0``, an unknown ``osc_node``, a transmission line, a
+            otherwise (kind ``"analysis"``: an unknown ``osc_node``, an
+            autonomous circuit without ``osc_node`` or ``tstab``, a shooting
+            that settles on the equilibrium, a transmission line, a
             transient that does not converge...).
         ValueError: an argument out of range; bad ``options`` or
             ``includes``, as for :func:`spice.simulate`.

@@ -92,6 +92,8 @@ def test_result_fields() -> None:
     assert abs(s.column("v(2)")[0]) < 1e-6
     assert "pss: period" in " ".join(res.notes)
     assert "PssResult" in repr(res)
+    # Driven: the period is the drive's in every iteration.
+    assert res.periods == (res.period,) * len(res.residuals)
 
 
 def test_freq_zero_takes_the_sources() -> None:
@@ -116,6 +118,7 @@ def test_convergence_failure_carries_the_history() -> None:
     assert e.kind == "pss"
     assert e.iterations == 1
     assert len(e.residuals) == 1 and e.residuals[0] > 1
+    assert e.period is None  # a driven circuit's period is fixed
     assert "did not converge" in str(e)
     # The same failure through a .pss card in simulate() and in a Session.
     deck = with_card(RC, ".pss 1k 5m 2 128 10 1\n")
@@ -202,3 +205,71 @@ def test_columns_are_numpy() -> None:
     assert res.spectrum.column("v(2)").dtype == np.complex128
     df = res.spectrum.df()
     assert df.columns[:3] == ["frequency", "re:v(1)", "im:v(1)"]
+
+
+# --- autonomous oscillators (D-0035) --------------------------------------
+
+#: corpus/pss/osc_vdp.cir's card: .pss 0 4m 1 256 10 uic.
+VDP = {"tstab": 4e-3, "osc_node": "1", "points": 256, "uic": True}
+
+
+def _golden_period(path: Path, var: str) -> float:
+    """Frequency counter over an ASCII rawfile's transient: the mean spacing
+    of the rising mid-range crossings of ``var`` (as pss_osc.rs measures)."""
+    head, values = path.read_text().split("Values:\n")
+    lines = head.splitlines()
+    nvars = int(next(ln for ln in lines if ln.startswith("No. Variables:")).split(":")[1])
+    names = lines[lines.index("Variables:") + 1 :]
+    col = next(i for i, ln in enumerate(names) if ln.split()[1] == var)
+    tok = values.split()
+    rows = np.array(tok, dtype=np.float64).reshape(-1, nvars + 1)
+    t, v = rows[:, 1], rows[:, 1 + col]
+    level = 0.5 * (v.min() + v.max())
+    j = np.nonzero((v[:-1] < level) & (v[1:] >= level))[0]
+    c = t[j] + (t[j + 1] - t[j]) * (level - v[j]) / (v[j + 1] - v[j])
+    assert len(c) >= 3
+    return float((c[-1] - c[0]) / (len(c) - 1))
+
+
+def test_autonomous_oscillator_period(corpus: Path) -> None:
+    path = corpus / "pss" / "osc_vdp.cir"
+    res = spice.pss(path, **VDP)  # type: ignore[arg-type]
+    # The deck's card through simulate(): the same engine call.
+    assert_same_plots(res, spice.simulate(path))
+    assert res.residuals[-1] <= 1
+    assert len(res.periods) == len(res.residuals) >= 2
+    assert res.periods[-1] == res.period
+    assert res.periods[0] != res.period  # T is a Newton unknown here
+    assert res.time.column("time")[0] == res.t0
+    # ngspice-47's long .tran (corpus/pss/golden/osc_vdp.raw), counted: the
+    # ruler is the trapezoidal phase error per period of both computations,
+    # (2 pi/N)^2/12 with N = 256 here and ~199 there (TMAX = 1u).
+    golden = _golden_period(corpus / "pss" / "golden" / "osc_vdp.raw", "v(1)")
+    ruler = sum((2 * math.pi / n) ** 2 / 12 for n in (256, golden / 1e-6))
+    assert abs(res.period / golden - 1) < ruler
+    assert "autonomous oscillator" in " ".join(res.notes)
+
+
+def test_autonomous_failure_carries_the_last_period(corpus: Path) -> None:
+    path = corpus / "pss" / "osc_vdp.cir"
+    with pytest.raises(spice.PssConvergenceError) as info:
+        spice.pss(path, max_iter=1, **VDP)  # type: ignore[arg-type]
+    e = info.value
+    assert e.kind == "pss" and e.iterations == 1 and len(e.residuals) == 1
+    assert e.period is not None
+    # The frequency counter's estimate, near the tank's 2 pi sqrt(LC).
+    assert e.period == pytest.approx(2 * math.pi * math.sqrt(1e-3 * 1e-6), rel=0.05)
+    # The same through the card (SCITER 1).
+    deck = path.read_text().replace(".pss 0 4m 1 256 10 uic", ".pss 0 4m 1 256 10 1 uic")
+    with pytest.raises(spice.PssConvergenceError) as card:
+        spice.simulate(deck)
+    assert (card.value.period, card.value.residuals) == (e.period, e.residuals)
+
+
+def test_sweep_run_that_does_not_converge_is_kind_pss() -> None:
+    deck = with_card(RC, ".pss 1k 5m 2 128 10 1\n")
+    with pytest.raises(spice.PssConvergenceError, match=r"run 0 \(r1=1000\)") as info:
+        spice.sweep(deck, {"r1": [1e3, 2e3]})
+    e = info.value
+    assert e.kind == "pss" and e.iterations == 1 and e.period is None
+    assert len(e.residuals) == 1 and e.residuals[0] > 1

@@ -122,8 +122,45 @@ struct Failure {
     message: String,
     diags: Vec<Diag>,
     /// For kind `pss` (a `.pss` that did not converge): the shooting
-    /// iterations run and the residual of each.
-    residuals: Option<(usize, Vec<f64>)>,
+    /// history.
+    pss: Option<PssHistory>,
+}
+
+/// The history of a shooting that did not converge
+/// ([`dune_core::Error::PssConvergence`]): the iterations run, the
+/// residual of each and, for an autonomous oscillator, the last
+/// period iterate.
+struct PssHistory {
+    iterations: usize,
+    residuals: Vec<f64>,
+    period: Option<f64>,
+}
+
+impl PssHistory {
+    /// The history of `e`, when it is a `.pss` that did not converge.
+    fn of(e: &dune_core::Error) -> Option<Self> {
+        match e {
+            dune_core::Error::PssConvergence {
+                iterations,
+                residuals,
+                period,
+            } => Some(PssHistory {
+                iterations: *iterations,
+                residuals: residuals.clone(),
+                period: *period,
+            }),
+            _ => None,
+        }
+    }
+
+    /// `{"iterations", "residuals", "period"}`: the extra argument of
+    /// a `NativeError` of kind `pss`, and the fields of a failed sweep
+    /// run of that kind.
+    fn fill(&self, d: &Bound<'_, PyDict>) -> PyResult<()> {
+        d.set_item("iterations", self.iterations)?;
+        d.set_item("residuals", &self.residuals)?;
+        d.set_item("period", self.period)
+    }
 }
 
 impl Failure {
@@ -132,24 +169,19 @@ impl Failure {
             kind,
             message: message.into(),
             diags: Vec::new(),
-            residuals: None,
+            pss: None,
         }
     }
 
     /// An analysis that failed: kind `pss`, with the shooting history,
     /// for a `.pss` that did not converge; kind `analysis` otherwise.
     fn analysis(e: dune_core::Error) -> Self {
-        let message = e.to_string();
-        match e {
-            dune_core::Error::PssConvergence {
-                iterations,
-                residuals,
-                ..
-            } => Failure {
-                residuals: Some((iterations, residuals)),
-                ..Failure::new("pss", message)
+        match PssHistory::of(&e) {
+            Some(h) => Failure {
+                pss: Some(h),
+                ..Failure::new("pss", e.to_string())
             },
-            _ => Failure::new("analysis", message),
+            None => Failure::new("analysis", e.to_string()),
         }
     }
 }
@@ -274,7 +306,7 @@ fn prepare(source: &Source, overrides: &[Override]) -> Result<Prepared, Failure>
             kind: "parse",
             message: first.render(&parsed.sources),
             diags,
-            residuals: None,
+            pss: None,
         });
     }
     let mut opt_diags = Vec::new();
@@ -728,6 +760,7 @@ struct PssOut {
     period: f64,
     t0: f64,
     residuals: Vec<f64>,
+    periods: Vec<f64>,
 }
 
 /// Parse and elaborate the deck, then run [`Circuit::pss`] with `p`
@@ -753,6 +786,7 @@ fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<Pss
         period: pss.period,
         t0: pss.t0,
         residuals: pss.residuals,
+        periods: pss.periods,
     })
 }
 
@@ -762,10 +796,10 @@ fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<Pss
 /// The deck as in `_simulate`, its analysis cards ignored; the
 /// periodic steady state per [`PssParams`] (`freq` 0 takes the
 /// fundamental from the sources). Returns `_simulate`'s dict with the
-/// two `.pss` plots (time, then spectrum) plus `"period"`, `"t0"` and
-/// `"residuals"`. A shooting that does not converge raises
-/// `NativeError("pss", message, diagnostics, {"iterations",
-/// "residuals"})`. The GIL is released while it runs.
+/// two `.pss` plots (time, then spectrum) plus `"period"`, `"t0"`,
+/// `"residuals"` and `"periods"`. A shooting that does not converge
+/// raises `NativeError("pss", message, diagnostics, {"iterations",
+/// "residuals", "period"})`. The GIL is released while it runs.
 #[pyfunction]
 #[pyo3(signature = (text, path, includes, options, tmax_divisor, freq, tstab, osc_node, points, harmonics, max_iter, steady_coeff, uic))]
 #[allow(clippy::too_many_arguments)]
@@ -803,23 +837,21 @@ fn _pss<'py>(
     result.set_item("period", out.period)?;
     result.set_item("t0", out.t0)?;
     result.set_item("residuals", out.residuals)?;
+    result.set_item("periods", out.periods)?;
     Ok(result)
 }
 
 /// `NativeError(kind, message, diagnostics)`, with a fourth argument
-/// `{"iterations", "residuals"}` for kind `pss`.
+/// `{"iterations", "residuals", "period"}` for kind `pss`.
 fn native_error(py: Python<'_>, f: Failure) -> PyErr {
     let diags = match diag_list(py, &f.diags) {
         Ok(d) => d.unbind(),
         Err(e) => return e,
     };
-    match f.residuals {
-        Some((iterations, residuals)) => {
+    match &f.pss {
+        Some(h) => {
             let extra = PyDict::new(py);
-            let set = extra
-                .set_item("iterations", iterations)
-                .and_then(|()| extra.set_item("residuals", residuals));
-            match set {
+            match h.fill(&extra) {
                 Ok(()) => NativeError::new_err((f.kind, f.message, diags, extra.unbind())),
                 Err(e) => e,
             }
@@ -1043,7 +1075,8 @@ impl NativeSession {
 /// `threads` 1 for the sequential path, 0 for one per core. Returns
 /// `{"title", "params": [canonical key], "diagnostics": [dict],
 /// "runs": [{"ok": True, "plots", "measurements", "notes"} | {"ok": False, "kind",
-/// "message"}]}`. Bad parameter names or rows raise `ValueError`.
+/// "message"}]}` — a failed run of kind `pss` also has `"iterations"`,
+/// `"residuals"` and `"period"`. Bad parameter names or rows raise `ValueError`.
 /// The GIL is released while the runs execute.
 #[pyfunction]
 #[pyo3(signature = (text, path, includes, options, params, rows, threads, tmax_divisor=None))]
@@ -1103,14 +1136,19 @@ fn _sweep<'py>(
             }
             Err(e) => {
                 d.set_item("ok", false)?;
+                let history = PssHistory::of(&e);
                 let kind = match e {
                     dune_core::Error::Build(_)
                     | dune_core::Error::Elab(_)
                     | dune_core::Error::Unsupported { .. } => "elaborate",
+                    _ if history.is_some() => "pss",
                     _ => "analysis",
                 };
                 d.set_item("kind", kind)?;
                 d.set_item("message", e.to_string())?;
+                if let Some(h) = &history {
+                    h.fill(&d)?;
+                }
             }
         }
         runs.append(d)?;

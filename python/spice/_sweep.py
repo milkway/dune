@@ -14,7 +14,7 @@ import polars as pl
 from . import _spice
 from ._errors import Diagnostic, ErrorKind, SpiceError
 from ._result import Result
-from ._simulate import OptionValue, _deck_source, _native_errors
+from ._simulate import OptionValue, _deck_source, _native_errors, _pss_error
 from .pic import PicExtraction
 
 if TYPE_CHECKING:
@@ -89,7 +89,9 @@ def sweep(
             negative ``threads``; and what :func:`simulate` raises for
             ``options``/``includes``/``tmax_divisor``.
         SpiceError: the deck does not parse, or a run fails to build or
-            simulate (the message names the run and its values).
+            simulate (the message names the run and its values); a run
+            whose ``.pss`` did not converge raises the subclass
+            :class:`PssConvergenceError` (kind ``"pss"``, with its history).
         OSError: the deck file cannot be read.
     """
     text, path, inc = _deck_source(netlist, includes)
@@ -140,10 +142,10 @@ def sweep(
     for i, run in enumerate(native["runs"]):
         if not run["ok"]:
             values = ", ".join(f"{k}={v:g}" for k, v in zip(keys, rows[i], strict=True))
-            raise SpiceError(
-                f"run {i} ({values}): {run['message']}",
-                kind=cast(ErrorKind, run["kind"]),
-            )
+            message = f"run {i} ({values}): {run['message']}"
+            if run["kind"] == "pss":
+                raise _pss_error(message, run)
+            raise SpiceError(message, kind=cast(ErrorKind, run["kind"]))
     return SweepResult(native, rows)
 
 

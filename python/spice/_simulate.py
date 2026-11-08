@@ -7,7 +7,7 @@ import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from . import _spice
 from ._errors import Diagnostic, ErrorKind, PssConvergenceError, SpiceError
@@ -68,14 +68,23 @@ def _from_native_error(e: _spice.NativeError) -> Exception:
         return OSError(message)
     diagnostics = tuple(Diagnostic._from_native(d) for d in diags)
     if kind == "pss":
-        extra = e.args[3]
-        return PssConvergenceError(
-            message,
-            iterations=int(extra["iterations"]),
-            residuals=tuple(float(r) for r in extra["residuals"]),
-            diagnostics=diagnostics,
-        )
+        return _pss_error(message, e.args[3], diagnostics)
     return SpiceError(message, kind=cast(ErrorKind, kind), diagnostics=diagnostics)
+
+
+def _pss_error(
+    message: str, history: dict[str, Any], diagnostics: tuple[Diagnostic, ...] = ()
+) -> PssConvergenceError:
+    """The :class:`PssConvergenceError` of a native shooting history
+    ``{"iterations", "residuals", "period"}``."""
+    period = history["period"]
+    return PssConvergenceError(
+        message,
+        iterations=int(history["iterations"]),
+        residuals=tuple(float(r) for r in history["residuals"]),
+        period=None if period is None else float(period),
+        diagnostics=diagnostics,
+    )
 
 
 @contextmanager
