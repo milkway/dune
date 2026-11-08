@@ -1,0 +1,36 @@
+JFET .disto: harmonics in normal and inverse mode, NJF and PJF
+* Coverage: jfetdset.c/jfetdist.c through the 2nd and 3rd harmonics
+* against ngspice-47. j1 is a self-biased common-source NJF stage in
+* saturation (RD/RS prime nodes, depletion charges below FC*PB);
+* j2 is an NJF wired drain-low, so vds < 0 puts it in inverse mode,
+* linear region, with both gate junctions inside -5*vt (the setup's
+* inverse-mode second-order cross-over of ggs2/capgs2 is visible);
+* j3 is a PJF stage with its gate slightly forward (gate diode past
+* FC*PB, the linearized charge). The setup ignores B (plain
+* Shichman-Hodges), so the models keep the default B = 1.
+vdd 1 0 15
+vee 20 0 -15
+vin 2 0 dc 0 distof1 0.05
+* j1: common source, unbypassed source resistor
+j1 3 2 4 jn 2
+rd1 1 3 4.7k
+rs1 4 0 1k
+* j2: inverse mode, gate driven through a coupling cap
+c25 2 5 1u
+rg2 5 9 100k
+vg2 9 0 dc 0.95
+j2 7 5 8 jn
+r7 7 0 10k
+r8 1 8 140k
+* j3: PJF, gate slightly forward of its source
+c2g 2 10 1u
+rg3 10 11 100k
+vg3 11 0 dc -0.35
+j3 12 10 0 jp
+rl3 12 20 3.3k
+.model jn njf vto=-2 beta=1.3e-3 lambda=0.02 rd=20 rs=15 cgs=3p cgd=1.5p
++ is=1e-14 pb=0.8 fc=0.5
+.model jp pjf vto=-1.5 beta=0.8e-3 lambda=0.03 rd=10 rs=10 cgs=2p cgd=1p
++ is=1e-12 pb=0.6 fc=0.5
+.disto dec 10 1e3 1e9
+.end

@@ -1,0 +1,46 @@
+MESFET .disto: intermodulation in normal and inverse mode, NMF and PMF
+* Coverage: mesdset.c/mesdisto.c through the IM products (f1+f2, f1-f2,
+* 2f1-f2) against ngspice-47. z1 is a common-source NMF stage in
+* saturation; z4 has its gate forward of both channel ends (vnew1
+* above vmax: the clamped branch of the charge model); z2 is wired
+* drain-low, so vds < 0 puts it in inverse mode, linear region; z3 is
+* a PMF stage in the linear region (vds < 3/alpha). The setup's
+* charges are its own qgs = vgs*cgsnew model, not the load's qggnew
+* split (kept literally, as in both the 3f5 and ngspice). Both inputs
+* ride the same gate source.
+vdd 1 0 5
+vee 20 0 -5
+vin 2 0 dc 0 distof1 0.02 distof2 0.02
+* z1: common source, unbypassed source resistor, saturation
+c2a 2 21 1u
+rga 21 22 100k
+vga 22 0 dc -0.6
+z1 3 21 4 zn area=1.5
+rd1 1 3 330
+rs1 4 0 10
+* z4: gate forward (vgs, vgd ~ 0.45 V), vds small
+c2b 2 23 1u
+rgb 23 24 20k
+vgb 24 0 dc 2
+z4 25 23 26 zn
+rd4 25 0 100
+rs4 26 0 50
+* z2: inverse mode
+c25 2 5 1u
+rg2 5 9 100k
+vg2 9 0 dc 1.2
+z2 7 5 8 zn
+r7 7 0 2k
+r8 1 8 2.2k
+* z3: PMF, linear region
+c2g 2 10 1u
+rg3 10 11 100k
+vg3 11 0 dc 0.5
+z3 12 10 0 zp
+rl3 12 20 20k
+.model zn nmf vto=-1.8 beta=3e-3 b=0.3 alpha=2.5 lambda=0.05 rd=5 rs=5
++ cgs=1p cgd=0.2p pb=0.8 is=1e-14
+.model zp pmf vto=-1.2 beta=1.5e-3 b=0.5 alpha=2 lambda=0.03 rd=8 rs=8
++ cgs=0.6p cgd=0.15p pb=0.7 is=1e-13
+.disto dec 10 1e4 1e9 0.9
+.end

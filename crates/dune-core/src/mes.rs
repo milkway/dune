@@ -12,9 +12,12 @@
 //! current and the charge.
 
 use crate::consts::{ROOT2, VT0};
+use crate::dderivs::Dderivs;
+use crate::disto::{DfCoeffs, DistoCtx, DistoSetupCtx};
 use crate::jfet::{
-    CQGD, CQGS, FET3_NUM_STATES, Fet3Nodes, Fet3Op, QGD, QGS, VGD, VGS, fet3_ac, fet3_bias,
-    fet3_charge, fet3_finish, gate_diode,
+    CQGD, CQGS, FET3_NUM_STATES, Fet3DistoCoeffs, Fet3DrainDerivs, Fet3GateQ, Fet3Nodes, Fet3Op,
+    QGD, QGS, VGD, VGS, fet3_ac, fet3_bias, fet3_cdr, fet3_charge, fet3_disto_load, fet3_finish,
+    fet3_gate_diode_disto, gate_diode,
 };
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Var};
 
@@ -218,6 +221,164 @@ pub(crate) fn qggnew(
     )
 }
 
+/// `MESdSetup` (`dev/mes/mesdset.c`, identical in ngspice-47 but for
+/// its `m`): Taylor coefficients at the operating point `(vgs, vgd)`
+/// (type-normalized, from `CKTrhsOld`), carried through the C's
+/// `Dderivs` chain operation by operation.
+///
+/// The drain current is the load's Statz current (p = vgs, r = vds
+/// of the mode-normalized device). The gate diodes are evaluated on
+/// the real `vgs`/`vgd` (before the source/drain interchange, unlike
+/// the JFET). The gate charges are NOT the load's `qggnew` split:
+/// the C assumes `qgs = vgs·cgsnew`, `qgd = vgd·cgdnew` ("probably
+/// wrong but then so is the a.c. analysis routine", its comment) and
+/// builds `cgsnew` with `czgs/(qroot·par1)` where `qggnew` has
+/// `czgs/qroot·par1` — both kept literally.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn mes_dsetup(
+    t: &MesTemp,
+    area: f64,
+    gmin: f64,
+    vgs_real: f64,
+    vgd_real: f64,
+) -> Fet3DistoCoeffs {
+    let m = &t.m;
+    let typ = t.type_;
+    let beta = m.beta * area;
+    let csat = m.is * area;
+    let vto = m.vto;
+    let vds_real = vgs_real - vgd_real;
+    let (_, lggs2, lggs3) = fet3_gate_diode_disto(vgs_real, csat, VT0, gmin);
+    let (_, lggd2, lggd3) = fet3_gate_diode_disto(vgd_real, csat, VT0, gmin);
+
+    // Drain current, local (mode-normalized) voltages.
+    let (vgs, vds, mode) = if vds_real < 0.0 {
+        (vgd_real, -vds_real, -1.0)
+    } else {
+        (vgs_real, vds_real, 1.0)
+    };
+    let mut d_p = Dderivs::var_p();
+    let mut d_r = Dderivs::var_r();
+    let d_zero = Dderivs::default();
+    d_p.value = vgs;
+    d_r.value = vds;
+    let vgst = vgs - vto;
+    let mut d_vgst = d_p;
+    d_vgst.value = vgst;
+    let d_cdrain = if vgst <= 0.0 {
+        d_zero
+    } else {
+        let mut d_prod = d_r.times(m.lambda);
+        d_prod.value = 1.0 + m.lambda * vds;
+        let d_betap = d_prod.times(beta);
+        let mut d_denom = d_vgst.times(m.b);
+        d_denom.value = 1.0 + m.b * vgst;
+        let d_invdenom = d_denom.inv();
+        // Saturation region.
+        let mut d_cdrain = d_betap.mult(&d_vgst).mult(&d_vgst).mult(&d_invdenom);
+        if vds < 3.0 / m.alpha {
+            // Linear region.
+            let mut d_afact = d_r.times(-m.alpha / 3.0);
+            d_afact.value = 1.0 - m.alpha * vds / 3.0;
+            let mut d_lfact = d_afact.cube().times(-1.0);
+            d_lfact.value += 1.0;
+            d_cdrain = d_betap
+                .mult(&d_vgst)
+                .mult(&d_vgst)
+                .mult(&d_invdenom)
+                .mult(&d_lfact);
+        }
+        d_cdrain
+    };
+
+    // Charge storage: p = vgs, q = vgd (the real ones).
+    let czgs = m.cgs * area;
+    let czgd = m.cgd * area;
+    let phib = m.pb;
+    let vcap = 1.0 / m.alpha;
+    let mut d_p = Dderivs::var_p();
+    let mut d_q = Dderivs::var_q();
+    d_p.value = vgs_real;
+    d_q.value = vgd_real;
+    let mut d_veroot = d_q.times(-1.0).plus(&d_p);
+    d_veroot = d_veroot.mult(&d_veroot);
+    d_veroot.value += vcap * vcap;
+    let d_veroot = d_veroot.sqrt();
+    let d_veff1 = d_veroot.plus(&d_p).plus(&d_q).times(0.5);
+    let del = 0.2;
+    // The region test reads the plain-double `vnew1` of the C.
+    let veroot = f64::sqrt((vgs_real - vgd_real) * (vgs_real - vgd_real) + vcap * vcap);
+    let veff1 = 0.5 * (vgs_real + vgd_real + veroot);
+    let vnroot = f64::sqrt((veff1 - vto) * (veff1 - vto) + del * del);
+    let vnew1 = 0.5 * (veff1 + vto + vnroot);
+    let mut d_vnroot = d_veff1;
+    d_vnroot.value -= vto;
+    d_vnroot = d_vnroot.mult(&d_vnroot);
+    d_vnroot.value += del * del;
+    let d_vnroot = d_vnroot.sqrt();
+    let mut d_vnew1 = d_veff1.plus(&d_vnroot);
+    d_vnew1.value += vto;
+    let mut d_vnew1 = d_vnew1.times(0.5);
+    let vmax = 0.5;
+    if vnew1 >= vmax {
+        // (the C also builds `d_ext`, which no charge uses)
+        d_vnew1 = d_zero;
+        d_vnew1.value = vmax;
+    }
+    let mut d_qroot = d_vnew1.times(-1.0 / phib);
+    d_qroot.value += 1.0;
+    let d_qroot = d_qroot.sqrt();
+    let mut d_par1 = d_veff1;
+    d_par1.value -= vto;
+    let mut d_par1 = d_par1.div(&d_vnroot);
+    d_par1.value += 1.0;
+    let d_par1 = d_par1.times(0.5);
+    let d_cfact = d_q.times(-1.0).plus(&d_p).div(&d_veroot);
+    let mut d_cplus = d_cfact.times(0.5);
+    d_cplus.value += 0.5;
+    let mut d_cminus = d_cfact.times(-0.5);
+    d_cminus.value += 0.5;
+    let d_dummy = d_qroot.mult(&d_par1).inv().times(czgs);
+    let d_cgsnew = d_cminus.times(czgd).plus(&d_dummy.mult(&d_cplus));
+    let d_cgdnew = d_cplus.times(czgd).plus(&d_dummy.mult(&d_cminus));
+    let d_qgs = d_cgsnew.mult(&d_p);
+    let d_qgd = d_cgdnew.mult(&d_q);
+
+    let dc = &d_cdrain;
+    let g = Fet3DrainDerivs {
+        gm1: dc.d1_p,
+        gds1: dc.d1_r,
+        gm2: dc.d2_p2,
+        gds2: dc.d2_r2,
+        gmds: dc.d2_pr,
+        gm3: dc.d3_p3,
+        gds3: dc.d3_r3,
+        gm2ds: dc.d3_p2r,
+        gmds2: dc.d3_pr2,
+    };
+    let q2 = |d: &Dderivs| DfCoeffs {
+        cxx: 0.5 * typ * d.d2_p2,
+        cyy: 0.5 * typ * d.d2_q2,
+        cxy: typ * d.d2_pq,
+        cxxx: d.d3_p3 / 6.,
+        cyyy: d.d3_q3 / 6.,
+        cxxy: 0.5 * d.d3_p2q,
+        cxyy: 0.5 * d.d3_pq2,
+        ..DfCoeffs::default()
+    };
+    Fet3DistoCoeffs {
+        cdr: fet3_cdr(typ, mode, &g),
+        ggs2: typ * lggs2,
+        ggs3: lggs3,
+        ggd2: typ * lggd2,
+        ggd3: lggd3,
+        q: Fet3GateQ::Statz {
+            qgs: q2(&d_qgs),
+            qgd: q2(&d_qgd),
+        },
+    }
+}
+
 /// A MESFET instance (`MESinstance`).
 pub(crate) struct MesI {
     n: Fet3Nodes,
@@ -228,6 +389,8 @@ pub(crate) struct MesI {
     ic: (f64, f64),
     ic_given: crate::devices::IcGiven,
     st: usize,
+    /// `.disto` Taylor coefficients (`MESdSetup`).
+    dist: Fet3DistoCoeffs,
 }
 
 impl MesI {
@@ -248,6 +411,7 @@ impl MesI {
             ic,
             ic_given: crate::devices::IcGiven::ALL,
             st,
+            dist: Fet3DistoCoeffs::default(),
         }
     }
 }
@@ -370,6 +534,21 @@ impl crate::devices::Device for MesI {
         let gspr = self.t.source_conduct * self.area;
         crate::jfet::fet3_noise(ctx, &self.n, self.st, gdpr, gspr, self.t.m.kf, self.t.m.af)
     }
+
+    /// `MESdSetup`: see [`mes_dsetup`].
+    fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        let n = &self.n;
+        let typ = self.t.type_;
+        let vgs = typ * (ctx.sol[n.gate] - ctx.sol[n.s_p]);
+        let vgd = typ * (ctx.sol[n.gate] - ctx.sol[n.d_p]);
+        self.dist = mes_dsetup(&self.t, self.area, ctx.gmin, vgs, vgd);
+        Ok(())
+    }
+
+    /// `MESdisto` (`mesdisto.c`).
+    fn disto_load(&self, ctx: &mut DistoCtx) {
+        fet3_disto_load(&self.dist, &self.n, ctx);
+    }
 }
 
 #[cfg(test)]
@@ -434,5 +613,130 @@ mod tests {
             assert!((cgsn - dgs).abs() < 1e-6 * cgs, "cgs at {vgs},{vgd}");
             assert!((cgdn - dgd).abs() < 1e-6 * cgs, "cgd at {vgs},{vgd}");
         }
+    }
+
+    /// The plain-number form of `mesdset.c`'s charge model: `qgs =
+    /// vgs·cgsnew`, `qgd = vgd·cgdnew` with `cgsnew` built from
+    /// `czgs/(qroot·par1)` (see [`mes_dsetup`]).
+    fn dset_charges(
+        vgs: f64,
+        vgd: f64,
+        phib: f64,
+        vcap: f64,
+        vto: f64,
+        czgs: f64,
+        czgd: f64,
+    ) -> (f64, f64) {
+        let veroot = f64::sqrt((vgs - vgd) * (vgs - vgd) + vcap * vcap);
+        let veff1 = 0.5 * (vgs + vgd + veroot);
+        let vnroot = f64::sqrt((veff1 - vto) * (veff1 - vto) + 0.04);
+        let vnew1 = f64::min(0.5 * (veff1 + vto + vnroot), 0.5);
+        let qroot = f64::sqrt(1.0 - vnew1 / phib);
+        let par1 = 0.5 * (1.0 + (veff1 - vto) / vnroot);
+        let cfact = (vgs - vgd) / veroot;
+        let cplus = 0.5 * (1.0 + cfact);
+        let cminus = cplus - cfact;
+        let dummy = czgs / (qroot * par1);
+        (
+            vgs * (dummy * cplus + czgd * cminus),
+            vgd * (dummy * cminus + czgd * cplus),
+        )
+    }
+
+    /// `MESdSetup`'s coefficients against finite differences: the
+    /// drain current is the load's Statz current (`mes_ids`) in the
+    /// real node voltages (x = vgs, y = vds), both modes, both
+    /// polarities, linear/saturation/cutoff; the gate diodes are the
+    /// load's at `CONSTvt0`; the charges are the setup's own model in
+    /// (vgs, vgd).
+    #[test]
+    fn mes_dsetup_matches_finite_differences() {
+        use crate::jfet::tests::{assert_taylor, df_seven, taylor2_fd_rich};
+        let gmin = 1e-12;
+        let mut worst_cdr = 0.0f64;
+        let mut worst_q = 0.0f64;
+        for nmf in [true, false] {
+            let mut m = MesModel::new(nmf);
+            m.vto = -1.8;
+            m.beta = 3e-3;
+            m.b = 0.3;
+            m.alpha = 2.5;
+            m.lambda = 0.05;
+            m.cgs = 1e-12;
+            m.cgd = 0.2e-12;
+            m.pb = 0.8;
+            m.is = 1e-13;
+            let t = MesTemp::new(&m);
+            let typ = t.type_;
+            let area = 1.3;
+            let beta = m.beta * area;
+            let csat = m.is * area;
+            for &(vgs_n, vds_n) in &[
+                (-0.5, 0.4),  // normal linear (vds < 3/α)
+                (-0.5, 3.0),  // normal saturation
+                (-0.6, -0.5), // inverse linear
+                (-0.3, -2.5), // inverse saturation
+                (0.4, 2.0),   // forward gate, vnew1 clamped
+                (-2.5, 2.0),  // cutoff
+            ] {
+                let (vgs_a, vds_a) = (typ * vgs_n, typ * vds_n);
+                let d = mes_dsetup(&t, area, gmin, vgs_n, vgs_n - vds_n);
+                let id = |x: f64, y: f64| {
+                    typ * mes_ids(typ * x, typ * (x - y), m.vto, beta, m.lambda, m.b, m.alpha).0
+                };
+                let want = taylor2_fd_rich(&id, vgs_a, vds_a, 4e-3);
+                worst_cdr = worst_cdr.max(assert_taylor(
+                    df_seven(&d.cdr),
+                    want,
+                    1e-5,
+                    &format!("cdr nmf={nmf} at ({vgs_n},{vds_n})"),
+                ));
+                let Fet3GateQ::Statz { qgs, qgd } = d.q else {
+                    panic!("MESFET charges are two-variable")
+                };
+                let q = |which: usize| {
+                    move |x: f64, y: f64| {
+                        // x = vgs, y = vgd (real); polarity as the
+                        // other branches.
+                        let (a, b) = dset_charges(
+                            typ * x,
+                            typ * y,
+                            m.pb,
+                            1.0 / m.alpha,
+                            m.vto,
+                            m.cgs * area,
+                            m.cgd * area,
+                        );
+                        typ * if which == 0 { a } else { b }
+                    }
+                };
+                let vgd_a = vgs_a - vds_a;
+                for (k, c) in [qgs, qgd].iter().enumerate() {
+                    let want = taylor2_fd_rich(&q(k), vgs_a, vgd_a, 4e-3);
+                    worst_q = worst_q.max(assert_taylor(
+                        df_seven(c),
+                        want,
+                        1e-5,
+                        &format!("q{k} nmf={nmf} at ({vgs_n},{vds_n})"),
+                    ));
+                }
+                let one = |v: f64, h: f64| {
+                    let f = |v: f64| typ * gate_diode(typ * v, csat, VT0, gmin).1;
+                    let c2 = 0.5 * (f(v + h) - 2.0 * f(v) + f(v - h)) / (h * h);
+                    let c3 = (f(v + 2.0 * h) - 2.0 * f(v + h) + 2.0 * f(v - h) - f(v - 2.0 * h))
+                        / (2.0 * h * h * h)
+                        / 6.0;
+                    (c2, c3)
+                };
+                for (got, v) in [((d.ggs2, d.ggs3), vgs_a), ((d.ggd2, d.ggd3), vgd_a)] {
+                    let want = one(v, 2e-4);
+                    for (a, b) in [(got.0, want.0), (got.1, want.1)] {
+                        let s = a.abs().max(b.abs());
+                        assert!((a - b).abs() <= 2e-3 * s + 1e-15, "gate diode {a} vs {b}");
+                    }
+                }
+            }
+        }
+        eprintln!("MES cdr worst {worst_cdr:.2e}, charges worst {worst_q:.2e}");
     }
 }
