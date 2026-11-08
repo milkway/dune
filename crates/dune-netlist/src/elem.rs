@@ -234,12 +234,13 @@ fn two_terminal_rc(ctx: &mut ElemCtx, is_r: bool) -> Parsed {
 }
 
 /// Keywords that may legally follow the optional model name of a
-/// semiconductor R/C (`w l temp ic resistance capacitance`): a bare
-/// token matching one of these is a parameter, not a model name.
+/// semiconductor R/C (`w l temp ic resistance capacitance`, and
+/// ngspice-47's `dtemp`): a bare token matching one of these is a
+/// parameter, not a model name.
 fn is_keyword_param(tok: &str) -> bool {
     matches!(
         tok,
-        "w" | "l" | "temp" | "ic" | "resistance" | "capacitance" | "area" | "off"
+        "w" | "l" | "temp" | "dtemp" | "ic" | "resistance" | "capacitance" | "area" | "off"
     )
 }
 

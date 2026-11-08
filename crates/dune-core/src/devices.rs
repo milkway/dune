@@ -219,6 +219,14 @@ pub(crate) struct ResistorI {
     r_ac: Option<f64>,
     m: f64,
     scale: f64,
+    /// The temperature data of `REStemp` (TC1/TC2/TNOM of the model,
+    /// the instance `TEMP=`/`DTEMP=`); `.sens` moves TC1, TC2 and
+    /// `TEMP` (`cktsens.c` calls `DEVtemperature` after each
+    /// `sens_setp`).
+    rt: crate::circuit::ResTemp,
+    /// The circuit `TEMP` and `TNOM` the build ran at (kelvin).
+    ckt_temp: f64,
+    ckt_tnom: f64,
     /// `REStemp`'s `1 + TC1·ΔT + TC2·ΔT²` (1 for a plain resistor).
     factor: f64,
     pub pos: Var,
@@ -227,9 +235,16 @@ pub(crate) struct ResistorI {
 }
 
 impl ResistorI {
-    /// A resistor of nominal resistance `r` at temperature factor
-    /// `factor` (`REStemp`: `RESconduct = 1/(RESresist·factor)`).
-    pub fn with_factor(r: f64, factor: f64, pos: Var, neg: Var) -> Self {
+    /// A resistor of nominal resistance `r` with the temperature
+    /// dependence `rt` at the circuit temperatures of `opts`
+    /// (`REStemp`: `RESconduct = 1/(RESresist·factor)`).
+    pub fn with_temp(
+        r: f64,
+        rt: crate::circuit::ResTemp,
+        opts: &crate::Options,
+        pos: Var,
+        neg: Var,
+    ) -> Self {
         let mut res = ResistorI {
             g: 0.0,
             g_ac: 0.0,
@@ -237,7 +252,10 @@ impl ResistorI {
             r_ac: None,
             m: 1.0,
             scale: 1.0,
-            factor,
+            rt,
+            ckt_temp: opts.temp,
+            ckt_tnom: opts.tnom,
+            factor: 1.0,
             pos,
             neg,
             slots: [TRASH; 4],
@@ -246,9 +264,17 @@ impl ResistorI {
         res
     }
 
-    /// `RESupdate_conduct` (ngspice `restemp.c`; the 3f5's
-    /// `REStemp` without `m`/`scale`/`ac`).
+    /// The instance temperature (kelvin): `TEMP=`, else `CKTtemp +
+    /// DTEMP`.
+    fn temperature(&self) -> f64 {
+        self.rt.temp.unwrap_or(self.ckt_temp + self.rt.dtemp)
+    }
+
+    /// `REStemp` + `RESupdate_conduct` (ngspice `restemp.c`; the
+    /// 3f5's `REStemp` without `m`/`scale`/`ac`).
     fn update_conduct(&mut self) {
+        let difference = self.temperature() - self.rt.tnom.unwrap_or(self.ckt_tnom);
+        self.factor = 1.0 + self.rt.tc1 * difference + self.rt.tc2 * difference * difference;
         self.g = self.m / (self.r * self.factor * self.scale);
         self.g_ac = self.m / (self.r_ac.unwrap_or(self.r) * self.factor * self.scale);
     }
@@ -302,15 +328,34 @@ impl Device for ResistorI {
     }
 
     /// `RESpTable`: the principal `resistance`, the AC-only `ac`,
-    /// then `temp dtemp l w m tc tc2 tce bv_max scale`; only the
-    /// resistance, `ac`, `m` and `scale` reach Dune's conductance.
+    /// then `temp dtemp l w m tc tc2 tce bv_max scale`. The 3f5's
+    /// walk (`cktsens.c` → `sens_setp` + `sens_temp` = `REStemp`)
+    /// moves the model `tc1`/`tc2` and the instance `temp`, and
+    /// `REStemp` recomputes the conductance from them, so those
+    /// three are live (`d/dTC1 = −R·ΔT·…`); the resistance, `ac`,
+    /// `m` and `scale` reach the conductance directly. `dtemp` (no
+    /// 3f5 counterpart) stays inert: in ngspice-47 the `temp`
+    /// perturbation before it leaves `REStempGiven` up, so `dtemp`
+    /// is ignored by then and comes out zero (measured).
     fn sens_params(&self, ac: bool) -> Option<Vec<SensParam>> {
-        let mut v: Vec<SensParam> = sens_inert(RES_MODEL_SENS).collect();
+        let mut v: Vec<SensParam> = RES_MODEL_SENS
+            .iter()
+            .map(|&suffix| match suffix {
+                ":tc1" => sens_param(suffix, self.rt.tc1),
+                ":tc2" => sens_param(suffix, self.rt.tc2),
+                _ => SensParam { suffix, value: 0.0 },
+            })
+            .collect();
         v.push(sens_param("", self.r));
         if ac {
             v.push(sens_param("_ac", self.r_ac.unwrap_or(self.r)));
         }
-        v.extend(sens_inert(&["_temp", "_dtemp", "_l", "_w"]));
+        // `RESask(RES_TEMP)` reports °C.
+        v.push(sens_param(
+            "_temp",
+            self.temperature() - crate::consts::CTOK,
+        ));
+        v.extend(sens_inert(&["_dtemp", "_l", "_w"]));
         v.push(sens_param("_m", self.m));
         v.extend(sens_inert(&["_tc", "_tc2", "_tce", "_bv_max"]));
         v.push(sens_param("_scale", self.scale));
@@ -323,6 +368,12 @@ impl Device for ResistorI {
             "_ac" => self.r_ac = Some(value),
             "_m" => self.m = value,
             "_scale" => self.scale = value,
+            ":tc1" => self.rt.tc1 = value,
+            ":tc2" => self.rt.tc2 = value,
+            // `RES_TEMP` (`resparam.c`): `REStemp = value + CONSTCtoK`,
+            // given. Restoring writes back the effective temperature,
+            // so a `DTEMP` instance ends where it started.
+            "_temp" => self.rt.temp = Some(value + crate::consts::CTOK),
             _ => return,
         }
         self.update_conduct();
@@ -345,7 +396,11 @@ impl Device for ResistorI {
     }
 
     fn noise_dens(&self, ctx: &NoiseCtx) -> Vec<f64> {
-        let thermal = ctx.thermal(self.pos, self.neg, self.g);
+        // ngspice-47 `resnoise.c`: `NevalSrcInstanceTemp` at
+        // `CKTtemp + dtemp`, `dtemp = REStemp − CKTtemp` when `TEMP=`
+        // is given, else `RESdtemp` — the instance temperature. The
+        // 3f5's `NevalSrc` used `CKTtemp` (KNOWN_DIFFS).
+        let thermal = ctx.thermal_at(self.pos, self.neg, self.g, self.temperature());
         let flicker = 0.0;
         vec![thermal, flicker, thermal + flicker]
     }

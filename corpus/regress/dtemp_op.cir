@@ -1,0 +1,55 @@
+Instance DTEMP= (ngspice-47) in the operating point
+* Coverage: ngspice-47's instance DTEMP (res.c, dio.c, bjt.c,
+* jfet.c, mos1.c, mos2.c, mos3.c, mos6.c; the 3f5 has no DTEMP): an
+* instance without TEMP= runs at CKTtemp + DTEMP (*temp.c: "if
+* (!tempGiven) temp = CKTtemp + dtemp"), so with .options temp=50
+* every device below sits at its own temperature. rboth and dboth
+* carry TEMP= and DTEMP= together: TEMP= wins and DTEMP is dropped
+* (restemp.c zeroes RESdtemp with "Instance temperature specified,
+* dtemp ignored"; the semiconductors simply never read it). Each
+* device hangs off its own source, so every current is a separate
+* branch vector; the JFET gate is forward biased so its IS(T) shows
+* (the 3f5 JFET drain current itself has no temperature dependence).
+.options temp=50
+v1 1 0 dc 1
+r1 1 0 rtc 1k dtemp=40
+v2 2 0 dc 1
+r2 2 0 rtc 1k
+v3 3 0 dc 1
+rboth 3 0 rtc 1k temp=0 dtemp=40
+v4 4 0 dc 0.6
+d1 4 0 dm dtemp=-60
+v5 5 0 dc 0.6
+dboth 5 0 dm temp=100 dtemp=-60
+vb6 6 0 dc 0.68
+vc6 16 0 dc 3
+q6 16 6 0 qn dtemp=35
+vg7 7 0 dc 0.55
+vd7 17 0 dc 3
+j7 17 7 0 jn dtemp=-45
+vg8 8 0 dc 2
+vd8 18 0 dc 3
+m8 18 8 0 0 nm1 l=4u w=20u dtemp=60
+vg9 9 0 dc 2
+vd9 19 0 dc 3
+m9 19 9 0 0 nm2 l=4u w=10u dtemp=-40
+vg10 10 0 dc 2
+vd10 20 0 dc 3
+m10 20 10 0 0 nm3 l=4u w=10u dtemp=25
+vg11 11 0 dc 2
+vd11 21 0 dc 3
+m11 21 11 0 0 n6 l=3u w=10u dtemp=-70
+.model rtc r tc1=3e-3 tc2=2e-5
+.model dm d is=1e-14 n=1.05 rs=5 xti=3 eg=1.11
+.model qn npn is=1e-16 bf=120 ise=1e-14 ne=1.6 isc=1e-15 rb=100 re=2
++ vaf=60 xtb=1.5
+.model jn njf vto=-2 beta=0.4e-3 lambda=0.02 rd=30 rs=20 is=1e-14
+.model nm1 nmos level=1 vto=0.8 kp=50u lambda=0.02 phi=0.65 gamma=0.4
++ tpg=1 nsub=2e15 tox=5e-8
+.model nm2 nmos level=2 vto=0.7 tox=40n nsub=1e16 uo=600 lambda=0.02
+.model nm3 nmos level=3 vto=0.7 tox=30n nsub=1e16 uo=500 theta=0.1
+.model n6 nmos level=6 tpg=1 kc=3.8921e-05 nc=1.1739 kv=0.91602 nv=0.87225
++ lambda0=0.013333 lambda1=0.0046901 vt0=0.69486 gamma=0.60309 phi=1
++ tox=1.98e-08 ld=0.1u nsub=5e16 nss=0
+.op
+.end

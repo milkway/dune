@@ -32,14 +32,10 @@ pub(crate) struct ResTemp {
     pub tnom: Option<f64>,
     /// Instance `TEMP=`.
     pub temp: Option<f64>,
-}
-
-impl ResTemp {
-    /// `factor` of `REStemp`, the divisor of the conductance.
-    pub fn factor(&self, opts: &Options) -> f64 {
-        let difference = self.temp.unwrap_or(opts.temp) - self.tnom.unwrap_or(opts.tnom);
-        1.0 + self.tc1 * difference + self.tc2 * difference * difference
-    }
+    /// Instance `DTEMP=` (ngspice-47 only, kelvin difference): the
+    /// instance runs at `CKTtemp + DTEMP` when `TEMP=` is not given
+    /// (`restemp.c`: a given `TEMP=` zeroes it).
+    pub dtemp: f64,
 }
 
 /// `CXXXXXXX N+ N- VALUE <IC=INCOND>` (farads).
@@ -653,6 +649,12 @@ pub struct Circuit {
     /// entry (typed spec, plain card) has `TC1 = TC2 = 0`: its
     /// conductance is `1/R` at every temperature, as in the 3f5.
     pub(crate) res_temp: HashMap<String, ResTemp>,
+    /// Instance name → the ngspice-47 `DTEMP=` (kelvin difference) of
+    /// a diode, BJT, JFET or MOS1/2/3/6 card, recorded by the netlist
+    /// front end: the instance temperature is `TEMP=` when given,
+    /// else `CKTtemp + DTEMP` (`*temp.c` of each device). The 3f5 has
+    /// no `DTEMP`; a device without an entry has `DTEMP = 0`.
+    pub(crate) dtemp: HashMap<String, f64>,
     /// The warm-start channel of a [`Session`](crate::Session):
     /// empty for a plain circuit (the engine then runs exactly the
     /// 3f5 path).
@@ -709,6 +711,19 @@ impl Circuit {
     /// (the netlist front end; see [`ResTemp`]).
     pub(crate) fn set_res_temp(&mut self, name: &str, t: ResTemp) {
         self.res_temp.insert(name.to_ascii_lowercase(), t);
+    }
+
+    /// Record the ngspice `DTEMP=` of instance `name` (the netlist
+    /// front end; see [`Circuit::dtemp`]).
+    pub(crate) fn set_dtemp(&mut self, name: &str, dtemp: f64) {
+        self.dtemp.insert(name.to_ascii_lowercase(), dtemp);
+    }
+
+    /// The temperature of a semiconductor instance (kelvin): its
+    /// `TEMP=` when given, else the circuit's plus its `DTEMP=`
+    /// (`DIOtemp`/`BJTtemp`/`JFETtemp`/`MOS*temp` of ngspice-47).
+    fn instance_temp(&self, name: &str, temp: Option<f64>, opts: &Options) -> f64 {
+        temp.unwrap_or_else(|| opts.temp + self.dtemp.get(name).copied().unwrap_or(0.0))
     }
 
     /// Record which `IC=` components instance `name`'s card gave
@@ -1208,7 +1223,7 @@ impl Circuit {
                         prime(s.model.rb, "base", bse),
                         prime(s.model.re, "emitter", emi),
                     ];
-                    let temp = s.temp.unwrap_or(opts.temp);
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
                     let bt = crate::bjt::BjtTemp::new(&s.name, &s.model, temp, opts.tnom);
                     notes.extend(bt.notes.iter().cloned());
                     devices.push(Box::new(crate::bjt::BjtI::new(
@@ -1246,7 +1261,7 @@ impl Circuit {
                         nrd: s.nrd,
                         nrs: s.nrs,
                     };
-                    let temp = s.temp.unwrap_or(opts.temp);
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
                     let mt = crate::mos1::Mos1Temp::new(&s.name, &s.model, &geom, temp, opts.tnom)
                         .map_err(Error::Build)?;
                     notes.extend(mt.notes.iter().cloned());
@@ -1285,7 +1300,7 @@ impl Circuit {
                         nrd: s.nrd,
                         nrs: s.nrs,
                     };
-                    let temp = s.temp.unwrap_or(opts.temp);
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
                     let mt = crate::mos2::Mos2Temp::new(&s.name, &s.model, &geom, temp, opts.tnom)
                         .map_err(Error::Build)?;
                     notes.extend(mt.notes.iter().cloned());
@@ -1324,7 +1339,7 @@ impl Circuit {
                         nrd: s.nrd,
                         nrs: s.nrs,
                     };
-                    let temp = s.temp.unwrap_or(opts.temp);
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
                     let mt = crate::mos3::Mos3Temp::new(&s.name, &s.model, &geom, temp, opts.tnom)
                         .map_err(Error::Build)?;
                     devices.push(Box::new(crate::mos3::Mos3I::new(
@@ -1363,7 +1378,7 @@ impl Circuit {
                         nrd: if s.nrd == 0.0 { 1.0 } else { s.nrd },
                         nrs: if s.nrs == 0.0 { 1.0 } else { s.nrs },
                     };
-                    let temp = s.temp.unwrap_or(opts.temp);
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
                     let mt = crate::mos6::Mos6Temp::new(&s.name, &s.model, &geom, temp, opts.tnom)
                         .map_err(Error::Build)?;
                     notes.extend(mt.notes.iter().cloned());
@@ -1507,10 +1522,11 @@ impl Circuit {
                     )));
                 }
                 Spec::Resistor(s) => {
-                    let factor = self.res_temp.get(&s.name).map_or(1.0, |t| t.factor(opts));
-                    devices.push(Box::new(ResistorI::with_factor(
+                    let rt = self.res_temp.get(&s.name).copied().unwrap_or_default();
+                    devices.push(Box::new(ResistorI::with_temp(
                         s.value,
-                        factor,
+                        rt,
+                        opts,
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                     )));
@@ -1672,7 +1688,7 @@ impl Circuit {
                     } else {
                         pos
                     };
-                    let temp = s.temp.unwrap_or(opts.temp);
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
                     let t = DiodeTemp::new(&s.name, &s.model, s.area, temp, opts.tnom, opts.reltol);
                     notes.extend(t.notes.iter().cloned());
                     devices.push(Box::new(crate::diode::DiodeI::new(
@@ -1697,7 +1713,7 @@ impl Circuit {
                 Spec::Jfet(s) => {
                     let (nodes, primes) =
                         fet3_vars(&node_ids, &s.name, &s.nodes, s.model.rd, s.model.rs);
-                    let temp = s.temp.unwrap_or(opts.temp);
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
                     let t = crate::jfet::JfetTemp::new(&s.name, &s.model, temp, opts.tnom);
                     notes.extend(t.notes.iter().cloned());
                     devices.push(Box::new(crate::jfet::JfetI::new(

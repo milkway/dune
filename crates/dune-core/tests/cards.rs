@@ -67,6 +67,68 @@ fn instance_temp_uses_model_tc_and_tnom() {
 }
 
 #[test]
+fn instance_dtemp_offsets_the_circuit_temperature() {
+    // ngspice-47 restemp.c: T = CKTtemp + DTEMP = 27 + 100 = 127,
+    // factor 1.2 as above; with TEMP= too, TEMP wins (the C's note).
+    let (p, notes) = run("dtemp\nv1 1 0 1\nr1 1 0 1k rm dtemp=100\n\
+                          v2 2 0 1\nr2 2 0 1k rm temp=127 dtemp=-50\n\
+                          .model rm r tc1=1e-3 tc2=1e-5\n.op\n.end\n");
+    assert!(close(real(&p[0], "i(v1)")[0], -1.0 / 1200.0));
+    assert!(close(real(&p[0], "i(v2)")[0], -1.0 / 1200.0));
+    assert!(
+        notes.iter().any(|n| n.contains("dtemp ignored")),
+        "{notes:?}"
+    );
+    // A plain resistor takes `dtemp` as a parameter, not a model name.
+    let (p, _) = run("dtemp plain\nv1 1 0 1\nr1 1 0 1k dtemp=10\n.op\n.end\n");
+    assert!(close(real(&p[0], "i(v1)")[0], -1e-3));
+}
+
+#[test]
+fn bsim1_instance_temp_is_an_unknown_parameter() {
+    // b1.c has `temp` only in the model table (3f5 and ngspice-47,
+    // whose parser stops on "unknown parameter (temp)"); the card
+    // used to drop it silently.
+    for kw in ["temp=50", "dtemp=5"] {
+        let deck = format!(
+            "b1\nv1 1 0 2\nm1 1 1 0 0 nb l=2u w=10u {kw}\n.model nb nmos level=4\n.op\n.end\n"
+        );
+        let parsed = dune_netlist::parse_str("b1.cir", &deck);
+        let err = Circuit::from_netlist(&parsed.netlist)
+            .err()
+            .expect("must fail");
+        assert!(err.to_string().contains("unknown parameter"), "{err}");
+    }
+}
+
+#[test]
+fn resistor_temperature_sensitivity_matches_a_finite_difference() {
+    // cktsens.c: sens_setp + sens_temp (REStemp) — `_temp` moves the
+    // instance temperature (here CKTtemp + DTEMP = 70 C); `_dtemp`
+    // stays inert, as in ngspice's full walk.
+    let deck = |extra: &str| {
+        format!(
+            "s\n.options temp=60\nv1 1 0 dc 5\nr1 1 2 1k\nr2 2 0 rtc 2k {extra}\n\
+             .model rtc r tc1=2e-3 tc2=1e-5\n.sens v(2) r2_temp r2_dtemp\n.end\n"
+        )
+    };
+    let (p, _) = run(&deck("dtemp=10"));
+    let s_temp = real(&p[0], "v(r2_temp)")[0];
+    assert_eq!(real(&p[0], "v(r2_dtemp)")[0], 0.0);
+    let v2 = |extra: &str| {
+        let d = format!(
+            "s\n.options temp=60\nv1 1 0 dc 5\nr1 1 2 1k\nr2 2 0 rtc 2k {extra}\n\
+             .model rtc r tc1=2e-3 tc2=1e-5\n.op\n.end\n"
+        );
+        real(&run(&d).0[0], "v(2)")[0]
+    };
+    let fd = (v2("temp=70.01") - v2("temp=69.99")) / 0.02;
+    assert!((s_temp - fd).abs() <= 1e-6 * fd.abs(), "{s_temp} vs {fd}");
+    // ngspice with only `r2_dtemp` walked gives 2.777359e-3 here.
+    assert!((s_temp - 2.777359e-3).abs() <= 1e-6, "{s_temp}");
+}
+
+#[test]
 fn capacitor_geometry_narrow_is_the_3f5_formula() {
     // C = CJ*(W-N)*(L-N) + 2*CJSW*((L-N)+(W-N)), N=1u, L=11u, W=6u:
     // 1e-3*5u*10u + 2*1e-9*15u = 5e-14 + 3e-14 = 8e-14.

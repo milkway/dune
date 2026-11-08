@@ -421,6 +421,8 @@ impl Circuit {
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
+                            // ngspice-47 `dio.c` (KNOWN_DIFFS).
+                            ("dtemp", ParamValue::Num(v)) => ckt.set_dtemp(&name, *v),
                             ("ic", ParamValue::Num(v)) => ic = Some(*v),
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
@@ -457,6 +459,8 @@ impl Circuit {
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
+                            // ngspice-47 `bjt.c` (KNOWN_DIFFS).
+                            ("dtemp", ParamValue::Num(v)) => ckt.set_dtemp(&name, *v),
                             ("ic", ParamValue::Num(v)) => {
                                 ic = (*v, 0.0);
                                 icg = IcGiven::first(1);
@@ -549,8 +553,9 @@ impl Circuit {
                                 }
                                 // `GEO` only matters with ACM > 0.
                                 ("geo", ParamValue::Num(_)) => continue,
-                                ("temp", _) => {
-                                    problems.push(format!("`{name}`: unknown parameter (temp)"));
+                                ("temp" | "dtemp", _) => {
+                                    problems
+                                        .push(format!("`{name}`: unknown parameter ({})", p.name));
                                     continue;
                                 }
                                 _ => {}
@@ -567,6 +572,8 @@ impl Circuit {
                             ("nrs", ParamValue::Num(v)) => inst.nrs = *v,
                             ("off", ParamValue::Flag) => inst.off = true,
                             ("temp", ParamValue::Num(v)) => inst.temp = Some(v + CTOK),
+                            // ngspice-47 `mos{1,2,3,6}.c` (KNOWN_DIFFS).
+                            ("dtemp", ParamValue::Num(v)) => inst.dtemp = Some(*v),
                             ("ic", ParamValue::Num(v)) => {
                                 inst.ic = (*v, 0.0, 0.0);
                                 inst.ic_given = IcGiven::first(1);
@@ -581,6 +588,20 @@ impl Circuit {
                             }
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
+                    }
+                    if matches!(mm, MosModel::B1(_) | MosModel::B2(_)) {
+                        // `b1.c`/`b2.c` have `temp` only as a model
+                        // parameter; neither table has `dtemp`.
+                        for (given, kw) in [
+                            (inst.temp.is_some(), "temp"),
+                            (inst.dtemp.is_some(), "dtemp"),
+                        ] {
+                            if given {
+                                problems.push(format!("`{name}`: unknown parameter ({kw})"));
+                            }
+                        }
+                    } else if let Some(d) = inst.dtemp {
+                        ckt.set_dtemp(&name, d);
                     }
                     let nodes = four(&el.nodes);
                     match mm {
@@ -756,6 +777,8 @@ impl Circuit {
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
+                            // ngspice-47 `jfet.c` (KNOWN_DIFFS).
+                            ("dtemp", ParamValue::Num(v)) => ckt.set_dtemp(&name, *v),
                             ("area", ParamValue::Num(v)) => area = Some(*v),
                             ("ic", ParamValue::Num(v)) => {
                                 ic.0 = *v;
@@ -1173,6 +1196,8 @@ struct MosInst {
     /// Which `IC=` components the card gave.
     ic_given: IcGiven,
     temp: Option<f64>,
+    /// ngspice-47 `DTEMP=` (MOS1/2/3/6).
+    dtemp: Option<f64>,
     /// BSIM3 only: `M`, `DELVTO`, `MULU0`.
     m: f64,
     delvto: f64,
@@ -1823,6 +1848,7 @@ fn res_instance(
     let mut l = None;
     let mut w = None;
     let mut temp = None;
+    let mut dtemp = None;
     for p in params {
         let v = match p.value {
             ParamValue::Num(v) => v,
@@ -1836,6 +1862,8 @@ fn res_instance(
             "l" => l = Some(v),
             "w" => w = Some(v),
             "temp" => temp = Some(v + CTOK),
+            // ngspice-47 `res.c` (KNOWN_DIFFS).
+            "dtemp" => dtemp = Some(v),
             other => notes.push(format!(
                 "`{name}`: resistor parameter {other} is not in the 3f5 - ignored"
             )),
@@ -1858,11 +1886,20 @@ fn res_instance(
             }
         }
     };
-    let rt = (rm.is_some() || temp.is_some()).then(|| crate::circuit::ResTemp {
+    // `restemp.c` (ngspice-47): a given `TEMP=` wins and zeroes
+    // `DTEMP`, with the C's message.
+    if temp.is_some() && dtemp.is_some() {
+        notes.push(format!(
+            "`{name}`: Instance temperature specified, dtemp ignored"
+        ));
+        dtemp = None;
+    }
+    let rt = (rm.is_some() || temp.is_some() || dtemp.is_some()).then(|| crate::circuit::ResTemp {
         tc1: rm.map_or(0.0, |m| m.tc1),
         tc2: rm.map_or(0.0, |m| m.tc2),
         tnom: rm.and_then(|m| m.tnom),
         temp,
+        dtemp: dtemp.unwrap_or(0.0),
     });
     Ok((r, rt))
 }
