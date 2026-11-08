@@ -1689,7 +1689,15 @@ impl Circuit {
                         pos
                     };
                     let temp = self.instance_temp(&s.name, s.temp, opts);
-                    let t = DiodeTemp::new(&s.name, &s.model, s.area, temp, opts.tnom, opts.reltol);
+                    let t = DiodeTemp::new(
+                        &s.name,
+                        &s.model,
+                        s.area,
+                        1.0,
+                        temp,
+                        opts.tnom,
+                        opts.reltol,
+                    );
                     notes.extend(t.notes.iter().cloned());
                     devices.push(Box::new(crate::diode::DiodeI::new(
                         pos,
