@@ -136,6 +136,28 @@ ordem das camadas: deck → `options` → `temp` (o `setTemp` vence).
 `{options:{trtol:1}, tmaxDivisor:10}` é bit a bit o deck com
 `.options trtol=1` e o TMAX do `.tran` a um décimo.
 
+### Opções nos bindings (paridade, 2026-11-08)
+
+Os três bindings aceitam os mesmos nomes — os dos cartões `.options`
+— e o override é bit a bit o deck com o cartão editado (testes
+espelhados: `npm/test/smoke.mjs`, `python/tests/test_options.py`,
+`r/tests/testthat/test-options.R`).
+
+- **wasm**: genérico — cada entrada vira o `Param` que o parser faria
+  de `.options KEY=VALUE` e vai pelo `Options::apply`, então qualquer
+  cartão novo passa sem tocar o binding (entrada inválida = aviso).
+- **Python/R**: lista fechada e estrita (nome desconhecido ou tipo
+  errado = erro: `ValueError`/`TypeError`, `spice_error_options`).
+  Entraram `seed` (inteiro em `[1, 2^53)`; sem `random`),
+  `notrnoise`, `devnoise`, `devnt` (passo > 0, s) e `keepopinfo`;
+  `ltrafit`, `ltrabkrate` e `method="trbdf2"` já estavam (a doc do R
+  não os listava — corrigida). `False`/`FALSE` limpa a flag do deck.
+- **Fora das listas, por desenho:** `tmax_divisor` (argumento próprio
+  nos três: `tmaxDivisor`/`tmax_divisor`) e `load_threads`, que não
+  tem cartão `.options` (é argumento de API; ignorado no wasm, sem a
+  feature `parallel`) — expô-lo em Py/R pede nome novo de argumento
+  (ponto de pausa).
+
 ### Python (`spice`)
 
 ```python
