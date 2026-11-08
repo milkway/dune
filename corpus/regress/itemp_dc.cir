@@ -1,0 +1,55 @@
+Instance TEMP= in .dc: BJT, MOS1, MOS2 and MOS6
+* Coverage: the instance TEMP= of the 3f5 tables (bjt.c, mos1.c,
+* mos2.c, mos6.c: IOPU "temp") had no .op/.dc probe for these four
+* (diode, JFET, MOS3 and R are pinned by dctemp, jfet_iv, mos3_iv and
+* rmodel). Each hot/cold device recomputes its own *temp.c data at
+* its TEMP= while its twin stays at the circuit temperature
+* (.options temp=40, TNOM 27): BJTtemp (IS/BF/ISE/ISC, VJ/CJ), and
+* MOS1temp/MOS2temp/MOS6temp (KP/VBI/PHI, the junction saturation
+* currents and PB). Every device has its own E-source drive, so each
+* drain/collector current is a separate branch vector. The sweep
+* starts at 0.65 V so even the cold BJT carries well above the gmin
+* level, where ngspice-47 adds a substrate gmin the Dune does not
+* (KNOWN_DIFFS, "Substrato do PNP").
+.options temp=40
+vin 1 0 dc 0.7
+vds 2 0 dc 2
+eb1 11 0 1 0 1
+ec1 12 0 2 0 1
+q1 12 11 0 qn temp=120
+eb2 21 0 1 0 1
+ec2 22 0 2 0 1
+q2 22 21 0 qn
+eb3 31 0 1 0 1
+ec3 32 0 2 0 1
+q3 32 31 0 qp2 temp=-30
+eg4 41 0 1 0 2
+ed4 42 0 2 0 1
+m4 42 41 0 0 nm1 l=4u w=20u temp=90
+eg5 51 0 1 0 2
+ed5 52 0 2 0 1
+m5 52 51 0 0 nm1 l=4u w=20u
+eg6 61 0 1 0 2
+ed6 62 0 2 0 1
+m6 62 61 0 0 nm2 l=4u w=10u temp=-10
+eg7 71 0 1 0 2
+ed7 72 0 2 0 1
+m7 72 71 0 0 nm2 l=4u w=10u
+eg8 81 0 1 0 2
+ed8 82 0 2 0 1
+m8 82 81 0 0 n6 l=3u w=10u temp=100
+eg9 91 0 1 0 2
+ed9 92 0 2 0 1
+m9 92 91 0 0 n6 l=3u w=10u
+.model qn npn is=1e-16 bf=120 ise=1e-14 ne=1.6 isc=1e-15 rb=100 re=2 vaf=60
++ cje=1p cjc=0.5p xtb=1.5 xti=3.5 eg=1.15
+.model qp2 npn is=5e-17 bf=80 br=2 vaf=40 nf=1.02 xtb=0.8 re=5 rc=10 rb=50
+.model nm1 nmos level=1 vto=0.8 kp=50u lambda=0.02 phi=0.65 gamma=0.4
++ is=1e-14 tpg=1 nsub=2e15 tox=5e-8
+.model nm2 nmos level=2 vto=0.7 tox=40n nsub=1e16 uo=600 lambda=0.02
++ tnom=35
+.model n6 nmos level=6 tpg=1 kc=3.8921e-05 nc=1.1739 kv=0.91602 nv=0.87225
++ lambda0=0.013333 lambda1=0.0046901 vt0=0.69486 gamma=0.60309 phi=1
++ tox=1.98e-08 ld=0.1u nsub=5e16 nss=0
+.dc vin 0.65 1.2 0.05 vds 0.5 3 1.25
+.end
