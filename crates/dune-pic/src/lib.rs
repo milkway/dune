@@ -2,7 +2,7 @@
 //! D-0004, D-0019, D-0020).
 //!
 //! A figure is ordinary pic, compiled by [`rpic_core`] as a library,
-//! with the `spice.pic` prelude (embedded; `corpus/pic/spice.pic`)
+//! with the `spice.pic` prelude (embedded; `src/spice.pic`)
 //! loaded after rpic's std circuit library. The prelude wraps every
 //! D-0019 element in a labeled block:
 //!
@@ -73,8 +73,10 @@ use rpic_core::{CompileOptions, IncludePolicy};
 
 use crate::connect::{Pt, UnionFind, join_geometry};
 
-/// The embedded dune prelude (`corpus/pic/spice.pic`).
-pub const PRELUDE: &str = include_str!("../../../corpus/pic/spice.pic");
+/// The embedded dune prelude (`src/spice.pic`, inside the crate so
+/// the packaged crate — the Python sdist, the R vendor tarball —
+/// carries it).
+pub const PRELUDE: &str = include_str!("spice.pic");
 
 /// Default snap tolerance, in pic inches (PLAN §2.5).
 pub const DEFAULT_SNAP: f64 = 1e-3;

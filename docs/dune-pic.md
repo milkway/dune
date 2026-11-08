@@ -15,7 +15,7 @@ dobradas no `Drawing.passthrough` e argumentos crus em
    testado). As continuações `+` de coluna 1 já vêm dentro da
    entrada do passthrough (cada linha aparada; `end_line` fecha o
    span).
-2. Compila prelude (`corpus/pic/spice.pic`, embutido) + figura com o
+2. Compila prelude (`crates/dune-pic/src/spice.pic`, embutido) + figura com o
    rpic (std `circuits: true`; `copy` negado). Exige `spice = 1` nos
    `vars`.
 3. Colhe blocos rotulados (label = refdes; 1ª letra = cartão, só
@@ -238,9 +238,10 @@ flat (E3) não são usadas — os elementos continuam blocos rotulados.
   S e B em cima e D embaixo (convenção de símbolo PMOS).
 - `vsource` chama `voltage_source($2,$1)` invertido para o `+`
   encarar o P.
-- `PRELUDE` usa `include_str!` com caminho fora do crate
-  (`corpus/pic/spice.pic`) — `cargo package` do dune-pic falharia;
-  irrelevante enquanto não publicamos o crate.
+- `PRELUDE` é `include_str!("spice.pic")`, dentro do crate
+  (`crates/dune-pic/src/spice.pic`; morava em `corpus/pic/` até a
+  0.1.0). Fora do crate, `cargo package` — e com ele o sdist do
+  Python e o tarball vendorizado do R — não levava o arquivo.
 - `X` (opamp ou `subcktN`) emite o cartão, mas o corpo `.subckt` não cabe em linhas `.`
   (linhas de corpo não começam com `.`) — precisa de `.include`,
   resolvido relativo à figura. Testado em `opamp.pic` +
