@@ -1,7 +1,8 @@
-//! [`Circuit::run`]: one analysis card of the netlist IR, dispatched
-//! to its engine call. This is the single card→analysis mapping the
-//! CLI, the oracle, the wasm build and the language bindings share,
-//! so a deck runs the same everywhere.
+//! [`Circuit::run_card`]: one analysis card of the netlist IR,
+//! dispatched to its engine call. This is the single card→analysis
+//! mapping the CLI, the oracle, the wasm build and the language
+//! bindings share (directly, or through [`Circuit::run`], its
+//! plots-only form), so a deck runs the same everywhere.
 
 use dune_netlist::ir::{self, Analysis, Variation};
 
@@ -10,11 +11,46 @@ use crate::circuit::Circuit;
 use crate::dc::DcSweep;
 use crate::error::Error;
 use crate::options::Options;
-use crate::pss::PssParams;
+use crate::pss::{Pss, PssParams};
 use crate::pz::{PzInput, PzWhich};
 use crate::sens::SensAc;
 use crate::solution::Solution;
 use crate::tf::OutputVar;
+
+/// What one analysis card produced ([`Circuit::run_card`]).
+#[derive(Clone, Debug)]
+pub enum CardOutput {
+    /// Every card but `.pss`: its plots in rawfile order and its notes
+    /// (see [`Circuit::run`]).
+    Plots {
+        plots: Vec<Solution>,
+        notes: Vec<String>,
+    },
+    /// A `.pss` card, kept whole: besides its two plots, the period,
+    /// `t0` and the shooting history ([`Pss`]) that the plots alone do
+    /// not carry.
+    Pss(Box<Pss>),
+}
+
+impl CardOutput {
+    /// The card's plots in rawfile order and its notes — what
+    /// [`Circuit::run`] returns: a `.pss` gives its time plot, then
+    /// its spectrum.
+    pub fn into_plots(self) -> (Vec<Solution>, Vec<String>) {
+        match self {
+            CardOutput::Plots { plots, notes } => (plots, notes),
+            CardOutput::Pss(p) => {
+                let Pss {
+                    time,
+                    spectrum,
+                    notes,
+                    ..
+                } = *p;
+                (vec![time, spectrum], notes)
+            }
+        }
+    }
+}
 
 impl Circuit {
     /// Run one analysis card (`.op`, `.dc`, `.tran`, `.ac`, `.pz`,
@@ -26,7 +62,9 @@ impl Circuit {
     /// plot plus, when the band has more than one frequency, the
     /// integrated totals; `.disto` gives 2 or 3 plots; `.pss` the
     /// period and its harmonics — and the analysis' notes (non-fatal
-    /// remarks the caller may show).
+    /// remarks the caller may show). This is [`Circuit::run_card`]
+    /// with the `.pss` result reduced to its plots
+    /// ([`CardOutput::into_plots`]).
     ///
     /// A `.tf`/`.sens` output that is not `V(..)`/`I(..)` is an
     /// [`Error::Build`]; engine failures pass through unchanged.
@@ -35,7 +73,20 @@ impl Circuit {
         analysis: &Analysis,
         opts: &Options,
     ) -> Result<(Vec<Solution>, Vec<String>), Error> {
-        let (mut plots, notes) = self.run_plots(analysis, opts)?;
+        self.run_card(analysis, opts).map(CardOutput::into_plots)
+    }
+
+    /// Run one analysis card as [`Circuit::run`] does, keeping a
+    /// `.pss` result whole ([`CardOutput::Pss`]: period, `t0` and the
+    /// shooting history besides the plots). The card's parameters are
+    /// read here and only here — for `.pss`, the [`PssParams`] of the
+    /// card (ngspice's integer truncation of the counts, the
+    /// defaults of [`PssParams::default`] for what it omits).
+    pub fn run_card(&self, analysis: &Analysis, opts: &Options) -> Result<CardOutput, Error> {
+        let (mut plots, notes) = match self.run_plots(analysis, opts)? {
+            CardOutput::Plots { plots, notes } => (plots, notes),
+            pss @ CardOutput::Pss(_) => return Ok(pss),
+        };
         // `.options keepopinfo`: the small-signal analyses dump their
         // operating point as a plot of its own first (`CKTdump` under
         // `CKTkeepOpInfo`). Names are the C's, copy-paste bug
@@ -56,15 +107,12 @@ impl Circuit {
                 plots.insert(0, op);
             }
         }
-        Ok((plots, notes))
+        Ok(CardOutput::Plots { plots, notes })
     }
 
-    fn run_plots(
-        &self,
-        analysis: &Analysis,
-        opts: &Options,
-    ) -> Result<(Vec<Solution>, Vec<String>), Error> {
-        Ok(match analysis {
+    /// The card's engine call; `keepopinfo` is [`Circuit::run_card`]'s.
+    fn run_plots(&self, analysis: &Analysis, opts: &Options) -> Result<CardOutput, Error> {
+        let (plots, notes) = match analysis {
             Analysis::Op { .. } => {
                 let op = self.op(opts)?;
                 (vec![op.solution], op.notes)
@@ -224,8 +272,7 @@ impl Circuit {
                     steady_coeff: steady_coeff.unwrap_or(d.steady_coeff),
                     uic: *uic,
                 };
-                let pss = self.pss(opts, &p)?;
-                (vec![pss.time, pss.spectrum], pss.notes)
+                return Ok(CardOutput::Pss(Box::new(self.pss(opts, &p)?)));
             }
             Analysis::Tf { outvar, insrc, .. } => {
                 let tf = self.tf(opts, &output_var(outvar)?, insrc)?;
@@ -246,7 +293,8 @@ impl Circuit {
                 let sens = self.sens(opts, &output_var(outvar)?, filters, ac)?;
                 (vec![sens.solution], sens.notes)
             }
-        })
+        };
+        Ok(CardOutput::Plots { plots, notes })
     }
 }
 

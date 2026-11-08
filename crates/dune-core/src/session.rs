@@ -39,6 +39,7 @@ use crate::circuit::{Circuit, Spec};
 use crate::consts::CTOK;
 use crate::error::Error;
 use crate::options::Options;
+use crate::run::CardOutput;
 use crate::solution::Solution;
 use crate::srcfn::Wave;
 
@@ -691,7 +692,7 @@ impl Session {
         let mut plots = Vec::new();
         let mut notes = Vec::new();
         for a in &self.analyses {
-            let (p, n) = run_one(&self.circuit, &self.options, a)?;
+            let (p, n) = run_one(&self.circuit, &self.options, a)?.into_plots();
             plots.extend(p);
             notes.extend(n);
         }
@@ -704,22 +705,25 @@ impl Session {
         &mut self,
         analysis: &Analysis,
     ) -> Result<(Vec<Solution>, Vec<String>), Error> {
+        run_one(&self.circuit, &self.options, analysis).map(CardOutput::into_plots)
+    }
+
+    /// [`Session::run_analysis`] keeping a `.pss` result whole, as
+    /// [`Circuit::run_card`] does (same warm start, same cold re-run
+    /// after a miss).
+    pub fn run_card(&mut self, analysis: &Analysis) -> Result<CardOutput, Error> {
         run_one(&self.circuit, &self.options, analysis)
     }
 }
 
-/// [`Circuit::run`], re-run cold when its warm start missed.
-fn run_one(
-    circuit: &Circuit,
-    options: &Options,
-    analysis: &Analysis,
-) -> Result<(Vec<Solution>, Vec<String>), Error> {
-    let first = circuit.run(analysis, options);
+/// [`Circuit::run_card`], re-run cold when its warm start missed.
+fn run_one(circuit: &Circuit, options: &Options, analysis: &Analysis) -> Result<CardOutput, Error> {
+    let first = circuit.run_card(analysis, options);
     if first.is_ok() || !circuit.warm.take_missed() {
         return first;
     }
     circuit.warm.set_suspended(true);
-    let cold = circuit.run(analysis, options);
+    let cold = circuit.run_card(analysis, options);
     circuit.warm.set_suspended(false);
     cold
 }
