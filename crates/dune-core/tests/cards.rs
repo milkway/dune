@@ -67,6 +67,24 @@ fn instance_temp_uses_model_tc_and_tnom() {
 }
 
 #[test]
+fn instance_dtemp_offsets_the_circuit_temperature() {
+    // ngspice-47 restemp.c: T = CKTtemp + DTEMP = 27 + 100 = 127,
+    // factor 1.2 as above; with TEMP= too, TEMP wins (the C's note).
+    let (p, notes) = run("dtemp\nv1 1 0 1\nr1 1 0 1k rm dtemp=100\n\
+                          v2 2 0 1\nr2 2 0 1k rm temp=127 dtemp=-50\n\
+                          .model rm r tc1=1e-3 tc2=1e-5\n.op\n.end\n");
+    assert!(close(real(&p[0], "i(v1)")[0], -1.0 / 1200.0));
+    assert!(close(real(&p[0], "i(v2)")[0], -1.0 / 1200.0));
+    assert!(
+        notes.iter().any(|n| n.contains("dtemp ignored")),
+        "{notes:?}"
+    );
+    // A plain resistor takes `dtemp` as a parameter, not a model name.
+    let (p, _) = run("dtemp plain\nv1 1 0 1\nr1 1 0 1k dtemp=10\n.op\n.end\n");
+    assert!(close(real(&p[0], "i(v1)")[0], -1e-3));
+}
+
+#[test]
 fn capacitor_geometry_narrow_is_the_3f5_formula() {
     // C = CJ*(W-N)*(L-N) + 2*CJSW*((L-N)+(W-N)), N=1u, L=11u, W=6u:
     // 1e-3*5u*10u + 2*1e-9*15u = 5e-14 + 3e-14 = 8e-14.
