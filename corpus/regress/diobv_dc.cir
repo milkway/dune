@@ -1,0 +1,25 @@
+Diode reverse breakdown from leakage to high current
+* Coverage: the breakdown match of diotemp.c (xbv from BV/IBV) and the
+* breakdown branch of dioload.c, swept from leakage through the knee
+* to ~1.5 A. Two corrections of the 3f5 that ngspice-47 carries
+* (corpus/KNOWN_DIFFS.md): dn has N=1.47, and the 3f5 matches xbv with
+* plain vt while its load uses N*vt (ngspice: NBV*vt, NBV defaults to
+* N), so the 3f5 knee sits (N-1)*vt*ln(IBV/IS) = 0.397 V higher; da
+* has AREA=10, and the 3f5 matches the per-area saturation current
+* against the absolute IBV (ngspice: IS*AREA against IBV), shifting
+* the knee by vt*ln(10) = 60 mV. d3 is the same model without area:
+* ngspice-47 rejects a model referenced only with a positional area.
+* BV is small on purpose: at BV=50 the node test (reltol*50 V = 50 mV)
+* exceeds N*vt, and ngspice's Newton stops off the curve by up to
+* 0.18 V (path-dependent; see docs/dune-core.md, diode breakdown).
+v1 1 0 dc 0
+r1 1 2 10
+d1 0 2 dn
+r2 1 3 10
+d2 0 3 da 10
+r3 1 4 10
+d3 0 4 da
+.model dn d(is=6.79e-18 n=1.47 bv=5)
+.model da d(is=1e-14 bv=5 ibv=1e-4)
+.dc v1 0 20 0.25
+.end
