@@ -38,6 +38,10 @@ test_that("every corpus deck runs and matches the golden's plots", {
   expect_true("ltra_3" %in% names(accepted))
   decks <- list.files(corpus, pattern = "\\.cir$", recursive = TRUE, full.names = TRUE)
   decks <- decks[!grepl("/spice3f5/src/", decks, fixed = TRUE)]
+  # Figure goldens (corpus/pic/golden) are extraction outputs, checked
+  # by test-pic.R next to their figures' .include files; a stem shared
+  # with a Berkeley deck (mos6inv, diffpair, ...) is not its golden.
+  decks <- decks[!grepl("/pic/golden/", decks, fixed = TRUE)]
   ran <- 0L
   for (deck in decks) {
     stem <- sub("\\.cir$", "", basename(deck))
