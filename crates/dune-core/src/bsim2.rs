@@ -1625,4 +1625,17 @@ impl crate::devices::Device for Bsim2I {
         ctx.add_g(self.s[SP_B], -gbs - (xnrm - xrev) * gmbs);
         ctx.add_g(self.s[SP_DP], -gds - xrev * (gm + gmbs));
     }
+
+    /// `B2pzLoad` (`b2pzld.c`, `b1pzld.c` with the overlaps read from
+    /// `pParam`): see [`crate::bsim1::bsim_pz_load`].
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let ov = crate::bsim1::BsimOverlaps {
+            gd: self.t.gd_overlap,
+            gs: self.t.gs_overlap,
+            gb: self.t.gb_overlap,
+        };
+        let (gdpr, gspr) = (self.t.drain_conductance, self.t.source_conductance);
+        crate::bsim1::bsim_pz_load(ctx, &self.s, self.st, self.mode, gdpr, gspr, &ov);
+        Ok(())
+    }
 }

@@ -11,7 +11,7 @@
 use crate::consts::{ROOT2, VT0};
 use crate::diode::pnjlim;
 use crate::matrix::{AcCtx, AnKind, InitMode, LoadCtx, MatrixBuilder, Slot, TRASH, Var};
-use crate::mos1::{MosGeom, fetlim, limvds};
+use crate::mos1::{MosGeom, MosPzConductances, fetlim, limvds, mos_pz_conductances};
 
 /// `.model … nmos(level=4 …)` parameters, 3f5 names (`b1.c` keyword
 /// table). Everything defaults to 0 (`b1set.c`); the junction
@@ -321,6 +321,92 @@ const SP_S: usize = 18;
 const DP_B: usize = 19;
 const SP_B: usize = 20;
 const SP_DP: usize = 21;
+
+/// The overlap capacitances the AC and pole-zero loads add to the
+/// charge-model matrix (`B1GDoverlapCap`, `B1GSoverlapCap`,
+/// `B1GBoverlapCap` of `b1temp.c`; BSIM2 keeps them in `pParam`).
+pub(crate) struct BsimOverlaps {
+    pub gd: f64,
+    pub gs: f64,
+    pub gb: f64,
+}
+
+/// `B1pzLoad` (`b1pzld.c`; `b2pzld.c` is the same file reading the
+/// overlaps from `pParam`): the AC stamps of the charge-oriented
+/// capacitance matrix with `s` in place of `jω`, then the shared MOS
+/// conductances. Reads the small-signal values the `INITSMSIG` load
+/// left in `state0` at the BSIM1 offsets — BSIM2's state layout is
+/// the same (`b2defs.h` copies `bsim1def.h`; the offsets in
+/// `bsim2.rs` are identical).
+pub(crate) fn bsim_pz_load(
+    ctx: &mut crate::matrix::PzCtx,
+    s: &[Slot; 22],
+    st: usize,
+    mode: f64,
+    gdpr: f64,
+    gspr: f64,
+    ov: &BsimOverlaps,
+) {
+    let s0 = |o: usize| ctx.states.get(0, st + o);
+    let (xnrm, xrev) = if mode >= 0.0 { (1.0, 0.0) } else { (0.0, 1.0) };
+    let gm = s0(GM);
+    let gds = s0(GDS);
+    let gmbs = s0(GMBS);
+    let gbd = s0(GBD);
+    let gbs = s0(GBS);
+    let capbd = s0(CAPBD);
+    let capbs = s0(CAPBS);
+    let cggb = s0(CGGB);
+    let cgsb = s0(CGSB);
+    let cgdb = s0(CGDB);
+    let cbgb = s0(CBGB);
+    let cbsb = s0(CBSB);
+    let cbdb = s0(CBDB);
+    let cdgb = s0(CDGB);
+    let cdsb = s0(CDSB);
+    let cddb = s0(CDDB);
+    let xcdgb = cdgb - ov.gd;
+    let xcddb = cddb + capbd + ov.gd;
+    let xcdsb = cdsb;
+    let xcsgb = -(cggb + cbgb + cdgb + ov.gs);
+    let xcsdb = -(cgdb + cbdb + cddb);
+    let xcssb = capbs + ov.gs - (cgsb + cbsb + cdsb);
+    let xcggb = cggb + ov.gd + ov.gs + ov.gb;
+    let xcgdb = cgdb - ov.gd;
+    let xcgsb = cgsb - ov.gs;
+    let xcbgb = cbgb - ov.gb;
+    let xcbdb = cbdb - capbd;
+    let xcbsb = cbsb - capbs;
+
+    ctx.add_cap(s[G_G], xcggb);
+    ctx.add_cap(s[B_B], -xcbgb - xcbdb - xcbsb);
+    ctx.add_cap(s[DP_DP], xcddb);
+    ctx.add_cap(s[SP_SP], xcssb);
+    ctx.add_cap(s[G_B], -xcggb - xcgdb - xcgsb);
+    ctx.add_cap(s[G_DP], xcgdb);
+    ctx.add_cap(s[G_SP], xcgsb);
+    ctx.add_cap(s[B_G], xcbgb);
+    ctx.add_cap(s[B_DP], xcbdb);
+    ctx.add_cap(s[B_SP], xcbsb);
+    ctx.add_cap(s[DP_G], xcdgb);
+    ctx.add_cap(s[DP_B], -xcdgb - xcddb - xcdsb);
+    ctx.add_cap(s[DP_SP], xcdsb);
+    ctx.add_cap(s[SP_G], xcsgb);
+    ctx.add_cap(s[SP_B], -xcsgb - xcsdb - xcssb);
+    ctx.add_cap(s[SP_DP], xcsdb);
+    let g = MosPzConductances {
+        xnrm,
+        xrev,
+        gm,
+        gds,
+        gmbs,
+        gbd,
+        gbs,
+        gdpr,
+        gspr,
+    };
+    mos_pz_conductances(ctx, s, &g);
+}
 
 /// Everything `B1evaluate` hands back.
 #[derive(Clone, Copy, Default)]
@@ -1344,5 +1430,17 @@ impl crate::devices::Device for Bsim1I {
         ctx.add_g(self.s[SP_S], -gspr);
         ctx.add_g(self.s[SP_B], -gbs - (xnrm - xrev) * gmbs);
         ctx.add_g(self.s[SP_DP], -gds - xrev * (gm + gmbs));
+    }
+
+    /// `B1pzLoad` (`b1pzld.c`): see [`bsim_pz_load`].
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let ov = BsimOverlaps {
+            gd: self.t.gd_overlap,
+            gs: self.t.gs_overlap,
+            gb: self.t.gb_overlap,
+        };
+        let (gdpr, gspr) = (self.t.drain_conductance, self.t.source_conductance);
+        bsim_pz_load(ctx, &self.s, self.st, self.mode, gdpr, gspr, &ov);
+        Ok(())
     }
 }
