@@ -1,0 +1,24 @@
+Semiconductor resistors: R model geometry, TC1/TC2, TNOM and instance TEMP
+* Coverage: no corpus deck has an R model. restemp.c (3f5): with no
+* value, R = RSH*(L-NARROW)/(W-NARROW), W defaulting to DEFW (10u in the
+* code; spice.txt documents 1u); then G = 1/(R*(1+TC1*dT+TC2*dT^2)),
+* dT = TEMP - TNOM, TEMP from the instance TEMP= or .options temp.
+* r1: geometry + DEFW + circuit temp (60 C) against TNOM=20 C.
+* r2: explicit value on a model card (value wins, TC still applies).
+* r3: instance temp=150 C. r4: plain resistor with temp= (default
+* model: TC=0, so temp changes nothing). NARROW stays 0 and every
+* model card has RSH: ngspice-47 changed the geometry formula to
+* (L-2*SHORT)/(W-2*NARROW) and the no-RSH fallback from 1k to 1 mOhm
+* (corpus/KNOWN_DIFFS.md; both pinned by unit tests instead).
+.options temp=60
+v1 1 0 dc 2
+r1 1 2 rpoly l=40u
+r2 2 3 750 rpoly
+r3 3 4 rpoly l=12u w=3u temp=150
+r4 4 0 470 temp=-40
+v2 6 0 dc 1
+r6 6 0 rhot l=25u w=5u
+.model rpoly r rsh=50 defw=4u tc1=2.5e-3 tc2=1.2e-5 tnom=20
+.model rhot r (rsh=200 tc1=-1.5e-3 tc2=4e-6)
+.op
+.end

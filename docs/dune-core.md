@@ -577,6 +577,63 @@ oráculo contra o ngspice.
    `vbin` do ngspice produz gm negativo com corrente nula e só
    converge com o dynamic gmin de lá; correntes idênticas).
 
+## Cartões e sweeps menores (2026-11-08)
+
+- **R com modelo** (`restemp.c`, `resmpar.c`, `resparam.c`): modelo
+  `r` com `RSH DEFW NARROW TC1 TC2 TNOM`; sem valor,
+  `R = RSH·(L−NARROW)/(W−NARROW)` (W default DEFW = 10e-6 — o
+  código; o `spice.txt` diz 1e-6), e sem RSH ou L o aviso do C
+  "resistance=0, set to 1000". Com ou sem valor, a condutância é
+  `1/(R·factor)`, `factor = 1 + TC1·ΔT + TC2·ΔT²`, `ΔT = T − TNOM`,
+  `T` = `TEMP=` da instância ou a do circuito. O fator mora em
+  `ResistorI::factor` (o `RESupdate_conduct` do ngspice: `g =
+  m/(R·factor·scale)`, AC idem); a temperatura da instância e os
+  TC vêm da elaboração por uma tabela lateral crate-privada
+  (`Circuit::res_temp`, como o `ic_given`) — **o spec público
+  `Resistor` não mudou** (ponto de pausa de API: estender o spec
+  tipado com modelo/temp fica para quando o usuário pedir). R sem
+  modelo e sem valor segue erro (o 3f5 daria 1 kΩ calado).
+- **C com modelo** (`captemp.c`, `capsetup.c`, `capmpar.c`): modelo
+  `c` com `CJ CJSW DEFW NARROW`; sem valor,
+  `C = CJ·(W−N)·(L−N) + 2·CJSW·((L−N)+(W−N))`, L default 0. Puro
+  na elaboração (o 3f5 não tem temperatura no C).
+- Divergências do ngspice-47 na geometria (SHORT/2·NARROW), no
+  fallback (1 mΩ) e os parâmetros só-ngspice (ignorados com nota)
+  estão no KNOWN_DIFFS. Sondas `regress/rmodel` (.op, margem 0) e
+  `regress/cmodel` (.ac, margem 0), ambas com NARROW=0; a fórmula
+  do 3f5 com NARROW≠0 e o fallback ficam em `tests/cards.rs`.
+- **`.dc` além de fontes.** Contrato medido no C: o `DCtrCurv` do
+  3f5 (`ckt/dctrcurv.c:67-111`) só procura `Vsource` e `Isource`
+  ("DCtrCurv: source %s not in circuit", `E_NODEV`) — nem TEMP nem
+  parâmetro de modelo. O ngspice-47
+  (`spicelib/analysis/dctrcurv.c:89-157`) procura resistor
+  (`rcode`: varre `RESresist` com `RESresGiven`, chama
+  `RESupdate_conduct` — o fator de temperatura continua dividindo),
+  depois V, I e por fim a palavra `temp` (`TEMP_CODE`: `CKTtemp =
+  valor + CONSTCtoK` e `CKTtemp(ckt)` a cada ponto; o passo que já
+  passou do stop não reavalia, linha 457); escalas `res-sweep` e
+  `temp-sweep`, tipadas pelo próprio nome. Parâmetro de
+  modelo/instância não é variável de `.dc` em nenhum dos dois
+  (no ngspice só por laço `.control`/`alter`). O Dune segue o
+  ngspice (KNOWN_DIFFS): `SweepTarget::{Device, Temp}`; o nível de
+  temperatura reconstrói os dispositivos com `opts.temp` novo
+  (`Circuit::build`) e troca a lista no motor
+  (`Engine::replace_devices` — mesma ordem, nós e estados, slots
+  re-derivados num builder novo), reaplicando os valores correntes
+  dos outros níveis; `TEMP=` de instância fica. Sonda
+  `regress/dctemp` (`.dc temp -25 125 25 v1 1 3 1`: diodo, BJT, R
+  com TC e um R com `temp=` fixo) PASS a 0.475.
+- **`keepopinfo`** (`cktsopt.c`, IF_FLAG): `Options::keepopinfo`;
+  `Circuit::run` antepõe o op (`self.op`, idêntico ao op da
+  análise) com o nome do C — 3f5: `.ac` "AC Operating Point"
+  (`acan.c:73`), `.pz` e `.disto` "Distortion Operating Point"
+  (`pzan.c:46` herdou o nome por copy-paste; `distoan.c:126`).
+  ngspice-47 acrescenta `.noise` ("NOISE Operating Point",
+  `noisean.c:221`) e `.sp` ("AC Operating Point", `span.c:476`),
+  que o Dune segue (KNOWN_DIFFS). Plot real, sem escala. Sonda
+  `regress/keepop` (PASS 0.012 / 0.005); pz/disto/noise medidos à
+  mão contra o ngspice (PASS) e pinados em `tests/cards.rs`.
+
 ## Pendências (fases seguintes)
 
 - Ruído de BSIM1/2 (`b1noi.c`/`b2noi.c`, só ngspice — hoje
@@ -585,16 +642,15 @@ oráculo contra o ngspice.
   térmicos usam a temperatura do circuito); `.pz` dos semicondutores restantes (BJT/
   MOS têm `pzLoad` no C, aqui ainda não); `.disto` de JFET/MES/BSIM1
   (`jfetdset.c`/`mesdset.c`/`b1dset.c` no C, não portados —
-  MOS6/BSIM2 não têm no C); `.dc` varrendo TEMP e parâmetro de
-  modelo; `keepopinfo` (plot "AC Operating Point").
-- Semicondutores R/C com modelo (w/l), `temp` por instância de R.
+  MOS6/BSIM2 não têm no C).
+- R/C com modelo: `.sens` dos parâmetros de temperatura do R
+  (`_temp`, `:tc1`, `:tc2` seguem inertes — derivada nula mesmo com
+  TC≠0) e o térmico do R na temperatura da instância (ngspice usa
+  `REStemp`; o 3f5 usa `CKTtemp`, que é o que o Dune faz). Espelho
+  de `keepopinfo` nas listas de override dos bindings (Py/R/wasm).
 - Linha U (URC) e fonte B (Fase 3, sem deck); JFET nível 2
   (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são ngspice, fora do
   contrato 3f5.
-- Oráculo: a coluna de escala não é comparada (a malha de
-  frequência errada do acdec só apareceu como erro de variável) e
-  o tubo do tran absorve um shift de malha inteiro (o tra_uic
-  pré-fix passava com 0.68 V de erro pontual).
 - Pz das chaves sem golden (só testes unitários); o ruído está
   pinado por `regress/fetnoise` (`onoise_s1`).
 - LTRA: `trytocompact` (compactação do histórico) e o controle LTE

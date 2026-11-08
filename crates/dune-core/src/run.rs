@@ -35,6 +35,35 @@ impl Circuit {
         analysis: &Analysis,
         opts: &Options,
     ) -> Result<(Vec<Solution>, Vec<String>), Error> {
+        let (mut plots, notes) = self.run_plots(analysis, opts)?;
+        // `.options keepopinfo`: the small-signal analyses dump their
+        // operating point as a plot of its own first (`CKTdump` under
+        // `CKTkeepOpInfo`). Names are the C's, copy-paste bug
+        // included: `pzan.c` calls its plot "Distortion Operating
+        // Point" (3f5 `acan.c:73`, `pzan.c:46`, `distoan.c:126`).
+        // `.noise` and `.sp` dump only in ngspice-47 (`noisean.c:221`,
+        // `span.c:476`), which Dune follows (corpus/KNOWN_DIFFS.md).
+        if opts.keepopinfo {
+            let name = match analysis {
+                Analysis::Ac { .. } | Analysis::Sp { .. } => Some("AC Operating Point"),
+                Analysis::Pz { .. } | Analysis::Disto { .. } => Some("Distortion Operating Point"),
+                Analysis::Noise { .. } => Some("NOISE Operating Point"),
+                _ => None,
+            };
+            if let Some(name) = name {
+                let mut op = self.op(opts)?.solution;
+                op.plotname = name.to_string();
+                plots.insert(0, op);
+            }
+        }
+        Ok((plots, notes))
+    }
+
+    fn run_plots(
+        &self,
+        analysis: &Analysis,
+        opts: &Options,
+    ) -> Result<(Vec<Solution>, Vec<String>), Error> {
         Ok(match analysis {
             Analysis::Op { .. } => {
                 let op = self.op(opts)?;

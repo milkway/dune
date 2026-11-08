@@ -28,6 +28,14 @@
 //! `2 · (trtol · reltol · S + floor)` with `S` the vector's waveform
 //! scale; the maximum and RMS errors are reported per worst vector.
 //!
+//! Two guards close holes of those rulers: the sweep scale (the
+//! frequency or `.dc` sweep vector) is compared as a grid, at
+//! rounding level, and reported as a structural problem when it
+//! differs ([`compare_scale`]); and a transient plot may neither
+//! exceed `POINTWISE_K` rulers pointwise (the time tube hides a
+//! whole-step slip of an edge) nor pass only thanks to the global
+//! time shift.
+//!
 //! Comparing `.ac` as dB magnitude + phase is still pending.
 
 use dune_raw::{Data, Plot, Rawfile, VarType};
@@ -54,6 +62,18 @@ impl Default for Tolerances {
 /// `TRTOL`, the truncation-error overestimation factor of the step
 /// control (3f5 default 7): the transient comparison budget.
 const TRTOL: f64 = 7.0;
+
+/// The transient pointwise guard (see `compare_tran`): the raw
+/// interpolated error, without the time tube, may reach this many
+/// LTE rulers `2·(TRTOL·reltol·S + floor)` — `16·0.014·S ≈ 0.22·S`,
+/// a fifth of the waveform scale. Measured on the corpus (78 decks):
+/// every passing transient stays at ≤ 0.27 rulers pointwise (60×
+/// under the limit), while the `tra_uic` regression from before the
+/// UIC TSTEP breakpoint fix (an edge one oracle step late, 0.68 V
+/// pointwise, invisible to the tube) sits at ~48 rulers. The XFAIL
+/// decks (schmitt 52, ltra_3 43, mosamp2 6 pointwise) stay under
+/// their caps once divided by the limit.
+const POINTWISE_K: f64 = 16.0;
 
 impl Tolerances {
     /// Absolute floor for a vector of the given type.
@@ -89,11 +109,17 @@ pub struct PlotReport {
     pub problems: Vec<String>,
     /// Non-fatal observations (extra variables in the candidate, …).
     pub notes: Vec<String>,
+    /// A transient plot that is within the ruler only after a global
+    /// time shift (D-0011). Never a PASS: every passing deck of the
+    /// corpus passes unshifted, and a shift that rescues a plot is
+    /// the signature of a grid slip (see `compare_tran`); the shifted
+    /// margin still measures XFAIL entries against their caps.
+    pub shift_needed: bool,
 }
 
 impl PlotReport {
     pub fn pass(&self) -> bool {
-        self.problems.is_empty() && self.worst_ratio <= 1.0
+        self.problems.is_empty() && self.worst_ratio <= 1.0 && !self.shift_needed
     }
 }
 
@@ -160,13 +186,19 @@ fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotRepor
         worst_var: None,
         problems: Vec::new(),
         notes: Vec::new(),
+        shift_needed: false,
     };
 
+    let scale = is_scale(oracle);
     for (i, var) in oracle.variables.iter().enumerate() {
         let Some(j) = candidate.variable_index(&var.name) else {
             r.problems.push(format!("variable `{}` missing", var.name));
             continue;
         };
+        if i == 0 && scale {
+            compare_scale(&var.name, &oracle.data, &candidate.data, j, &mut r);
+            continue;
+        }
         let floor = tol.floor(&var.vtype);
         match (&oracle.data, &candidate.data) {
             (Data::Real(a), Data::Real(b)) => {
@@ -193,6 +225,68 @@ fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotRepor
         }
     }
     r
+}
+
+/// Relative ruler of the scale column (see [`compare_scale`]).
+const SCALE_RTOL: f64 = 1e-9;
+
+/// Whether a (non-transient) plot's first vector is a sweep scale:
+/// the frequency of `.ac`/`.noise`/`.disto`/`.sp`, or a `.dc` sweep
+/// vector (`v-sweep`, `i-sweep`, ngspice's `res-sweep`/`temp-sweep`).
+/// Operating-point plots have no scale — their first vector is just
+/// the first node.
+fn is_scale(p: &Plot) -> bool {
+    p.variables.first().is_some_and(|v| {
+        let n = v.name.to_ascii_lowercase();
+        matches!(v.vtype, VarType::Frequency)
+            || n == "frequency"
+            || ["v-sweep", "i-sweep", "res-sweep", "temp-sweep"]
+                .iter()
+                .any(|s| n == *s || n == format!("v({s})") || n == format!("i({s})"))
+    })
+}
+
+/// The scale is a grid, not a solution: both programs compute it by
+/// the same arithmetic from the card (`acan.c`'s `freq *= step`,
+/// `dctrcurv.c`'s `+= step`), with no Newton tolerance to share. A
+/// grid that differs beyond accumulated rounding (`SCALE_RTOL`,
+/// relative to the point and to the largest point of the column) is
+/// a structural problem — it misplaces every vector — and is
+/// reported as such, not as a variable error.
+fn compare_scale(name: &str, oracle: &Data, candidate: &Data, j: usize, r: &mut PlotReport) {
+    let col = |d: &Data, k: usize| -> Option<Vec<f64>> {
+        match d {
+            Data::Real(c) => c.get(k).cloned(),
+            Data::Complex(c) => c.get(k).map(|v| v.iter().map(|z| z.re).collect()),
+        }
+    };
+    let (Some(a), Some(b)) = (col(oracle, 0), col(candidate, j)) else {
+        r.problems.push(format!("scale `{name}` unreadable"));
+        return;
+    };
+    if a.len() != b.len() {
+        r.problems.push(format!(
+            "scale `{name}` length differs: oracle {} vs candidate {}",
+            a.len(),
+            b.len()
+        ));
+        return;
+    }
+    let colmax = a.iter().chain(&b).fold(0.0f64, |m, v| m.max(v.abs()));
+    for (k, (x, y)) in a.iter().zip(&b).enumerate() {
+        if x == y {
+            continue;
+        }
+        let err = (x - y).abs();
+        let allow = SCALE_RTOL * (x.abs().max(y.abs()) + colmax);
+        if err.is_nan() || err > allow {
+            r.problems.push(format!(
+                "scale `{name}` differs at point {k}: oracle {x:.9e} vs candidate {y:.9e} \
+                 (grid mismatch)"
+            ));
+            return;
+        }
+    }
 }
 
 fn compare_column(
@@ -247,6 +341,7 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
         worst_var: None,
         problems: Vec::new(),
         notes: Vec::new(),
+        shift_needed: false,
     };
     let (Data::Real(oc), Data::Real(cc)) = (&oracle.data, &candidate.data) else {
         r.problems.push("transient plots must be real".into());
@@ -292,8 +387,17 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
     // own-scale allowance cannot be reconstructed from the rawfile,
     // so in transient plots they are compared and reported but do
     // not gate the verdict (D-0011); node voltages gate.
-    let eval = |delta: f64| -> (f64, usize, f64, f64, f64, usize) {
-        let mut worst = (0.0f64, usize::MAX, 0.0f64, 0.0f64, 0.0f64, usize::MAX);
+    let eval = |delta: f64| -> (f64, usize, f64, f64, f64, usize, f64, usize) {
+        let mut worst = (
+            0.0f64,
+            usize::MAX,
+            0.0f64,
+            0.0f64,
+            0.0f64,
+            usize::MAX,
+            0.0f64,
+            usize::MAX,
+        );
         let mut plot_max_err = 0.0f64;
         for &(i, j) in &pairs {
             let a = &oc[i];
@@ -302,6 +406,7 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
             let floor = tol.floor(&oracle.variables[i].vtype);
             let allow = 2.0 * (TRTOL * tol.reltol * scale + floor);
             let mut max_tube = 0.0f64;
+            let mut max_point = 0.0f64;
             let mut sum_sq = 0.0f64;
             for (k, t) in ot.iter().enumerate() {
                 let ts = t + delta;
@@ -314,9 +419,12 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
                         f64::INFINITY,
                         0.0,
                         usize::MAX,
+                        f64::INFINITY,
+                        i,
                     );
                 }
                 plot_max_err = plot_max_err.max(err);
+                max_point = max_point.max(err);
                 sum_sq += err * err;
                 // Time tube: within the oracle's own local sampling
                 // interval an edge cannot be located better than one
@@ -324,11 +432,16 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
                 let tau = oracle_tau(ot, k);
                 max_tube = max_tube.max(tube_err(ct, b, ts, a[k], tau));
             }
-            let ratio = if max_tube == 0.0 {
+            let tube_ratio = if max_tube == 0.0 {
                 0.0
             } else {
                 max_tube / allow
             };
+            // The pointwise guard: the tube forgives an edge placed
+            // anywhere within one oracle step, which also forgives a
+            // whole-step slip of a deterministic edge; bound the raw
+            // pointwise error at POINTWISE_K rulers.
+            let ratio = tube_ratio.max(max_point / allow / POINTWISE_K);
             let gating = matches!(oracle.variables[i].vtype, VarType::Voltage);
             if gating && ratio > worst.0 {
                 worst.0 = ratio;
@@ -338,6 +451,10 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
             if !gating && ratio > worst.4 {
                 worst.4 = ratio;
                 worst.5 = i;
+            }
+            if gating && max_point / allow > worst.6 {
+                worst.6 = max_point / allow;
+                worst.7 = i;
             }
         }
         worst.2 = plot_max_err;
@@ -364,7 +481,20 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
         }
     }
 
-    let (ratio, worst_i, max_err, rms, ng_ratio, ng_i) = best;
+    let (ratio, worst_i, max_err, rms, ng_ratio, ng_i, pw_ratio, pw_i) = best;
+    if best_delta != 0.0 {
+        r.shift_needed = true;
+        r.notes.push(format!(
+            "within the ruler only after a time shift of {best_delta:+.3e}s: not a PASS \
+             (a grid slip, or a self-timed XFAIL deck)"
+        ));
+    }
+    if pw_i != usize::MAX {
+        r.notes.push(format!(
+            "pointwise guard: worst `{}` at {pw_ratio:.3} rulers (limit {POINTWISE_K})",
+            oracle.variables[pw_i].name
+        ));
+    }
     r.worst_ratio = ratio;
     r.max_abs_err = max_err;
     if worst_i != usize::MAX {
@@ -581,5 +711,66 @@ mod tests {
         assert!(!compare_rawfiles(&a, &b, &t).pass());
         // NaN on both sides at the same point: no disagreement.
         assert!(compare_rawfiles(&a, &a.clone(), &t).pass());
+    }
+
+    fn tran(times: Vec<f64>, vals: Vec<f64>) -> Rawfile {
+        let mut p = plot(
+            vec![Variable::new("time", VarType::Time), v("v(1)")],
+            Data::Real(vec![times, vals]),
+        );
+        p.name = "Transient Analysis".into();
+        raw(p)
+    }
+
+    /// A unit step at `edge`, sampled on `0, dt, 2dt, … 10`.
+    fn step(edge: f64, dt: f64) -> Rawfile {
+        let n = (10.0 / dt).round() as usize;
+        let t: Vec<f64> = (0..=n).map(|k| k as f64 * dt).collect();
+        let y = t
+            .iter()
+            .map(|&x| if x >= edge { 1.0 } else { 0.0 })
+            .collect();
+        tran(t, y)
+    }
+
+    #[test]
+    fn scale_grid_mismatch_is_structural() {
+        let t = Tolerances::default();
+        let ac = |f2: f64| {
+            let mut p = plot(
+                vec![Variable::new("frequency", VarType::Frequency), v("v(1)")],
+                Data::Complex(vec![
+                    vec![Complex64::new(1e3, 0.0), Complex64::new(f2, 0.0)],
+                    vec![Complex64::new(1.0, 0.0); 2],
+                ]),
+            );
+            p.name = "AC Analysis".into();
+            raw(p)
+        };
+        assert!(compare_rawfiles(&ac(1e4), &ac(1e4), &t).pass());
+        // 1e-4 relative: inside the variable ruler, a wrong grid.
+        let rep = compare_rawfiles(&ac(1e4), &ac(1.0001e4), &t);
+        assert!(!rep.pass());
+        assert!(rep.plots[0].problems[0].contains("scale"), "{rep:?}");
+    }
+
+    #[test]
+    fn tran_whole_step_slip_fails_the_pointwise_guard() {
+        let t = Tolerances::default();
+        let oracle = step(5.0, 1.0);
+        assert!(compare_rawfiles(&oracle, &step(5.0, 0.1), &t).pass());
+        // Edge 0.9 late: inside the ±1-step tube, beyond the shift
+        // budget (2·7·1e-3·10 = 0.14), 71 rulers pointwise.
+        let rep = compare_rawfiles(&oracle, &step(5.9, 0.1), &t);
+        assert!(!rep.pass(), "{rep:?}");
+    }
+
+    #[test]
+    fn tran_passing_only_after_a_shift_is_not_a_pass() {
+        let t = Tolerances::default();
+        let rep = compare_rawfiles(&step(5.0, 1.0), &step(5.1, 0.01), &t);
+        assert!(rep.plots[0].shift_needed, "{rep:?}");
+        assert!(rep.plots[0].worst_ratio <= 1.0);
+        assert!(!rep.pass());
     }
 }
