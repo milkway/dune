@@ -4,8 +4,9 @@
 //! and the three setups share everything but the drain-current
 //! derivatives: the bulk diodes, the depletion and Meyer capacitance
 //! coefficients and the final "type and mode" bookkeeping live here,
-//! once. MOS6 and BSIM1/2 have no `DEVdisto` in this port (BSIM1's
-//! `b1disto.c` is not ported) and keep the structured refusal.
+//! once. BSIM1's (`b1dset.c`/`b1disto.c`) lives in `b1disto.rs`;
+//! MOS6 and BSIM2 have no `DEVdisto` in the C and keep the structured
+//! refusal.
 
 use crate::dderivs::Dderivs;
 use crate::disto::{DfCoeffs, DistoCtx, DistoMode, d1_term, df_term, jomega};

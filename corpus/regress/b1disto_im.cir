@@ -1,0 +1,31 @@
+BSIM1 stage in inverse mode: intermodulation in .disto
+* Coverage: b1dset.c in the inverse mode (drain and source swapped on
+* the card, so vds < 0: the chain rule for the current and for the
+* 0/100 (XPART=1) gate, bulk and drain charges), a forward-biased
+* bulk-drain junction (vbb = +0.45 V over the 1k drain resistor, JS
+* raised so it conducts) whose gbd term b1disto.c stamps from the GATE
+* in the F1+F2/F1-F2 modes, and IM products f1+f2, f1-f2, 2f1-f2
+* against ngspice-47.
+vdd 5 0 5
+vin 1 0 0 distof1 0.02 distof2 0.015
+vbias 2 1 1.6
+rg 2 3 10k
+m1 8 3 4 6 nmos l=2u w=20u ad=60p as=40p pd=30u ps=24u
+rd 5 4 10k
+cl 4 0 0.2p
+vbb 6 0 0.45
+rsd 8 0 1k
+.model nmos nmos
++ level=4 tox=3.00000e-2 vdd=5 temp=27
++ dl=7.97991e-1 dw=4.77402e-1
++ vfb=-1.0087 phi=7.96434e-1 k1=1.31191 k2=1.46640e-1
++ eta=-1.0027e-3 muz=5.34334e+2 u0=4.38497e-2 u1=-5.7332e-2
++ x2e=-7.6911e-4 x3e=7.86777e-4 x2mz=8.25434
++ mus=5.40612e+2 x2ms=-1.2992e+1 x3ms=-9.4035
++ x2u0=1.06821e-3 x2u1=-1.9209e-2 x3u1=7.76925e-3
++ n0=1.55 nb=0.09 nd=0.0
++ cgdo=2.70000e-10 cgso=2.70000e-10 cgbo=1.40000e-10 xpart=1
++ rsh=0 cj=2.75e-4 cjsw=1.90e-10 js=1.0e-2
++ pb=0.7 pbsw=0.8 mj=0.5 mjsw=0.33 wdf=0.0
+.disto dec 10 1e3 1e10 0.9
+.end

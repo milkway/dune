@@ -364,6 +364,8 @@ pub(crate) struct Bsim1I {
     mode: f64,
     von: f64,
     vdsat: f64,
+    /// `B1dSetup`'s Taylor coefficients (`b1disto.rs`).
+    dist: crate::b1disto::B1DistoCoeffs,
 }
 
 impl Bsim1I {
@@ -397,6 +399,7 @@ impl Bsim1I {
             mode: 1.0,
             von,
             vdsat: 0.0,
+            dist: crate::b1disto::B1DistoCoeffs::default(),
         }
     }
 
@@ -761,6 +764,21 @@ impl Bsim1I {
         e.cdrain = f64::max(drain_current, 0.0);
         e
     }
+}
+
+/// `B1evaluate` on a bare size/geometry (the `.disto` setup's
+/// cross-check): `(cdrain, qg, qb, qd)` at local `vds ≥ 0`.
+#[cfg(test)]
+pub(crate) fn evaluate_for_test(
+    t: Bsim1Size,
+    geom: MosGeom,
+    vds: f64,
+    vbs: f64,
+    vgs: f64,
+) -> (f64, f64, f64, f64) {
+    let i = Bsim1I::new([1, 2, 3, 4], [1, 3], t, geom, false, (0.0, 0.0, 0.0), 0);
+    let e = i.evaluate(vds, vbs, vgs, true);
+    (e.cdrain, e.qg, e.qb, e.qd)
 }
 
 impl crate::devices::Device for Bsim1I {
@@ -1268,6 +1286,23 @@ impl crate::devices::Device for Bsim1I {
         crate::integ::terr(self.st + QB, t, time_step);
         crate::integ::terr(self.st + QG, t, time_step);
         crate::integ::terr(self.st + QD, t, time_step);
+    }
+
+    /// `B1dSetup` (`dev/bsim1/b1dset.c`): see `b1disto.rs`.
+    fn disto_setup(&mut self, ctx: &crate::disto::DistoSetupCtx) -> Result<(), &'static str> {
+        self.dist = crate::b1disto::dsetup(
+            &self.t,
+            &self.geom,
+            (self.gate, self.bulk, self.d_p, self.s_p),
+            ctx.sol,
+            ctx.gmin,
+        );
+        Ok(())
+    }
+
+    /// `B1disto` (`dev/bsim1/b1disto.c`) in the load modes.
+    fn disto_load(&self, ctx: &mut crate::disto::DistoCtx) {
+        crate::b1disto::dload(&self.dist, (self.gate, self.bulk, self.d_p, self.s_p), ctx);
     }
 
     /// `B1acLoad`.
