@@ -46,8 +46,22 @@ impl Circuit {
         let mut zmodels: HashMap<&str, crate::mes::MesModel> = HashMap::new();
         let mut smodels: HashMap<&str, crate::switch::SwModel> = HashMap::new();
         let mut wmodels: HashMap<&str, crate::switch::CswModel> = HashMap::new();
+        let mut rmodels: HashMap<&str, ResModel> = HashMap::new();
+        let mut cmodels: HashMap<&str, CapModel> = HashMap::new();
         for m in &nl.models {
             match m.mtype.as_str() {
+                "r" => match res_model(m, &mut notes) {
+                    Ok(rm) => {
+                        rmodels.insert(m.name.as_str(), rm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
+                "c" => match cap_model(m, &mut notes) {
+                    Ok(cm) => {
+                        cmodels.insert(m.name.as_str(), cm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
                 "sw" => match sw_model(m, &mut notes) {
                     Ok(sm) => {
                         smodels.insert(m.name.as_str(), sm);
@@ -204,26 +218,32 @@ impl Circuit {
                     model,
                     params,
                 } => {
-                    if model.is_some() {
-                        problems.push(format!(
-                            "`{name}`: semiconductor resistor models are not implemented yet"
-                        ));
-                        continue;
-                    }
-                    if !params.is_empty() {
-                        notes.push(format!("`{name}`: resistor parameters ignored (Phase 1)"));
-                    }
-                    match value {
-                        Some(v) => add(
-                            &mut ckt,
-                            Resistor {
-                                name,
-                                nodes: two(&el.nodes),
-                                value: *v,
-                            },
-                            &mut problems,
-                        ),
-                        None => problems.push(format!("`{name}`: resistor has no value")),
+                    let rm = match model {
+                        Some(m) => match rmodels.get(m.as_str()) {
+                            Some(rm) => Some(rm),
+                            None => {
+                                problems.push(format!("`{name}`: unknown resistor model `{m}`"));
+                                continue;
+                            }
+                        },
+                        None => None,
+                    };
+                    match res_instance(&name, *value, rm, params, &mut notes) {
+                        Ok((r, temp)) => {
+                            if let Some(t) = temp {
+                                ckt.set_res_temp(&name, t);
+                            }
+                            add(
+                                &mut ckt,
+                                Resistor {
+                                    name,
+                                    nodes: two(&el.nodes),
+                                    value: r,
+                                },
+                                &mut problems,
+                            );
+                        }
+                        Err(e) => problems.push(e),
                     }
                 }
                 ir::Device::Capacitor {
@@ -231,25 +251,29 @@ impl Circuit {
                     model,
                     params,
                 } => {
-                    if model.is_some() {
-                        problems.push(format!(
-                            "`{name}`: semiconductor capacitor models are not implemented yet"
-                        ));
-                        continue;
-                    }
+                    let cm = match model {
+                        Some(m) => match cmodels.get(m.as_str()) {
+                            Some(cm) => Some(cm),
+                            None => {
+                                problems.push(format!("`{name}`: unknown capacitor model `{m}`"));
+                                continue;
+                            }
+                        },
+                        None => None,
+                    };
                     let ic = num_param(params, "ic");
-                    match value {
-                        Some(v) => add(
+                    match cap_instance(&name, *value, cm, params, &mut notes) {
+                        Ok(c) => add(
                             &mut ckt,
                             Capacitor {
                                 name,
                                 nodes: two(&el.nodes),
-                                value: *v,
+                                value: c,
                                 ic,
                             },
                             &mut problems,
                         ),
-                        None => problems.push(format!("`{name}`: capacitor has no value")),
+                        Err(e) => problems.push(e),
                     }
                 }
                 ir::Device::Inductor { value, params } => {
@@ -1672,6 +1696,221 @@ fn num_param(params: &[ir::Param], name: &str) -> Option<f64> {
             (ParamValue::Num(v), true) => Some(*v),
             _ => None,
         })
+}
+
+/// `.model x r(...)` (`res.c` model table, defaults of
+/// `restemp.c`). Temperatures in kelvin.
+#[derive(Clone, Copy, Debug)]
+struct ResModel {
+    rsh: f64,
+    defw: f64,
+    narrow: f64,
+    tc1: f64,
+    tc2: f64,
+    tnom: Option<f64>,
+}
+
+/// ngspice-47 resistor model parameters the 3f5 does not have
+/// (`res.c` of ngspice): accepted and ignored with a note.
+const RES_MODEL_NGSPICE: &[&str] = &[
+    "short", "dlr", "tce", "kf", "af", "lf", "wf", "ef", "res", "defl", "bv_max",
+];
+
+fn res_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<ResModel, String> {
+    // `REStemp`: RSH 0, DEFW 10e-6 (the code; spice.txt's 1e-6 is
+    // wrong), NARROW 0, TC1/TC2 0, TNOM the circuit's.
+    let mut rm = ResModel {
+        rsh: 0.0,
+        defw: 10e-6,
+        narrow: 0.0,
+        tc1: 0.0,
+        tc2: 0.0,
+        tnom: None,
+    };
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "r" => continue,
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "rsh" => rm.rsh = v,
+            "defw" => rm.defw = v,
+            "narrow" => rm.narrow = v,
+            "tc1" => rm.tc1 = v,
+            "tc2" => rm.tc2 = v,
+            "tnom" => rm.tnom = Some(v + CTOK),
+            other if RES_MODEL_NGSPICE.contains(&other) => notes.push(format!(
+                "model `{}`: {other} is an ngspice resistor parameter, not in the 3f5 - ignored",
+                m.name
+            )),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(rm)
+}
+
+/// One `R` card → nominal resistance and, when the card names a
+/// model or gives `TEMP=`, its [`ResTemp`](crate::circuit::ResTemp)
+/// (`REStemp`, `restemp.c`):
+///
+/// * `VALUE` (bare or `resistance=`) wins;
+/// * else, with a model whose `RSH ≠ 0` and `L ≠ 0`,
+///   `R = RSH·(L − NARROW)/(W − NARROW)`, `W` defaulting to `DEFW`;
+/// * else the C warns "resistance=0, set to 1000" and uses 1 kΩ.
+///
+/// A plain card (no model) with no value stays an error: the 3f5
+/// would silently make it 1 kΩ through its default model.
+fn res_instance(
+    name: &str,
+    value: Option<f64>,
+    rm: Option<&ResModel>,
+    params: &[ir::Param],
+    notes: &mut Vec<String>,
+) -> Result<(f64, Option<crate::circuit::ResTemp>), String> {
+    let mut value = value;
+    let mut l = None;
+    let mut w = None;
+    let mut temp = None;
+    for p in params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            _ => {
+                notes.push(format!("`{name}`: resistor parameter {} ignored", p.name));
+                continue;
+            }
+        };
+        match p.name.as_str() {
+            "resistance" => value = Some(v),
+            "l" => l = Some(v),
+            "w" => w = Some(v),
+            "temp" => temp = Some(v + CTOK),
+            other => notes.push(format!(
+                "`{name}`: resistor parameter {other} is not in the 3f5 - ignored"
+            )),
+        }
+    }
+    if rm.is_none() && (l.is_some() || w.is_some()) {
+        notes.push(format!("`{name}`: L/W without a resistor model ignored"));
+    }
+    let r = match (value, rm) {
+        (Some(v), _) => v,
+        (None, None) => return Err(format!("`{name}`: resistor has no value")),
+        (None, Some(m)) => {
+            let l = l.unwrap_or(0.0);
+            let w = w.unwrap_or(m.defw);
+            if m.rsh != 0.0 && l != 0.0 {
+                m.rsh * (l - m.narrow) / (w - m.narrow)
+            } else {
+                notes.push(format!("`{name}`: resistance=0, set to 1000"));
+                1000.0
+            }
+        }
+    };
+    let rt = (rm.is_some() || temp.is_some()).then(|| crate::circuit::ResTemp {
+        tc1: rm.map_or(0.0, |m| m.tc1),
+        tc2: rm.map_or(0.0, |m| m.tc2),
+        tnom: rm.and_then(|m| m.tnom),
+        temp,
+    });
+    Ok((r, rt))
+}
+
+/// `.model x c(...)` (`cap.c` model table, defaults of
+/// `capsetup.c`).
+#[derive(Clone, Copy, Debug)]
+struct CapModel {
+    cj: f64,
+    cjsw: f64,
+    defw: f64,
+    narrow: f64,
+}
+
+/// ngspice-47 capacitor model parameters the 3f5 does not have.
+const CAP_MODEL_NGSPICE: &[&str] = &[
+    "cap", "short", "del", "tc1", "tc2", "tnom", "di", "thick", "defl", "bv_max",
+];
+
+fn cap_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<CapModel, String> {
+    // `CAPsetup`: CJ 0, CJSW 0, DEFW 10e-6 (spice.txt says 1e-6),
+    // NARROW 0.
+    let mut cm = CapModel {
+        cj: 0.0,
+        cjsw: 0.0,
+        defw: 10e-6,
+        narrow: 0.0,
+    };
+    for p in &m.params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "c" => continue,
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "cj" => cm.cj = v,
+            "cjsw" => cm.cjsw = v,
+            "defw" => cm.defw = v,
+            "narrow" => cm.narrow = v,
+            other if CAP_MODEL_NGSPICE.contains(&other) => notes.push(format!(
+                "model `{}`: {other} is an ngspice capacitor parameter, not in the 3f5 - ignored",
+                m.name
+            )),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(cm)
+}
+
+/// One `C` card → capacitance (`CAPtemp`, `captemp.c`): `VALUE`
+/// (bare or `capacitance=`) wins; else, with a model,
+/// `C = CJ·(W − NARROW)·(L − NARROW) + 2·CJSW·((L − NARROW) +
+/// (W − NARROW))`, `W` defaulting to `DEFW` and `L` to 0.
+fn cap_instance(
+    name: &str,
+    value: Option<f64>,
+    cm: Option<&CapModel>,
+    params: &[ir::Param],
+    notes: &mut Vec<String>,
+) -> Result<f64, String> {
+    let mut value = value;
+    let mut l = None;
+    let mut w = None;
+    for p in params {
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            _ => {
+                notes.push(format!("`{name}`: capacitor parameter {} ignored", p.name));
+                continue;
+            }
+        };
+        match p.name.as_str() {
+            "capacitance" => value = Some(v),
+            "ic" => {}
+            "l" => l = Some(v),
+            "w" => w = Some(v),
+            other => notes.push(format!(
+                "`{name}`: capacitor parameter {other} is not in the 3f5 - ignored"
+            )),
+        }
+    }
+    if cm.is_none() && (l.is_some() || w.is_some()) {
+        notes.push(format!("`{name}`: L/W without a capacitor model ignored"));
+    }
+    match (value, cm) {
+        (Some(v), _) => Ok(v),
+        (None, None) => Err(format!("`{name}`: capacitor has no value")),
+        (None, Some(m)) => {
+            let l = l.unwrap_or(0.0) - m.narrow;
+            let w = w.unwrap_or(m.defw) - m.narrow;
+            Ok(m.cj * w * l + m.cjsw * 2.0 * (l + w))
+        }
+    }
 }
 
 fn two(nodes: &[String]) -> [String; 2] {

@@ -219,13 +219,17 @@ pub(crate) struct ResistorI {
     r_ac: Option<f64>,
     m: f64,
     scale: f64,
+    /// `REStemp`'s `1 + TC1·ΔT + TC2·ΔT²` (1 for a plain resistor).
+    factor: f64,
     pub pos: Var,
     pub neg: Var,
     slots: [Slot; 4],
 }
 
 impl ResistorI {
-    pub fn new(r: f64, pos: Var, neg: Var) -> Self {
+    /// A resistor of nominal resistance `r` at temperature factor
+    /// `factor` (`REStemp`: `RESconduct = 1/(RESresist·factor)`).
+    pub fn with_factor(r: f64, factor: f64, pos: Var, neg: Var) -> Self {
         let mut res = ResistorI {
             g: 0.0,
             g_ac: 0.0,
@@ -233,6 +237,7 @@ impl ResistorI {
             r_ac: None,
             m: 1.0,
             scale: 1.0,
+            factor,
             pos,
             neg,
             slots: [TRASH; 4],
@@ -241,10 +246,11 @@ impl ResistorI {
         res
     }
 
-    /// `RESupdate_conduct` (ngspice `restemp.c`) at `TEMP == TNOM`.
+    /// `RESupdate_conduct` (ngspice `restemp.c`; the 3f5's
+    /// `REStemp` without `m`/`scale`/`ac`).
     fn update_conduct(&mut self) {
-        self.g = self.m / (self.r * self.scale);
-        self.g_ac = self.m / (self.r_ac.unwrap_or(self.r) * self.scale);
+        self.g = self.m / (self.r * self.factor * self.scale);
+        self.g_ac = self.m / (self.r_ac.unwrap_or(self.r) * self.factor * self.scale);
     }
 }
 
@@ -278,6 +284,14 @@ impl Device for ResistorI {
         ctx.add(self.slots[1], self.g);
         ctx.add(self.slots[2], -self.g);
         ctx.add(self.slots[3], -self.g);
+    }
+
+    /// ngspice's `.dc RNAME …` (`dctrcurv.c`, `rcode`): the swept
+    /// value is the nominal resistance (`RESresist`, `RESresGiven`),
+    /// still divided by the temperature factor.
+    fn set_dc(&mut self, value: f64) {
+        self.r = value;
+        self.update_conduct();
     }
 
     fn load_ac(&mut self, ctx: &mut AcCtx) {

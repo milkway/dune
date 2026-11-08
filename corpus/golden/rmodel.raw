@@ -1,0 +1,23 @@
+Title: semiconductor resistors: r model geometry, tc1/tc2, tnom and instance temp
+Date: Sun Nov  8 09:20:16  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 7
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(6)	voltage
+	5	i(v2)	current
+	6	i(v1)	current
+Values:
+0		2.000000000000000e+00
+	1.485321168420278e+00
+	7.133029210506951e-01
+	4.322713560444411e-01
+	1.000000000000000e+00
+	-1.047278333068023e-03
+	-9.197262894562579e-04

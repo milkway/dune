@@ -19,6 +19,29 @@ pub struct Resistor {
     pub value: f64,
 }
 
+/// The temperature dependence of one resistor (`REStemp`,
+/// `dev/res/restemp.c`): `R(T) = R(TNOM)·[1 + TC1·(T−TNOM) +
+/// TC2·(T−TNOM)²]`. Temperatures in kelvin; `None` takes the
+/// circuit's `TEMP`/`TNOM` (`.options`, or the `.dc TEMP` sweep
+/// point).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ResTemp {
+    pub tc1: f64,
+    pub tc2: f64,
+    /// Model `TNOM`.
+    pub tnom: Option<f64>,
+    /// Instance `TEMP=`.
+    pub temp: Option<f64>,
+}
+
+impl ResTemp {
+    /// `factor` of `REStemp`, the divisor of the conductance.
+    pub fn factor(&self, opts: &Options) -> f64 {
+        let difference = self.temp.unwrap_or(opts.temp) - self.tnom.unwrap_or(opts.tnom);
+        1.0 + self.tc1 * difference + self.tc2 * difference * difference
+    }
+}
+
 /// `CXXXXXXX N+ N- VALUE <IC=INCOND>` (farads).
 #[derive(Clone, Debug)]
 pub struct Capacitor {
@@ -600,6 +623,12 @@ pub struct Circuit {
     /// the semiconductors' `DEVsetic`. A device without an entry
     /// (built from a typed spec) has every component given.
     pub(crate) ic_given: HashMap<String, crate::devices::IcGiven>,
+    /// Instance name → the temperature dependence of a resistor
+    /// card that named an `R` model or a `TEMP=` (`restemp.c`),
+    /// recorded by the netlist front end. A resistor without an
+    /// entry (typed spec, plain card) has `TC1 = TC2 = 0`: its
+    /// conductance is `1/R` at every temperature, as in the 3f5.
+    pub(crate) res_temp: HashMap<String, ResTemp>,
     /// The warm-start channel of a [`Session`](crate::Session):
     /// empty for a plain circuit (the engine then runs exactly the
     /// 3f5 path).
@@ -650,6 +679,12 @@ impl Circuit {
     /// point; `.tran … UIC` ignores it in favor of device ICs).
     pub fn ic(&mut self, node: impl Into<String>, value: f64) {
         self.ics.push((node.into().to_ascii_lowercase(), value));
+    }
+
+    /// Record the `restemp.c` temperature data of resistor `name`
+    /// (the netlist front end; see [`ResTemp`]).
+    pub(crate) fn set_res_temp(&mut self, name: &str, t: ResTemp) {
+        self.res_temp.insert(name.to_ascii_lowercase(), t);
     }
 
     /// Record which `IC=` components instance `name`'s card gave
@@ -1427,8 +1462,10 @@ impl Circuit {
                     )));
                 }
                 Spec::Resistor(s) => {
-                    devices.push(Box::new(ResistorI::new(
+                    let factor = self.res_temp.get(&s.name).map_or(1.0, |t| t.factor(opts));
+                    devices.push(Box::new(ResistorI::with_factor(
                         s.value,
+                        factor,
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                     )));

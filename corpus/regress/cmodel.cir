@@ -1,0 +1,19 @@
+Semiconductor capacitors: C model CJ/CJSW geometry and DEFW
+* Coverage: no corpus deck has a C model. captemp.c (3f5): with no
+* value, C = CJ*(W-NARROW)*(L-NARROW) + 2*CJSW*((L-NARROW)+(W-NARROW)),
+* W defaulting to DEFW (10u in the code; spice.txt documents 1u). The
+* .ac reads each capacitance off an RC low-pass (corner ~1/(2*pi*R*C)).
+* c1: L and W given. c2: L only (W = DEFW). c3: explicit value on a
+* model card (value wins). NARROW stays 0: ngspice-47 subtracts SHORT
+* from L instead, corpus/KNOWN_DIFFS.md.
+v1 1 0 dc 0 ac 1
+r1 1 2 10k
+c1 2 0 cpoly l=100u w=50u
+r2 1 3 10k
+c2 3 0 cmet l=80u
+r3 1 4 10k
+c3 4 0 2p cpoly
+.model cpoly c cj=3e-4 cjsw=2e-10
+.model cmet c (cj=1e-4 cjsw=5e-11 defw=20u)
+.ac dec 5 100k 100meg
+.end
