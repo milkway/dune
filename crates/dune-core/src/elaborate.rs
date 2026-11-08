@@ -42,6 +42,7 @@ impl Circuit {
         // cards for levels they never instantiate (mos6inv.cir).
         let mut unsupported_models: HashMap<&str, String> = HashMap::new();
         let mut omodels: HashMap<&str, crate::ltra::LtraModel> = HashMap::new();
+        let mut umodels: HashMap<&str, UrcModel> = HashMap::new();
         let mut jmodels: HashMap<&str, crate::jfet::JfetModel> = HashMap::new();
         let mut zmodels: HashMap<&str, crate::mes::MesModel> = HashMap::new();
         let mut smodels: HashMap<&str, crate::switch::SwModel> = HashMap::new();
@@ -100,6 +101,12 @@ impl Circuit {
                         }
                     }
                 }
+                "urc" => match urc_model(m, &mut notes) {
+                    Ok(um) => {
+                        umodels.insert(m.name.as_str(), um);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
                 "ltra" => match ltra_model(m, &mut notes) {
                     Ok(lm) => {
                         omodels.insert(m.name.as_str(), lm);
@@ -875,6 +882,22 @@ impl Circuit {
                     },
                     &mut problems,
                 ),
+                ir::Device::Urc { model, params } => {
+                    let Some(um) = umodels.get(model.as_str()) else {
+                        problems.push(format!(
+                            "`{name}`: unable to find definition of model `{model}`"
+                        ));
+                        continue;
+                    };
+                    match urc_expand(&name, &el.nodes, um, params) {
+                        Ok(specs) => {
+                            for spec in specs {
+                                add(&mut ckt, spec, &mut problems);
+                            }
+                        }
+                        Err(e) => problems.push(e),
+                    }
+                }
                 ir::Device::TlineIdeal { params } => match tra_spec(&name, &el.nodes, params) {
                     Ok(t) => add(&mut ckt, t, &mut problems),
                     Err(e) => problems.push(e),
@@ -1893,4 +1916,193 @@ fn mes_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mes::MesMo
         }
     }
     Ok(zm)
+}
+
+/// `.model x URC(...)` (`URCmPTable`, `dev/urc/urc.c`), with the
+/// defaults `URCsetup` applies.
+#[derive(Clone, Debug)]
+struct UrcModel {
+    /// `K`: propagation constant (the geometric ratio between
+    /// consecutive lumps), default 1.5.
+    k: f64,
+    /// `FMAX`: maximum frequency of interest, default 1 GHz.
+    fmax: f64,
+    /// `RPERL`, default 1000 Ω/m.
+    rperl: f64,
+    /// `CPERL`, default 1e-12 F/m.
+    cperl: f64,
+    /// `ISPERL`: when given, the shunts are diodes instead of
+    /// capacitors.
+    isperl: Option<f64>,
+    /// `RSPERL`, default 0.
+    rsperl: f64,
+}
+
+fn urc_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<UrcModel, String> {
+    let mut um = UrcModel {
+        k: 1.5,
+        fmax: 1e9,
+        rperl: 1000.0,
+        cperl: 1e-12,
+        isperl: None,
+        rsperl: 0.0,
+    };
+    for p in &m.params {
+        // `URC`: "no operation - already know we are a URC, but
+        // this makes spice-2 like parsers happy" (`urcmpar.c`).
+        if p.name == "urc" && p.value == ParamValue::Flag {
+            continue;
+        }
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        match p.name.as_str() {
+            "k" => um.k = v,
+            "fmax" => um.fmax = v,
+            "rperl" => um.rperl = v,
+            "cperl" => um.cperl = v,
+            "isperl" => um.isperl = Some(v),
+            "rsperl" => um.rsperl = v,
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(um)
+}
+
+/// Upper bound on the lumps of one URC line (the C has none; a
+/// hostile `K` near 1 or a huge `FMAX` would otherwise ask for
+/// billions of elements).
+const URC_MAX_LUMPS: i64 = 10_000;
+
+/// `URCsetup` (`dev/urc/urcsetup.c`): the 3f5 has no URC load — the
+/// line *is* the ladder of lumped elements it expands into. Lump `i`
+/// (1-based) puts `rlo<i>` on the side growing from N1 and `rhi<i>`
+/// on the side growing from N2, both `p^(i-1)·r1`, and shunts the
+/// new inner nodes to N3 with `clo<i>`/`chi<i>` of `p^(i-1)·c1` (or
+/// diodes `dlo<i>`/`dhi<i>` of area `p^(i-1)` when `ISPERL` is
+/// given); the two sides meet at the last `hi` node, which carries
+/// only `clo`. Names follow `IFnewUid`/`CKTmkVolt` (`u1#hi1`,
+/// `u1#rlo1`, …), so the inner nodes show up in the rawfile as in
+/// ngspice.
+fn urc_expand(
+    name: &str,
+    nodes: &[String],
+    m: &UrcModel,
+    params: &[ir::Param],
+) -> Result<Vec<crate::circuit::Spec>, String> {
+    use crate::circuit::{Capacitor, Diode, Resistor, Spec};
+    let mut len = None;
+    let mut lumps = None;
+    for p in params {
+        match (p.name.as_str(), &p.value) {
+            ("l", ParamValue::Num(v)) => len = Some(*v),
+            // `URClumps = value->rValue` into an int: truncation.
+            ("n", ParamValue::Num(v)) => lumps = Some(v.trunc()),
+            _ => return Err(format!("`{name}`: unknown parameter ({})", p.name)),
+        }
+    }
+    let Some(len) = len.filter(|l| *l > 0.0 && l.is_finite()) else {
+        return Err(format!("`{name}`: URC line needs a length L > 0"));
+    };
+    let p = m.k;
+    if p.is_nan() || p <= 1.0 || !p.is_finite() {
+        return Err(format!(
+            "`{name}`: URC model K = {p} must exceed 1 (the lump ratio)"
+        ));
+    }
+    let r0 = len * m.rperl;
+    let c0 = len * m.cperl;
+    let i0 = len * m.isperl.unwrap_or(0.0);
+    let n = match lumps {
+        Some(n) => n,
+        None => {
+            let wnorm = m.fmax * r0 * c0 * 2.0 * std::f64::consts::PI;
+            let est = (wnorm * (((p - 1.0) / p) * ((p - 1.0) / p))).ln() / p.ln();
+            // `MAX(3.0, …)` then the int conversion; `wnorm < 35`
+            // forces 3.
+            let est = if 3.0 > est { 3.0 } else { est };
+            if wnorm < 35.0 { 3.0 } else { est.trunc() }
+        }
+    };
+    if n.is_nan() || n < 1.0 || n > URC_MAX_LUMPS as f64 {
+        return Err(format!(
+            "`{name}`: URC line with {n} lumps (must be 1..={URC_MAX_LUMPS})"
+        ));
+    }
+    let n = n as i64;
+    let r1 = (r0 * (p - 1.0)) / ((2.0 * p.powf(n as f64)) - 2.0);
+    let c1 = (c0 * (p - 1.0)) / (p.powf((n - 1) as f64) * (p + 1.0) - 2.0);
+    let i1 = (i0 * (p - 1.0)) / (p.powf((n - 1) as f64) * (p + 1.0) - 2.0);
+    let rd = len * n as f64 * m.rsperl;
+    let diode_model = m.isperl.map(|_| DiodeModel {
+        cjo: c1,
+        rs: rd,
+        is: i1,
+        ..DiodeModel::default()
+    });
+
+    let gnd = nodes[2].clone();
+    let mut lowl = nodes[0].clone();
+    let mut hir = nodes[1].clone();
+    let mut prop = 1.0;
+    let mut out: Vec<Spec> = Vec::new();
+    for i in 1..=n {
+        let hil = format!("{name}#hi{i}");
+        let lowr = if i == n {
+            hil.clone()
+        } else {
+            format!("{name}#lo{i}")
+        };
+        let r = prop * r1;
+        let c = prop * c1;
+        out.push(
+            Resistor {
+                name: format!("{name}#rlo{i}"),
+                nodes: [lowl.clone(), lowr.clone()],
+                value: r,
+            }
+            .into(),
+        );
+        out.push(
+            Resistor {
+                name: format!("{name}#rhi{i}"),
+                nodes: [hil.clone(), hir.clone()],
+                value: r,
+            }
+            .into(),
+        );
+        let shunt = |tag: &str, node: &str| -> Spec {
+            match &diode_model {
+                Some(dm) => Diode {
+                    name: format!("{name}#d{tag}{i}"),
+                    nodes: [node.to_string(), gnd.clone()],
+                    model: dm.clone(),
+                    area: prop,
+                    off: false,
+                    temp: None,
+                    ic: None,
+                }
+                .into(),
+                None => Capacitor {
+                    name: format!("{name}#c{tag}{i}"),
+                    nodes: [node.to_string(), gnd.clone()],
+                    value: c,
+                    ic: None,
+                }
+                .into(),
+            }
+        };
+        out.push(shunt("lo", &lowr));
+        if i != n {
+            out.push(shunt("hi", &hil));
+        }
+        prop *= p;
+        lowl = lowr;
+        hir = hil;
+    }
+    Ok(out)
 }
