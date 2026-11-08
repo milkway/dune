@@ -49,8 +49,9 @@ create_exception!(
 /// relative to it, i.e. as given (same as `dune-wasm`).
 const DECK_NAME: &str = "deck.cir";
 
-/// Every `options` key accepted, in `Options` field order.
-const OPTION_NAMES: [&str; 25] = [
+/// Every `options` key accepted (the `.options` card names), in
+/// `Options` field order.
+const OPTION_NAMES: [&str; 30] = [
     "reltol",
     "abstol",
     "vntol",
@@ -76,6 +77,11 @@ const OPTION_NAMES: [&str; 25] = [
     "defw",
     "defad",
     "defas",
+    "seed",
+    "notrnoise",
+    "devnoise",
+    "devnt",
+    "keepopinfo",
 ];
 
 /// A parser/options diagnostic with its position resolved.
@@ -439,6 +445,36 @@ fn count_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<usize> {
     Ok(n as usize)
 }
 
+/// A `seed` value: an int in `[1, 2^53)`, the card's range (Dune
+/// never seeds from the clock, so there is no `"random"`).
+fn seed_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<u64> {
+    if v.is_instance_of::<PyBool>() {
+        return Err(PyTypeError::new_err(format!(
+            "option {key} must be an int, not bool"
+        )));
+    }
+    let n: i64 = v
+        .extract()
+        .map_err(|_| PyTypeError::new_err(format!("option {key} must be an int")))?;
+    if !(1..9_007_199_254_740_992).contains(&n) {
+        return Err(PyValueError::new_err(format!(
+            "option {key} must be a positive int below 2**53, got {n}"
+        )));
+    }
+    Ok(n as u64)
+}
+
+/// A positive finite time step (`devnt`).
+fn step_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<f64> {
+    let x = float_value(key, v)?;
+    if x <= 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "option {key} must be a positive time step, got {x}"
+        )));
+    }
+    Ok(x)
+}
+
 fn bool_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<bool> {
     if !v.is_instance_of::<PyBool>() {
         return Err(PyTypeError::new_err(format!("option {key} must be a bool")));
@@ -511,6 +547,11 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
             "defw" => set!(defw, float_value(key, &v)?),
             "defad" => set!(defad, float_value(key, &v)?),
             "defas" => set!(defas, float_value(key, &v)?),
+            "seed" => set!(seed, seed_value(key, &v)?),
+            "notrnoise" => set!(notrnoise, bool_value(key, &v)?),
+            "devnoise" => set!(dev_noise, bool_value(key, &v)?),
+            "devnt" => set!(dev_noise_step, Some(step_value(key, &v)?)),
+            "keepopinfo" => set!(keepopinfo, bool_value(key, &v)?),
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown option '{other}'; valid options: {}",
