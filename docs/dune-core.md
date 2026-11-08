@@ -1097,8 +1097,29 @@ circular correto dá 14,3–15,5 — a convolução circular sozinha não
 explica, o índice sim. O Dune segue a forma fechada (KNOWN_DIFFS).
 Densidade de passos: o deck branco/RC dá a mesma contagem de pontos
 nos dois (1 002 697 vs 1 002 699); no deck com 1/f+RTS+TRRANDOM o
-ngspice dá 954 k pontos e o Dune 520 k (não investigado: as quinas
-são as mesmas).
+ngspice dá 954 k pontos e o Dune 520 k — **investigado (issue #20
+item 4): artefato do ngspice, não fidelidade a corrigir.** O
+`VSRCaccept` de cada fonte acumula o próprio breakpoint e desconta
+`CKTminBreak` a cada disparo (`break_time += TS; CKTsetBreak(…);
+break_time -= CKTminBreak`), então o k-ésimo ponto da grade cai
+`(k−1)·minBreak` adiantado. Grades de TS diferentes adiantam em
+ritmos diferentes: num deck com `TRNOISE` 1/f a 1 µs e `TRRANDOM` a
+10 µs, o ponto de 9 ms chega como `9 ms − 9,0e-13` (9000 descontos)
+de um e `9 ms − 9,0e-14` (900) do outro — medido nos instantes do
+rawfile, batendo com `(k−1)·1e-16` —, e o `CKTminBreak = 10·CKTdelmin`
+do build com XSPICE (o do Homebrew: `1e-10·TMAX` = 1e-16 aqui; sem
+XSPICE seria `5e-5·TMAX`) não os funde. Cada par vira um
+breakpoint-fiapo, o `DCtran` recomeça em `0,1·vão` e sobe dobrando:
+~20 passos extras por coincidência (16 539 passos < 1e-10 s em 77 k
+pontos no deck de 10 ms; o Dune tem 0). Medido em decks de 100 ms
+(1/f 1 µ + RTS + dois `TRRANDOM`): TS 10 µ → ngspice 734 949, Dune
+520 769; TS 2/5 µ → 1 899 402 vs 520 769; com todas as grades no
+mesmo TS (o deck da tabela acima, com uma fonte por tipo) as
+contagens batem (520 738 vs 520 769), como no branco/RC. O Dune
+planta `(k+1)·TS` por multiplicação — os pontos coincidem bit a bit
+e o `CKTsetBreak` os funde — e a forma de onda é a mesma (o valor da
+fonte vem de `t/TS`, não do breakpoint). Eficiência legítima;
+KNOWN_DIFFS registra.
 
 **Sondas** (`corpus/regress/trnoise_white.cir`, `trnoise_1f_rts.cir`,
 `trrandom.cir`): golden do **próprio Dune** em
