@@ -29,6 +29,11 @@
 //! functions of `x₀` alone — the full MNA vector is the shooting
 //! state, and its algebraic components fall out of the Jacobian on
 //! their own (their columns of `Φ′` vanish).
+//!
+//! **Autonomous oscillators** (no periodic source, issue #20): the
+//! period `T` is a Newton unknown, the phase pinned by holding
+//! OSCNODE at its value on a rising mid-range crossing — see
+//! `Circuit::pss_autonomous` and docs/dune-core.md.
 
 use dune_raw::{Data, VarType};
 use num_complex::Complex64;
@@ -50,14 +55,18 @@ pub const PSS_FREQ_PLOT: &str = "Frequency Domain Periodic Steady State Analysis
 pub struct PssParams {
     /// Fundamental frequency in Hz; `None` takes it from the
     /// periodic sources (the greatest common divisor of their
-    /// frequencies).
+    /// frequencies). Without periodic sources (an autonomous
+    /// oscillator) it is a guess of the period's inverse, and `None`
+    /// estimates it from the stabilization transient.
     pub freq: Option<f64>,
     /// Stabilization time: a plain transient runs from 0 to the first
     /// period boundary at or after `tstab` (at least one period)
     /// before the shooting starts there.
     pub tstab: f64,
-    /// ngspice's oscillation node — for autonomous circuits, which
-    /// this analysis does not solve yet; checked and reported only.
+    /// ngspice's oscillation node. A driven circuit only checks and
+    /// reports it; an autonomous one (no periodic source) needs it:
+    /// its phase condition holds this node at its value on a rising
+    /// mid-range crossing, and its crossings estimate the period.
     pub osc_node: Option<String>,
     /// Samples per period in the time-domain plot (the plot has
     /// `points + 1` rows, both ends included, like ngspice's).
@@ -104,13 +113,18 @@ pub struct Pss {
     /// convention, phases referred to `t = 0`. ngspice writes only
     /// the magnitudes; `mag()` of these columns is that plot.
     pub spectrum: Solution,
-    /// The period `T` (s).
+    /// The period `T` (s): the drive's for a driven circuit, the
+    /// shooting's result for an autonomous oscillator.
     pub period: f64,
     /// Start of the reported period (a multiple of `T`).
     pub t0: f64,
     /// The residual `max_i |x_i(t₀+T) − x_i(t₀)| / tol_i` of each
     /// shooting iteration (converged when ≤ 1).
     pub residuals: Vec<f64>,
+    /// The period of each shooting iteration, aligned with
+    /// `residuals` (constant for a driven circuit; the Newton iterate
+    /// `T` of an autonomous one).
+    pub periods: Vec<f64>,
     pub notes: Vec<String>,
 }
 
@@ -174,6 +188,11 @@ impl Circuit {
         }
         let mut notes = Vec::new();
         let sources = self.source_frequencies()?;
+        if sources.is_empty() {
+            // No periodic stimulus: a free-running oscillator, its
+            // period an unknown of the shooting (see `pss_autonomous`).
+            return self.pss_autonomous(opts, p);
+        }
         let freq = match p.freq {
             Some(f) => {
                 if !(f.is_finite() && f > 0.0) {
@@ -252,7 +271,7 @@ impl Circuit {
             circuit: self,
             opts,
             tight: tightened(opts),
-            run: &run,
+            run,
             kinds: &kinds,
             adaptive: 0,
             replays: 0,
@@ -286,6 +305,7 @@ impl Circuit {
                 return Err(Error::PssConvergence {
                     iterations: residuals.len(),
                     residuals,
+                    period: None,
                 });
             }
             // Backtrack a Newton step that did not reduce the residual.
@@ -323,12 +343,14 @@ impl Circuit {
         notes.push(shooter.summary(&residuals));
 
         let (time, spectrum) = outputs(&converged, &names, &kinds, p, t0, period);
+        let periods = vec![period; residuals.len()];
         Ok(Pss {
             time,
             spectrum,
             period,
             t0,
             residuals,
+            periods,
             notes,
         })
     }
@@ -399,6 +421,416 @@ impl Circuit {
     }
 }
 
+impl Circuit {
+    /// `.pss` of an autonomous oscillator (no periodic source): the
+    /// period is an unknown. Shooting–Newton on the augmented system
+    /// `[Φ_T(x₀) − x₀ = 0; x₀[osc] = v_ref]`, the phase condition
+    /// fixing `OSCNODE` at its value on a rising crossing of its
+    /// mid-range (see [`osc_start`]); the bordered Jacobian
+    /// `[I − Φ′, −∂Φ/∂T]` (osc column dropped) is solved by the same
+    /// matrix-free GMRES, `∂Φ/∂T` by a replay on the frozen grid
+    /// stretched to `T + δT`.
+    fn pss_autonomous(&self, opts: &Options, p: &PssParams) -> Result<Pss, Error> {
+        let bad = |m: &str| Err(Error::Build(format!(".pss {m}")));
+        let guess = match p.freq {
+            Some(f) if !(f.is_finite() && f > 0.0) => return bad("frequency must be positive"),
+            Some(f) => Some(1.0 / f),
+            None => None,
+        };
+        let Some(node) = &p.osc_node else {
+            return bad(
+                "of an autonomous circuit (no periodic source) needs the oscillation node \
+                 OSCNODE",
+            );
+        };
+        if p.tstab <= 0.0 {
+            return bad(
+                "of an autonomous circuit needs a stabilization time TSTAB: the oscillation \
+                 must start and be measured before the shooting",
+            );
+        }
+        let built = self.build(opts)?;
+        let mut notes: Vec<String> = built.notes.clone();
+        let mut engine = Engine::new(built);
+        let lc = node.to_ascii_lowercase();
+        let Some(osc) = engine.vars.names.iter().position(|n| *n == lc) else {
+            return Err(Error::Build(format!(".pss: no node `{node}` for oscnode")));
+        };
+        if osc == 0 || engine.vars.kinds[osc] != VarKind::Node {
+            return Err(Error::Build(format!(
+                ".pss: oscnode `{node}` must be a circuit node"
+            )));
+        }
+        // Stabilization grid: with a guess, the driven one; without,
+        // TMAX = TSTAB/STAB_POINTS (the LTE control refines it).
+        let (tstep, max_step) = match guess {
+            Some(t) => (t / p.points as f64, f64::min(t / p.points as f64, t / 50.0)),
+            None => (p.tstab / STAB_POINTS, p.tstab / STAB_POINTS),
+        };
+        let nvars = engine.vars.len() as f64;
+        let pts = p.points as f64;
+        if (pts + 1.0) * nvars > MAX_OUTPUT_VALUES as f64
+            || p.tstab / tstep > 1e8
+            || p.harmonics as f64 * pts * nvars > 1e9
+        {
+            return bad("asks for too many points or periods; refusing");
+        }
+        let rows = engine.tran(
+            opts,
+            &TranParams {
+                tstep,
+                tstop: p.tstab,
+                tstart: p.tstab * (1.0 - STAB_WINDOW),
+                tmax: Some(max_step),
+                uic: p.uic,
+            },
+        )?;
+        let names = engine.vars.names.clone();
+        let kinds = engine.vars.kinds.clone();
+        drop(engine);
+        let mut start = osc_start(&rows, osc, &lc, guess, opts)?;
+        if guess.is_none() {
+            // The stabilization grid knew no period: refine the
+            // estimate (and the start) on a short continuation at
+            // the shooting's own grid, T/POINTS, from where it ended.
+            let (t_end, x_end) = rows.last().expect("the stabilization has rows");
+            let t = start.period;
+            let tstep = t / p.points as f64;
+            let refine = PeriodRun {
+                t0: *t_end,
+                period: REFINE_PERIODS * t,
+                tstep,
+                max_step: f64::min(tstep, t / 50.0),
+            };
+            let fine = Engine::new(self.build(opts)?).tran_period(
+                opts,
+                &refine,
+                x_end,
+                &mut Vec::new(),
+            )?;
+            notes.push(start.note);
+            start = osc_start(&fine, osc, &lc, None, opts)?;
+            start.note = format!(
+                "{} (refined over {REFINE_PERIODS} periods continued from TSTAB at T/POINTS)",
+                start.note
+            );
+        }
+        notes.push(start.note.clone());
+        let t0 = start.t0;
+        let mut x = start.x0;
+        let mut period = start.period;
+
+        let run_for = |t: f64| PeriodRun {
+            t0,
+            period: t,
+            tstep: t / p.points as f64,
+            max_step: f64::min(t / p.points as f64, t / 50.0),
+        };
+        let mut shooter = Shooter {
+            circuit: self,
+            opts,
+            tight: tightened(opts),
+            run: run_for(period),
+            kinds: &kinds,
+            adaptive: 0,
+            replays: 0,
+            krylov: Vec::new(),
+        };
+        let mut residuals = Vec::new();
+        let mut periods = Vec::new();
+        let mut last: Option<OscStep> = None;
+        let min_frac = 0.5f64.powi(MAX_BACKTRACK as i32);
+        let fail = |residuals: Vec<f64>, period: f64| Error::PssConvergence {
+            iterations: residuals.len(),
+            residuals,
+            period: Some(period),
+        };
+        let converged = loop {
+            shooter.run = run_for(period);
+            let (mut period_run, rnorm) = match shooter.adaptive(&x) {
+                Ok(r) => {
+                    let n = r.rnorm;
+                    (Some(r), n)
+                }
+                Err(e) => match &last {
+                    Some(l) if l.frac > min_frac => (None, f64::INFINITY),
+                    Some(_) => {
+                        residuals.push(f64::INFINITY);
+                        periods.push(period);
+                        return Err(fail(residuals, period));
+                    }
+                    None => return Err(e),
+                },
+            };
+            residuals.push(rnorm);
+            periods.push(period);
+            // At least one Newton step: an estimate already within
+            // the tolerance still gets its T corrected (quadratically)
+            // — the mismatch criterion alone admits a period error of
+            // about tol/|dx/dt| — and the step's δT is reported.
+            if rnorm <= p.steady_coeff
+                && last.is_some()
+                && let Some(r) = period_run.take()
+            {
+                break r;
+            }
+            if residuals.len() >= p.max_iter {
+                return Err(fail(residuals, period));
+            }
+            if let Some(l) = &mut last
+                && rnorm > l.base_norm
+                && l.frac > min_frac
+            {
+                l.frac *= 0.5;
+                for ((xi, bx), sx) in x.iter_mut().zip(&l.x).zip(&l.dx) {
+                    *xi = bx + l.frac * sx;
+                }
+                period = l.t + l.frac * l.dt;
+                continue;
+            }
+            let Some(period_run) = period_run else {
+                unreachable!("a failed run is always backtracked")
+            };
+            let (mut sx, mut st) = shooter.newton_step_osc(&x, period, osc, &period_run)?;
+            // A Newton step never moves T by more than MAX_DT of itself
+            // (far from the orbit the linearized phase drift is not
+            // to be trusted); the whole step is scaled.
+            if st.abs() > MAX_DT * period {
+                let k = MAX_DT * period / st.abs();
+                sx.iter_mut().for_each(|v| *v *= k);
+                st *= k;
+            }
+            let base = x.clone();
+            for i in 1..x.len() {
+                x[i] += sx[i];
+            }
+            let bt = period;
+            period += st;
+            last = Some(OscStep {
+                x: base,
+                t: bt,
+                dx: sx,
+                dt: st,
+                base_norm: rnorm,
+                frac: 1.0,
+            });
+        };
+
+        // The trivial periodic solution — the equilibrium — is
+        // periodic for every T; a converged "orbit" with no swing at
+        // OSCNODE is that, not an oscillation.
+        let (lo, hi) = converged
+            .rows
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), r| {
+                (a.min(r.1[osc]), b.max(r.1[osc]))
+            });
+        if hi - lo <= 10.0 * converged.tol[osc] {
+            return Err(Error::Build(format!(
+                ".pss: the shooting settled on the equilibrium (v({lc}) swings {:e} V); \
+                 the circuit does not oscillate",
+                hi - lo
+            )));
+        }
+        let hist: Vec<String> = residuals
+            .iter()
+            .zip(&periods)
+            .map(|(r, t)| format!("[{r:.3e}, {t:.9e}]"))
+            .collect();
+        let dt = last.as_ref().map_or(0.0, |l| l.dt * l.frac);
+        notes.push(format!(
+            "pss: autonomous oscillator: period {period:e} s (frequency {:e} Hz) is the \
+             shooting's result (last Newton correction {dt:.3e} s); [residual/tolerance, T] \
+             per iteration: {}; phase condition v({lc}) = {:e} V at t0 = {t0:e} s",
+            1.0 / period,
+            hist.join(", "),
+            x[osc]
+        ));
+        notes.push(shooter.summary(&residuals));
+        let (time, spectrum) = outputs(&converged, &names, &kinds, p, t0, period);
+        Ok(Pss {
+            time,
+            spectrum,
+            period,
+            t0,
+            residuals,
+            periods,
+            notes,
+        })
+    }
+}
+
+/// Default stabilization grid of an autonomous `.pss` without a
+/// frequency guess: TMAX = TSTAB / this.
+const STAB_POINTS: f64 = 1000.0;
+/// The fraction of TSTAB (its end) the stabilization keeps and
+/// measures the oscillation on.
+const STAB_WINDOW: f64 = 0.5;
+/// Rising crossings the period estimate averages over (at most).
+const EST_PERIODS: usize = 4;
+/// Length, in estimated periods, of the continuation that refines a
+/// period estimated on the stabilization grid.
+const REFINE_PERIODS: f64 = 5.5;
+/// Largest relative change of `T` in one Newton step.
+const MAX_DT: f64 = 0.2;
+
+/// The last Newton step of an autonomous shooting, for backtracking.
+struct OscStep {
+    /// The base point `(x, T)` …
+    x: Vec<f64>,
+    t: f64,
+    /// … the full step from it …
+    dx: Vec<f64>,
+    dt: f64,
+    /// … the residual at the base, and the fraction of the step taken.
+    base_norm: f64,
+    frac: f64,
+}
+
+/// Where the autonomous shooting starts.
+#[derive(Debug)]
+struct OscStart {
+    /// The rising mid-range crossing of OSCNODE the period starts at.
+    t0: f64,
+    /// The state there (cubic interpolation of the stabilization).
+    x0: Vec<f64>,
+    /// The initial period: the guess, or the crossing estimate.
+    period: f64,
+    note: String,
+}
+
+/// Rising crossings of `level` by unknown `k` over `rows`, linearly
+/// interpolated.
+fn rising_crossings(rows: &[(f64, Vec<f64>)], k: usize, level: f64) -> Vec<f64> {
+    let mut out = Vec::new();
+    for w in rows.windows(2) {
+        let (a, b) = (w[0].1[k], w[1].1[k]);
+        if a < level && b >= level {
+            out.push(w[0].0 + (w[1].0 - w[0].0) * (level - a) / (b - a));
+        }
+    }
+    out
+}
+
+/// The start of the autonomous shooting from the stabilization rows
+/// (the last `STAB_WINDOW` of TSTAB). The level is the mid-range
+/// `(max + min)/2` of OSCNODE — over the last `EST_PERIODS` periods
+/// once a period is known, so a still-growing amplitude does not bias
+/// it; the start `t0` is the last rising crossing of that level,
+/// where `|dv/dt|` is near its largest (the transversality the phase
+/// condition needs). Without a guess the period is the mean spacing
+/// of the last `EST_PERIODS` + 1 rising crossings — a frequency
+/// counter's estimate, exact for any waveform shape once the orbit is
+/// settled, and its spread is reported.
+fn osc_start(
+    rows: &[(f64, Vec<f64>)],
+    osc: usize,
+    name: &str,
+    guess: Option<f64>,
+    opts: &Options,
+) -> Result<OscStart, Error> {
+    let span = |from: f64| {
+        rows.iter()
+            .filter(|r| r.0 >= from)
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), r| {
+                (a.min(r.1[osc]), b.max(r.1[osc]))
+            })
+    };
+    let (Some(first), Some(end)) = (rows.first(), rows.last()) else {
+        return Err(Error::Build(".pss: empty stabilization".into()));
+    };
+    let (t_first, t_end) = (first.0, end.0);
+    let (lo, hi) = span(t_first);
+    let floor = 10.0 * (opts.reltol * lo.abs().max(hi.abs()) + opts.vntol);
+    let quiet = || {
+        Err(Error::Build(format!(
+            ".pss: the circuit does not oscillate at the oscillation node within TSTAB \
+             ({:e} V of swing over the last {:.0}% of it); kick it out of its equilibrium \
+             (an initial condition with UIC, or a supply ramp by PWL/PULSE) or lengthen \
+             TSTAB",
+            hi - lo,
+            100.0 * STAB_WINDOW
+        )))
+    };
+    if (hi - lo).is_nan() || hi - lo <= floor {
+        return quiet();
+    }
+    // First pass: the mid-range of the whole window.
+    let c = rising_crossings(rows, osc, 0.5 * (lo + hi));
+    let estimate = |c: &[f64]| -> Option<(f64, f64)> {
+        if c.len() < 3 {
+            return None;
+        }
+        let k = EST_PERIODS.min(c.len() - 1);
+        let tail = &c[c.len() - 1 - k..];
+        let mean = (tail[k] - tail[0]) / k as f64;
+        let spread = tail
+            .windows(2)
+            .map(|w| ((w[1] - w[0]) / mean - 1.0).abs())
+            .fold(0.0, f64::max);
+        Some((mean, spread))
+    };
+    let rough = match guess {
+        Some(t) => t,
+        None => match estimate(&c) {
+            Some((t, _)) => t,
+            None => {
+                return Err(Error::Build(format!(
+                    ".pss: {} rising crossing(s) of the oscillation node's mid-range in the \
+                     last {:.0}% of TSTAB; estimating the period needs 3 — lengthen TSTAB or \
+                     give FREQ",
+                    c.len(),
+                    100.0 * STAB_WINDOW
+                )));
+            }
+        },
+    };
+    // Second pass: the mid-range of the last few periods.
+    let (lo2, hi2) = span(f64::max(t_first, t_end - EST_PERIODS as f64 * rough));
+    if (hi2 - lo2).is_nan() || hi2 - lo2 <= floor {
+        return quiet();
+    }
+    let level = 0.5 * (lo2 + hi2);
+    let c = rising_crossings(rows, osc, level);
+    let Some(&t0) = c.last() else {
+        return quiet();
+    };
+    // A measured period beats a guess: FREQ sets the stabilization
+    // grid, and seeds T only when the window has too few crossings.
+    let guessed = guess.map_or_else(String::new, |g| format!("; FREQ's guess was {g:e} s"));
+    let (period, how) = match (estimate(&c), guess) {
+        (Some((t, spread)), _) => {
+            let k = EST_PERIODS.min(c.len() - 1);
+            (
+                t,
+                format!(
+                    "estimate {t:e} s from the last {k} periods between rising crossings \
+                     (spread {spread:.1e}){guessed}"
+                ),
+            )
+        }
+        (None, Some(g)) => (
+            g,
+            format!("guess {g:e} s from FREQ (too few crossings to measure one)"),
+        ),
+        (None, None) => (rough, format!("estimate {rough:e} s (first pass)")),
+    };
+    let all = [0, rows.len() - 1];
+    let x0 = interp(rows, &all, t0);
+    Ok(OscStart {
+        t0,
+        x0,
+        period,
+        note: format!(
+            "pss: no periodic source — autonomous oscillator on v({}); initial period {how}; \
+             mid-range level {level:e} V, swing {:e} V; shooting starts at its last rising \
+             crossing, t0 = {t0:e} s",
+            name,
+            hi2 - lo2
+        ),
+    })
+}
+
 /// The fundamental shared by the source frequencies: their greatest
 /// common divisor, to 1e-9 relative, with at most a million
 /// harmonics up to the highest.
@@ -451,7 +883,7 @@ struct Shooter<'a> {
     circuit: &'a Circuit,
     opts: &'a Options,
     tight: Options,
-    run: &'a PeriodRun,
+    run: PeriodRun,
     kinds: &'a [VarKind],
     adaptive: usize,
     replays: usize,
@@ -470,7 +902,7 @@ impl Shooter<'_> {
         let mut log = Vec::new();
         let rows = self
             .engine()?
-            .tran_period(self.opts, self.run, x, &mut log)?;
+            .tran_period(self.opts, &self.run, x, &mut log)?;
         let n = x.len();
         let last = &rows.last().expect("the period has its end point").1;
         let mut peak = vec![0.0f64; n];
@@ -525,7 +957,7 @@ impl Shooter<'_> {
         let replays = std::cell::Cell::new(0usize);
         let replay = |x0: &[f64]| -> Result<Vec<f64>, Error> {
             replays.set(replays.get() + 1);
-            Engine::new(circuit.build(build_opts)?).tran_replay(opts, run, x0, &at.log)
+            Engine::new(circuit.build(build_opts)?).tran_replay(opts, &run, x0, &at.log)
         };
         let base = replay(x)?;
         // Scaled residual, unknowns 1..n.
@@ -551,6 +983,107 @@ impl Shooter<'_> {
             step[i] = ds[i - 1] * d[i];
         }
         Ok(step)
+    }
+
+    /// The Newton step `(δx, δT)` of an autonomous oscillator: the
+    /// bordered system `(I − Φ′) δx − (∂Φ/∂T) δT = Φ_T(x) − x` with
+    /// `δx[osc] = 0` (the phase condition fixes OSCNODE), square
+    /// again because `T` takes the place of `x[osc]` among the
+    /// unknowns. GMRES on the scaled unknowns (`x_i / tol_i`,
+    /// `T / (RELTOL·T)`); one replay per product perturbs `x` and `T`
+    /// together, `T` by stretching the frozen grid uniformly — the
+    /// replay is then smooth in `T` as it is in `x` (every step, and
+    /// every coefficient of the integration formulas, scales with it).
+    fn newton_step_osc(
+        &mut self,
+        x: &[f64],
+        period: f64,
+        osc: usize,
+        at: &PeriodOut,
+    ) -> Result<(Vec<f64>, f64), Error> {
+        match self.newton_step_osc_with(x, period, osc, at, true) {
+            Ok(s) => Ok(s),
+            Err(Error::IterLim) => self.newton_step_osc_with(x, period, osc, at, false),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn newton_step_osc_with(
+        &mut self,
+        x: &[f64],
+        period: f64,
+        osc: usize,
+        at: &PeriodOut,
+        tight: bool,
+    ) -> Result<(Vec<f64>, f64), Error> {
+        let opts = if tight { &self.tight } else { self.opts };
+        let (circuit, build_opts, run) = (self.circuit, self.opts, self.run);
+        let n = x.len();
+        let d = &at.tol;
+        let s_t = self.opts.reltol * period;
+        // Unknown i sits in slot i − 1 and T in OSCNODE's slot, so
+        // the operator stays identity plus low rank (the identity's
+        // osc entry is replaced by the −∂Φ/∂T column), which is what
+        // makes GMRES converge in a few products.
+        let slot = |i: usize| i - 1;
+        let t_slot = osc - 1;
+        let replays = std::cell::Cell::new(0usize);
+        let replay = |x0: &[f64], t: f64| -> Result<Vec<f64>, Error> {
+            replays.set(replays.get() + 1);
+            let mut engine = Engine::new(circuit.build(build_opts)?);
+            if t == period {
+                return engine.tran_replay(opts, &run, x0, &at.log);
+            }
+            let k = t / period;
+            let stretched = PeriodRun {
+                t0: run.t0,
+                period: t,
+                tstep: run.tstep * k,
+                max_step: run.max_step * k,
+            };
+            let mut log: Vec<StepRec> = at
+                .log
+                .iter()
+                .map(|r| StepRec {
+                    time: run.t0 + (r.time - run.t0) * k,
+                    ..*r
+                })
+                .collect();
+            if let Some(end) = log.last_mut() {
+                end.time = run.t0 + t;
+            }
+            engine.tran_replay(opts, &stretched, x0, &log)
+        };
+        let base = replay(x, period)?;
+        let b: Vec<f64> = (1..n).map(|i| at.resid[i] / d[i]).collect();
+        let bnorm = norm(&b);
+        let lin_tol = f64::min(1e-2, 1e-4 * bnorm);
+        let mut apply = |u: &[f64]| -> Result<Vec<f64>, Error> {
+            let mut xp = x.to_vec();
+            for i in 1..n {
+                if i != osc {
+                    xp[i] += FD_EPS * d[i] * u[slot(i)];
+                }
+            }
+            let y = replay(&xp, period + FD_EPS * s_t * u[t_slot])?;
+            Ok((1..n)
+                .map(|i| {
+                    let ui = if i == osc { 0.0 } else { u[slot(i)] };
+                    ui - (y[i] - base[i]) / (FD_EPS * d[i])
+                })
+                .collect())
+        };
+        let solved = gmres(&b, n - 1, lin_tol, &mut apply);
+        self.replays += replays.get();
+        let (us, dim) = solved?;
+        self.krylov.push(dim);
+        let mut step = vec![0.0; n];
+        for i in 1..n {
+            if i != osc {
+                step[i] = us[slot(i)] * d[i];
+            }
+        }
+        Ok((step, us[t_slot] * s_t))
     }
 
     fn summary(&self, residuals: &[f64]) -> String {

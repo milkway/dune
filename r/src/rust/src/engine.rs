@@ -76,6 +76,7 @@ impl Failure {
             dune_core::Error::PssConvergence {
                 iterations,
                 residuals,
+                ..
             } => ("pss", Some((iterations, residuals))),
             _ => ("analysis", None),
         };

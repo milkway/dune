@@ -306,8 +306,11 @@ fn too_few_iterations_is_a_structured_error() {
         Err(Error::PssConvergence {
             iterations,
             residuals,
+            period,
         }) => {
             assert_eq!(iterations, 1);
+            // A driven period is fixed: no last iterate to report.
+            assert_eq!(period, None);
             assert!(residuals[0] > 1.0);
         }
         other => panic!("{other:?}"),

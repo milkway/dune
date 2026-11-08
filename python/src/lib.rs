@@ -144,6 +144,7 @@ impl Failure {
             dune_core::Error::PssConvergence {
                 iterations,
                 residuals,
+                ..
             } => Failure {
                 residuals: Some((iterations, residuals)),
                 ..Failure::new("pss", message)

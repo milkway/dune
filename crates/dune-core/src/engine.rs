@@ -2473,6 +2473,7 @@ pub(crate) struct StepRec {
 
 /// One shooting interval of `.pss`: a transient over
 /// `[t0, t0 + period]` started from a given state.
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct PeriodRun {
     pub t0: f64,
     pub period: f64,

@@ -39,20 +39,30 @@ pub enum Error {
     /// `.pss`: the shooting iterations did not bring the period
     /// mismatch `x(t₀+T) − x(t₀)` within tolerance. `residuals` holds
     /// each iteration's mismatch in units of the tolerance
-    /// ([`Pss::residuals`](crate::Pss::residuals)).
+    /// ([`Pss::residuals`](crate::Pss::residuals)). `period` is the
+    /// last period iterate of an autonomous oscillator (where `T` is
+    /// a Newton unknown); `None` for a driven circuit, whose period
+    /// is fixed.
     #[error(
         "periodic steady state did not converge in {iterations} shooting iterations \
-         (residual/tolerance per iteration: {})",
-        list_e(.residuals)
+         (residual/tolerance per iteration: {}){}",
+        list_e(.residuals),
+        last_period(.period)
     )]
     PssConvergence {
         iterations: usize,
         residuals: Vec<f64>,
+        period: Option<f64>,
     },
 
     /// An output selection named a vector the solution does not have.
     #[error("no such vector `{0}`")]
     UnknownVector(String),
+}
+
+/// `; last period 1.234e-6 s` — an autonomous shooting's last `T`.
+fn last_period(p: &Option<f64>) -> String {
+    p.map_or_else(String::new, |t| format!("; last period {t:.6e} s"))
 }
 
 /// `1.234e-3, 5.000e-1` — a residual history in an error message.
