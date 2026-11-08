@@ -125,6 +125,14 @@ impl Expander<'_> {
             | Device::SwitchI { vname, .. } => {
                 *vname = rename(vname, path);
             }
+            // The expression's `v(n)` nodes and `i(vname)` devices
+            // map like the card's own (ngspice's `subckt.c` does the
+            // same; the 3f5 frontend translated only the two nodes).
+            Device::Behavioral { expr, .. } => {
+                expr.visit_refs_mut(&mut |n| *n = map_node(n, path, node_map), &mut |d| {
+                    *d = rename(d, path)
+                });
+            }
             _ => {}
         }
         if let Some(m) = device_model_mut(&mut out.device)

@@ -146,7 +146,20 @@ fn utok_len(bytes: &[u8]) -> usize {
 /// `INPevaluate` on one token: `None` when the token does not start
 /// with a number (the C's "error" return).
 pub(crate) fn evaluate(token: &str) -> Option<f64> {
-    let b = token.as_bytes();
+    evaluate_prefix(token.as_bytes()).map(|(v, _)| v)
+}
+
+/// `INPevaluate` reading a number at the start of `b` and reporting
+/// where it ends: the value and the byte length consumed, scale
+/// factor included (`meg`/`mil` count 3 bytes, any other scale
+/// letter 1; letters after it are not consumed). `None` when no
+/// number starts here, as for [`evaluate`].
+///
+/// The C's non-gobbling mode (`gobble == 0`, used by the B-source
+/// lexer) leaves the cursor *on* the scale letter, so `2k` ends the
+/// expression there and the `k` becomes an unknown card parameter;
+/// consuming it is Dune's superset (`docs/dune-netlist.md`).
+pub(crate) fn evaluate_prefix(b: &[u8]) -> Option<(f64, usize)> {
     let mut i = 0usize;
     let mut mantis: f64 = 0.0;
     let mut expo1: i32 = 0;
@@ -169,7 +182,7 @@ pub(crate) fn evaluate(token: &str) -> Option<f64> {
         i += 1;
     }
     if i >= b.len() {
-        return Some(mantis * sign);
+        return Some((mantis * sign, i));
     }
     if b[i] == b':' {
         // The C's hack for subcircuit node numbering: not a number.
@@ -178,7 +191,7 @@ pub(crate) fn evaluate(token: &str) -> Option<f64> {
     if b[i] == b'.' {
         i += 1;
         if i >= b.len() {
-            return Some(mantis * sign);
+            return Some((mantis * sign, i));
         }
         while i < b.len() && b[i].is_ascii_digit() {
             mantis = 10.0 * mantis + f64::from(b[i] - b'0');
@@ -204,32 +217,64 @@ pub(crate) fn evaluate(token: &str) -> Option<f64> {
     }
     // Scale factor; everything after it is ignored.
     if i < b.len() {
-        match b[i].to_ascii_lowercase() {
-            b't' => expo1 += 12,
-            b'g' => expo1 += 9,
-            b'k' => expo1 += 3,
-            b'u' => expo1 -= 6,
-            b'n' => expo1 -= 9,
-            b'p' => expo1 -= 12,
-            b'f' => expo1 -= 15,
+        let scale_len = match b[i].to_ascii_lowercase() {
+            b't' => {
+                expo1 += 12;
+                1
+            }
+            b'g' => {
+                expo1 += 9;
+                1
+            }
+            b'k' => {
+                expo1 += 3;
+                1
+            }
+            b'u' => {
+                expo1 -= 6;
+                1
+            }
+            b'n' => {
+                expo1 -= 9;
+                1
+            }
+            b'p' => {
+                expo1 -= 12;
+                1
+            }
+            b'f' => {
+                expo1 -= 15;
+                1
+            }
             b'm' => {
                 let two = b.get(i + 1).map(u8::to_ascii_lowercase);
                 let three = b.get(i + 2).map(u8::to_ascii_lowercase);
                 match (two, three) {
-                    (Some(b'e'), Some(b'g')) => expo1 += 6,
+                    (Some(b'e'), Some(b'g')) => {
+                        expo1 += 6;
+                        3
+                    }
                     (Some(b'i'), Some(b'l')) => {
                         expo1 -= 6;
                         mantis *= 25.4;
+                        3
                     }
-                    _ => expo1 -= 3,
+                    _ => {
+                        expo1 -= 3;
+                        1
+                    }
                 }
             }
-            _ => {}
-        }
+            _ => 0,
+        };
+        i += scale_len;
     }
     // `pow`, not repeated multiplication, to land on the same
     // doubles the C does.
-    Some(sign * mantis * pow10(expo1.saturating_add(expsgn * expo2)))
+    Some((
+        sign * mantis * pow10(expo1.saturating_add(expsgn * expo2)),
+        i,
+    ))
 }
 
 /// `pow(10.0, k)` correctly rounded, on every target.

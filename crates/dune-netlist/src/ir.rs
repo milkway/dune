@@ -138,12 +138,10 @@ pub enum Device {
     TlineLossy { model: Ident },
     /// `U`: uniform distributed RC, 3 nodes + URC model.
     Urc { model: Ident, params: Vec<Param> },
-    /// `B`: non-linear dependent source. The expression is kept as
-    /// raw text until the corpus demands parse trees (`inpptree.c`).
-    Behavioral {
-        v_expr: Option<String>,
-        i_expr: Option<String>,
-    },
+    /// `B`: non-linear dependent source (`ASRC`), `V=EXPR` or
+    /// `I=EXPR`; when the card gives both, the last one wins, as in
+    /// `INPdevParse` + `ASRCparam`.
+    Behavioral { kind: SourceKind, expr: Expr },
     /// `X`: subcircuit call, only seen before expansion.
     SubcktCall { subname: Ident },
 }
@@ -152,6 +150,128 @@ pub enum Device {
 pub enum SourceKind {
     Voltage,
     Current,
+}
+
+/// A B-source expression: the 3f5 parse tree (`INPparseNode`,
+/// `inpptree.h`) as `PTparse` builds it — no constant folding (only
+/// the derivative trees fold, in `dune-core`) and every name already
+/// resolved. Built by [`crate::parse_expr`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Expr {
+    /// `PT_CONSTANT`: a number or one of the constants `e`, `pi`.
+    Num(f64),
+    /// `v(node)` (`PT_VAR` of type `IF_NODE`). `v(a,b)` is parsed
+    /// into `v(a) - v(b)`, as `mkfnode` does.
+    V(Ident),
+    /// `i(vname)` (`PT_VAR` of type `IF_INSTANCE`): the branch current
+    /// of a device with a branch equation (V, E, H, L, a voltage-type
+    /// B).
+    I(Ident),
+    /// `PT_PLUS` … `PT_POWER`.
+    Bin(ExprOp, Box<Expr>, Box<Expr>),
+    /// `PT_FUNCTION` (unary minus included, as `ExprFunc::Neg`).
+    Call(ExprFunc, Box<Expr>),
+}
+
+/// The binary operators of the 3f5 expression grammar (`ops[]` in
+/// `inpptree.c`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExprOp {
+    Plus,
+    Minus,
+    Times,
+    Divide,
+    Power,
+}
+
+/// The functions of `ptfuncs.c` (`funcs[]` in `inpptree.c`), with
+/// their 3f5 semantics: `log` is the base-10 logarithm, `ln`/`log`/
+/// `sqrt` act on `|x|`, `u` is the unit step (½ at 0), `uramp` the
+/// unit ramp.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExprFunc {
+    Abs,
+    Acos,
+    Acosh,
+    Asin,
+    Asinh,
+    Atan,
+    Atanh,
+    Cos,
+    Cosh,
+    Exp,
+    Ln,
+    Log,
+    Sgn,
+    Sin,
+    Sinh,
+    Sqrt,
+    Tan,
+    Tanh,
+    U,
+    Uramp,
+    /// Unary minus (`PTF_UMINUS`, the function named `-`).
+    Neg,
+}
+
+impl ExprFunc {
+    /// The 3f5 function table, by name (`funcs[]`; `-` is reached
+    /// only through the unary-minus token).
+    pub const TABLE: [(&'static str, ExprFunc); 20] = [
+        ("abs", ExprFunc::Abs),
+        ("acos", ExprFunc::Acos),
+        ("acosh", ExprFunc::Acosh),
+        ("asin", ExprFunc::Asin),
+        ("asinh", ExprFunc::Asinh),
+        ("atan", ExprFunc::Atan),
+        ("atanh", ExprFunc::Atanh),
+        ("cos", ExprFunc::Cos),
+        ("cosh", ExprFunc::Cosh),
+        ("exp", ExprFunc::Exp),
+        ("ln", ExprFunc::Ln),
+        ("log", ExprFunc::Log),
+        ("sgn", ExprFunc::Sgn),
+        ("sin", ExprFunc::Sin),
+        ("sinh", ExprFunc::Sinh),
+        ("sqrt", ExprFunc::Sqrt),
+        ("tan", ExprFunc::Tan),
+        ("tanh", ExprFunc::Tanh),
+        ("u", ExprFunc::U),
+        ("uramp", ExprFunc::Uramp),
+    ];
+
+    /// The name the function is written with (`-` for [`ExprFunc::Neg`]).
+    pub fn name(self) -> &'static str {
+        if self == ExprFunc::Neg {
+            return "-";
+        }
+        Self::TABLE
+            .iter()
+            .find(|(_, f)| *f == self)
+            .map_or("?", |(n, _)| n)
+    }
+}
+
+impl Expr {
+    /// Visit every `v()` node name and `i()` device name, mutably
+    /// (subcircuit expansion renames them). Depth is bounded by the
+    /// parser, so the recursion is too.
+    pub fn visit_refs_mut(
+        &mut self,
+        node: &mut dyn FnMut(&mut Ident),
+        device: &mut dyn FnMut(&mut Ident),
+    ) {
+        match self {
+            Expr::Num(_) => {}
+            Expr::V(n) => node(n),
+            Expr::I(d) => device(d),
+            Expr::Bin(_, l, r) => {
+                l.visit_refs_mut(node, device);
+                r.visit_refs_mut(node, device);
+            }
+            Expr::Call(_, a) => a.visit_refs_mut(node, device),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
