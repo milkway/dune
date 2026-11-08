@@ -511,6 +511,103 @@ resultados espelhando o rawfile).
   `b1overlap.cir` polariza o nó para evitar o cruzamento); fica
   para a investigação do controlador de passo.
 
+- **Linha U (URC)** (`elaborate.rs::urc_expand` ← `urcsetup.c`):
+  no 3f5 a URC não tem load — o setup a **expande** numa escada de
+  elementos concentrados, e é isso que o Dune faz na elaboração.
+  Modelo `URC` (`urcmpar.c`: `K`=1.5, `FMAX`=1 GHz, `RPERL`=1000,
+  `CPERL`=1e-12, `ISPERL`, `RSPERL`=0, flag `URC` inerte), instância
+  `L` e `N`. Lumps: `N` truncado se dado, senão
+  `max(3, ln(wnorm·((p−1)/p)²)/ln p)` truncado, com
+  `wnorm = FMAX·R0·C0·2π` e 3 quando `wnorm < 35`. Seções:
+  `r1 = R0(p−1)/(2pⁿ−2)`, `c1 = C0(p−1)/(pⁿ⁻¹(p+1)−2)` (idem `i1`
+  para IS), crescendo por `p` a partir **das duas pontas** (`rlo<i>`
+  do lado de N1, `rhi<i>` do lado de N2) até se encontrarem no último
+  nó `hi`; cada nó interno ganha `clo<i>`/`chi<i>` para N3 — ou
+  diodos `dlo<i>`/`dhi<i>` de área `p^(i−1)` com `CJO=c1`, `IS=i1`,
+  `RS=L·n·RSPERL` quando `ISPERL` é dado. Nomes do
+  `IFnewUid`/`CKTmkVolt` (`u1#hi1`, `u1#lo1`, `u1#rlo1`…): o ngspice
+  salva esses nós no rawfile e o Dune também (`saved_node` não os
+  esconde; o `#internal` dos diodos com RS sim). O `urcsetup.c` do
+  ngspice-47 é o do 3f5 (só cast/estilo), então não há
+  KNOWN_DIFFS de modelo. Guardas novas (o C divide por zero ou aloca
+  sem limite): `L ≤ 0`, `K ≤ 1` e mais de 10 000 lumps são erro.
+  Sondas: `urc_line` (`.ac` + `.tran`, 10 lumps pela regra e N=4) em
+  lockstep (3.5e-14 no tran, 9.5e-7 no AC) e `urc_diode` (`.dc` +
+  `.tran` com ISPERL) a 0.52/0.017.
+
+- **Fonte B (ASRC)** (`asrc.rs` ← `asrcload.c`, `asrcacld.c`,
+  `asrcpzld.c`, `asrcconv.c`, `asrcset.c`, `inpptree.c`, `ifeval.c`,
+  `ptfuncs.c`; parser em `dune-netlist/src/expr.rs`). A árvore
+  parseada vira uma arena (subárvores compartilhadas entre a função e
+  as derivadas, como os ponteiros do C); as variáveis são os `v(n)` e
+  `i(dev)` distintos em ordem de aparição. **`PTdifferentiate`
+  literal**, inclusive a dobra dos construtores (`mkb`: constantes
+  dobram com o operador cru — `/` sem fudge, `pow` puro —, depois as
+  identidades 0/1; `mkf`: argumento constante dobra pela própria
+  função do `ptfuncs.c`), com as derivadas do C (`tan' = 1/cos²`,
+  `log' = log₁₀e/u`, `uramp' = u`, `u' = sgn' = 0`, `x^c` →
+  `c·x^(c−1)·x'` só quando o expoente é constante na árvore —
+  `x^(1+1)` e `x^-2` caem no caso geral). **`PTeval`**: `/` empurra
+  o divisor para longe de 0 por `gmin` (`PTfudge_factor`), `^` com
+  base negativa toma o expoente inteiro quando
+  `|b−(int)b|/(b+0.001) < 1e-6` (e senão `|a|^b`), `sin/cos/tan`
+  reduzem o argumento pelo `MODULUS` com `(int)`, e qualquer `HUGE`
+  (`+∞`) devolvido é erro de avaliação. O load é o `ASRCload`:
+  `V=` estampa o ramo (`b1#branch`, alcançável por `i(b1)`) e
+  `−∂f/∂xᵢ` na linha do ramo; `I=` estampa `±∂f/∂xᵢ` nas linhas
+  N+/N−; RHS `f(x₀) − Σ xᵢ₀·∂f/∂xᵢ`. **Sem limitação de junção**
+  (o 3f5 não tem nenhuma para este dispositivo). O passe
+  `MODEINITSMSIG` guarda as derivadas (`ASRCacValues`) que o AC e o
+  `.pz` estampam (o `ASRCpzLoad` reavalia no op — mesmo número).
+  `.disto`: o 3f5 (e o ngspice) não têm `DEVdisto` para a B — ela
+  entra só pelas estampas lineares, como lá. Sem ruído (idem C). Sem
+  `.sens` (falha alto, como todo dispositivo sem porta).
+
+  Onde o ngspice-47 corrigiu o 3f5, o Dune segue o ngspice
+  (KNOWN_DIFFS, gates medidos): `V=` constante estampa a linha do
+  ramo (o `v_first` do 3f5 só estampa a partir da 1ª variável — `V=5`
+  dá matriz singular; revertido, `bsrc_dc` falha "singular matrix"
+  no `b8`); a derivada de `f^g` com `g` variável usa `ln f` (o 3f5
+  escreve `ln(f')`; revertido, `bsrc_ac` FALHA a 500 e o `bsrc_dc`
+  aborta); o teste de convergência avalia na solução **nova** (o do
+  3f5 lê `CKTrhsOld` e nunca falha; sem efeito medido nas sondas);
+  `srcFact` escala a fonte no TRANOP (D-0012, não exercitado);
+  `ln`/`log` de exatamente 0 dão −1e99 (o −∞ do 3f5 envenena a 1ª
+  iteração de todo `ln(v(n))`, que parte de v=0; revertido, um deck
+  `v=ln(v(1))` aborta "not finite"); fonte `V=` com N+ = N− é erro
+  (ngspice; no 3f5, singular). Mantém o 3f5: `log` base 10 (o ngspice
+  faz `log` = ln — medido: `ln(2)+log(2)` dá 0.994 no Dune, 1.386 no
+  ngspice), `|x|` em `ln/log/sqrt` (ngspice: erro), `x^y` com x<0 e y
+  fracionário = `|x|^y` (ngspice: 0), `d(x^c)` = `c·x^(c−1)` (o
+  ngspice usa `pwr`, de sinal trocado para x<0 e c ímpar), `exp`
+  estourando é erro (ngspice satura em 1e99; sem efeito medido — o
+  gmin stepping recupera nos dois). Avaliação não finita (NaN de
+  `acos(2)`, −∞…) é falha de load (o C empurraria NaN para a
+  matriz): o Newton trata como não convergência e o `CKTop` segue
+  para os fallbacks.
+
+  Fora (extensões do ngspice além do 3f5): `time`/`temper`/`hertz`,
+  ternário e relacionais, `**`, as funções extras (`pwl`, `min`,
+  `max`, `pow`, `pwr`, `ddt`, `floor`…), `tc1/tc2/m/reciproctc`,
+  `.param` em expressões; e o `vmeas` do frontend do ngspice — para
+  `i(l1)` (ou E, H, B) o ngspice insere uma fonte de 0 V em série
+  (nó `5_vmeas_0`, vetor `v_l5#branch`); o Dune lê o ramo
+  diretamente pelo `CKTfndBranch`, como o 3f5 (mesmo valor, sem o
+  nó extra). Sondas: `bsrc_dc` (`.dc`, 8 fontes cobrindo todas as
+  funções, `v(a,b)`, `i()`, `e`/`pi`, V= constante, carga
+  exponencial resolvida pelo Newton) a 0.41; `bsrc_tran` a 0.003;
+  `bsrc_ac` a 4.8e-7.
+
+  **Pegas medidas ao escrever as sondas:** o ngspice-47 roda `.ac`
+  antes de `.tran` qualquer que seja a ordem no deck (decks de sonda
+  com os dois põem `.ac` primeiro); `ln`/`sqrt`/`acosh` exatamente na
+  borda do domínio no chute inicial zero são frágeis no LU denso —
+  o −1e99 de `ln(0)` contamina outras incógnitas em ~1e83 por
+  arredondamento e um `asin` adiante dá NaN (o esparso do ngspice
+  isola a linha); o ngspice força `maxIter ≥ 100` no `NIiter` e o
+  Dune não, o que pesa para fontes B exponenciais sem limitação
+  (descem ~vt por iteração).
+
 Validação: `tests/op.rs` compara um deck-sonda (divisor, indutor,
 diodo com RS, E, F, G, H, I) com números do ngspice-47 dentro das
 tolerâncias SPICE; os decks `.op`/`.dc` de `corpus/basic/` passam no
@@ -588,9 +685,9 @@ oráculo contra o ngspice.
   MOS6/BSIM2 não têm no C); `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
 - Semicondutores R/C com modelo (w/l), `temp` por instância de R.
-- Linha U (URC) e fonte B (Fase 3, sem deck); JFET nível 2
-  (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são ngspice, fora do
-  contrato 3f5.
+- JFET nível 2 (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são
+  ngspice, fora do contrato 3f5. (Linha U e fonte B entraram em
+  2026-11-08 — seções acima.)
 - Oráculo: a coluna de escala não é comparada (a malha de
   frequência errada do acdec só apareceu como erro de variável) e
   o tubo do tran absorve um shift de malha inteiro (o tra_uic
