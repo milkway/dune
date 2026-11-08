@@ -1143,6 +1143,67 @@ impl crate::devices::Device for BjtI {
         ctx.add_b(self.s[COLP_BASE], -xcbx);
     }
 
+    /// `BJTpzLoad` (`bjtpzld.c`): the AC stamps with `s` in place of
+    /// `jω`, without the excess phase (`xgm = 0` — neither the 3f5
+    /// nor ngspice delays `gm` at a complex frequency). The series
+    /// resistances enter as conductances times the area, as in the
+    /// AC load and ngspice's `bjtpzld.c`; the 3f5's reads
+    /// `BJTcollectorResist·area` (ohms stamped as siemens,
+    /// `corpus/KNOWN_DIFFS.md`). The substrate capacitance sits on
+    /// the collector', as everywhere in the Dune BJT (ngspice's
+    /// `substCon` is the same node for the vertical default).
+    fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let st = self.st;
+        let gcpr = self.t.col_conduct * self.area;
+        let gepr = self.t.emit_conduct * self.area;
+        let gpi = ctx.states.get(0, st + GPI);
+        let gmu = ctx.states.get(0, st + GMU);
+        let gm = ctx.states.get(0, st + GM);
+        let go = ctx.states.get(0, st + GO);
+        let xgm = 0.0;
+        let gx = ctx.states.get(0, st + GX);
+        let xcpi = ctx.states.get(0, st + CQBE);
+        let xcmu = ctx.states.get(0, st + CQBC);
+        let xcbx = ctx.states.get(0, st + CQBX);
+        let xccs = ctx.states.get(0, st + CQCS);
+        let xcmcb = ctx.states.get(0, st + CEXBC);
+
+        ctx.add_g(self.s[COL_COL], gcpr);
+        ctx.add_g(self.s[BASE_BASE], gx);
+        ctx.add_cap(self.s[BASE_BASE], xcbx);
+        ctx.add_g(self.s[EMIT_EMIT], gepr);
+        ctx.add_g(self.s[COLP_COLP], gmu + go + gcpr);
+        ctx.add_cap(self.s[COLP_COLP], xcmu + xccs + xcbx);
+        ctx.add_g(self.s[BASEP_BASEP], gx + gpi + gmu);
+        ctx.add_cap(self.s[BASEP_BASEP], xcpi + xcmu + xcmcb);
+        ctx.add_g(self.s[EMITP_EMITP], gpi + gepr + gm + go);
+        ctx.add_cap(self.s[EMITP_EMITP], xcpi + xgm);
+        ctx.add_g(self.s[COL_COLP], -gcpr);
+        ctx.add_g(self.s[BASE_BASEP], -gx);
+        ctx.add_g(self.s[EMIT_EMITP], -gepr);
+        ctx.add_g(self.s[COLP_COL], -gcpr);
+        ctx.add_g(self.s[COLP_BASEP], -gmu + gm);
+        ctx.add_cap(self.s[COLP_BASEP], -xcmu + xgm);
+        ctx.add_g(self.s[COLP_EMITP], -gm - go);
+        ctx.add_cap(self.s[COLP_EMITP], -xgm);
+        ctx.add_g(self.s[BASEP_BASE], -gx);
+        ctx.add_g(self.s[BASEP_COLP], -gmu);
+        ctx.add_cap(self.s[BASEP_COLP], -xcmu - xcmcb);
+        ctx.add_g(self.s[BASEP_EMITP], -gpi);
+        ctx.add_cap(self.s[BASEP_EMITP], -xcpi);
+        ctx.add_g(self.s[EMITP_EMIT], -gepr);
+        ctx.add_g(self.s[EMITP_COLP], -go);
+        ctx.add_cap(self.s[EMITP_COLP], xcmcb);
+        ctx.add_g(self.s[EMITP_BASEP], -gpi - gm);
+        ctx.add_cap(self.s[EMITP_BASEP], -xcpi - xgm - xcmcb);
+        ctx.add_cap(self.s[SUBST_SUBST], xccs);
+        ctx.add_cap(self.s[COLP_SUBST], -xccs);
+        ctx.add_cap(self.s[SUBST_COLP], -xccs);
+        ctx.add_cap(self.s[BASE_COLP], -xcbx);
+        ctx.add_cap(self.s[COLP_BASE], -xcbx);
+        Ok(())
+    }
+
     /// `BJTdSetup` (`dev/bjt/bjtdset.c`): Taylor coefficients of the
     /// Gummel–Poon nonlinearities at the operating point in
     /// `CKTrhsOld`, carried through the model equations with the
