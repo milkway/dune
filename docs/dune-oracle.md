@@ -80,6 +80,35 @@ regenerativas) com teto de margem: rodam e aparecem em todo CI,
 XFAIL dentro do teto não derruba, estourar o teto derruba, e passar
 pede remoção da entrada.
 
+Dois guardas fecham buracos dessas réguas (2026-11-08):
+
+- **Escala como grade.** O primeiro vetor de um plot não-transiente
+  que é escala (`frequency`, `v-sweep`, `i-sweep`, `res-sweep`,
+  `temp-sweep`) não é solução de Newton: os dois programas o
+  calculam pela mesma aritmética a partir do cartão. É comparado à
+  parte com régua de arredondamento, `|a−b| ≤ 1e-9·(max(|a|,|b|) +
+  max|coluna|)`, e a divergência é **problema estrutural** ("scale
+  … differs at point k (grid mismatch)"), não erro de variável.
+  Medido no corpus: o pior ponto fica a 1.7e-7 dessa régua (as
+  grades batem a ~1e-16 relativo). Antes, a malha errada do acdec
+  só aparecia como erro nos vetores, sob a régua frouxa 2·reltol.
+- **Transiente: guarda pontual e shift.** O tubo de ±1 passo
+  perdoa uma borda em qualquer lugar do passo do oráculo — e por
+  isso perdoava também uma borda determinística escorregada um
+  passo inteiro (o `tra_uic` antes do breakpoint em TSTEP sob UIC:
+  0.68 V pontual, margem 0.000). Agora a razão de cada tensão é
+  `max(tubo, pontual/16)`, onde "pontual" é o erro interpolado sem
+  tubo na mesma régua LTE: 16 réguas ≈ `0.22·S`. Medido nos 78
+  decks: todo transiente que passa fica ≤ 0.27 réguas pontuais (60×
+  abaixo); o `tra_uic` pré-fix dá ~48. E um plot que só fica dentro
+  da régua **depois** do deslocamento global de D-0011 não é PASS
+  (`shift_needed`): nenhum deck que passa precisa de shift; com o
+  guarda pontual, o `tra_uic` pré-fix era resgatado por um shift de
+  −6.9e-11 s (um passo inicial) — a assinatura de uma grade
+  escorregada. O shift continua buscado e reportado e a margem com
+  ele ainda mede os XFAIL contra os tetos: schmitt sobe de 2.69 a
+  3.02 (teto 5), ltra_3 29.9 e mosamp2 6.08 inalterados.
+
 `.ac` compara parte real e imaginária com a régua de D-0009 — mais
 apertado que o módulo-em-dB + fase que o PLAN §2.4 esboçou, e viável
 porque o AC é um solve linear direto (sem folga de Newton): os três
