@@ -83,8 +83,9 @@ Model parameters are not sweepable yet.
 An unknown element or parameter, a parameter given twice or a
 non-finite value is a \code{spice_error_sweep}. A run that fails to build
 or simulate stops the sweep with the error class of \code{\link[=spice_run]{spice_run()}}
-(\code{spice_error_elaborate}, \code{spice_error_analysis}), naming the run
-and its values.
+(\code{spice_error_elaborate}, \code{spice_error_analysis}, or
+\code{spice_error_pss} with the shooting history for a \code{.pss} that did
+not converge), naming the run and its values.
 }
 
 \section{Mirror of the Python package}{

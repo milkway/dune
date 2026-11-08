@@ -55,6 +55,8 @@ test_that("the result carries period, t0, residuals and tidy tibbles", {
   expect_length(res$residuals, 2L)
   expect_gt(res$residuals[[1]], 1)
   expect_lte(res$residuals[[2]], 1)
+  # Driven: the period is the drive's in every iteration.
+  expect_identical(res$periods, rep(res$period, 2L))
 
   tm <- res$time
   expect_named(tm, c("time", "variable", "type", "value"))
@@ -103,6 +105,7 @@ test_that("a shooting that does not converge is spice_error_pss with its history
   expect_identical(e$iterations, 1L)
   expect_length(e$residuals, 1L)
   expect_gt(e$residuals, 1)
+  expect_null(e$period) # a driven circuit's period is fixed
   expect_match(conditionMessage(e), "did not converge")
   deck <- with_card(rc_pss, ".pss 1k 5m 2 128 10 1")
   card <- expect_error(spice_run(deck), class = "spice_error_pss")
@@ -145,4 +148,71 @@ test_that("a session runs a .pss deck as spice_run() does", {
   expect_same_plots(spice_rerun(s), spice_run(deck))
   spice_alter(s, "r1", 2e3)
   expect_same_plots(spice_rerun(s), spice_run(sub("r1 1 2 1k", "r1 1 2 2k", deck, fixed = TRUE)))
+})
+
+# --- autonomous oscillators (D-0035) --------------------------------------
+
+# corpus/pss/osc_vdp.cir's card: .pss 0 4m 1 256 10 uic.
+vdp_args <- list(tstab = 4e-3, osc_node = "1", points = 256L, uic = TRUE)
+
+# Frequency counter over a transient: the mean spacing of the rising
+# mid-range crossings of `v` (as crates/dune-core/tests/pss_osc.rs measures).
+counter_period <- function(t, v) {
+  level <- (min(v) + max(v)) / 2
+  j <- which(v[-length(v)] < level & v[-1L] >= level)
+  c <- t[j] + (t[j + 1L] - t[j]) * (level - v[j]) / (v[j + 1L] - v[j])
+  stopifnot(length(c) >= 3L)
+  (c[[length(c)]] - c[[1L]]) / (length(c) - 1L)
+}
+
+test_that("an autonomous oscillator's period is the shooting's unknown", {
+  path <- corpus_path("pss", "osc_vdp.cir")
+  res <- do.call(spice_pss, c(list(path), vdp_args))
+  expect_same_plots(res, spice_run(path))
+  expect_lte(res$residuals[[length(res$residuals)]], 1)
+  expect_length(res$periods, length(res$residuals))
+  expect_identical(res$periods[[length(res$periods)]], res$period)
+  expect_false(res$periods[[1L]] == res$period) # T moved with Newton
+  expect_identical(res$time$time[[1L]], res$t0)
+  # ngspice-47's long .tran, counted; the ruler is the trapezoidal phase
+  # error per period of both computations, (2 pi/N)^2/12 with N = 256
+  # here and ~199 there (TMAX = 1u).
+  gold <- spice_read_raw(corpus_path("pss", "golden", "osc_vdp.raw"))$plots[[1L]]
+  t_gold <- counter_period(gold$values[["time"]], gold$values[["v(1)"]])
+  ruler <- sum((2 * pi / c(256, t_gold / 1e-6))^2 / 12)
+  expect_lt(abs(res$period / t_gold - 1), ruler)
+  expect_output(print(res), "Periodic steady state \\(autonomous oscillator\\): period 0.000199")
+})
+
+test_that("an oscillator cut short carries its last period", {
+  path <- corpus_path("pss", "osc_vdp.cir")
+  e <- expect_error(
+    do.call(spice_pss, c(list(path, max_iter = 1L), vdp_args)),
+    class = "spice_error_pss"
+  )
+  expect_identical(e$iterations, 1L)
+  expect_length(e$residuals, 1L)
+  # The frequency counter's estimate, near the tank's 2 pi sqrt(LC).
+  expect_equal(e$period, 2 * pi * sqrt(1e-3 * 1e-6), tolerance = 0.05)
+  # The same through the card (SCITER 1).
+  deck <- sub(".pss 0 4m 1 256 10 uic", ".pss 0 4m 1 256 10 1 uic",
+    paste(readLines(path), collapse = "\n"),
+    fixed = TRUE
+  )
+  card <- expect_error(spice_run(deck), class = "spice_error_pss")
+  expect_identical(card$period, e$period)
+  expect_identical(card$residuals, e$residuals)
+})
+
+test_that("a sweep run whose .pss does not converge is spice_error_pss", {
+  deck <- with_card(rc_pss, ".pss 1k 5m 2 128 10 1")
+  e <- expect_error(
+    spice_sweep(deck, r1 = c(1e3, 2e3)),
+    "run 1 \\(r1=1000\\)",
+    class = "spice_error_pss"
+  )
+  expect_identical(e$kind, "pss")
+  expect_identical(e$iterations, 1L)
+  expect_gt(e$residuals, 1)
+  expect_null(e$period)
 })

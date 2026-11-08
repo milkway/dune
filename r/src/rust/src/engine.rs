@@ -52,9 +52,37 @@ pub struct Failure {
     pub kind: &'static str,
     pub message: String,
     pub diagnostics: Vec<Diag>,
-    /// For kind `pss`: the shooting iterations run and the residual of
-    /// each.
-    pub residuals: Option<(usize, Vec<f64>)>,
+    /// For kind `pss`: the shooting history.
+    pub pss: Option<PssHistory>,
+}
+
+/// The history of a shooting that did not converge
+/// ([`dune_core::Error::PssConvergence`]): the iterations run, the
+/// residual of each and, for an autonomous oscillator, the last
+/// period iterate (`None` for a driven circuit).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PssHistory {
+    pub iterations: usize,
+    pub residuals: Vec<f64>,
+    pub period: Option<f64>,
+}
+
+impl PssHistory {
+    /// The history of `e`, when it is a `.pss` that did not converge.
+    pub fn of(e: &dune_core::Error) -> Option<Self> {
+        match e {
+            dune_core::Error::PssConvergence {
+                iterations,
+                residuals,
+                period,
+            } => Some(PssHistory {
+                iterations: *iterations,
+                residuals: residuals.clone(),
+                period: *period,
+            }),
+            _ => None,
+        }
+    }
 }
 
 impl Failure {
@@ -63,7 +91,7 @@ impl Failure {
             kind,
             message: message.into(),
             diagnostics: Vec::new(),
-            residuals: None,
+            pss: None,
         }
     }
 
@@ -71,20 +99,12 @@ impl Failure {
     /// `pss` with the shooting history for a `.pss` that did not
     /// converge, kind `analysis` otherwise.
     fn analysis(e: dune_core::Error, diagnostics: Vec<Diag>) -> Self {
-        let message = e.to_string();
-        let (kind, residuals) = match e {
-            dune_core::Error::PssConvergence {
-                iterations,
-                residuals,
-                ..
-            } => ("pss", Some((iterations, residuals))),
-            _ => ("analysis", None),
-        };
+        let pss = PssHistory::of(&e);
         Failure {
-            kind,
-            message,
+            kind: if pss.is_some() { "pss" } else { "analysis" },
+            message: e.to_string(),
             diagnostics,
-            residuals,
+            pss,
         }
     }
 }
@@ -389,7 +409,7 @@ fn prepare(
             kind: "parse",
             message: first.render(&parsed.sources),
             diagnostics,
-            residuals: None,
+            pss: None,
         });
     }
 
@@ -475,6 +495,8 @@ pub struct PssOutput {
     pub period: f64,
     pub t0: f64,
     pub residuals: Vec<f64>,
+    /// The period of each shooting iteration, aligned with `residuals`.
+    pub periods: Vec<f64>,
 }
 
 /// `spice_pss()`: parse and elaborate the deck (options as in [`run`]),
@@ -511,6 +533,7 @@ pub fn pss(
         period: pss.period,
         t0: pss.t0,
         residuals: pss.residuals,
+        periods: pss.periods,
     })
 }
 
@@ -642,6 +665,8 @@ pub enum SweepRunOutput {
     Failed {
         kind: &'static str,
         message: String,
+        /// For kind `pss`: the shooting history.
+        pss: Option<PssHistory>,
     },
 }
 
@@ -698,10 +723,12 @@ pub fn sweep(
                 notes: o.notes,
             },
             Err(e) => SweepRunOutput::Failed {
+                pss: PssHistory::of(&e),
                 kind: match e {
                     dune_core::Error::Build(_)
                     | dune_core::Error::Elab(_)
                     | dune_core::Error::Unsupported { .. } => "elaborate",
+                    dune_core::Error::PssConvergence { .. } => "pss",
                     _ => "analysis",
                 },
                 message: e.to_string(),
@@ -894,6 +921,7 @@ mod tests {
         }
         assert_eq!(out.period, 1e-3);
         assert!(out.residuals.len() == 2 && out.residuals[1] <= 1.0);
+        assert_eq!(out.periods, [1e-3; 2]);
     }
 
     #[test]
@@ -902,14 +930,16 @@ mod tests {
             panic!("one iteration cannot converge");
         };
         assert_eq!(f.kind, "pss");
-        let (n, r) = f.residuals.unwrap();
-        assert!(n == 1 && r.len() == 1 && r[0] > 1.0);
+        let h = f.pss.unwrap();
+        let r = h.residuals.clone();
+        assert!(h.iterations == 1 && r.len() == 1 && r[0] > 1.0);
+        assert_eq!(h.period, None);
         // The same through the card.
         let Err(card) = text(&RC.replace(".end", ".pss 1k 5m 2 128 10 1\n.end")) else {
             panic!("one iteration cannot converge");
         };
         assert_eq!(card.kind, "pss");
-        assert_eq!(card.residuals.unwrap().1, r);
+        assert_eq!(card.pss.unwrap(), h);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 % Please edit documentation in R/pss.R
 \name{spice_pss}
 \alias{spice_pss}
-\title{Periodic steady state of a driven circuit}
+\title{Periodic steady state of a driven circuit or an oscillator}
 \usage{
 spice_pss(
   deck,
@@ -37,9 +37,9 @@ frequencies (\code{SIN}/\code{SFFM} with an explicit frequency, \code{PULSE}
 first multiple of the period at or after \code{tstab} (at least one
 period) before the shooting starts there.}
 
-\item{osc_node}{\code{NULL} or ngspice's oscillation node, for autonomous
-circuits (not solved yet): checked to exist and reported in the
-notes only.}
+\item{osc_node}{\code{NULL} or ngspice's oscillation node. Required for
+an autonomous oscillator: its phase condition and period estimate
+(see Details). A driven circuit only checks that it exists.}
 
 \item{points}{Samples per period, 4 to 10 000 000: the time plot has
 \code{points + 1} rows, and the period transient steps at most
@@ -94,10 +94,14 @@ instants from \code{t0} to \code{t0 + period} per variable: \code{time},
 and the derived \code{mag} (\code{Mod()}) and \code{phase} (\code{Arg()}, radians).
 The convention is \code{.ac}'s phasor: \verb{x(t) = X_0 + sum Re(X_k exp(1i * k * w * t))}, phases referred to \code{t = 0}; \code{mag} is
 ngspice's (magnitude-only) plot;
-\item \code{period} (s), \code{t0} (s, the first multiple of the period at or
-after \code{tstab}), and \code{residuals}: the period mismatch
+\item \code{period} (s: the drive's for a driven circuit, the shooting's
+result for an oscillator), \code{t0} (s, the start of the reported
+period), \code{residuals}: the period mismatch
 \verb{max_i |x_i(t0+T) - x_i(t0)| / tol_i} of each shooting iteration
-(the last one \verb{<= steady_coeff}).
+(the last one \verb{<= steady_coeff}; \code{Inf} for an iteration whose
+transient failed), and \code{periods}: the period of each iteration
+(constant for a driven circuit, the Newton iterate of an
+oscillator; the last one is \code{period}).
 }
 }
 \description{
@@ -116,19 +120,30 @@ The method is Dune's: ngspice-47's \code{.pss} is a free-running
 oscillator search that detunes from a driving source. \code{points} is the
 accuracy knob: the error left is the integrator's phase error,
 \code{(2 * pi / points)^2 / 12} of the amplitude with the default
-trapezoidal rule. Autonomous oscillators and transmission lines are
-not supported yet.
+trapezoidal rule.
+
+A circuit without a periodic source (\code{freq = 0} finds none) is an
+autonomous oscillator: the period becomes a Newton unknown, with the
+phase pinned where \code{v(osc_node)} rises through its mid-range, and is
+first estimated by counting the crossings of \code{osc_node} over the
+second half of \code{tstab} (both are required then; a \code{freq} given is
+only a fallback for fewer than three crossings). The deck must start
+the oscillation itself (\code{.ic} with \code{uic = TRUE}, or a ramp): there is
+no automatic kick. The result's \code{periods} follows the period per
+iteration. Transmission lines are not supported yet.
 }
 \section{Errors}{
 
 As \code{\link[=spice_run]{spice_run()}}; a shooting that does not converge in \code{max_iter}
 iterations is a condition of class \code{spice_error_pss} (and
 \code{spice_error}) whose fields \code{iterations} (int) and \code{residuals} (dbl)
-hold the history -- the same condition a \code{.pss} card raises from
-\code{\link[=spice_run]{spice_run()}} and \code{\link[=spice_rerun]{spice_rerun()}}. Other failures (no periodic source
-with \code{freq = 0}, an unknown \code{osc_node}, a transmission line) are
-\code{spice_error_analysis}; an argument out of range is
-\code{spice_error_input}.
+hold the history, and \code{period} (dbl) the last period iterate of an
+oscillator (\code{NULL} for a driven circuit) -- the same condition a
+\code{.pss} card raises from \code{\link[=spice_run]{spice_run()}}, \code{\link[=spice_rerun]{spice_rerun()}} and a run of
+\code{\link[=spice_sweep]{spice_sweep()}}. Other failures (an unknown \code{osc_node}, an
+oscillator without \code{osc_node} or \code{tstab}, a shooting that settles
+on the equilibrium, a transmission line) are \code{spice_error_analysis};
+an argument out of range is \code{spice_error_input}.
 }
 
 \section{Mirror of the Python package}{

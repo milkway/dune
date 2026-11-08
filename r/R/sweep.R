@@ -53,8 +53,9 @@
 #' An unknown element or parameter, a parameter given twice or a
 #' non-finite value is a `spice_error_sweep`. A run that fails to build
 #' or simulate stops the sweep with the error class of [spice_run()]
-#' (`spice_error_elaborate`, `spice_error_analysis`), naming the run
-#' and its values.
+#' (`spice_error_elaborate`, `spice_error_analysis`, or
+#' `spice_error_pss` with the shooting history for a `.pss` that did
+#' not converge), naming the run and its values.
 #'
 #' @section Mirror of the Python package:
 #' This is the R face of `spice.sweep()` in Python. Run indices are
@@ -130,7 +131,7 @@ spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
       vals <- paste0(keys, "=", format(vapply(values, `[[`, 0, i), digits = 6), collapse = ", ")
       abort_engine(r$kind, paste0("run ", i, " (", vals, "): ", r$message),
         diagnostics,
-        call = call
+        call = call, failure = r
       )
     }
     runs[[i]] <- new_spice_result(out$title, r$plots, r$notes, diagnostics[0, ], r$measurements)

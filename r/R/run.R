@@ -129,7 +129,8 @@ new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements 
 }
 
 # `failure` is the Rust side's failure list; for kind `pss` its
-# shooting history (`iterations`, `residuals`) rides on the condition.
+# shooting history (`iterations`, `residuals`, `period`) rides on the
+# condition (`period` NULL for a driven circuit).
 abort_engine <- function(kind, message, diagnostics, call, failure = NULL) {
   what <- switch(kind,
     options = "Invalid simulator options.",
@@ -145,7 +146,8 @@ abort_engine <- function(kind, message, diagnostics, call, failure = NULL) {
   if (identical(kind, "pss") && !is.null(failure)) {
     extra <- list(
       iterations = as.integer(failure$iterations),
-      residuals = as.double(failure$residuals)
+      residuals = as.double(failure$residuals),
+      period = if (is.null(failure$period)) NULL else as.double(failure$period)
     )
   }
   rlang::inject(cli::cli_abort(

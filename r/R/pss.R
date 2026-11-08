@@ -1,4 +1,4 @@
-#' Periodic steady state of a driven circuit
+#' Periodic steady state of a driven circuit or an oscillator
 #'
 #' Runs the periodic steady state (`.pss`) of the circuit in `deck`, by
 #' shooting--Newton: Newton on the period map `x(t0) -> x(t0 + T)` with
@@ -14,8 +14,17 @@
 #' oscillator search that detunes from a driving source. `points` is the
 #' accuracy knob: the error left is the integrator's phase error,
 #' `(2 * pi / points)^2 / 12` of the amplitude with the default
-#' trapezoidal rule. Autonomous oscillators and transmission lines are
-#' not supported yet.
+#' trapezoidal rule.
+#'
+#' A circuit without a periodic source (`freq = 0` finds none) is an
+#' autonomous oscillator: the period becomes a Newton unknown, with the
+#' phase pinned where `v(osc_node)` rises through its mid-range, and is
+#' first estimated by counting the crossings of `osc_node` over the
+#' second half of `tstab` (both are required then; a `freq` given is
+#' only a fallback for fewer than three crossings). The deck must start
+#' the oscillation itself (`.ic` with `uic = TRUE`, or a ramp): there is
+#' no automatic kick. The result's `periods` follows the period per
+#' iteration. Transmission lines are not supported yet.
 #'
 #' @inheritParams spice_run
 #' @param freq The fundamental in Hz; `0` (the default) takes it from
@@ -25,9 +34,9 @@
 #' @param tstab Stabilization time (s): a plain transient runs to the
 #'   first multiple of the period at or after `tstab` (at least one
 #'   period) before the shooting starts there.
-#' @param osc_node `NULL` or ngspice's oscillation node, for autonomous
-#'   circuits (not solved yet): checked to exist and reported in the
-#'   notes only.
+#' @param osc_node `NULL` or ngspice's oscillation node. Required for
+#'   an autonomous oscillator: its phase condition and period estimate
+#'   (see Details). A driven circuit only checks that it exists.
 #' @param points Samples per period, 4 to 10 000 000: the time plot has
 #'   `points + 1` rows, and the period transient steps at most
 #'   `period / points`.
@@ -59,20 +68,26 @@
 #'     The convention is `.ac`'s phasor: `x(t) = X_0 + sum Re(X_k
 #'     exp(1i * k * w * t))`, phases referred to `t = 0`; `mag` is
 #'     ngspice's (magnitude-only) plot;
-#'   * `period` (s), `t0` (s, the first multiple of the period at or
-#'     after `tstab`), and `residuals`: the period mismatch
+#'   * `period` (s: the drive's for a driven circuit, the shooting's
+#'     result for an oscillator), `t0` (s, the start of the reported
+#'     period), `residuals`: the period mismatch
 #'     `max_i |x_i(t0+T) - x_i(t0)| / tol_i` of each shooting iteration
-#'     (the last one `<= steady_coeff`).
+#'     (the last one `<= steady_coeff`; `Inf` for an iteration whose
+#'     transient failed), and `periods`: the period of each iteration
+#'     (constant for a driven circuit, the Newton iterate of an
+#'     oscillator; the last one is `period`).
 #'
 #' @section Errors:
 #' As [spice_run()]; a shooting that does not converge in `max_iter`
 #' iterations is a condition of class `spice_error_pss` (and
 #' `spice_error`) whose fields `iterations` (int) and `residuals` (dbl)
-#' hold the history -- the same condition a `.pss` card raises from
-#' [spice_run()] and [spice_rerun()]. Other failures (no periodic source
-#' with `freq = 0`, an unknown `osc_node`, a transmission line) are
-#' `spice_error_analysis`; an argument out of range is
-#' `spice_error_input`.
+#' hold the history, and `period` (dbl) the last period iterate of an
+#' oscillator (`NULL` for a driven circuit) -- the same condition a
+#' `.pss` card raises from [spice_run()], [spice_rerun()] and a run of
+#' [spice_sweep()]. Other failures (an unknown `osc_node`, an
+#' oscillator without `osc_node` or `tstab`, a shooting that settles
+#' on the equilibrium, a transmission line) are `spice_error_analysis`;
+#' an argument out of range is `spice_error_input`.
 #'
 #' @section Mirror of the Python package:
 #' This is `spice.pss()`, whose `PssConvergenceError` is the
@@ -138,6 +153,7 @@ spice_pss <- function(deck, freq = 0, tstab = 0, osc_node = NULL, points = 128L,
   res$period <- out$period
   res$t0 <- out$t0
   res$residuals <- as.double(out$residuals)
+  res$periods <- as.double(out$periods)
   class(res) <- c("spice_pss", class(res))
   res
 }
@@ -200,9 +216,11 @@ pss_spectrum_tibble <- function(plot) {
 print.spice_pss <- function(x, ...) {
   NextMethod()
   r <- x$residuals
+  # An oscillator's period moves with the Newton iterations.
+  what <- if (length(unique(x$periods)) > 1L) " (autonomous oscillator)" else ""
   cat(
     cli::format_inline(
-      "Periodic steady state: period {format(x$period, digits = 6)} s from t0 = ",
+      "Periodic steady state{what}: period {format(x$period, digits = 6)} s from t0 = ",
       "{format(x$t0, digits = 6)} s; {length(r)} shooting iteration{?s}, residual ",
       "{format(r[[length(r)]], digits = 3)}."
     ),

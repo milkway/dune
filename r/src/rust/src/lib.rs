@@ -272,10 +272,11 @@ fn ffi_run_deck(
 }
 
 /// `list(ok = FALSE, message, plots = NULL, notes, diagnostics, kind,
-/// measurements = NULL, iterations, residuals)`; the last two are the
-/// shooting history for kind `pss`, `NULL` otherwise.
+/// measurements = NULL, iterations, residuals, period)`; the last
+/// three are the shooting history for kind `pss` (`period` `NULL` for
+/// a driven circuit), `NULL` otherwise.
 fn failure_list(f: &Failure) -> savvy::Result<Sexp> {
-    let mut out = OwnedListSexp::new(9, true)?;
+    let mut out = OwnedListSexp::new(10, true)?;
     out.set_name_and_value(0, "ok", logical(false)?)?;
     out.set_name_and_value(1, "message", string(&f.message)?)?;
     out.set_name_and_value(2, "plots", savvy::NullSexp)?;
@@ -283,21 +284,37 @@ fn failure_list(f: &Failure) -> savvy::Result<Sexp> {
     out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
     out.set_name_and_value(5, "kind", string(f.kind)?)?;
     out.set_name_and_value(6, "measurements", savvy::NullSexp)?;
-    match &f.residuals {
-        Some((iterations, residuals)) => {
-            out.set_name_and_value(
-                7,
-                "iterations",
-                OwnedRealSexp::try_from_scalar(*iterations as f64)?,
-            )?;
-            out.set_name_and_value(8, "residuals", OwnedRealSexp::try_from_slice(residuals)?)?;
-        }
-        None => {
-            out.set_name_and_value(7, "iterations", savvy::NullSexp)?;
-            out.set_name_and_value(8, "residuals", savvy::NullSexp)?;
-        }
-    }
+    set_pss_history(&mut out, 7, f.pss.as_ref())?;
     Ok(out.into())
+}
+
+/// `iterations`, `residuals` and `period` at `at`, `at + 1`, `at + 2`
+/// of `out`: the shooting history of a `.pss` that did not converge
+/// (`period` `NULL` for a driven circuit), all `NULL` without one.
+fn set_pss_history(
+    out: &mut OwnedListSexp,
+    at: usize,
+    h: Option<&engine::PssHistory>,
+) -> savvy::Result<()> {
+    let Some(h) = h else {
+        out.set_name_and_value(at, "iterations", savvy::NullSexp)?;
+        out.set_name_and_value(at + 1, "residuals", savvy::NullSexp)?;
+        return out.set_name_and_value(at + 2, "period", savvy::NullSexp);
+    };
+    out.set_name_and_value(
+        at,
+        "iterations",
+        OwnedRealSexp::try_from_scalar(h.iterations as f64)?,
+    )?;
+    out.set_name_and_value(
+        at + 1,
+        "residuals",
+        OwnedRealSexp::try_from_slice(&h.residuals)?,
+    )?;
+    match h.period {
+        Some(t) => out.set_name_and_value(at + 2, "period", OwnedRealSexp::try_from_scalar(t)?),
+        None => out.set_name_and_value(at + 2, "period", savvy::NullSexp),
+    }
 }
 
 /// A run's outcome as the list `ffi_run_deck` returns.
@@ -330,9 +347,9 @@ fn ok_list(r: &engine::RunOutput, extra: usize) -> savvy::Result<OwnedListSexp> 
 /// includes, options and `tmax_divisor` as in `ffi_run_deck`; then the
 /// `.pss` parameters (`freq` 0 takes the fundamental from the sources,
 /// `osc_node` `""` for none). Returns `ffi_run_deck`'s list with the
-/// two plots plus `period`, `t0` and `residuals`, or its failure list
-/// (kind `pss` with `iterations` and `residuals` when the shooting did
-/// not converge).
+/// two plots plus `period`, `t0`, `residuals` and `periods`, or its
+/// failure list (kind `pss` with `iterations`, `residuals` and
+/// `period` when the shooting did not converge).
 /// @noRd
 #[savvy]
 #[allow(clippy::too_many_arguments)]
@@ -378,7 +395,7 @@ fn ffi_pss_deck(
     };
     match engine::pss(source, &user, divisor(&tmax_divisor), &params) {
         Ok(out) => {
-            let mut list = ok_list(&out.run, 3)?;
+            let mut list = ok_list(&out.run, 4)?;
             list.set_name_and_value(7, "period", OwnedRealSexp::try_from_scalar(out.period)?)?;
             list.set_name_and_value(8, "t0", OwnedRealSexp::try_from_scalar(out.t0)?)?;
             list.set_name_and_value(
@@ -386,6 +403,7 @@ fn ffi_pss_deck(
                 "residuals",
                 OwnedRealSexp::try_from_slice(out.residuals)?,
             )?;
+            list.set_name_and_value(10, "periods", OwnedRealSexp::try_from_slice(out.periods)?)?;
             Ok(list.into())
         }
         Err(f) => failure_list(&f),
@@ -611,13 +629,13 @@ fn ffi_sweep_deck(
             out.set_name_and_value(2, "params", strings(&r.params)?)?;
             let mut runs = OwnedListSexp::new(r.runs.len(), false)?;
             for (i, run) in r.runs.iter().enumerate() {
-                let mut item = OwnedListSexp::new(4, true)?;
-                match run {
+                let item = match run {
                     SweepRunOutput::Ok {
                         plots,
                         measures,
                         notes,
                     } => {
+                        let mut item = OwnedListSexp::new(4, true)?;
                         item.set_name_and_value(0, "ok", logical(true)?)?;
                         item.set_name_and_value(
                             1,
@@ -626,14 +644,19 @@ fn ffi_sweep_deck(
                         )?;
                         item.set_name_and_value(2, "notes", strings(notes)?)?;
                         item.set_name_and_value(3, "measurements", meas_columns(measures)?)?;
+                        item
                     }
-                    SweepRunOutput::Failed { kind, message } => {
+                    // Kind `pss` carries the shooting history too.
+                    SweepRunOutput::Failed { kind, message, pss } => {
+                        let mut item = OwnedListSexp::new(7, true)?;
                         item.set_name_and_value(0, "ok", logical(false)?)?;
                         item.set_name_and_value(1, "kind", string(kind)?)?;
                         item.set_name_and_value(2, "message", string(message)?)?;
                         item.set_name_and_value(3, "measurements", savvy::NullSexp)?;
+                        set_pss_history(&mut item, 4, pss.as_ref())?;
+                        item
                     }
-                }
+                };
                 runs.set_value(i, item)?;
             }
             out.set_name_and_value(3, "runs", runs)?;
