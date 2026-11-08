@@ -784,10 +784,9 @@ Rawfile e stdout dos 83 decks do corpus (examples, basic, regress,
 measure) **byte-idênticos** ao main com o refactor do `DCtran`
 (`tran_loop` extraído; log de passos opcional).
 
-**Limitações/pendências**: linhas de transmissão recusadas
-(`Error::Unsupported`: o estado é o histórico da linha — com
-`ltrafit` a parte recursiva é finita, mas o atraso não; exigiria pôr
-o histórico/estados no vetor do shooting); chaves com histerese
+**Limitações/pendências**: linhas de transmissão entram pelo
+caminho próprio descrito em "Linhas de transmissão no `.pss`" abaixo
+(as RLC/RC do LTRA exigem `.options ltrafit`); chaves com histerese
 semeiam o estado pelo controle (dentro da banda pode escolher o ramo
 errado); ruído transiente fica para a outra leva da issue #13.
 
@@ -966,13 +965,156 @@ pede (o tempo físico de partida do oscilador — o Colpitts herdou os
 500 µs do cartão do ngspice). Com o T estimado, o Newton não espera a
 amplitude assentar.
 
-**Pendências:** LTRA/TRA no `.pss` (estado = histórico da linha,
-recusado como no excitado); ruído de dispositivo no tempo (issue #20
-itens 3–5); osciladores com fonte
-periódica que *não* é a fundamental (VCO travado, injeção) seguem o
-caminho excitado — não há opção para forçar o autônomo com fontes;
-bindings dedicados (spice.pss/spice_pss) não expõem `periods` nem o
-`period` da falha ainda (outro território).
+**Pendências:** osciladores com fonte periódica que *não* é a
+fundamental (VCO travado, injeção) seguem o caminho excitado — não
+há opção para forçar o autônomo com fontes; o modo de fase quase
+neutro do `osc_tline` converge devagar (×0,85/iteração, 16
+corridas) e pede aceleração; `.pss` com `devnoise` ligado não
+injeta nem recusa (decidir); `Circuit::run_card` devolvendo o
+`Pss` eliminaria o mapeamento duplicado do wasm; espelhos de
+`notrnoise`/`devnoise` nos bindings.
+
+### Linhas de transmissão no `.pss` (issue #20)
+
+**O problema.** O estado de uma linha é o seu histórico — as ondas que
+saíram de cada porta, lidas um atraso `TD` depois (TRA, LC do LTRA) e,
+nas perdas (RLC/RC), a convolução de núcleos de cauda `τ^{−3/2}` sobre
+tudo o que passou desde o ponto de operação. O vetor do shooting
+(`x₀` + bancos de estado) não o contém; até aqui o `.pss` recusava T/O
+com `Unsupported`.
+
+**Escolha: opção A (o histórico é a órbita), com uma fixação de DC.**
+No regime periódico `x(t − τ) = x(t − τ + kT)`: o passado inteiro é a
+órbita repetida. A incógnita do Newton continua `x₀`; o histórico vira
+um ponto fixo resolvido junto (Picard). A opção B (estados do
+`ltrafit` como incógnitas extras) não foi adotada: o atraso puro `TD`
+exige a órbita de qualquer jeito (opção A), os estados recursivos de
+um período passado infinito saem em **forma fechada** da própria
+órbita (abaixo) — pô-los no vetor só acrescentaria incógnitas
+redundantes — e o modo que de fato não converge (o DC das perdas,
+abaixo) é singular para o Newton também (`1 − λ ≈ 1e-5`, enterrado no
+ruído das diferenças), então incluí-lo no GMRES não resolveria.
+
+- **O passado sintetizado** (`matrix::PeriodicPast`): fases `u ∈ (0, 1)`
+  e linhas de solução de um período da órbita; cada fronteira de
+  período é o próprio `x₀` (o fechamento da onda termina no estado de
+  que o intervalo parte, e o produto `Φ′v` vê `x₀` também nas
+  fronteiras do passado). Chega aos dispositivos pelo
+  `AcceptCtx::periodic` do primeiro accept do intervalo (sem gancho
+  novo no trait `Device`); as linhas montam ali o histórico de períodos
+  inteiros até o atraso mais velho que um load pode pedir: a tabela
+  `TRAdelays` (TRA; `MODEINITTRAN` passa a ler a tabela em vez de
+  semear o operating point), os vetores `times/v/i` do LTRA (LC: só
+  atraso; RLC: `TD`; RC com `ltrafit`: a janela exata `RCl²/8`). Os
+  breakpoints que a regra de inclinação (`TRAaccept`/`LTRAaccept`)
+  teria plantado um atraso depois das quinas do passado são plantados
+  onde caem dentro do intervalo.
+- **Estados recursivos (`ltrafit`) em forma fechada.** Com o desvio
+  `d = w − w̄` (a média da órbita, não o operating point — não há),
+  um período de `d` leva o estado de zero a `P_j`; periodicidade
+  `S = e^{−x_j T}S + P_j` dá `S_j = P_j/(1 − e^{−x_j T})` — a soma
+  geométrica exata sobre todos os períodos anteriores
+  (`FitState::periodic_start`). O horizonte do ajuste vai a
+  `max(TSTOP, 1000·T)`; além dele `d` tem média nula e o que o ajuste
+  perde se cancela a cada período.
+- **RLC/RC exigem `.options ltrafit`** (erro claro sem ela; decisão de
+  desenho, pausa): o caminho exato soma um histórico que começa num
+  operating point; o passado periódico é infinito, e só o modelo
+  recursivo o soma (em forma fechada). LC, RG e TRA não precisam.
+- **Fixação de DC (o achado que custou caro).** Com `G = 0` a forma
+  característica perde a queda DC da linha: `Y0(0) = 0`, então em
+  `s = 0` as duas equações de ramo viram `i1 + i2 = 0`, e
+  `v1 − v2 = R·LEN·i1` só aparece na ordem `√s` — no tempo, as caudas
+  integradas sobre um histórico que *começa* num operating point (cujos
+  carimbos DC são esse resistor). Um passado sempre periódico não tem
+  começo: a queda média é um modo neutro que a órbita só copia. Medido
+  (RLC sozinho, apertado): a resistência DC aparente derivando
+  1,85e-6 A por iteração para longe da verdade, constante, com e sem
+  Newton, independente do horizonte do ajuste (10, 1000, 1e5 T). O
+  passado é então **fixado na relação DC exata**: as tensões médias
+  deslocadas simetricamente, a corrente média mantida, de modo que a
+  queda média seja `R·LEN` vezes a corrente média. Num ponto fixo o
+  passado é a órbita, então a própria órbita cumpre a relação (o
+  deslocamento só é não nulo enquanto itera). É a relação de dois
+  portos em `s = 0`, válida para qualquer circuito em volta.
+  **O mesmo modo neutro afeta o `.tran` longo** (ngspice e Dune, exato
+  ou recursivo): o DC deriva como `√t` (abaixo).
+- **Grade congelada.** Uma corrida adaptativa (passado: o último
+  período da estabilização) fixa a grade; nela, cada iteração refaz o
+  intervalo (`Engine::tran_replay_rows`) lendo a órbita anterior como
+  passado (Picard) e, enquanto o descasamento de período passa da
+  tolerância, dá um passo de Newton em `x₀` com esse passado congelado
+  (o GMRES do excitado). Convergiu na grade quando o descasamento de
+  período **e** o de histórico (`max |x_i(t) − passado_i(t)|/tol_i`
+  nas incógnitas de porta das linhas, nos mesmos instantes — exato,
+  sem interpolar entre grades) cabem na tolerância. A grade é então
+  renovada **uma vez** (adaptativa a partir do resultado, que escolhe
+  uma grade para a órbita convergida) e a iteração converge de novo
+  nela. Sem congelar, o histórico não converge: entre duas grades as
+  linhas não se reproduzem na tolerância SPICE — a regra de inclinação
+  planta o breakpoint de eco pelo **sinal** de uma inclinação
+  (`|d1−d2| ≥ max + 1` só dispara em troca de sinal; com `d2` ~0
+  depende do ruído), então duas corridas põem uma quina atrasada até um
+  passo de distância, dezenas de tolerâncias na quina (medido: 10–60,
+  sem convergir em 50 iterações); e o erro da convolução do LTRA é da
+  grade, não do RELTOL (não há LTE no LTRA). O descasamento da corrida
+  de renovação é essa discretização entre grades e vai na nota, não é
+  iterado.
+- **Autônomo.** Mesmo esquema com o passo de Newton `(x₀, T)` da
+  D-0035; a grade congelada e o passado esticam com `T` (ambos são
+  funções da fase); pelo menos um passo de Newton. A continuação de
+  refino de 5,5 períodos e o shooting leem o último período estimado
+  da estabilização como passado.
+
+**Validação** (`crates/dune-core/tests/pss_lines.rs`; decks e goldens
+em `corpus/pss/`, `tools/pss-golden.sh`). Régua D-0010
+`2·TRTOL·RELTOL·S` com o tubo de ±1 passo da D-0011 (as linhas põem
+quinas que duas grades colocam até um passo de distância; a distância
+pontual vai junto na nota do teste).
+
+| Deck | Iterações (custo) | vs `.tran` ngspice (tubo / régua) | vs `.tran` Dune no TMAX do PSS (T/256) |
+|---|---|---|---|
+| `pss_tra` (TRA TD=7 ns < T e TD=55 ns > T, grampo a diodo, pulsos 25 MHz) | 10 (2 adaptativas + 8 replays, nenhum Newton: o descasamento de período já cabe) | v(2) 2,6e-4 / 2,6e-2; v(3) 2,7e-4 / 3,1e-2; v(4) 2,6e-3 / 1,7e-2; v(5) 6,1e-5 / 1,0e-2 | v(3) 7,0e-4; v(5) 9,2e-4 |
+| `pss_ltra` (LTRA RLC + RC com `ltrafit`, LC atrás de grampo) | 4 (2 + 2) | v(2) 3,7e-3 / 5,2e-2; v(3) 1,4e-2 / 6,0e-2; v(4) 3,0e-5; v(5) 1,3e-4; v(6) 7,8e-3 / 3,6e-2; v(7) 4,2e-4 / 1,1e-2 | v(3) 1,4e-2 (com e sem `ltrafit` no `.tran`: 1,44e-2 / 1,43e-2); v(5) 3,3e-4; v(7) 7,1e-4 |
+| `osc_tline` (inversor CMOS fechado por TRA TD=1 ns, autônomo) | 16 (2 + 22 replays, GMRES 3) | T: 6,4e-5 do ngspice a 256 pontos; 1024 pontos: 3,3e-6 (régua de fase 6,0e-6) | T: 2,0e-5 |
+
+- **Apertado** (RELTOL 1e-6, 1024 pontos) contra o `.tran` do Dune
+  apertado (T/1024, 100 períodos): `pss_tra` v(3) 3,7e-5, v(5) 1,3e-5;
+  `pss_ltra` v(3) 5,0e-4, v(5) 1,0e-4, v(7) 2,5e-6 (parte disso é a
+  deriva de DC do `.tran`, abaixo).
+- **Ponto a ponto contra o apertado** (`pss_ltra`, ambos a T/256): o PSS
+  fica a 4,0e-2 em v(3) e 2,9e-2 em v(5) (quinas), o `.tran` a
+  7,4e-2/3,3e-2; no patamar o PSS fica a ~1e-5 e o `.tran` a ~6e-4 —
+  a deriva de DC.
+- **DC (superior ao `.tran`).** A média da resposta periódica de rede
+  linear é o ganho DC vezes a média do estímulo, exatamente:
+  `2,1 V · 100/114,8 = 1,829268 V` nas duas pontas distantes. PSS:
+  v(3) +7,8e-5, v(5) +1,7e-5. `.tran` do ngspice (convolução exata) após
+  50 períodos: v(3) −6,3e-4, v(5) +1,3e-4. `.tran` do Dune com
+  `ltrafit`: v(3) −5,8e-4 (25 períodos), −1,1e-3 (100), −2,2e-3 (400),
+  −3,0e-3 (800) — cresce como `√t` (×1,4 por dobra); o exato do Dune
+  segue junto (−5,0e-4/−7,0e-4/−9,7e-4 a 25/50/100). É o mesmo modo
+  neutro da queda DC, empurrado pela discretização a cada passo; o
+  `.tran` longo **não** converge para o regime permanente nesse modo.
+- **Fidelidade do `.tran` com linha**: no cartão do golden do
+  `osc_tline` o `.tran` do Dune bate o período do ngspice a 2,7e-9.
+- **`.pss` sem linhas bit-idêntico**: as 18 provas de
+  `tests/pss.rs`/`tests/pss_osc.rs` e rawfile + stdout dos 126 decks
+  do corpus (`corpus/**/*.cir`, inclusive os `.pss`) idênticos byte a
+  byte ao main (os 3 decks novos eram recusados lá).
+
+**Convergência.** O Picard da TRA contrai pelo produto das reflexões
+por volta (pss_tra: ×0,2–0,5 por iteração). No autônomo o histórico
+tem um modo quase neutro de fase (deslocar o passado no tempo; a
+condição de fase prende só `x₀[osc]`): ×0,85 por iteração na segunda
+grade do `osc_tline` — converge, mas é o custo dominante (22 replays).
+Sem aceleração (Anderson sobre o passado foi descartado para o DC:
+o mesmo `1 − λ ≈ 1e-5` deixa a secante no ruído).
+
+**Pendências:** linha num deck com `TD` de muitos períodos custa
+`TD/T` cópias do passado (limite `MAX_PAST_SAMPLES`, erro claro);
+acelerar o modo de fase do autônomo com linha; bindings (`spice.pss`,
+`spice_pss`) ainda documentam linhas como recusadas (outro território).
 
 ## Ruído transiente — `TRNOISE`/`TRRANDOM` (issue #13, parte 2)
 
