@@ -138,7 +138,9 @@ resultados espelhando o rawfile).
   ngspice — KNOWN_DIFFS), `LAMBDA0−LAMBDA1·vbs`, `KC` default
   `0.5·U0·COX`, alias `LAMBDA`→`LAMBDA0`, `vonbm` zerado onde o 3f5
   lê lixo (`sarg≤0`), `NVTH`/`PS` aceitos e ignorados como no 3f5.
-  Sem carga AC (o 3f5 não tem `mos6acld.c`). Mesmo andaime do MOS1.
+  Sem carga AC nem pole-zero (o 3f5 não tem `mos6acld.c` nem
+  `mos6pzld.c`; o ngspice também não — `.pz` com MOS6 é recusado).
+  Mesmo andaime do MOS1.
   Valida: `mos6inv` (4 inversores NAND/NOR em subcircuitos, 44 MOS)
   PASS com máx 1.3 mV. Parâmetro de modelo desconhecido agora é
   aviso ("unrecognized parameter - ignored", como o `INPmakeMod`),
@@ -181,9 +183,32 @@ resultados espelhando o rawfile).
   desgrudar de pontos repetidos e o registro ordenado de trials
   (lista ligada por índices). Determinante via LU complexa própria
   do backend (`det_complex`, mantissa/expoente base 2 como o
-  `SMPcDProd`); matriz singular = raiz. Cargas `pzLoad` para
-  R C L K V I E F G H e diodo (`G + s·C`); dispositivo sem porte
-  falha alto (o C pula silenciosamente). Bugs do C tratados: o
+  `SMPcDProd`); matriz singular = raiz. Cargas `pzLoad` (`G + s·C`)
+  para R C L K V I E F G H, diodo, chaves S/W e para todo
+  semicondutor que tem `*pzld.c` no 3f5: BJT (`bjtpzld.c`), MOS1/2/3
+  (`mos{1,2,3}pzld.c` — um arquivo renomeado, `mos1.rs::meyer_pz_load`),
+  JFET/MES (`jfetpzld.c`/`mespzld.c`, `jfet.rs::fet3_pz`), BSIM1/2
+  (`b1pzld.c`/`b2pzld.c`, `bsim1.rs::bsim_pz_load`; metade de
+  condutâncias comum aos cinco MOS em `mos1.rs::mos_pz_conductances`)
+  e BSIM3 (`b3pzld.c`). Todos são o `acLoad` com `s` no lugar de `jω`,
+  lendo o mesmo estado do passe `INITSMSIG`. Desvios do arquivo C:
+  BJT e JFET estampam a resistência série **como condutância × área**
+  (o ngspice; o 3f5 estampa `R·area`, ohms como siemens —
+  KNOWN_DIFFS, gates 497×/500×); a fase em excesso do BJT fica fora
+  (`xgm = 0` nos dois C). Quirk literal: o `CKTpzSetup` re-roda os
+  setups e o `mos3set.c` zera `MOS3mode`, então o MOS3 entra no `.pz`
+  sempre em modo normal (gate 995×; KNOWN_DIFFS). O MOS6 não tem
+  `pzLoad` em nenhum dos dois C (nem `acLoad`): o C o pula em silêncio
+  e o determinante sai sem ele; o Dune recusa o deck (dispositivo sem
+  porte falha alto). Sondas `regress/pz_{bjt,mos1,mos2,mos3,jfet,mes,
+  bsim1,bsim2,sw}` — CE/CS com resistência de fonte, seguidor com
+  pinos de fonte/dreno trocados nos MOS (modo reverso), RD/RS/RC/RE
+  não nulos —, todas PASS contra o ngspice-47 (margens ≤ 0.07);
+  verificação extra-oráculo: os polos/zeros de cada sonda,
+  reconstruídos em `K·Π(s−z)/Π(s−p)`, reproduzem o `.ac` do ngspice
+  (V(out)/V(in), 1 kHz–1 THz) a ≤ 4e-4 (o BJT; os MOS/FET a ≤ 4e-7) —
+  exceto `pz_mos3`, onde o quirk do modo afasta os dois simuladores
+  do próprio `.ac` pelo mesmo 1.2 relativo. Bugs do C tratados: o
   `b = 0.0 ||` do `NIpzSym2` (atribuição dentro da condição)
   portado literal; `vonbm`/`new_mag` não inicializados viram 0;
   o `abort()` do Strat e o "Lost numerical stability" viram
@@ -447,8 +472,8 @@ resultados espelhando o rawfile).
   spice.txt documenta 1e-4 errado). Nós primos `#source`/`#drain`
   (source primeiro, ordem do C). `LEVEL≠1` (Parker–Skellern, MESA,
   HFET do ngspice) difere como os níveis MOS: só erra se
-  instanciado. Ruído via `fet3_noise` (pinado por `regress/fetnoise`); sem
-  `.pz` ou `.disto`. Sondas: `regress/jfet_iv` (famílias I-V NJF/PJF/quente,
+  instanciado. Ruído via `fet3_noise` (pinado por `regress/fetnoise`); `.pz`
+  via `fet3_pz` (`regress/pz_jfet`, `regress/pz_mes`); sem `.disto`. Sondas: `regress/jfet_iv` (famílias I-V NJF/PJF/quente,
   margem 0.27 — constantes físicas ×v/vt no diodo de porta),
   `jfet_amp` (op/ac/tran), `mes_iv`, `mes_amp` (carga de Statz com
   porta direta além de `vmax`), todas PASS.
@@ -582,8 +607,7 @@ oráculo contra o ngspice.
 - Ruído de BSIM1/2 (`b1noi.c`/`b2noi.c`, só ngspice — hoje
   silenciosos, deck `.noise` com BSIM divergiria do oráculo);
   `NLEV`/`GDSNOI`; temp/dtemp de instância no `NevalSrc` (os
-  térmicos usam a temperatura do circuito); `.pz` dos semicondutores restantes (BJT/
-  MOS têm `pzLoad` no C, aqui ainda não); `.disto` de JFET/MES/BSIM1
+  térmicos usam a temperatura do circuito); `.disto` de JFET/MES/BSIM1
   (`jfetdset.c`/`mesdset.c`/`b1dset.c` no C, não portados —
   MOS6/BSIM2 não têm no C); `.dc` varrendo TEMP e parâmetro de
   modelo; `keepopinfo` (plot "AC Operating Point").
