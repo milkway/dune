@@ -441,6 +441,11 @@ pub(crate) struct ConvCtx<'a> {
     pub states: &'a crate::state::States,
     pub reltol: f64,
     pub abstol: f64,
+    /// `CKTvoltTol` (the B source's voltage-type test).
+    pub vntol: f64,
+    /// `CKTgmin` (the B source re-evaluates its expression, whose
+    /// divide is fudged by it).
+    pub gmin: f64,
 }
 
 /// The AC load environment (`CKTacLoad`): the complex matrix

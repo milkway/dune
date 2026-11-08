@@ -865,6 +865,16 @@ impl Circuit {
                         &mut problems,
                     );
                 }
+                ir::Device::Behavioral { kind, expr } => add(
+                    &mut ckt,
+                    crate::circuit::Asrc {
+                        name,
+                        nodes: two(&el.nodes),
+                        kind: *kind,
+                        expr: expr.clone(),
+                    },
+                    &mut problems,
+                ),
                 ir::Device::TlineIdeal { params } => match tra_spec(&name, &el.nodes, params) {
                     Ok(t) => add(&mut ckt, t, &mut problems),
                     Err(e) => problems.push(e),
