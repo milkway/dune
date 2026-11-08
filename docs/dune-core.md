@@ -10,17 +10,17 @@ resultados espelhando o rawfile).
   `CONSTboltz`, `REFTEMP` etc., bit a bit.
 - **Defaults de opções** (`options.rs` ← `cktinit.c`/`cktntask.c`):
   `reltol 1e-3`, `abstol 1e-12`, `vntol 1e-6`, `gmin 1e-12`,
-  `itl1 100`, `gminsteps/srcsteps 10`, `temp/tnom 300.15 K`;
+  `itl1 100`, `temp/tnom 300.15 K`; `gminsteps`/`srcsteps` seguem
+  o ngspice-47 (1 e 1, não os 10 do 3f5 — ver "Cadeia do op");
   `temp`/`tnom` chegam em °C no cartão.
 - **Laço de Newton** (`engine.rs` ← `ni/niiter.c`): estados
   `INITJCT → INITFIX → INITFLOAT`, troca `rhs`/`rhsOld` por iteração,
   convergência exige `iterno != 1`, o passe extra `ipass` quando há
   `.nodeset`. Convergência (`ni/niconv.c`): `vntol` para tensões de
   nó, `abstol` para correntes de ramo, ambos com o termo `reltol`.
-- **`CKTop`** (`ckt/cktop.c`): NR direto com `itl1`; gmin stepping
-  (`diagGmin = gmin·10^n`, dividido por 10 a cada passo convergido,
-  passo final com gmin 0 **sempre** tentado, como no C); source
-  stepping (`srcFact = i/n` escalando V e I independentes).
+- **`CKTop`** (`ckt/cktop.c`): a cadeia completa do ngspice-47 com
+  as escadas do 3f5 em `gminsteps/srcsteps > 1` — seção própria,
+  "Cadeia do op", abaixo.
 - **Stamps** dos lineares (`devices.rs` ← `dev/*/..load.c`): R, C
   (aberto em DC), L (fonte de 0 V com corrente de ramo), K (sem efeito
   DC), V (dc·srcFact), I, E, G, F, H — posições e sinais do C.
@@ -30,8 +30,9 @@ resultados espelhando o rawfile).
   prevista (`cdhat`), nó interno `nome#internal` quando `RS≠0`,
   ajuste de temperatura de `IS` (EG/XTI) e o casamento iterativo de
   `BV`/`IBV` (25 iterações, mesmos avisos).
-- **Gmin na diagonal** (`linalg` ← `spsmp.c::LoadGmin`): só posições
-  diagonais presentes no padrão recebem `diagGmin`.
+- **Gmin na diagonal** (`engine.rs::gmin_slots` ← `spsmp.c::LoadGmin`
+  + `sputils.c::spMNA_Preorder`): o `diagGmin` vai para a diagonal
+  *depois* do pré-ordenamento do Sparse — ver "Cadeia do op".
 - **Saída**: espelha o rawfile de `.op` do ngspice — `v(<nó>)` para
   todo nó não-terra não-interno (`#` fica de fora, como no ngspice),
   `i(<nome>)` para ramos de V, L, E, H; `Plotname: Operating Point`.
@@ -441,9 +442,15 @@ resultados espelhando o rawfile).
   atraso via `accept`; teto de passo (`steplimit`/RLC safe step)
   via `trunc` (`TerrCtx` ganhou `sol`/`time`); "cannot find
   delayed timepoint" vira `LoadCtx::fault` → não-convergência →
-  corte de passo (o `E_INTERN` do C). Não portados (inalcançáveis
-  ou sem deck): `LTRAlteCalculate` (exige `fullcontrol`, que
-  nenhuma tabela aceita) e a compactação `trytocompact`. Exigiu
+  corte de passo (o `E_INTERN` do C). `.options trytocompact`
+  portado (seção "trytocompact" abaixo). `LTRAlteCalculate` fica de
+  fora por ser inalcançável: só roda com `LTRAlteConType` ≠
+  `NOCONTROL` (`ltratrun.c:129`), e `ltraset.c:75-77` força
+  `NOCONTROL` a menos que `fullcontrol`/`halfcontrol` tenham sido
+  dados — flags que estão sob `#ifdef notdef` na tabela do 3f5
+  (`ltra.c:61-73`) e nem existem na do ngspice-47 (só `nocontrol`).
+  O resto do `LTRAtrunc` (teto `steplimit`, o teste de inclinação sob
+  `nosteplimit`, o `LTRAmaxSafeStep` do RLC) está no `trunc`. Exigiu
   três acertos fora do LTRA (todos em `corpus/KNOWN_DIFFS.md`):
   a **regra de aproximação de breakpoint** do ngspice (resto
   < 1.9·passo → dois passos iguais; medida na fronteira
@@ -702,7 +709,8 @@ resultados espelhando o rawfile).
   o −1e99 de `ln(0)` contamina outras incógnitas em ~1e83 por
   arredondamento e um `asin` adiante dá NaN (o esparso do ngspice
   isola a linha); o ngspice força `maxIter ≥ 100` no `NIiter` e o
-  Dune não, o que pesa para fontes B exponenciais sem limitação
+  Dune não (salvo nos degraus de fallback do `CKTop`, ver "Cadeia do
+  op"), o que pesa para fontes B exponenciais sem limitação
   (descem ~vt por iteração).
 
 Validação: `tests/op.rs` compara um deck-sonda (divisor, indutor,
@@ -719,6 +727,161 @@ oráculo contra o ngspice.
   com `Error::StepLimit`. Decks biestáveis no oráculo: flags
   `bistable`/`accept-error=` do `corpus/XFAIL` (formato de 5
   campos, ver docs/dune-oracle.md).
+
+## Cadeia do op (`CKTop` do ngspice-47, 2026-11-08)
+
+Contrato: `spicelib/analysis/cktop.c` e `optran.c` do ngspice-47 (o
+3f5 só tem NR direto + as duas escadas fixas, `lib/ckt/cktop.c`).
+Cada degrau só roda se todos os anteriores falharam; com o NR direto
+convergindo nada novo executa (o corpus inteiro: 98 dos 101 ops
+fecham no NR direto, saída byte-idêntica à de antes nos 102 decks).
+
+1. **NR direto** (`cktop.c:40-51`): `NIiter(itl1)` a partir de
+   `INITJCT`; `noopiter` pula.
+2. **Gmin stepping** (`cktop.c:57-77`), com `gminsteps`:
+   - `== 1` (default, `cktntask.c:121`): **dynamic gmin**
+     (`dynamic_gmin`, `cktop.c:161-274`) e, se falhar e a variável de
+     frontend `dyngmin` não estiver setada (default), **true gmin**
+     (`new_gmin`, `cktop.c:349-466`). Os dois são o mesmo passeio
+     adaptativo (`GminWalk`): zera solução e `state0`, começa em
+     `1e-2/gminFactor` (`gminFactor = 10`), divide pelo fator a cada
+     passo convergido — fator ×√fator (teto 10) se convergiu em
+     ≤ itl2/4 iterações, `max(√fator, piso)` se em > ¾·itl2 —,
+     pousa exatamente no alvo `max(gmin, gshunt)` (e o fator vira
+     `gmin/alvo`), e numa falha volta ao último passo bom com o fator
+     na raiz quarta, desistindo abaixo de 1.00005. Diferenças
+     literais: o dynamic anda o `CKTdiagGmin` (piso 1.00005); o true
+     anda o `CKTgmin` dos dispositivos com o diagonal em `gshunt`
+     (piso 3). Desistindo ou não, os dois terminam com um NR completo
+     a `itl1` do ponto onde pararam (`cktop.c:261`, `452`).
+   - `> 1`: a escada fixa do 3f5 (`gmin·10^n`, ÷10 por passo,
+     passo final com gmin 0 sempre tentado).
+   - `0`: nenhum.
+3. **Source stepping** (`cktop.c:85-92`), com `srcsteps`:
+   - `== 1` (default, `cktntask.c:120`; o 3f5 tem 10): **Gillespie**
+     (`gillespie_src`, `cktop.c:480-658`, `SrcRamp`): zera tudo,
+     resolve com `srcFact = 0` (se falhar, escada fixa de 11 passos
+     de `gmin·1e10` a `gmin` no diagonal, ainda com fontes a zero) e
+     sobe `srcFact` de `raise` (0.001; ×1.5 após passo rápido, ×0.5
+     após lento; numa falha ÷10 com teto 0.01, volta ao último fator
+     convergido e o re-resolve). Desiste quando o passo falho estava
+     a < 1e-8 do bom ou `raise < 1e-7`; sucesso = convergir em
+     `srcFact = 1`, sem NR extra.
+   - `> 1`: a escada `srcFact = i/n` do 3f5. `0`: nenhum.
+4. **Op por transiente** (`OPtran`, `optran.c:290-852`;
+   `cktop.c:94-103`): **ligado por default** — o `cp_init` do
+   frontend executa `optran 1 1 1 100n 10u 0` (`frontend/init.c:
+   77-93`; o comando `optran` em `.spiceinit`/`.control` é o único
+   jeito de mudar ou desligar, não há `.option`). Marcha um
+   transiente privado de 0 a 10 µs com `TSTEP = TMAX = 100 ns`, a
+   partir do estado que o último degrau deixou: primeiro passo
+   `min(10µ/100, 100n)/10`, cortado ÷10 de novo no início; Newton
+   que falha (qualquer causa) corta ÷8 com ordem 1; LTE/ordem como
+   `DCtran`; breakpoints só 0 e o final (`opbreaks`), com o ramo
+   XSPICE do build do oráculo (descarte por `minBreak`, sem
+   `MAX(delta, 2·delmin)`). O `CKTtime` **não avança** (só o `optime`
+   local): as fontes ficam no valor transiente de t=0 e não plantam
+   breakpoints; `delmin`/`minBreak` são os da análise chamadora (0
+   no `.op`/`.dc`; `1e-11·TMAX` e `10·delmin` no TRANOP do `.tran`,
+   `traninit.c:36`, `dctran.c:163`). O ponto final é o op.
+   Verificado contra um ngspice-47 instrumentado: no `opfall_tran` os
+   107 passos coincidem em tempo e ordem.
+
+Detalhes do C que a cadeia exigiu e que valem para todos os degraus:
+
+- **Modo INITF herdado.** `NIiter` move os bits INITF do `CKTmode` e
+  uma chamada que falha os deixa onde parou (em geral `INITFIX`): o
+  retry do degrau seguinte começa dali, não de `INITJCT`
+  (`Engine::ni_iter_mode`). Cada degrau reinicia em `firstmode`.
+- **Piso de 100 iterações** (`niiter.c:37-39`) nos degraus 2–4 (que
+  passam `itl2`/`itl4` = 50/10 mas rodam 100); os limiares do passeio
+  continuam usando `itl2` (12 e 37). O NR direto e o transiente
+  normal mantêm os limites do 3f5.
+- **`LoadGmin` sobre a diagonal pré-ordenada.** O Sparse 1.3 (solver
+  default do ngspice-47 — o KLU só com `.options klu`; e do 3f5) roda
+  `spMNA_Preorder` uma vez, na primeira matriz carregada: toda
+  diagonal estruturalmente nula com um par de *gêmeos simétricos*
+  `(r,j)`, `(j,r)` de módulo exatamente 1 (as incidências ±1 de um
+  ramo de fonte de tensão) troca as colunas `j` e `r` — gêmeos únicos
+  primeiro, depois a primeira coluna com vários, até não sobrar
+  nenhuma. O `LoadGmin` então soma o gmin a `Diag[]` *depois* da
+  troca: num ramo de fonte, aos dois ±1, e não ao nó. Efeito
+  visível: sob gmin stepping o nó de uma fonte vale `V/(1+gmin)`
+  (no schmitt a 5.6234e-3: −1.6 V → −1.59105 V, idêntico ao trace
+  do ngspice) e esse nó não recebe shunt para a terra. O Dune antes
+  somava em toda diagonal presente; agora `gmin_slots` emula o
+  pré-ordenamento sobre o padrão e os valores da primeira carga.
+  Nenhuma margem do corpus mudou.
+- **Erro devolvido.** Se tudo falha, o `CKTop` do C imprime a causa do
+  `OPtran` e devolve o código dele; o Dune devolve o erro do último
+  degrau de Newton (singular, iterlim), mais útil que "timestep too
+  small" num `.op`.
+- **Linhas de transmissão** (`O`, `T`) pulam o `OPtran` (KNOWN_DIFFS):
+  com o `CKTtime` congelado o histórico de convolução não faz
+  sentido, e o accept das linhas não roda no op.
+
+Sondas (`corpus/regress/`, golden ngspice-47, verificadas também com
+`set ngdebug` e um build instrumentado do ngspice-47 que imprime o
+modo INITF e as iterações de cada `NIiter` da cadeia):
+
+| deck | degrau que fecha (Dune = ngspice) | mecanismo |
+|---|---|---|
+| `opfall_src` | Gillespie source stepping (17 passos, 0.1% → 100%, mesma sequência) | diodo `off` reverso atrás de fonte DC: o `INITFIX` segura vd=0 e o `DIOconvTest` falha a cada iteração; só com a fonte a zero vd=0 é solução |
+| `opfall_tran` | `OPtran` (107 passos, mesmos tempos) | o `.op` do offbjt: a fonte PULSE não tem `dc`, então no `MODEDCOP` fica no valor de t=0 sem `srcFact` e o source stepping não a zera; o BJT `off` trava no `INITFIX` em todos os degraus de Newton |
+| `opfall_gmin` | true gmin | cadeia flutuante de diodos `off` atrás de 1000 V: o gmin diagonal puxa os nós para a terra e põe d1 na ruptura; o gmin dos dispositivos os deixa no trilho. **Ressalva:** o que tira o NR do `INITFIX` aqui é um teste de corrente decidido pelo arredondamento do LU (delvd ~1e-9 V × gd) — o ngspice sai em 3 iterações a 5.6e-3, o Dune passeia mais; os dois fecham no true gmin com o mesmo valor (margem 0.001), mas o degrau pode variar entre plataformas. O teste unitário só pina a resposta. |
+| `offbjt` (pré-existente, `.tran`) | Gillespie (antes: escada do 3f5) | no TRANOP o `srcFact` escala o PULSE |
+
+Não consegui construir um deck *robusto* que só feche no true gmin:
+o que o distingue do dynamic é a ausência de shunt nó-terra, e os
+casos achados (busca aleatória de ~3300 circuitos contra o ngspice;
+`.claude/scratch/opfall/search/`) ou são decididos por arredondamento
+como o `opfall_gmin`, ou têm múltiplas soluções. O passeio em si
+está pinado por testes unitários que refazem as sequências de gmin do
+ngspice (`gmin_walk_retraces_ngspice_schmitt`, `…_gives_up_like_ngspice`,
+`gmin_walk_slow_floor`) e a rampa do Gillespie
+(`src_ramp_retraces_ngspice`, `src_ramp_backs_off`).
+
+Caminhos do corpus que passam pelos fallbacks: schmitt e mosamp2
+(dynamic gmin) e offbjt (Gillespie). O mosamp2 refaz o passeio do
+ngspice passo a passo (1e-3 → 1e-12 em décadas); o schmitt segue o
+mesmo mecanismo mas, num latch que parte do metaestável, um modo
+instável amplifica o arredondamento (valores ~1e-14 V que diferem no
+4º dígito já na 1ª iteração): o 2º passo leva 13 iterações no Dune e
+11 no ngspice, o que muda o fator e a sequência de gmins dali em
+diante — mesmo op final, margens inalteradas.
+
+## `.options trytocompact` (LTRA, 2026-11-08)
+
+`ltraset.c:55-72` e `ltraacct.c:84-127, 262-285` (idênticos no 3f5
+e no ngspice-47 salvo realocação de memória). Duas coisas:
+
+1. Modelo sem `lininterp`/`quadinterp`/`mixedinterp` interpola
+   **linear** em vez de quadrático, com o aviso do C
+   ("using linear interpolation because trytocompact option
+   specified") nas notas.
+2. Após cada ponto aceito com ≥ 3 amostras, se as três últimas de
+   `v1`, `v2`, `i1`, `i2` de **todas** as linhas estão numa reta
+   (`LTRAstraightLineCheck`: área do trapézio contra a soma das duas
+   áreas, com `COMPACTREL`/`COMPACTABS`, default `RELTOL`/`ABSTOL`),
+   a amostra do meio sai do histórico de todas (no C, a lista global
+   `CKTtimePoints` e o `CKTtimeIndex--`). O teste roda antes da regra
+   de inclinação do accept, que vê o histórico ainda cheio.
+
+No Dune cada linha tem a própria cópia da lista de tempos; o motor
+coordena (`Device::compact_ready`/`compact`, chamados em
+`Engine::accept`): compacta só se toda linha participante está
+pronta. Fora do modo `ltrafit` (recursivo, que tem estado próprio
+por ponto) e do `.pss` (passado periódico semeado). Opt-in como no C
+(`Options::trytocompact`, default false).
+
+Sondas: `regress/ltra_compact` (RLC, PULSE com patamares longos,
+`trytocompact`) e `regress/ltra_lin` (o mesmo com `lininterp` e sem
+a opção — diferem só pela compactação), ambas em lockstep com o
+ngspice-47 (6.7e-15 e 7.6e-15). Medido (`trytocompact_shrinks_the_ltra_history`):
+com a opção, 1112 pontos aceitos, 1100 compactações e histórico
+final de **12** amostras; sem, 578 pontos e histórico de 578. A
+compactação muda a malha de passos (mais pontos, porque a regra de
+inclinação passa a ver retas longas) — e o ngspice dá os mesmos 1112.
 
 ## Diferenças deliberadas
 
@@ -764,8 +927,9 @@ oráculo contra o ngspice.
    `MAGIC_VDS` e a repartição gs/gd na inversão fraca; diodos de
    corpo do MOS em 3 regiões com gmin dentro da corrente; junções
    do BJT com gmin nos ramos de fuga e cauda polinomial abaixo de
-   −3·n·vt; *dynamic gmin stepping* de Gillespie como default do
-   `CKTop` (`gminsteps=1`; a escada do 3f5 vive em `gminsteps>1`);
+   −3·n·vt; a cadeia de fallbacks do `CKTop` do ngspice-47 como
+   default (dynamic/true gmin, source stepping de Gillespie, `OPtran`;
+   as escadas do 3f5 vivem em `gminsteps/srcsteps > 1`);
    `srcFact` escalando toda fonte no TRANOP. Exceção na outra
    direção: o corte do MOS2 fica na fronteira `von` do 3f5 (o
    `vbin` do ngspice produz gm negativo com corrente nula e só
@@ -845,16 +1009,21 @@ oráculo contra o ngspice.
   2026-11-08 — seções próprias.)
 - Pz das chaves sem golden (só testes unitários); o ruído está
   pinado por `regress/fetnoise` (`onoise_s1`).
-- LTRA: `trytocompact` (compactação do histórico) e o controle LTE
-  (`LTRAlteCalculate` — inalcançável sem `fullcontrol`).
+- ~~LTRA: `trytocompact` e o controle LTE~~ — `trytocompact`
+  portado (2026-11-08); o controle LTE (`LTRAlteCalculate`) é
+  inalcançável nas duas tabelas de parâmetros (seção LTRA acima).
 - Controlador de passo: cruzamento de `vds=0` num breakpoint com nó
   de ~1 fF mata o passo no BSIM1/2 (ver o caso-limite acima).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.
-- Fallbacks restantes do op do ngspice: `gillespie_src` (rampa
-  adaptativa de fontes) e o *transient op* (acha o `.op` por um
-  pseudo-transiente — é o único que fecha um `.op` puro com BJT
-  `off` atrás de fonte só-transiente; o caso `.tran` equivalente
-  está coberto e regredido em `corpus/regress/offbjt.cir`).
+- ~~Fallbacks restantes do op do ngspice~~ — a cadeia inteira entrou
+  em 2026-11-08 ("Cadeia do op"). Fica: espelhar `trytocompact` nas
+  listas de override dos bindings (Py/R/wasm), como `keepopinfo` (o
+  cartão `.options` já funciona em todos).
+- Ruptura do diodo diverge do ngspice-47 com corrente alta (medido ao
+  construir as sondas do op: `i1 0 1 1.6; d1 0 1 (is=6.79e-18
+  n=1.47 bv=50)` dá 50.70 V no Dune e 50.32 V no ngspice; não é o
+  `NBV`, cujo default no ngspice é `N`, `diosetup.c:131`). Não
+  investigado; nenhum deck do corpus opera na ruptura forte.
 
 ## Transiente robusto (opt-in, issue #6)
 
