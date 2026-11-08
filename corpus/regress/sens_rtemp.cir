@@ -1,0 +1,21 @@
+DC sensitivity to the resistor temperature parameters
+* Coverage: the 3f5's sens walk (ckt/cktsens.c) perturbs a parameter
+* with sens_setp and then calls sens_temp = DEVtemperature before
+* reloading the device, so REStemp recomputes RESconduct from the
+* moved model tc1/tc2 (resmpar.c) or instance temp (resparam.c):
+* d/dTC1 = dV/dR * R * dT, d/dTC2 = dV/dR * R * dT^2 and d/dTEMP =
+* dV/dR * R * (TC1 + 2 TC2 dT). r2 sits at the circuit temperature
+* (.options temp=60, TNOM 27), r3 has TEMP=100 on the same model,
+* r1 is a plain resistor (default model, TC1 = TC2 = 0: its tc1/tc2
+* sensitivities are live, its temp one is zero). The filters keep
+* ngspice-47's own :tce out of the walk: perturbing it raises
+* REStceGiven for good, which switches every later perturbation of
+* that model to the exponential form at TCE = 0 (KNOWN_DIFFS).
+.options temp=60
+v1 1 0 dc 5
+r1 1 2 1k
+r2 2 0 rtc 2k
+r3 2 0 rtc 3k temp=100
+.model rtc r tc1=2e-3 tc2=1e-5
+.sens v(2) r?:tc1 r?:tc2 r?_temp r?
+.end

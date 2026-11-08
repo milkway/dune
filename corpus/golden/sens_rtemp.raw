@@ -1,0 +1,33 @@
+Title: dc sensitivity to the resistor temperature parameters
+Date: Sun Nov  8 10:30:53  2026
+Command: ngspice-47, Build 
+Plotname: Sensitivity Analysis
+Flags: real
+No. Variables: 12
+No. Points: 1       
+Variables:
+	0	v(r3:tc1)	voltage
+	1	v(r3:tc2)	voltage
+	2	v(r3)	voltage
+	3	v(r3_temp)	voltage
+	4	v(r2:tc1)	voltage
+	5	v(r2:tc2)	voltage
+	6	v(r2)	voltage
+	7	v(r2_temp)	voltage
+	8	v(r1:tc1)	voltage
+	9	v(r1:tc2)	voltage
+	10	v(r1)	voltage
+	11	v(r1_temp)	voltage
+Values:
+0		2.786801746053735e+01
+	2.034365429637517e+03
+	1.526109829403982e-04
+	1.320867836210999e-03
+	2.343657664404300e+01
+	7.734070764911354e+02
+	3.824028988892523e-04
+	1.889130381008730e-03
+	-4.034578757490310e+01
+	-1.330006549408850e+03
+	-1.222638746704146e-03
+	-0.000000000000000e+00

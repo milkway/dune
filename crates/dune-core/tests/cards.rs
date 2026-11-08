@@ -102,6 +102,33 @@ fn bsim1_instance_temp_is_an_unknown_parameter() {
 }
 
 #[test]
+fn resistor_temperature_sensitivity_matches_a_finite_difference() {
+    // cktsens.c: sens_setp + sens_temp (REStemp) — `_temp` moves the
+    // instance temperature (here CKTtemp + DTEMP = 70 C); `_dtemp`
+    // stays inert, as in ngspice's full walk.
+    let deck = |extra: &str| {
+        format!(
+            "s\n.options temp=60\nv1 1 0 dc 5\nr1 1 2 1k\nr2 2 0 rtc 2k {extra}\n\
+             .model rtc r tc1=2e-3 tc2=1e-5\n.sens v(2) r2_temp r2_dtemp\n.end\n"
+        )
+    };
+    let (p, _) = run(&deck("dtemp=10"));
+    let s_temp = real(&p[0], "v(r2_temp)")[0];
+    assert_eq!(real(&p[0], "v(r2_dtemp)")[0], 0.0);
+    let v2 = |extra: &str| {
+        let d = format!(
+            "s\n.options temp=60\nv1 1 0 dc 5\nr1 1 2 1k\nr2 2 0 rtc 2k {extra}\n\
+             .model rtc r tc1=2e-3 tc2=1e-5\n.op\n.end\n"
+        );
+        real(&run(&d).0[0], "v(2)")[0]
+    };
+    let fd = (v2("temp=70.01") - v2("temp=69.99")) / 0.02;
+    assert!((s_temp - fd).abs() <= 1e-6 * fd.abs(), "{s_temp} vs {fd}");
+    // ngspice with only `r2_dtemp` walked gives 2.777359e-3 here.
+    assert!((s_temp - 2.777359e-3).abs() <= 1e-6, "{s_temp}");
+}
+
+#[test]
 fn capacitor_geometry_narrow_is_the_3f5_formula() {
     // C = CJ*(W-N)*(L-N) + 2*CJSW*((L-N)+(W-N)), N=1u, L=11u, W=6u:
     // 1e-3*5u*10u + 2*1e-9*15u = 5e-14 + 3e-14 = 8e-14.
