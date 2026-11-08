@@ -164,6 +164,22 @@ pub struct Ccvs {
     pub gain: f64,
 }
 
+/// `BXXXXXXX N+ N- V=EXPR` or `I=EXPR`: the arbitrary source of the
+/// 3f5 (`dev/asrc/`). `expr` is the parse tree
+/// [`dune_netlist::parse_expr`] builds; its `v(node)` and
+/// `i(device)` references resolve at build time like every other
+/// name (an `i()` must name a device with a branch equation: V, E,
+/// H, L or a voltage-type B). A `Voltage` source drives `v(N+) −
+/// v(N−)` to the expression; a `Current` one makes it flow from `N+`
+/// through the source to `N−`.
+#[derive(Clone, Debug)]
+pub struct Asrc {
+    pub name: String,
+    pub nodes: [String; 2],
+    pub kind: dune_netlist::ir::SourceKind,
+    pub expr: dune_netlist::ir::Expr,
+}
+
 /// `QXXXXXXX NC NB NE <NS> MNAME <AREA> <OFF> <IC=VBE,VCE> <TEMP=T>`
 /// with its model inline. `nodes[3]` is ground when no substrate was
 /// given.
@@ -485,6 +501,7 @@ pub enum Spec {
     Tra(Box<Tra>),
     SwitchV(SwitchV),
     SwitchI(SwitchI),
+    Asrc(Box<Asrc>),
 }
 
 macro_rules! impl_into_spec {
@@ -565,6 +582,12 @@ impl From<Ltra> for Spec {
     }
 }
 
+impl From<Asrc> for Spec {
+    fn from(s: Asrc) -> Spec {
+        Spec::Asrc(Box::new(s))
+    }
+}
+
 impl From<Tra> for Spec {
     fn from(s: Tra) -> Spec {
         Spec::Tra(Box::new(s))
@@ -599,6 +622,7 @@ impl Spec {
             Spec::Tra(s) => &s.name,
             Spec::SwitchV(s) => &s.name,
             Spec::SwitchI(s) => &s.name,
+            Spec::Asrc(s) => &s.name,
         }
     }
 }
@@ -804,6 +828,11 @@ fn normalize(spec: &mut Spec) {
             s.nodes.iter_mut().for_each(lc);
             lc(&mut s.ctrl);
         }
+        Spec::Asrc(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+            s.expr.visit_refs_mut(&mut |n| lc(n), &mut |d| lc(d));
+        }
     }
 }
 
@@ -973,9 +1002,25 @@ impl Circuit {
                 Spec::Tra(s) => &s.nodes,
                 Spec::SwitchV(s) => &s.nodes,
                 Spec::SwitchI(s) => &s.nodes,
+                Spec::Asrc(s) => &s.nodes,
             };
             for n in node_names {
                 node(&mut vars, &mut node_ids, n);
+            }
+            // `INPgetTree` inserts the `v()` nodes while parsing the
+            // card (after N+ N-); `ASRCsetup` then makes the branch of
+            // a voltage source (`b1#branch`).
+            if let Spec::Asrc(s) = spec {
+                let mut refs = Vec::new();
+                let mut e = s.expr.clone();
+                e.visit_refs_mut(&mut |n| refs.push(n.clone()), &mut |_| {});
+                for n in &refs {
+                    node(&mut vars, &mut node_ids, n);
+                }
+                if s.kind == dune_netlist::ir::SourceKind::Voltage {
+                    let br = vars.push(s.name.clone(), VarKind::Branch);
+                    branches.insert(s.name.clone(), br);
+                }
             }
             match spec {
                 Spec::Vsource(s) => {
@@ -1573,6 +1618,40 @@ impl Circuit {
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
                         ctrl,
+                    )));
+                }
+                Spec::Asrc(s) => {
+                    let pos = get(&node_ids, &s.nodes[0]);
+                    let neg = get(&node_ids, &s.nodes[1]);
+                    let voltage = s.kind == dune_netlist::ir::SourceKind::Voltage;
+                    // ngspice's `ASRCsetup` check (the 3f5 would go on
+                    // to a singular matrix).
+                    if voltage && pos == neg {
+                        return Err(Error::Build(format!(
+                            "`{}`: voltage B source is shorted (both nodes `{}`)",
+                            s.name, s.nodes[0]
+                        )));
+                    }
+                    let tree = crate::asrc::Tree::new(&s.expr);
+                    let mut cols = Vec::with_capacity(tree.vars.len());
+                    for v in &tree.vars {
+                        cols.push(match v {
+                            crate::asrc::VarRef::Node(n) => get(&node_ids, n),
+                            // `CKTfndBranch`: any device with a branch
+                            // equation.
+                            crate::asrc::VarRef::Branch(d) => {
+                                branches.get(d).copied().ok_or_else(|| {
+                                    Error::Build(format!(
+                                        "`{}`: unknown controlling source `{d}`",
+                                        s.name
+                                    ))
+                                })?
+                            }
+                        });
+                    }
+                    let br = if voltage { branches[&s.name] } else { 0 };
+                    devices.push(Box::new(crate::asrc::AsrcI::new(
+                        s.kind, pos, neg, br, tree, cols,
                     )));
                 }
                 Spec::Ccvs(s) => {

@@ -11,6 +11,7 @@ pub mod consts;
 pub mod linalg;
 
 mod ac;
+mod asrc;
 mod b1disto;
 mod bjt;
 mod bsim1;
@@ -66,9 +67,9 @@ pub use bsim1::Bsim1Model;
 pub use bsim2::Bsim2Model;
 pub use bsim3::Bsim3Model;
 pub use circuit::{
-    Bjt, Bsim1, Bsim2, Bsim3, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra,
-    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vccs, Vcvs,
-    Vsource,
+    Asrc, Bjt, Bsim1, Bsim2, Bsim3, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet,
+    Ltra, Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vccs,
+    Vcvs, Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;

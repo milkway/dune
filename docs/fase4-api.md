@@ -96,6 +96,7 @@ Phase, Db}`; `Selection { scale, columns: Vec<OutColumn> }`;
 | `Ltra` [4] | `model: LtraModel` |
 | `Tra` [4] | `z0`, `td/f/nl: Option<f64>`, `ic: [V1, I1, V2, I2]` |
 | `SwitchV` [4] / `SwitchI` [2] | `model`, `on` (+ `ctrl` no W) |
+| `Asrc` [2] *(proposto em 2026-11-08, fora da v0 congelada — pede decisão)* | `kind: SourceKind` (V=/I=), `expr: dune_netlist::ir::Expr` (de `dune_netlist::parse_expr`) |
 
 Modelos: `DiodeModel` (15 campos), `BjtModel` (42), `Mos1Model` (31),
 `Mos2Model` (38), `Mos3Model` (37), `Mos6Model` (40), `Bsim1Model`

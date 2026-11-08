@@ -18,5 +18,10 @@ impl dune_netlist::IncludeLoader for NoFs {
 
 fuzz_target!(|data: &[u8]| {
     let text = String::from_utf8_lossy(data).into_owned();
+    // B-source expressions (`inpptree.c` front end): the bytes as an
+    // expression on their own and as the tail of a B card.
+    let _ = dune_netlist::parse_expr(&text);
+    let card = format!("t\nb1 1 0 v={}\n.end\n", text.replace(['\n', '\r'], " "));
+    let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), card, &mut NoFs);
     let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), text, &mut NoFs);
 });

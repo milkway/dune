@@ -449,6 +449,8 @@ impl Engine {
             states: &self.states,
             reltol: opts.reltol,
             abstol: opts.abstol,
+            vntol: opts.vntol,
+            gmin: opts.gmin,
         };
         self.devices.iter().all(|d| d.conv_test(&ctx))
     }

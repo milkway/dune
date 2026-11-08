@@ -1,0 +1,16 @@
+URC line: the URCsetup ladder (geometric R/C lumps), tran + ac
+* Coverage: the 3f5 URC has no load of its own; urcsetup.c expands
+* each U card into lumped R/C sections. u1 takes the lump count from
+* the K/FMAX rule (10 lumps), u2 gives N=4; the inner nodes
+* (u1#hi1, u1#lo1, ...) are saved like ngspice saves them.
+v1 1 0 dc 0 ac 1 pulse(0 1 10n 2n 2n 200n 500n)
+rs 1 2 100
+u1 2 3 0 umod l=1m
+rl 3 0 20k
+u2 3 4 0 umod2 l=2m n=4
+cl 4 0 0.5p
+.model umod urc k=1.5 fmax=1g rperl=10meg cperl=10n
+.model umod2 urc(rperl=1meg cperl=2n k=2)
+.ac dec 10 10k 10g
+.tran 2n 1u
+.end

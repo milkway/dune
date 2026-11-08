@@ -1,0 +1,12 @@
+URC line with ISPERL: the URCsetup ladder of R and diodes
+* Coverage: ISPERL given turns every shunt into a diode (CJO = c1,
+* IS = i1, RS = L*lumps*RSPERL, area = p^(i-1)), urcsetup.c's other
+* branch.
+v1 1 0 dc 0 pulse(-1 1 10n 20n 20n 100n 300n)
+rs 1 2 1k
+u1 2 3 0 dmod l=10u
+rl 3 0 100k
+.model dmod urc k=1.6 fmax=10g rperl=100meg cperl=100n isperl=1n rsperl=10k
+.dc v1 -1 1 0.05
+.tran 2n 400n
+.end

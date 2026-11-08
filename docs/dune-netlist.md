@@ -71,8 +71,84 @@ Registradas também em `corpus/KNOWN_DIFFS.md` quando observáveis:
    unário (`-2^2 = -4`, associatividade à direita do `^`). **Sem**
    parênteses, espaços ou vírgulas dentro de `{}` (viram separadores
    no léxico) e sem funções — amplia-se quando o corpus pedir.
-7. **Fonte `B`**: a expressão fica como texto cru na IR
-   (`inpptree.c` fica para quando um circuito do corpus usar `B`).
+7. **Fonte `B`**: ver a seção própria abaixo (expressões com as
+   extensões mínimas do ngspice onde o 3f5 rejeita ou mutila).
+
+## Expressões da fonte `B` (`expr.rs` ← `inpptree.c`)
+
+O cartão `Bxxx N+ N- V=EXPR` / `I=EXPR` segue o `INP2B` +
+`INPdevParse`: um número líder é ignorado (aviso); depois um laço de
+keywords — `v` ou `i`, o `INPgetTok` engole brancos/`=`/`,`, e o
+`INPgetTree` lê a expressão **até onde ela vai**; a varredura do
+cartão continua dali. O último `v=`/`i=` vence (`ASRCparam`
+sobrescreve tipo e árvore); qualquer outro keyword é "unknown
+parameter" e encerra o cartão. A IR guarda a árvore tipada
+(`ir::Expr`: `Num`, `V(nó)`, `I(dispositivo)`, `Bin(op)`,
+`Call(função)`), sem dobra de constantes — só as árvores de derivada
+dobram, no `dune-core`.
+
+Gramática (porte do `PTparse`, precedência por tabela
+`prectable[11][11]` copiada do C, pilha de 200 como `PT_STACKSIZE`):
+
+- `+ -` (associam à esquerda) < `* /` < `^` (associa à direita) <
+  menos unário. **Não há `+` unário** (`+1` é erro de sintaxe, como
+  no C) e `--1` também é erro (`u-` seguido de `u-` reduz sem
+  operando); `-(-1)` funciona. `-2^2` é `(-2)^2`.
+- `nome(expr)`: as 20 funções do `funcs[]` — `abs acos acosh asin
+  asinh atan atanh cos cosh exp ln log sgn sin sinh sqrt tan tanh u
+  uramp` (semântica do `ptfuncs.c` no `dune-core`: `log` é base 10;
+  `ln`/`log`/`sqrt` tomam `|x|`; `u` é o degrau com ½ em 0).
+- `v(n)`, `v(n1,n2)` (= `v(n1) - v(n2)`, recursivo: `v(a,b,c)` é
+  `v(a)-v(b)-v(c)` como no `mkfnode`), `i(vnome)`.
+- Constantes `e` e `pi`; números pelo `INPevaluate` sem gobble.
+- O lexer termina a expressão onde um valor seguiria outro valor ou
+  um `)` (`v(1) i=3`, `2 3`) e num `(` depois de número (`2(3)`).
+
+Diferenças deliberadas (todas em entradas que o 3f5 rejeita ou
+mutila; linhas no `KNOWN_DIFFS.md`):
+
+- **Fator de escala consumido** (`2k*v(1)` = 2000·v(1)): o lexer do
+  3f5 (`INPevaluate` com gobble 0) para *sobre* o `k`, a expressão
+  termina ali e o `k` vira "unknown parameter". Superconjunto, como o
+  ngspice.
+- **Nomes dentro de `v(…)`/`i(…)`** vão até branco, `,`, `(` ou `)`,
+  como no lexer do ngspice: `v(1a)`, `v(n-1)`, `v(x1.n2)` funcionam.
+  No 3f5 o argumento passava pelo lexer geral: `v(1a)` era erro,
+  `v(1.0)` virava `v(1)` (`sprintf("%d")`) e `v(e)`/`v(pi)` viravam
+  `v(2)`/`v(3)` (a constante!).
+- **`time`**: o 3f5 aceita o sinal especial no parser
+  (`specSigList`), mas o `ASRCsetup`/`ASRCload` não têm caso para a
+  variável `IF_STRING` e a carga devolve `E_BADPARM`; aqui é
+  diagnóstico com span já no parse. As fontes B dependentes do tempo
+  do ngspice não foram portadas.
+- **Limites**: profundidade ≤ 512 e ≤ 10 000 nós por árvore
+  (`EXPR_MAX_DEPTH`/`EXPR_MAX_NODES`), para que as passagens
+  recursivas (derivada, avaliação, renomeação) não estourem a pilha
+  com entrada hostil; o C só tinha a pilha de 200 do parser, que
+  não limita somas longas.
+- **Subcircuitos**: os nós de `v()` e os dispositivos de `i()` são
+  renomeados com o cartão (`v(n)` → `v(x1.n)`, `i(vx)` →
+  `i(v.x1.vx)`), como o `subckt.c` do ngspice; o frontend do 3f5 só
+  traduzia os dois nós do cartão.
+- Duplicatas de `i(x)` viram uma variável só (o C compara um
+  `temp.uValue` não inicializado e duplica; mesma soma no Jacobiano).
+
+Ficou de fora (extensões do ngspice além do 3f5): `time`, `temper`,
+`hertz`; operadores relacionais/lógicos e o ternário `?:`; `**`;
+as funções `log10 ceil floor nint u2 pwl pow pwr min max ddt eq0 ne0
+gt0 lt0 ge0 le0`; os parâmetros de instância `tc1 tc2 temp dtemp m
+reciproctc reciprocm`; `{}`/`.param` dentro da expressão.
+
+Erros: toda expressão malformada vira diagnóstico com o span do
+trecho (`syntax error`, `no such function`, `badly formed node
+voltage`/`branch current` — as mensagens do C —, nome solto,
+vírgula fora de `v()`, limites). Fuzz: o alvo `parse_deck` também
+alimenta `parse_expr` e um cartão B com os bytes; o smoke
+determinístico (`tests/fuzz_smoke.rs`) muta os cartões B das sondas
+`bsrc_*` e leva o parser aos limites.
+
+`dune_netlist::parse_expr(texto)` expõe o mesmo parser (expressão
+inteira; texto sobrando é erro).
 
 ## Pendências conhecidas
 

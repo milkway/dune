@@ -85,6 +85,55 @@ fn mutated_corpus_never_panics() {
     }
 }
 
+/// B-source expressions (the `inpptree.c` front end): the probe
+/// decks' cards, mutated with the expression alphabet, both through
+/// the deck parser and through `parse_expr` directly.
+#[test]
+fn mutated_expressions_never_panic() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/regress");
+    let mut seeds: Vec<Vec<u8>> = Vec::new();
+    for e in std::fs::read_dir(&dir).expect("corpus present").flatten() {
+        let p = e.path();
+        if p.file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("bsrc_"))
+        {
+            let text = std::fs::read_to_string(&p).unwrap();
+            for line in text.lines().filter(|l| l.starts_with('b')) {
+                seeds.push(line.as_bytes().to_vec());
+            }
+        }
+    }
+    assert!(!seeds.is_empty());
+    let mut rng = Rng(0x0e70_5eed_b5c0_0001);
+    let alphabet: &[u8] = b"()+-*/^,= \tvViI0123456789.eEkKmM{}$;\x00\xffabcdefgx#:";
+    for round in 0..2000 {
+        let mut bytes = seeds[round % seeds.len()].clone();
+        for _ in 0..1 + rng.below(6) {
+            match rng.below(3) {
+                0 if !bytes.is_empty() => {
+                    let i = rng.below(bytes.len());
+                    bytes[i] = alphabet[rng.below(alphabet.len())];
+                }
+                1 => {
+                    let i = rng.below(bytes.len() + 1);
+                    let j = rng.below(alphabet.len());
+                    bytes.splice(i..i, alphabet[j..].iter().copied().take(1 + rng.below(4)));
+                }
+                _ if bytes.len() > 2 => {
+                    let i = rng.below(bytes.len());
+                    bytes.truncate(i);
+                }
+                _ => {}
+            }
+        }
+        let card = String::from_utf8_lossy(&bytes).into_owned();
+        parse(format!("t\n{card}\nr1 1 0 1k\n.end\n"));
+        // The expression part alone (after the first `=`).
+        let expr = card.split_once('=').map_or(card.as_str(), |(_, e)| e);
+        let _ = dune_netlist::parse_expr(expr);
+    }
+}
+
 #[test]
 fn pure_noise_never_panics() {
     let mut rng = Rng(0xdead_beef_0bad_f00d);
@@ -116,6 +165,22 @@ fn pathological_shapes_terminate() {
         }
     }
     parse(format!("t\n.meas ac x when {}\n.end\n", "= ".repeat(500)));
+    // B-source expressions at the parser's bounds: deep parentheses,
+    // long sums, unary-minus and power chains, nested calls, and a
+    // B card inside a subcircuit (the expression is renamed).
+    for expr in [
+        format!("{}1{}", "(".repeat(3000), ")".repeat(3000)),
+        vec!["v(1)"; 12_000].join("+"),
+        format!("{}1", "-".repeat(3000)),
+        vec!["2"; 3000].join("^"),
+        format!("{}v(1){}", "sin(".repeat(600), ")".repeat(600)),
+        format!("{}v(1)", "-(".repeat(400)),
+        "v(".repeat(500),
+    ] {
+        parse(format!("t\nb1 1 0 v={expr}\n.end\n"));
+        let _ = dune_netlist::parse_expr(&expr);
+    }
+    parse("t\n.subckt s a b\nb1 a b i=v(a,b)*i(vx)+v(n)\nvx b 0 0\n.ends\nx1 1 2 s\n.end\n".into());
     // Many nested subcircuit scopes never closed.
     parse(format!("t\n{}.end\n", ".subckt s a b\n".repeat(200)));
 }

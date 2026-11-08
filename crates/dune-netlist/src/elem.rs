@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::deck::Card;
 use crate::diag::Diagnostic;
 use crate::ir::{
-    AcSpec, Device, DistoSpec, Element, OnOff, Param, ParamValue, RfPort, SourceKind, TranFn,
+    AcSpec, Device, DistoSpec, Element, Expr, OnOff, Param, ParamValue, RfPort, SourceKind, TranFn,
     TranFnKind,
 };
 use crate::param::ParamEnv;
@@ -652,38 +652,66 @@ fn urc(ctx: &mut ElemCtx) -> Parsed {
     Some((nodes, Device::Urc { model, params }))
 }
 
-/// `B`: `name N+ N- <V=EXPR> <I=EXPR>`. The expression is kept raw
-/// (parse trees are built when a corpus circuit needs the device).
+/// `B`: `name N+ N- <V=EXPR> <I=EXPR>` (`INP2B` + `INPdevParse`):
+/// keyword `v` or `i`, then a parse tree read with `INPgetTree`
+/// (`expr.rs`) for as long as it goes; the card scan resumes after
+/// it. The last `v=`/`i=` wins (`ASRCparam` overwrites type and
+/// tree); any other keyword is an unknown parameter, which ends the
+/// card as in the C.
 fn behavioral(ctx: &mut ElemCtx) -> Parsed {
     let nodes = vec![
         ctx.node_req("positive node")?,
         ctx.node_req("negative node")?,
     ];
-    // The rest of the card is `v=<expr>` or `i=<expr>`; expressions
-    // may contain every separator, so leave the scanner and read the
-    // raw text.
-    let rest_start = ctx
-        .sc
-        .peek_tok()
-        .map(|t| t.start)
-        .unwrap_or(ctx.card.text.len());
-    let rest = ctx.card.text[rest_start..].trim();
-    let span = ctx.card.span_of(rest_start, ctx.card.text.len());
-    let lower = rest.to_ascii_lowercase();
-    let (v_expr, i_expr) = if let Some(e) = lower.strip_prefix('v').and_then(after_eq) {
-        (Some(rest[rest.len() - e.len()..].trim().to_string()), None)
-    } else if let Some(e) = lower.strip_prefix('i').and_then(after_eq) {
-        (None, Some(rest[rest.len() - e.len()..].trim().to_string()))
-    } else {
-        ctx.err(span, "B source needs V=<expr> or I=<expr>");
-        (None, None)
-    };
-    Some((nodes, Device::Behavioral { v_expr, i_expr }))
-}
-
-fn after_eq(s: &str) -> Option<&str> {
-    let s = s.trim_start();
-    s.strip_prefix('=')
+    // `INPdevParse`'s optional leading number: `INP2B` never reads it.
+    if let Some((_, tok)) = ctx.sc.try_value() {
+        let span = ctx.sc.span(&tok);
+        ctx.warn(span, "leading value on a B source is ignored");
+    }
+    let mut source: Option<(SourceKind, Expr)> = None;
+    let mut failed = false;
+    while let Some(tok) = ctx.sc.next_tok() {
+        let span = ctx.sc.span(&tok);
+        let kind = match tok.lc().as_str() {
+            "v" => SourceKind::Voltage,
+            "i" => SourceKind::Current,
+            other => {
+                ctx.err(span, format!("unknown parameter ({other})"));
+                failed = true;
+                break;
+            }
+        };
+        // `INPgetTok`'s trailing gobble (blanks, `=`, `,`).
+        let text = &ctx.card.text;
+        let mut start = tok.end;
+        while start < text.len() && matches!(text.as_bytes()[start], b' ' | b'\t' | b'=' | b',') {
+            start += 1;
+        }
+        let (res, used) = crate::expr::parse_prefix(&text[start..]);
+        match res {
+            Ok(expr) => source = Some((kind, expr)),
+            Err(e) => {
+                let span = ctx
+                    .card
+                    .span_of(start + e.start, start + e.end.max(e.start + 1));
+                ctx.err(span, e.message);
+                failed = true;
+                break;
+            }
+        }
+        ctx.sc.seek(start + used);
+    }
+    match source {
+        Some((kind, expr)) if !failed => Some((nodes, Device::Behavioral { kind, expr })),
+        Some(_) => None,
+        None => {
+            if !failed {
+                let span = ctx.sc.here();
+                ctx.err(span, "B source needs V=<expr> or I=<expr>");
+            }
+            None
+        }
+    }
 }
 
 /// `X`: `name N1 <N2 …> SUBNAM` — the last token is the subcircuit.
@@ -1059,17 +1087,60 @@ mod tests {
     }
 
     #[test]
-    fn behavioral_keeps_raw_expression() {
+    fn behavioral_parses_the_expression() {
+        use crate::ir::{ExprFunc, ExprOp};
         let e = ok("B1 0 1 I=cos(v(1))+sin(v(2))");
-        assert!(matches!(
-            &e.device,
-            Device::Behavioral { v_expr: None, i_expr: Some(x) } if x == "cos(v(1))+sin(v(2))"
-        ));
+        match &e.device {
+            Device::Behavioral {
+                kind: SourceKind::Current,
+                expr: Expr::Bin(ExprOp::Plus, l, r),
+            } => {
+                assert_eq!(
+                    **l,
+                    Expr::Call(ExprFunc::Cos, Box::new(Expr::V("1".into())))
+                );
+                assert_eq!(
+                    **r,
+                    Expr::Call(ExprFunc::Sin, Box::new(Expr::V("2".into())))
+                );
+            }
+            d => panic!("{d:?}"),
+        }
         let e = ok("B2 2 0 V = v(1) * 2");
         assert!(matches!(
             &e.device,
-            Device::Behavioral { v_expr: Some(x), .. } if x == "v(1) * 2"
+            Device::Behavioral {
+                kind: SourceKind::Voltage,
+                expr: Expr::Bin(ExprOp::Times, _, _)
+            }
         ));
+        // The last keyword wins; the expression stops before it.
+        let e = ok("B3 3 4 V=v(1) I=17");
+        assert!(matches!(
+            &e.device,
+            Device::Behavioral { kind: SourceKind::Current, expr: Expr::Num(n) } if *n == 17.0
+        ));
+    }
+
+    #[test]
+    fn behavioral_errors_carry_spans() {
+        for (line, needle) in [
+            ("B1 1 0 V=foo(1)", "no such function"),
+            ("B1 1 0 V=v(1)+", "syntax error"),
+            ("B1 1 0 W=1", "unknown parameter (w)"),
+            ("B1 1 0", "needs V=<expr>"),
+            ("B1 1 0 V=2*time", "time"),
+            ("B1 1 0 V=v(1) junk", "unknown parameter (junk)"),
+        ] {
+            let (el, diags) = parse(line);
+            assert!(el.is_none(), "{line}");
+            assert!(
+                diags
+                    .iter()
+                    .any(|d| d.severity == Severity::Error && d.message.contains(needle)),
+                "{line}: {diags:?}"
+            );
+        }
     }
 
     #[test]
