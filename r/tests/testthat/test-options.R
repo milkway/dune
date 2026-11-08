@@ -12,11 +12,19 @@ ac_deck <- function(card = "") {
   paste0("keep\nv1 1 0 dc 1 ac 1\nr1 1 2 1k\nc1 2 0 1n\n", card, "\n.ac dec 2 1k 100k\n.end")
 }
 
+ltra_deck <- function(card = "") {
+  paste0(
+    "ltra\nv1 1 0 pulse(0 1 1n 1n 1n 20n 100n)\nr1 1 2 50\no1 2 0 3 0 lin\nr2 3 0 50\n",
+    ".model lin ltra r=0.1 l=9.13u c=3.65p len=1\n", card, "\n.tran 0.5n 60n\n.end"
+  )
+}
+
 values_of <- function(res) lapply(res$plots, `[[`, "values")
 
 test_that("each new option is the edited deck", {
   cases <- list(
     list(ac_deck, list(keepopinfo = TRUE), ".options keepopinfo"),
+    list(ltra_deck, list(trytocompact = TRUE), ".options trytocompact"),
     list(noisy_deck, list(seed = 9), ".options seed=9"),
     list(noisy_deck, list(seed = 9L), ".options seed=9"),
     list(noisy_deck, list(notrnoise = TRUE), ".options notrnoise"),
@@ -52,7 +60,7 @@ test_that("FALSE clears the deck's flags", {
 test_that("the new names are listed and bad values are errors", {
   # ::: because the helper is internal (@noRd): the test must also
   # pass against the installed package, not only under load_all().
-  expect_true(all(c("seed", "notrnoise", "devnoise", "devnt", "keepopinfo") %in%
+  expect_true(all(c("seed", "notrnoise", "devnoise", "devnt", "keepopinfo", "trytocompact") %in%
     spice:::spice_option_names()))
   bad <- list(
     list(seed = 0), list(seed = -2), list(seed = 1.5), list(seed = 2^53),

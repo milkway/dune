@@ -227,7 +227,7 @@ pub fn measure_plot(
 
 /// The option names `apply_options` accepts, in `Options` field order
 /// (the card's names, as in `spice.txt` §SIMULATOR VARIABLES).
-pub const OPTION_NAMES: [&str; 30] = [
+pub const OPTION_NAMES: [&str; 31] = [
     "reltol",
     "abstol",
     "vntol",
@@ -258,6 +258,7 @@ pub const OPTION_NAMES: [&str; 30] = [
     "devnoise",
     "devnt",
     "keepopinfo",
+    "trytocompact",
 ];
 
 /// `.include` from an in-memory map (the `dune-wasm` `MapLoader`).
@@ -369,6 +370,7 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
             "devnoise" => opts.dev_noise = flag(n, v)?,
             "devnt" => opts.dev_noise_step = Some(step(n, v)?),
             "keepopinfo" => opts.keepopinfo = flag(n, v)?,
+            "trytocompact" => opts.trytocompact = flag(n, v)?,
             other => return Err(format!("unknown option `{other}`")),
         }
     }

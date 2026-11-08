@@ -26,7 +26,8 @@
 #'   `ltrabkrate`, `ltrafit`, `maxord`, `nopage`, `defl`, `defw`,
 #'   `defad`, `defas`, `seed` (the transient-noise seed, a whole number
 #'   `>= 1`; no `"random"`), `notrnoise`, `devnoise`, `devnt` (the
-#'   device-noise grid step, seconds, `> 0`) and `keepopinfo`. The flags
+#'   device-noise grid step, seconds, `> 0`), `keepopinfo` and
+#'   `trytocompact`. The flags
 #'   `noopiter`, `nopage`, `ltrafit`, `notrnoise`, `devnoise` and
 #'   `keepopinfo` take `TRUE`/`FALSE` (`FALSE` clears a flag the deck's
 #'   card set). Unlike a `.options` card, which only warns, an unknown

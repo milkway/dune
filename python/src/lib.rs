@@ -51,7 +51,7 @@ const DECK_NAME: &str = "deck.cir";
 
 /// Every `options` key accepted (the `.options` card names), in
 /// `Options` field order.
-const OPTION_NAMES: [&str; 30] = [
+const OPTION_NAMES: [&str; 31] = [
     "reltol",
     "abstol",
     "vntol",
@@ -82,6 +82,7 @@ const OPTION_NAMES: [&str; 30] = [
     "devnoise",
     "devnt",
     "keepopinfo",
+    "trytocompact",
 ];
 
 /// A parser/options diagnostic with its position resolved.
@@ -552,6 +553,7 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
             "devnoise" => set!(dev_noise, bool_value(key, &v)?),
             "devnt" => set!(dev_noise_step, Some(step_value(key, &v)?)),
             "keepopinfo" => set!(keepopinfo, bool_value(key, &v)?),
+            "trytocompact" => set!(trytocompact, bool_value(key, &v)?),
             other => {
                 return Err(PyValueError::new_err(format!(
                     "unknown option '{other}'; valid options: {}",

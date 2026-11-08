@@ -26,6 +26,7 @@ c1 2 0 1n
 .ac dec 2 1k 100k
 .end
 """
+LTRA = "ltra\nv1 1 0 pulse(0 1 1n 1n 1n 20n 100n)\nr1 1 2 50\no1 2 0 3 0 lin\nr2 3 0 50\n.model lin ltra r=0.1 l=9.13u c=3.65p len=1\n{card}\n.tran 0.5n 60n\n.end\n"
 
 
 def bits(res: spice.Result) -> list[tuple[str, list[bytes]]]:
@@ -36,6 +37,7 @@ def bits(res: spice.Result) -> list[tuple[str, list[bytes]]]:
     ("deck", "options", "card"),
     [
         (AC, {"keepopinfo": True}, ".options keepopinfo"),
+        (LTRA, {"trytocompact": True}, ".options trytocompact"),
         (NOISY, {"seed": 9}, ".options seed=9"),
         (NOISY, {"notrnoise": True}, ".options notrnoise"),
         (
@@ -71,7 +73,7 @@ def test_false_clears_the_deck_flags() -> None:
 
 
 def test_new_names_are_listed() -> None:
-    for name in ("seed", "notrnoise", "devnoise", "devnt", "keepopinfo"):
+    for name in ("seed", "notrnoise", "devnoise", "devnt", "keepopinfo", "trytocompact"):
         assert name in spice.OPTION_NAMES
 
 

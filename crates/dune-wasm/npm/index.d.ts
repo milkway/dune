@@ -116,7 +116,7 @@ export interface RenderOptions {}
  * `vntol`, `gmin`, `itl1`, `itl2`, `itl4`, `gminsteps`, `srcsteps`, `temp` and
  * `tnom` (°C), `pivtol`, `pivrel`, `noopiter`, `trtol`, `chgtol`, `method`
  * (`"trap"` | `"gear"` | `"trbdf2"`), `maxord`, `ltrabkrate`, `ltrafit`,
- * `nopage`, `defl`, `defw`, `defad`, `defas`, `keepopinfo` (the small-signal
+ * `nopage`, `defl`, `defw`, `defad`, `defas`, `trytocompact`, `keepopinfo` (the small-signal
  * analyses emit their operating point first), `seed` (transient-noise seed, an
  * integer ≥ 1; no `"random"`), `notrnoise`, `devnoise` and `devnt` (device
  * noise in `.tran` and its grid step, s). A number is taken exactly; a string

@@ -136,7 +136,7 @@ def simulate(
             ``gminsteps``, ``srcsteps``, ``maxord``, ``ltrabkrate``),
             ``temp``/``tnom`` in degrees Celsius as on the card, ``method``
             as ``"trap"``, ``"gear"`` or ``"trbdf2"``, flags as bools
-            (``noopiter``, ``nopage``, ``ltrafit``, ``keepopinfo``,
+            (``noopiter``, ``nopage``, ``ltrafit``, ``keepopinfo``, ``trytocompact``,
             ``notrnoise``, ``devnoise``), ``seed`` as a positive int (the
             transient-noise seed; no ``"random"``) and ``devnt`` (the
             device-noise grid step, s) as a positive number. ``False``
