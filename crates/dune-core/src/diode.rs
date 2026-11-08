@@ -110,10 +110,16 @@ fn egfet(t: f64) -> f64 {
 
 impl DiodeTemp {
     /// `DIOtemperature` (`diotemp.c`) + the `diosetup.c` clamps.
+    /// `area` is the instance AREA and `mult` the ngspice multiplier
+    /// `m` (1 on cards): both scale the saturation current and the
+    /// series conductance, but only `area` enters the breakdown match
+    /// (`IBV` is absolute, `M·IBV` in ngspice).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: &str,
         model: &DiodeModel,
         area: f64,
+        mult: f64,
         temp: f64,
         default_tnom: f64,
         reltol: f64,
@@ -172,13 +178,27 @@ impl DiodeTemp {
         let t_dep_cap = fc * t_jct_pot;
         let vte = model.n * vt;
         let vcrit = vte * f64::ln(vte / (ROOT2 * t_sat_cur));
-        let gspr = if model.rs == 0.0 { 0.0 } else { 1.0 / model.rs } * area;
+        let gspr = if model.rs == 0.0 { 0.0 } else { 1.0 / model.rs } * area * mult;
 
-        // Match the exponential and linear breakdown regions.
+        // Match the exponential and linear breakdown regions: find
+        // `xbv` with `IS·(exp((BV−xbv)/(N·vt)) − 1 + xbv/vt) = IBV`, so
+        // that the breakdown branch of the load,
+        // `cd = −csat·exp(−(xbv+vd)/(N·vt))`, carries IBV at `vd = −BV`.
+        // Two corrections of `diotemp.c` that ngspice-47 carries
+        // (corpus/KNOWN_DIFFS.md, gates in `regress/diobv_*`):
+        // - the emission coefficient: the 3f5 matches with plain `vt`
+        //   while its load uses `N·vt`, so for `N ≠ 1` the current at
+        //   −BV is `IS·(IBV/IS)^(1/N)`, not IBV; ngspice's `NBV·vt`
+        //   (`NBV` defaults to `N`, `diosetup.c`) is used here.
+        // - the area: the 3f5 matches the per-area `DIOtSatCur` against
+        //   the absolute IBV, so the current at −BV is `AREA·IBV`
+        //   (`spice.txt` scales only IS/RS/CJO); ngspice matches
+        //   `IS·AREA·M` against `M·IBV`.
         let brkdwn = model.bv.map(|bv| {
             let mut cbv = model.ibv;
-            if cbv < t_sat_cur * bv / vt {
-                cbv = t_sat_cur * bv / vt;
+            let sat = t_sat_cur * area;
+            if cbv < sat * bv / vt {
+                cbv = sat * bv / vt;
                 notes.push(format!(
                     "{name}: breakdown current increased to {cbv:.3e} to resolve \
                      incompatibility with specified saturation current"
@@ -186,11 +206,12 @@ impl DiodeTemp {
                 bv
             } else {
                 let tol = reltol * cbv;
-                let mut xbv = bv - vt * f64::ln(1.0 + cbv / t_sat_cur);
+                let vtebrk = model.n * vt;
+                let mut xbv = bv - vtebrk * f64::ln(1.0 + cbv / sat);
                 let mut matched = false;
                 for _ in 0..25 {
-                    xbv = bv - vt * f64::ln(cbv / t_sat_cur + 1.0 - xbv / vt);
-                    let xcbv = t_sat_cur * (f64::exp((bv - xbv) / vt) - 1.0 + xbv / vt);
+                    xbv = bv - vtebrk * f64::ln(cbv / sat + 1.0 - xbv / vt);
+                    let xcbv = sat * (f64::exp((bv - xbv) / vtebrk) - 1.0 + xbv / vt);
                     if (xcbv - cbv).abs() <= tol {
                         matched = true;
                         break;
@@ -207,7 +228,7 @@ impl DiodeTemp {
         });
 
         DiodeTemp {
-            csat: t_sat_cur * area,
+            csat: t_sat_cur * area * mult,
             gspr,
             vt,
             vte,
@@ -245,7 +266,8 @@ pub(crate) struct DiodeI {
     d: DioDistoCoeffs,
     /// What `DIOtemp` is recomputed from when `.sens` perturbs a
     /// parameter: the model, the instance temperature (K), the
-    /// ngspice multiplier `m` (1 on cards; it scales like the area)
+    /// ngspice multiplier `m` (1 on cards; it scales like the area
+    /// except in the breakdown match, where `M·IBV` cancels it)
     /// and the circuit `TNOM`/`RELTOL`.
     sens: DiodeSensBase,
 }
@@ -588,7 +610,8 @@ impl crate::devices::Device for DiodeI {
         let t = DiodeTemp::new(
             &b.name,
             &b.model,
-            self.area * b.m,
+            self.area,
+            b.m,
             b.temp,
             b.default_tnom,
             b.reltol,
@@ -887,7 +910,7 @@ mod tests {
     #[test]
     fn temp_adjust_is_identity_at_reftemp() {
         let m = DiodeModel::default();
-        let t = DiodeTemp::new("d1", &m, 1.0, 300.15, 300.15, 1e-3);
+        let t = DiodeTemp::new("d1", &m, 1.0, 1.0, 300.15, 300.15, 1e-3);
         assert_eq!(t.csat, m.is);
         let vte = m.n * KOVERQ * 300.15;
         assert!((t.vcrit - vte * (vte / (ROOT2 * m.is)).ln()).abs() < 1e-15);
@@ -898,6 +921,50 @@ mod tests {
         assert!(t.notes.is_empty());
     }
 
+    /// The breakdown match (`diotemp.c`) with ngspice-47's two
+    /// corrections: the knee uses `N·vt` like the load, and the
+    /// absolute IBV is matched against `IS·AREA`. The load's
+    /// breakdown branch then carries IBV at `vd = −BV`; the 3f5 forms
+    /// put the knee 0.397 V (N = 1.47) and `vt·ln 10` (AREA = 10) off
+    /// (`regress/diobv_dc`: FAIL 495 / 197 with them, PASS 0.476).
+    #[test]
+    fn breakdown_carries_ibv_at_bv() {
+        let vt = KOVERQ * 300.15;
+        let cases = [
+            // (is, n, ibv, area, xbv of the 3f5 form)
+            (6.79e-18, 1.47, 1e-3, 1.0, 49.156_224_229_991_27),
+            (1e-14, 1.0, 1e-4, 10.0, 50.0 - vt * f64::ln(1e10)),
+        ];
+        for (is, n, ibv, area, xbv_3f5) in cases {
+            let m = DiodeModel {
+                is,
+                n,
+                bv: Some(50.0),
+                ibv,
+                ..DiodeModel::default()
+            };
+            let t = DiodeTemp::new("dz", &m, area, 1.0, 300.15, 300.15, 1e-3);
+            let xbv = t.brkdwn.expect("bv given");
+            let cd = t.csat * f64::exp(-(xbv - 50.0) / t.vte);
+            assert!((cd - ibv).abs() <= 1e-3 * ibv, "cd(-BV) = {cd:e}");
+            assert!(t.notes.is_empty());
+            let shift = xbv_3f5 - xbv;
+            let want = (n - 1.0) * vt * f64::ln(ibv / is) - vt * f64::ln(area);
+            assert!((shift - want).abs() < 1e-3, "shift {shift} vs {want}");
+        }
+        // The symptom deck (`i 1.6 A`, is=6.79e-18 n=1.47 bv=50):
+        // 50.2805 V against the 3f5's 50.6771 V.
+        let m = DiodeModel {
+            is: 6.79e-18,
+            n: 1.47,
+            bv: Some(50.0),
+            ..DiodeModel::default()
+        };
+        let t = DiodeTemp::new("dz", &m, 1.0, 1.0, 300.15, 300.15, 1e-3);
+        let v = t.brkdwn.unwrap() + t.vte * f64::ln(1.6 / t.csat);
+        assert!((v - 50.2805).abs() < 1e-4, "{v}");
+    }
+
     #[test]
     fn setup_clamps_warn() {
         let m = DiodeModel {
@@ -906,7 +973,7 @@ mod tests {
             fc: 0.99,
             ..DiodeModel::default()
         };
-        let t = DiodeTemp::new("dx", &m, 1.0, 300.15, 300.15, 1e-3);
+        let t = DiodeTemp::new("dx", &m, 1.0, 1.0, 300.15, 300.15, 1e-3);
         assert_eq!(t.notes.len(), 3);
         assert_eq!(t.m, 0.9);
         assert!((t.f3 - (1.0 - 0.95 * 1.9)).abs() < 1e-12);
