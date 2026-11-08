@@ -136,6 +136,18 @@ Sffm}(Vec<f64>)` (argumentos posicionais do cartão),
 5. **`as_`** (keyword Rust): sai como `as` nas bordas. Manter.
 6. **BJT de 3 nós**: na construção programática o substrato é
    explícito (passe `"0"`); o parser preenche sozinho. Manter.
+7. **Temperatura de instância fora dos specs** *(proposta futura,
+   2026-11-08 — pede decisão)*: o `DTEMP=` do ngspice-47 (R, diodo,
+   BJT, JFET, MOS1/2/3/6) e o modelo/`TEMP=` do R entram hoje só
+   pelo front-end do netlist, por tabelas crate-privadas do
+   `Circuit` (`res_temp: ResTemp {tc1, tc2, tnom, temp, dtemp}` e
+   `dtemp: nome → K`, padrão do `ic_given`); os specs públicos não
+   mudaram. Quem constrói o circuito por spec tipado não alcança
+   `DTEMP`, nem TC/`TEMP=` do R. Extensão proposta, quando o
+   usuário pedir: `dtemp: Option<f64>` nos specs que já têm `temp`
+   e `Resistor { model: Option<ResModel>, temp, dtemp }` (com
+   `ResModel {rsh, defw, narrow, tc1, tc2, tnom}`), espelhado nos
+   bindings no mesmo PR.
 
 ## Regras para as bordas (FFI/wasm/R/Py)
 

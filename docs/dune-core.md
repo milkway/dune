@@ -247,12 +247,15 @@ resultados espelhando o rawfile).
   gerador único integra o próprio total); MOS6 não tem em nenhum dos
   dois. **Temperatura dos térmicos** (`NevalSrcInstanceTemp` do
   ngspice-47): R, BJT (rc/rb/re), diodo (rs), JFET (rd/rs/id) e
-  MOS1/2/3 (rd/rs/id) usam o `TEMP=` da instância quando o cartão o
-  dá (`*Temp::temp`, `NoiseCtx::thermal_at`); MESFET, chaves, BSIM1/2
-  e BSIM3 ficam em `CKTtemp` (`NevalSrc` puro), como no C; shot e
-  flicker não dependem de T. O R do Dune não tem `TEMP=` por
-  instância e `DTEMP` não é lido (no ngspice `T = CKTtemp + DTEMP`
-  sem `TEMP=`), então hoje é sempre `CKTtemp` ou o `TEMP=` dado.
+  MOS1/2/3 (rd/rs/id) usam a temperatura da instância — `TEMP=`
+  quando o cartão o dá, senão `CKTtemp + DTEMP` (`*Temp::temp`,
+  `NoiseCtx::thermal_at`); MESFET, chaves, BSIM1/2 e BSIM3 ficam em
+  `CKTtemp` (`NevalSrc` puro), como no C; shot e flicker não
+  dependem de T. O R segue o `resnoise.c` do ngspice-47 (`dtemp =
+  REStemp − CKTtemp` com `TEMP=`, senão `RESdtemp`; condutância
+  `RESconduct`, já com o fator de TC) — o 3f5 usava `CKTtemp`
+  (KNOWN_DIFFS; `regress/rnoisetemp` PASS 0.004, com `CKTtemp` no R
+  FALHA a 111.9).
   **BSIM1/2 contra o oráculo:** o `bsim1def.h` define `B1gm`/`B1cd`
   como *offsets* de estado (`#define B1gm B1states+ 7`), e o
   `b1noi.c` lê `fabs(inst->B1gm * inst->B1m)` = `GENstate + 7` e
@@ -393,7 +396,20 @@ resultados espelhando o rawfile).
   → erro estruturado. Quirks dos dois C mantidos (LIN multiplica o
   passo — `LINEAR` vs `SENS_LINEAR` —, OCT multiplica por ln2 onde
   devia dividir; `rs` do diodo sem efeito, condutância fixada no
-  setup). **Diverge do oráculo onde o ngspice está quebrado** (AC
+  setup). Parâmetros de temperatura do R (contrato medido no C,
+  2026-11-08): o `cktsens.c` do 3f5 chama `sens_setp` (`:399`) e
+  depois `sens_temp` (`:420`, `DEVtemperature` = `REStemp`) antes de
+  recarregar, e o `REStemp` refaz `RESconduct` com o `tc1`/`tc2` do
+  modelo (`resmpar.c`, `IOPQ`/`IOPQO`) ou o `temp` da instância
+  (`resparam.c`, `IOPZU`) movidos — os três são **vivos** no 3f5 e
+  no Dune (`ResistorI::sens_set`; `d/dTC1 = ∂V/∂R·R·ΔT`, `d/dTC2 =
+  ∂V/∂R·R·ΔT²`, `d/dTEMP = ∂V/∂R·R·(TC1 + 2·TC2·ΔT)`); `_temp` move
+  a temperatura efetiva (com `DTEMP`, o ngspice salta −DTEMP);
+  `_dtemp` inerte (o ngspice dá 0 na varredura completa); `:tce`
+  (só-ngspice) inerte — no ngspice ele liga `REStceGiven` para
+  sempre e estraga as perturbações seguintes do modelo, daí os
+  filtros de `regress/sens_rtemp` (PASS a ≤5e-7 da régua; inertes
+  FALHA a 500). **Diverge do oráculo onde o ngspice está quebrado** (AC
   com não-lineares zerados, K e G/F errados — verificado por
   diferença finita de dois `.ac` do próprio ngspice; 6 entradas no
   KNOWN_DIFFS). Sondas: `sens_dc` (divisor+diodo), `sens_ac` (1
@@ -779,13 +795,14 @@ oráculo contra o ngspice.
   código; o `spice.txt` diz 1e-6), e sem RSH ou L o aviso do C
   "resistance=0, set to 1000". Com ou sem valor, a condutância é
   `1/(R·factor)`, `factor = 1 + TC1·ΔT + TC2·ΔT²`, `ΔT = T − TNOM`,
-  `T` = `TEMP=` da instância ou a do circuito. O fator mora em
-  `ResistorI::factor` (o `RESupdate_conduct` do ngspice: `g =
-  m/(R·factor·scale)`, AC idem); a temperatura da instância e os
-  TC vêm da elaboração por uma tabela lateral crate-privada
+  `T` = `TEMP=` da instância, senão a do circuito mais o `DTEMP=`
+  do ngspice. O fator é recalculado em `ResistorI::update_conduct`
+  (o `RESupdate_conduct` do ngspice: `g = m/(R·factor·scale)`, AC
+  idem) a partir de `ResTemp {tc1, tc2, tnom, temp, dtemp}`, que
+  vem da elaboração por uma tabela lateral crate-privada
   (`Circuit::res_temp`, como o `ic_given`) — **o spec público
-  `Resistor` não mudou** (ponto de pausa de API: estender o spec
-  tipado com modelo/temp fica para quando o usuário pedir). R sem
+  `Resistor` não mudou** (ponto de pausa de API: a extensão do spec
+  tipado está proposta em `docs/fase4-api.md`, item 7). R sem
   modelo e sem valor segue erro (o 3f5 daria 1 kΩ calado).
 - **C com modelo** (`captemp.c`, `capsetup.c`, `capmpar.c`): modelo
   `c` com `CJ CJSW DEFW NARROW`; sem valor,
@@ -828,18 +845,60 @@ oráculo contra o ngspice.
   `regress/keepop` (PASS 0.012 / 0.005); pz/disto/noise medidos à
   mão contra o ngspice (PASS) e pinados em `tests/cards.rs`.
 
+## Temperatura de instância (2026-11-08)
+
+- **Quem tem `TEMP=` de instância no 3f5** (tabelas `IFparm` com
+  `IOPU("temp")`): `res/res.c:15`, `dio/dio.c:14`, `bjt/bjt.c:71`,
+  `jfet/jfet.c:22`, `mos1/mos1.c:26`, `mos2/mos2.c:37`,
+  `mos3/mos3.c:38`, `mos6/mos6.c:37`. BSIM1/BSIM2 têm `temp` só como
+  parâmetro **de modelo** (`bsim1/b1.c:97`, `bsim2/b2.c:163`, em °C;
+  o Dune já lia); MESFET, chaves, linhas e fontes não têm. O Dune já
+  lia todos os oito (specs `temp`, `*Temp::new(…, temp, tnom)` refaz
+  o `*temp.c` da instância); faltava sonda `.op`/`.dc` para BJT,
+  MOS1, MOS2 e MOS6: `regress/itemp_dc` (gêmeos quentes/frios contra
+  gêmeos na temperatura do circuito, `.options temp=40`) PASS 0.609;
+  sem o `TEMP=` dos dispositivos FALHA de 78 a 498. O sweep começa em
+  0.65 V: abaixo disso o BJT cai no nível de gmin e aparece o gmin de
+  substrato do ngspice (KNOWN_DIFFS, já conhecido). Correção de
+  fidelidade de passagem: `TEMP=`/`DTEMP=` num M de BSIM1/BSIM2 era
+  descartado calado; agora é "unknown parameter", como no 3f5 e no
+  ngspice (medido) e como o BSIM3 já fazia.
+- **`DTEMP=`** (só ngspice-47; `IOPU("dtemp")` em `res.c:18`,
+  `dio.c:15`, `bjt.c:74`, `jfet.c:23`, `mos1.c:28`, `mos2.c:39`,
+  `mos3.c:40`, `mos6.c:38` — e em `cap.c`/`ind.c` e dispositivos fora
+  do contrato; MES, BSIM1/2/3 não têm). Semântica do C (`diotemp.c:
+  291-294`, `bjttemp.c:75-79`, `jfettemp.c:83-88`, `mos1temp.c:129-
+  134` e iguais): `if (!tempGiven) temp = CKTtemp + dtemp` — `TEMP=`
+  ganha quando os dois aparecem; o `restemp.c:35-49` ainda zera o
+  `RESdtemp` e avisa "Instance temperature specified, dtemp ignored"
+  (o Dune emite a mesma nota). A diferença é em kelvin/°C, sem
+  offset (`*param.c`). Implementado sem mexer nos specs públicos:
+  `Circuit::dtemp` (nome → ΔT) alimentado pelo `elaborate.rs`, lido
+  por `Circuit::instance_temp` nos sete construtores; o R leva o
+  `dtemp` no `ResTemp`. Como o `.dc temp` reconstrói os
+  dispositivos com o `CKTtemp` novo, a instância com `DTEMP`
+  acompanha a varredura (a com `TEMP=` não). `dtemp` virou keyword
+  no parser de R/C (como `temp`: não é nome de modelo). C/L seguem
+  sem temperatura (nota "ignored"). Sonda `regress/dtemp_op` (os oito
+  dispositivos + `TEMP=`/`DTEMP=` juntos no R e no diodo) PASS 0.387;
+  sem `DTEMP` FALHA de 32 a 495; com `DTEMP` ganhando FALHA a 132/500.
+- **Ruído do R** e **`.sens` do R**: ver as seções de ruído e de
+  `.sens` acima (contratos com arquivo/linha; sondas
+  `regress/rnoisetemp`, `regress/sens_rtemp`).
+
 ## Pendências (fases seguintes)
 
 - Variantes do ngspice não modeladas: `ngbehavior=spice3` (forma
   3f5 do flicker MOS); `XPART` do BSIM1 como flag (`IF_FLAG`:
   `xpart=0` presente já liga 0/100, medido) — o Dune decide pelo
   valor (`≥1`), ver KNOWN_DIFFS, e as sondas evitam `xpart=0`.
-- `DTEMP` de instância no parser (muda superfície de API das
-  specs); `.sens` dos parâmetros de temperatura do R (`_temp`,
-  `:tc1`, `:tc2` seguem inertes — derivada nula mesmo com TC≠0);
-  ruído térmico do R na temperatura da instância (ngspice usa
-  `REStemp`; o 3f5 usa `CKTtemp`, que é o que o Dune faz). Espelho
-  de `keepopinfo` nas listas de override dos bindings (Py/R/wasm).
+- ~~`DTEMP` de instância~~, ~~`.sens` dos parâmetros de temperatura
+  do R~~, ~~ruído térmico do R na temperatura da instância~~ — feitos
+  em 2026-11-08 (seção "Temperatura de instância"). Fica: o `DTEMP`
+  e o modelo/`TEMP=` do R nos specs tipados (proposta em
+  `docs/fase4-api.md`, item 7); gmin do ngspice na junção de
+  substrato do BJT (KNOWN_DIFFS). Espelho de `keepopinfo` nas listas
+  de override dos bindings (Py/R/wasm).
 - JFET nível 2 (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são
   ngspice, fora do contrato 3f5. (Linha U e fonte B entraram em
   2026-11-08 — seções próprias.)
