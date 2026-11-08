@@ -1,0 +1,11 @@
+LTRA RLC line, linear interpolation, no compaction
+* The reference for ltra_compact.cir: the same line and stimulus with
+* LININTERP on the model and no trytocompact, so the two decks differ
+* only by the history compaction.
+v1 1 0 pulse(0 1 2ns 1ns 1ns 40ns 100ns)
+rs 1 2 50
+o1 2 0 3 0 lline
+rl 3 0 50
+.model lline ltra r=0.5 l=9.13e-9 c=3.65e-12 len=1 lininterp
+.tran 0.2ns 100ns
+.end

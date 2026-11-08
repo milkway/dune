@@ -1,0 +1,15 @@
+Title: off diode reverse-biased by a dc source - cktop fallback: source stepping
+Date: Sun Nov  8 10:50:40  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 3
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	i(v1)	current
+Values:
+0		1.000000000000000e+01
+	9.999999989990000e+00
+	-1.000999994005269e-11

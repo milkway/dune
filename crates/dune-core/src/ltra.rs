@@ -31,11 +31,14 @@
 //! The line keeps its own copy of the accepted-timepoint list (the
 //! C's global `CKTtimePoints`, which `DCtran` only maintains when an
 //! LTRA instance exists); each instance stores its port histories.
-//! Not ported: `.options trytocompact` history compaction (no corpus
-//! deck uses it — the option is reported as ignored), and
-//! `LTRAlteCalculate`: its LTE control needs `fullcontrol`/
-//! `halfcontrol`, which the 3f5 (and ngspice) parameter tables never
-//! accept, so it is unreachable.
+//! `.options trytocompact` (`ltraacct.c`) is ported: after an accepted
+//! point where the last three samples of *every* line's port
+//! variables are straight (`LtraI::straight_tail`), the engine drops
+//! the middle sample of every line (`LtraI::drop_middle`) — the C's
+//! shared `CKTtimePoints` list, kept per instance here in lockstep.
+//! Not ported: `LTRAlteCalculate`: its LTE control needs
+//! `fullcontrol`/`halfcontrol`, which the 3f5 (and ngspice) parameter
+//! tables never accept, so it is unreachable.
 //!
 //! Dune's opt-in recursive mode (`Options::ltra_fit`, issue #8)
 //! replaces the RLC/RC coefficient walk with the exponential sums of
@@ -107,7 +110,7 @@ pub struct LtraModel {
     /// the timestep to the line delay `T`. The last flag wins.
     pub steplimit: bool,
     /// `LININTERP`/`QUADINTERP`/`MIXEDINTERP`; `None` = quadratic
-    /// (linear under `trytocompact`, which Dune does not implement).
+    /// (linear under `.options trytocompact`).
     pub interp: Option<LtraInterp>,
     /// `TRUNCNR`: Newton iterations for the LTE step estimate (only
     /// reachable with LTE control, which the parameter table never
@@ -190,6 +193,14 @@ pub(crate) struct LtraParams {
     interp: LtraInterp,
     trunc_dont_cut: bool,
     max_safe_step: f64,
+    /// `LTRAstLineReltol`/`LTRAstLineAbstol` (`COMPACTREL`/
+    /// `COMPACTABS`, the circuit tolerances when 0): the straight-line
+    /// checks of the safe step and of `trytocompact`.
+    st_line_reltol: f64,
+    st_line_abstol: f64,
+    /// Whether the model card gave an interpolation flag (`LTRAsetup`
+    /// only picks the default when none was given).
+    interp_given: bool,
     /// Setup warnings (`IFerror(ERR_WARNING, …)`).
     pub notes: Vec<String>,
 }
@@ -321,6 +332,9 @@ impl LtraParams {
             interp,
             trunc_dont_cut: m.truncdontcut,
             max_safe_step: 0.0,
+            st_line_reltol,
+            st_line_abstol,
+            interp_given: m.interp.is_some(),
             notes,
         };
 
@@ -379,6 +393,19 @@ impl LtraParams {
             }
         }
         Ok(p)
+    }
+
+    /// `.options trytocompact` in `LTRAsetup` (`ltraset.c:55-72`, the
+    /// same in the 3f5): a model without an interpolation flag takes
+    /// linear interpolation instead of quadratic, with the C's warning.
+    pub fn try_to_compact(&mut self) {
+        if !self.interp_given {
+            self.interp = LtraInterp::Linear;
+            self.notes.push(format!(
+                "{}: using linear interpolation because trytocompact option specified",
+                self.name
+            ));
+        }
     }
 }
 
@@ -2150,6 +2177,18 @@ impl Device for LtraI {
         ctx.add_g(s.neg2_ibr2, -1.0);
     }
 
+    fn compact_ready(&self) -> Option<bool> {
+        self.straight_tail()
+    }
+
+    fn compact(&mut self) {
+        self.drop_middle();
+    }
+
+    fn history_len(&self) -> Option<usize> {
+        Some(self.times.len())
+    }
+
     /// `LTRAaccept`: store the accepted point in the history and, when
     /// the slope of an incident wave `(v + Z0·i)·e^{−βT}` changes,
     /// plant a breakpoint one delay after the *previous* point (where
@@ -2195,6 +2234,40 @@ impl Device for LtraI {
 }
 
 impl LtraI {
+    /// `trytocompact`'s test in `LTRAaccept` (`ltraacct.c:84-127`):
+    /// whether the last three samples of `v1`, `v2`, `i1` and `i2`
+    /// each lie on a straight line in time within the model's
+    /// `COMPACTREL`/`COMPACTABS` (`LTRAstraightLineCheck`). `None` when
+    /// the line takes no part (fewer than three samples — the C's
+    /// `CKTtimeIndex >= 2` —, the recursive mode, or a `.pss` run).
+    fn straight_tail(&self) -> Option<bool> {
+        let n = self.times.len();
+        if n < 3 || self.fit_on || self.periodic {
+            return None;
+        }
+        let (t1, t2, t3) = (self.times[n - 3], self.times[n - 2], self.times[n - 1]);
+        let (rt, at) = (self.p.st_line_reltol, self.p.st_line_abstol);
+        let straight =
+            |y: &[f64]| straight_line_check(t1, y[n - 3], t2, y[n - 2], t3, y[n - 1], rt, at);
+        Some(straight(&self.v1) && straight(&self.v2) && straight(&self.i1) && straight(&self.i2))
+    }
+
+    /// The compaction itself (`ltraacct.c:262-285`): the newest sample
+    /// overwrites the middle one, which leaves the history.
+    fn drop_middle(&mut self) {
+        let n = self.times.len();
+        debug_assert!(n >= 3);
+        for h in [
+            &mut self.times,
+            &mut self.v1,
+            &mut self.v2,
+            &mut self.i1,
+            &mut self.i2,
+        ] {
+            h.swap_remove(n - 2);
+        }
+    }
+
     /// `LTRAaccept`'s test at history point `idx ≥ 1`: whether the
     /// slope of an incident wave changed enough (and the wave is not
     /// a straight line within tolerance) to want a breakpoint one

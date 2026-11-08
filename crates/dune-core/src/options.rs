@@ -26,11 +26,16 @@ pub struct Options {
     /// `ITL4`: transient timepoint iteration limit, default 10
     /// (`CKTtranMaxIter`).
     pub itl4: usize,
-    /// Gmin steps in `CKTop`. 1 (the ngspice default) selects the
-    /// dynamic Gillespie stepping; n > 1 runs the 3f5 fixed ladder
-    /// with n steps (`corpus/KNOWN_DIFFS.md`).
+    /// Gmin steps in `CKTop`. 1 (the ngspice-47 default) selects the
+    /// dynamic Gillespie stepping of the diagonal gmin followed, if it
+    /// fails, by the "true gmin" stepping of the devices' `gmin`;
+    /// n > 1 runs the 3f5 fixed ladder with n steps; 0 skips gmin
+    /// stepping (`corpus/KNOWN_DIFFS.md`).
     pub gminsteps: usize,
-    /// Source steps in `CKTop`, default 10 (`TSKnumSrcSteps`).
+    /// Source steps in `CKTop`. 1 (the ngspice-47 default,
+    /// `cktntask.c`) selects Gillespie's adaptive source ramp; n > 1
+    /// runs the 3f5 fixed ladder of n steps (the 3f5 default is 10);
+    /// 0 skips source stepping (`corpus/KNOWN_DIFFS.md`).
     pub srcsteps: usize,
     /// Operating temperature in kelvin (`TEMP`, default 27 °C).
     pub temp: f64,
@@ -155,6 +160,14 @@ pub struct Options {
     /// "Distortion Operating Point", "NOISE Operating Point").
     /// Default false.
     pub keepopinfo: bool,
+    /// `TRYTOCOMPACT` (`cktsopt.c`, IF_FLAG; `CKTtryToCompact`): LTRA
+    /// lines without an explicit interpolation flag interpolate
+    /// linearly, and after every accepted timepoint where the last
+    /// three points of every LTRA port voltage and current lie on a
+    /// straight line within `COMPACTREL`/`COMPACTABS`, the middle
+    /// point is dropped from the shared history (`ltraacct.c`). Default
+    /// false. Ignored under [`Options::ltra_fit`] and in `.pss`.
+    pub trytocompact: bool,
 }
 
 impl Default for Options {
@@ -168,7 +181,7 @@ impl Default for Options {
             itl2: 50,
             itl4: 10,
             gminsteps: 1,
-            srcsteps: 10,
+            srcsteps: 1,
             temp: REFTEMP,
             tnom: REFTEMP,
             pivtol: 1e-13,
@@ -193,6 +206,7 @@ impl Default for Options {
             dev_noise: false,
             dev_noise_step: None,
             keepopinfo: false,
+            trytocompact: false,
         }
     }
 }
@@ -349,6 +363,7 @@ impl Options {
                 "noopiter" => self.noopiter = true,
                 // IF_FLAG: a bare word (or `keepopinfo=0|1`).
                 "keepopinfo" => self.keepopinfo = num.is_none_or(|v| v != 0.0),
+                "trytocompact" => self.trytocompact = num.is_none_or(|v| v != 0.0),
                 "nopage" => self.nopage = true,
                 // `cktsopt.c` has a copy-paste bug that makes `defas`
                 // set the drain area; ngspice fixed it and so do we

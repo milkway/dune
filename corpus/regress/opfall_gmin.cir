@@ -1,0 +1,16 @@
+floating off-diode chain - CKTop fallback: true gmin stepping
+* Nodes 2 and 3 have no DC path but the junctions' own gmin: they sit
+* at the 1000 V rail. The diagonal gmin of the dynamic stepping pulls
+* them to ground instead, reverse-biasing d1 past its BV=1000 into
+* breakdown, and with both diodes `off` the INITFIX pass never settles
+* (direct Newton fails too). ngspice-47 (set ngdebug): dynamic gmin
+* fails at every factor, the true gmin stepping (new_gmin, cktop.c,
+* stepping the devices' CKTgmin from 1e-3) completes.
+v1 1 0 1000
+r1 1 0 1k
+d1 1 2 dhv off
+d2 2 3 dlo off
+.model dlo d(is=2.63e-17 n=1.02 rs=0.0163 bv=50)
+.model dhv d(is=5.37e-11 n=1.05 rs=0.085 bv=1000)
+.op
+.end

@@ -1,0 +1,17 @@
+off diode reverse-biased by a dc source - CKTop fallback: source stepping
+* An `off` junction is held at vd = 0 through INITFIX (dioload.c),
+* where DIOconvTest compares cd = 0 with cdhat = gd*(vd_nodes - 0):
+* with the source at full value the node sits at 10 V and the test
+* fails at every iteration, so Newton never leaves INITFIX. Diagonal
+* gmin (dynamic) and device gmin (true) stepping change gd, not the
+* bias, and fail the same way. Gillespie source stepping (srcsteps=1,
+* the ngspice-47 default) first solves with the source at zero, where
+* the held vd = 0 is the solution, leaves INITFIX, and ramps srcFact
+* 0.1% -> 100% in 17 steps (set ngdebug in ngspice-47 shows the same
+* sequence).
+v1 1 0 10
+r1 1 2 1k
+d1 0 2 dmod off
+.model dmod d(is=1e-14 n=1)
+.op
+.end

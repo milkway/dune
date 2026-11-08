@@ -1,0 +1,17 @@
+LTRA RLC line under .options trytocompact
+* Pins the history compaction of ltraacct.c (CKTtryToCompact): with
+* no interpolation flag on the model, LTRAsetup switches to linear
+* interpolation (and warns); after every accepted point where the last
+* three samples of v1, v2, i1, i2 are straight within COMPACTREL/
+* COMPACTABS (default RELTOL/ABSTOL), the middle one leaves the
+* history. The flat tops and bottoms of the pulse are where it
+* compacts. ltra_lin.cir is the same deck with LININTERP and no
+* compaction; dune-core's engine tests measure both histories.
+v1 1 0 pulse(0 1 2ns 1ns 1ns 40ns 100ns)
+rs 1 2 50
+o1 2 0 3 0 lline
+rl 3 0 50
+.model lline ltra r=0.5 l=9.13e-9 c=3.65e-12 len=1
+.options trytocompact
+.tran 0.2ns 100ns
+.end

@@ -43,6 +43,22 @@ pub(crate) trait Device: Send {
     /// Accepted-timepoint hook; sources plant breakpoints here
     /// (`*acct.c`).
     fn accept(&mut self, _ctx: &mut AcceptCtx) {}
+    /// `.options trytocompact` (`ltraacct.c`): whether this device's
+    /// convolution history ends in three samples on a straight line.
+    /// `None` (default) for devices that take no part — every one but
+    /// an LTRA line with three or more samples.
+    fn compact_ready(&self) -> Option<bool> {
+        None
+    }
+    /// Drop the middle of the last three history samples (called on
+    /// every participating device at once, when all are ready).
+    fn compact(&mut self) {}
+    /// The length of the device's accepted-point history, if it keeps
+    /// one (tests and statistics; LTRA lines).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn history_len(&self) -> Option<usize> {
+        None
+    }
     /// The corner times of the device's transient waveform inside
     /// `(t0, t1)` (PULSE corners, PWL vertices), for a transient that
     /// starts at `t0 > 0` from a given state (the `.pss` shooting
