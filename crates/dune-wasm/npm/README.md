@@ -79,7 +79,10 @@ await ready(wasmUrl);
 - Engine overrides, in the `opts` of every `simulate*` and `Session.from*`
   (0.3.3): `options` — `.options` keys applied after the deck's cards
   (`{ trtol: 1, method: 'gear', temp: 50 }`, °C; a bad entry is a warning
-  in `diagnostics`, not a throw) — and `tmaxDivisor` — a number ≥ 1 that
+  in `diagnostics`, not a throw; every key a `.options` card takes,
+  including Dune's `method: 'trbdf2'`, `ltrafit`, `ltrabkrate`,
+  `keepopinfo`, `seed`, `notrnoise`, `devnoise` and `devnt`) — and
+  `tmaxDivisor` — a number ≥ 1 that
   divides every `.tran`'s maximum step (the card's TMAX, else
   `min(TSTEP, span/50)`). `{ options: { trtol: 1 }, tmaxDivisor: 10 }` is
   bit for bit the deck with `.options trtol=1` and the `.tran` card's TMAX

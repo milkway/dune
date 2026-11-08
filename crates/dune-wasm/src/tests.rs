@@ -1086,10 +1086,12 @@ fn pss_entry_of_an_autonomous_oscillator() {
     assert!(json.contains("\"pss\":[]"), "{json}");
 }
 
-/// The `.pss` mapping repeated in `pss_params` is `Circuit::run`'s:
-/// every `.pss` deck of the corpus gives the same plots and notes as
-/// the engine's own dispatch, and a Session the same result as a
-/// fresh run.
+/// `.pss` cards go through the engine's one card path
+/// (`Circuit::run_card`): every `.pss` deck of the corpus gives the
+/// plots and notes of `Circuit::run`, one `pss` entry per card with
+/// `run_card`'s period and `t0`, and a Session the same result as a
+/// fresh run. (The card→`PssParams` mapping itself is pinned in
+/// `dune-core`'s `tests/run.rs`.)
 #[test]
 fn pss_cards_run_as_the_engine_runs_them() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus/pss");
@@ -1109,20 +1111,21 @@ fn pss_cards_run_as_the_engine_runs_them() {
         opts.apply(&parsed.netlist.options, &mut Vec::new());
         let mut want_notes = notes;
         let mut want = Vec::new();
+        let mut periods = Vec::new();
         for a in &parsed.netlist.analyses {
-            let (sols, n) = circuit.run(a, &opts).unwrap();
+            let card = circuit.run_card(a, &opts).unwrap();
+            if let dune_core::CardOutput::Pss(p) = &card {
+                periods.push((p.period, p.t0));
+            }
+            let (sols, n) = card.into_plots();
             want.extend(sols.iter().map(|s| s.to_plot(&parsed.netlist.title, "")));
             want_notes.extend(n);
         }
         assert_eq!(data.plots, want, "{}", path.display());
         assert_eq!(data.notes, want_notes, "{}", path.display());
-        let cards = parsed
-            .netlist
-            .analyses
-            .iter()
-            .filter(|a| pss_params(a).is_some())
-            .count();
-        assert_eq!(data.pss.len(), cards);
+        assert!(!periods.is_empty(), "{}", path.display());
+        let got: Vec<_> = data.pss.iter().map(|p| (p.period, p.t0)).collect();
+        assert_eq!(got, periods, "{}", path.display());
         let mut s = SimSession::open(&text, &SimOptions::default()).unwrap();
         assert_eq!(
             s.run().unwrap().to_json(),

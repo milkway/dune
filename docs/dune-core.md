@@ -787,6 +787,37 @@ oráculo contra o ngspice.
    `vbin` do ngspice produz gm negativo com corrente nula e só
    converge com o dynamic gmin de lá; correntes idênticas).
 
+## Caminho único cartão → análise (`Circuit::run_card`, 2026-11-08)
+
+`run.rs` é o único lugar que lê um cartão de análise do IR e o
+traduz em chamada do motor. `Circuit::run_card(&Analysis, &Options)
+-> Result<CardOutput, Error>` devolve `CardOutput::Plots { plots,
+notes }` para todo cartão exceto `.pss`, e `CardOutput::Pss(Box<Pss>)`
+para o `.pss` — o resultado inteiro (período, `t0`, histórico do
+shooting), que os plots sozinhos não carregam. `Circuit::run` é
+`run_card(..).map(CardOutput::into_plots)` (o `.pss` vira `[tempo,
+espectro]`, como antes); `Session::run_card` é o mesmo com o warm
+start e a re-rodada fria após um miss do `Session::run_analysis`.
+O `keepopinfo` mora no `run_card` (não se aplica ao `.pss`).
+
+Antes, o wasm repetia a tradução cartão → `PssParams` (truncamento
+IF_INTEGER das contagens, defaults) para obter o `Pss` inteiro, com
+um teste-trava comparando as duas cópias; e a sua `Session` tinha uma
+re-rodada fria própria para o `.pss` (desligava e religava o warm
+start, esquecendo o ponto guardado). Agora o wasm chama
+`run_card`/`Session::run_card`; a trava virou
+`tests/run.rs::run_card_is_the_one_card_mapping` (contagens
+fracionárias truncadas, defaults, contagem negativa = erro, `run` =
+`run_card` = `Session::run_card` = `Session::run_analysis`, e o plot
+do `keepopinfo`). Python e R não duplicam: o `.pss` dos decks passa
+pelo `Circuit::run`, e `spice.pss()`/`spice_pss()` montam `PssParams`
+dos próprios argumentos, não de um cartão.
+
+Superfície pública nova (ponto de pausa, aguarda aprovação): o enum
+`CardOutput` (reexportado na raiz), `CardOutput::into_plots`,
+`Circuit::run_card` e `Session::run_card`. `pub(crate)` não basta
+porque o consumidor é outro crate (`dune-wasm`).
+
 ## Cartões e sweeps menores (2026-11-08)
 
 - **R com modelo** (`restemp.c`, `resmpar.c`, `resparam.c`): modelo
@@ -1277,9 +1308,10 @@ fundamental (VCO travado, injeção) seguem o caminho excitado — não
 há opção para forçar o autônomo com fontes; o modo de fase quase
 neutro do `osc_tline` converge devagar (×0,85/iteração, 16
 corridas) e pede aceleração; `.pss` com `devnoise` ligado não
-injeta nem recusa (decidir); `Circuit::run_card` devolvendo o
-`Pss` eliminaria o mapeamento duplicado do wasm; espelhos de
-`notrnoise`/`devnoise` nos bindings.
+injeta nem recusa (decidir). ~~`Circuit::run_card` devolvendo o
+`Pss`~~ e ~~espelhos de `notrnoise`/`devnoise` nos bindings~~:
+feitos (2026-11-08, §Caminho único cartão → análise e
+`docs/dune-sessao.md` §Opções nos bindings).
 
 ### Linhas de transmissão no `.pss` (issue #20)
 
@@ -1674,7 +1706,9 @@ entre segmentos do Welch, sem supor correlação entre bins):
 `corpus/SKIP`; regenerar com `DUNE_BLESS=1 cargo test -p dune-core
 --test devnoise`.
 
-**Pendências:** espelho nos bindings (Py/R/wasm — outro território);
+**Pendências:** ~~espelho nos bindings~~ (feito: `devnoise`/`devnt`
+nas listas de override de Py/R; o wasm já passava qualquer cartão —
+`docs/dune-sessao.md` §Opções nos bindings);
 `.pss` com `devnoise` não injeta (o `.pss` não passa pelo
 `Circuit::tran`; recusar lá é do dono do `pss.rs`); flicker do BSIM3
 `noiMod` 2/3/6; correlação entre geradores (nenhum dispositivo do

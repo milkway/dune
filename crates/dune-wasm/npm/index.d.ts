@@ -116,8 +116,11 @@ export interface RenderOptions {}
  * `vntol`, `gmin`, `itl1`, `itl2`, `itl4`, `gminsteps`, `srcsteps`, `temp` and
  * `tnom` (°C), `pivtol`, `pivrel`, `noopiter`, `trtol`, `chgtol`, `method`
  * (`"trap"` | `"gear"` | `"trbdf2"`), `maxord`, `ltrabkrate`, `ltrafit`,
- * `nopage`, `defl`, `defw`, `defad`, `defas`. A number is taken exactly; a
- * string as the card's text (`"1u"`); `true` is the bare flag, `false` clears it.
+ * `nopage`, `defl`, `defw`, `defad`, `defas`, `keepopinfo` (the small-signal
+ * analyses emit their operating point first), `seed` (transient-noise seed, an
+ * integer ≥ 1; no `"random"`), `notrnoise`, `devnoise` and `devnt` (device
+ * noise in `.tran` and its grid step, s). A number is taken exactly; a string
+ * as the card's text (`"1u"`); `true` is the bare flag, `false` clears it.
  */
 export type EngineOptions = Record<string, number | string | boolean>;
 

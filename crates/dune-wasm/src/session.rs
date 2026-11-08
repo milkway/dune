@@ -9,14 +9,14 @@
 //! deck: the elaboration notes and the parser/`.options` warnings of
 //! the original deck come with every run.
 
-use dune_core::{AlterValue, Pss, PssParams, Session, WarmStats};
+use dune_core::{AlterValue, Session, WarmStats};
 use wasm_bindgen::prelude::*;
 
 use crate::overrides::{Overrides, check_divisor};
 use crate::schema::{PicJson, PicSimOptions, SimError, SimOptions};
 use crate::{
-    Card, Outcome, Prepared, RunData, extract_runnable, guarded, js_error, opts_text,
-    parse_options, prepare, pss_params, to_js, typed_result,
+    Outcome, Prepared, RunData, extract_runnable, guarded, js_error, opts_text, parse_options,
+    prepare, to_js, typed_result,
 };
 
 /// A live circuit: [`dune_core::Session`] plus what a fresh run's
@@ -179,32 +179,11 @@ impl SimSession {
         guarded(|| {
             let mut out = Outcome::new(self.base.notes.clone());
             for analysis in self.session.analyses().to_vec() {
-                let card = match pss_params(&analysis) {
-                    Some(p) => self.run_pss(&p).map(|p| Card::Pss(Box::new(p))),
-                    None => self.session.run_analysis(&analysis).map(Card::Plain),
-                };
+                let card = self.session.run_card(&analysis);
                 out.push(card.map_err(SimError::analysis)?);
             }
             Ok(self.base.finish(out))
         })
-    }
-
-    /// A `.pss` card on the session's circuit, kept whole (period and
-    /// history) instead of [`Session::run_analysis`]'s plots. Like
-    /// every card of [`Session::run`], it re-runs cold when it failed
-    /// after a warm-start miss; the cold run here turns the warm start
-    /// off and on again, which also forgets the stored point (the next
-    /// run starts cold, as after `set_warm_start(true)`).
-    fn run_pss(&mut self, p: &PssParams) -> Result<Pss, dune_core::Error> {
-        let misses = self.session.warm_stats().misses;
-        let first = self.session.circuit().pss(self.session.options(), p);
-        if first.is_ok() || self.session.warm_stats().misses == misses {
-            return first;
-        }
-        self.session.set_warm_start(false);
-        let cold = self.session.circuit().pss(self.session.options(), p);
-        self.session.set_warm_start(true);
-        cold
     }
 }
 

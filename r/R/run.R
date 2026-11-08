@@ -22,10 +22,15 @@
 #'   units (temperatures `temp`/`tnom` in degrees Celsius): `reltol`,
 #'   `abstol`, `vntol`, `gmin`, `itl1`, `itl2`, `itl4`, `gminsteps`,
 #'   `srcsteps`, `temp`, `tnom`, `pivtol`, `pivrel`, `noopiter`,
-#'   `trtol`, `chgtol`, `method` (`"trap"` or `"gear"`), `maxord`,
-#'   `nopage`, `defl`, `defw`, `defad`, `defas`. `noopiter` and `nopage`
-#'   take `TRUE`/`FALSE`. Unlike a `.options` card, which only warns, an
-#'   unknown name or a value of the wrong type is an error.
+#'   `trtol`, `chgtol`, `method` (`"trap"`, `"gear"` or `"trbdf2"`),
+#'   `ltrabkrate`, `ltrafit`, `maxord`, `nopage`, `defl`, `defw`,
+#'   `defad`, `defas`, `seed` (the transient-noise seed, a whole number
+#'   `>= 1`; no `"random"`), `notrnoise`, `devnoise`, `devnt` (the
+#'   device-noise grid step, seconds, `> 0`) and `keepopinfo`. The flags
+#'   `noopiter`, `nopage`, `ltrafit`, `notrnoise`, `devnoise` and
+#'   `keepopinfo` take `TRUE`/`FALSE` (`FALSE` clears a flag the deck's
+#'   card set). Unlike a `.options` card, which only warns, an unknown
+#'   name or a value of the wrong type is an error.
 #' @param tmax_divisor `NULL` (the default) or a finite number `>= 1` that
 #'   divides the maximum step of every `.tran` card -- its TMAX argument,
 #'   else the default `min(TSTEP, (TSTOP - TSTART) / 50)`. The run is, bit

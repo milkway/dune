@@ -181,16 +181,46 @@ mod tests {
         assert!(o.ltra_fit && o.noopiter);
     }
 
+    /// The cards of the noise and keepopinfo levas pass as every other
+    /// key: `seed`, `notrnoise`, `devnoise`/`devnt`, `keepopinfo`,
+    /// `ltrabkrate`, `method=trbdf2`.
+    #[test]
+    fn noise_and_keepopinfo_keys() {
+        let (o, d) = apply(
+            r#"{"seed": 9, "notrnoise": true, "DevNoise": true, "devnt": "200n",
+                "keepopinfo": true, "ltrabkrate": 4, "method": "trbdf2"}"#,
+        );
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(o.seed, 9);
+        assert!(o.notrnoise && o.dev_noise && o.keepopinfo);
+        // "200n" is read as the card's text is (200 × 1e-9).
+        assert!((o.dev_noise_step.unwrap() - 2e-7).abs() < 1e-21);
+        assert_eq!(o.ltra_break_rate, Some(4));
+        assert_eq!(o.method, dune_core::Method::TrBdf2);
+        let (o, d) = apply(r#"{"devnt": 2e-7}"#);
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(o.dev_noise_step, Some(2e-7));
+        // The card's refusals, as warnings.
+        let (o, d) = apply(r#"{"seed": 0, "devnt": -1, "seed2": 1}"#);
+        assert_eq!((o.seed, o.dev_noise_step), (1, None));
+        assert_eq!(d.len(), 3, "{d:?}");
+    }
+
     #[test]
     fn false_clears_flags() {
         let deck = Options {
             noopiter: true,
             ltra_fit: true,
+            notrnoise: true,
+            dev_noise: true,
+            keepopinfo: true,
             ..Options::default()
         };
-        let Value::Object(map) =
-            serde_json::from_str(r#"{"noopiter": false, "ltrafit": false}"#).unwrap()
-        else {
+        let Value::Object(map) = serde_json::from_str(
+            r#"{"noopiter": false, "ltrafit": false, "notrnoise": false,
+                "devnoise": false, "keepopinfo": false}"#,
+        )
+        .unwrap() else {
             panic!()
         };
         let (o, d) = Overrides {
@@ -199,7 +229,7 @@ mod tests {
         }
         .apply(&deck);
         assert!(d.is_empty());
-        assert!(!o.noopiter && !o.ltra_fit);
+        assert!(!o.noopiter && !o.ltra_fit && !o.notrnoise && !o.dev_noise && !o.keepopinfo);
         assert_eq!(o.tmax_divisor, Some(4.0));
     }
 

@@ -70,10 +70,15 @@ override the deck's \code{.options} card, with the card's names and
 units (temperatures \code{temp}/\code{tnom} in degrees Celsius): \code{reltol},
 \code{abstol}, \code{vntol}, \code{gmin}, \code{itl1}, \code{itl2}, \code{itl4}, \code{gminsteps},
 \code{srcsteps}, \code{temp}, \code{tnom}, \code{pivtol}, \code{pivrel}, \code{noopiter},
-\code{trtol}, \code{chgtol}, \code{method} (\code{"trap"} or \code{"gear"}), \code{maxord},
-\code{nopage}, \code{defl}, \code{defw}, \code{defad}, \code{defas}. \code{noopiter} and \code{nopage}
-take \code{TRUE}/\code{FALSE}. Unlike a \code{.options} card, which only warns, an
-unknown name or a value of the wrong type is an error.}
+\code{trtol}, \code{chgtol}, \code{method} (\code{"trap"}, \code{"gear"} or \code{"trbdf2"}),
+\code{ltrabkrate}, \code{ltrafit}, \code{maxord}, \code{nopage}, \code{defl}, \code{defw},
+\code{defad}, \code{defas}, \code{seed} (the transient-noise seed, a whole number
+\verb{>= 1}; no \code{"random"}), \code{notrnoise}, \code{devnoise}, \code{devnt} (the
+device-noise grid step, seconds, \verb{> 0}) and \code{keepopinfo}. The flags
+\code{noopiter}, \code{nopage}, \code{ltrafit}, \code{notrnoise}, \code{devnoise} and
+\code{keepopinfo} take \code{TRUE}/\code{FALSE} (\code{FALSE} clears a flag the deck's
+card set). Unlike a \code{.options} card, which only warns, an unknown
+name or a value of the wrong type is an error.}
 
 \item{tmax_divisor}{As in \code{\link[=spice_run]{spice_run()}} (it divides the maximum step
 of the stabilization transient).}

@@ -17,7 +17,7 @@ from .pic import PicExtraction, _runnable
 __all__ = ["OPTION_NAMES", "OptionValue", "simulate"]
 
 OptionValue = float | int | bool | str
-"""Value of a simulator option: a number, a count, a flag or ``"trap"``/``"gear"``."""
+"""Value of a simulator option: a number, a count, a flag or ``"trap"``/``"gear"``/``"trbdf2"``."""
 
 OPTION_NAMES: tuple[str, ...] = tuple(_spice.OPTION_NAMES)
 """Every key :func:`simulate` accepts in ``options`` (the 3f5 ``.options`` names)."""
@@ -133,9 +133,14 @@ def simulate(
             ``abstol``, ``vntol``, ``gmin``, ``pivtol``, ``pivrel``,
             ``trtol``, ``chgtol``, ``defl``, ``defw``, ``defad``,
             ``defas``), counts as ints (``itl1``, ``itl2``, ``itl4``,
-            ``gminsteps``, ``srcsteps``, ``maxord``), ``temp``/``tnom`` in
-            degrees Celsius as on the card, ``method`` as ``"trap"`` or
-            ``"gear"``, ``noopiter``/``nopage`` as bools.
+            ``gminsteps``, ``srcsteps``, ``maxord``, ``ltrabkrate``),
+            ``temp``/``tnom`` in degrees Celsius as on the card, ``method``
+            as ``"trap"``, ``"gear"`` or ``"trbdf2"``, flags as bools
+            (``noopiter``, ``nopage``, ``ltrafit``, ``keepopinfo``,
+            ``notrnoise``, ``devnoise``), ``seed`` as a positive int (the
+            transient-noise seed; no ``"random"``) and ``devnt`` (the
+            device-noise grid step, s) as a positive number. ``False``
+            clears a flag the deck's card set.
         tmax_divisor: Divide the maximum step of every ``.tran`` card -- its
             TMAX argument, else the default ``min(TSTEP, (TSTOP-TSTART)/50)``
             -- by this finite number ``>= 1``: the run is, bit for bit, that

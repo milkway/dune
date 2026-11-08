@@ -94,6 +94,7 @@ pub use op::Op;
 pub use options::Options;
 pub use pss::{PSS_FREQ_PLOT, PSS_TIME_PLOT, Pss, PssParams};
 pub use pz::{Pz, PzInput, PzWhich};
+pub use run::CardOutput;
 pub use select::{ColData, OutColumn, OutExpr, Part, Selection};
 pub use sens::{Sens, SensAc};
 pub use session::{AlterValue, Session, WarmStats};
