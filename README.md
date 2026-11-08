@@ -9,6 +9,8 @@ clean engine you can call from Python, R, JavaScript or C.
 [Examples gallery](https://milkway.github.io/dune/examples/) — every
 corpus circuit, simulated · [Known differences](corpus/KNOWN_DIFFS.md)
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24052213.svg)](https://doi.org/10.5281/zenodo.24052213)
+
 ## What's inside
 
 - **Every SPICE3f5 device and analysis**: R C L K, V/I sources, E F G H,
