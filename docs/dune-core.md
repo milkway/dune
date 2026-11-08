@@ -29,7 +29,8 @@ resultados espelhando o rawfile).
   limitação separada na ruptura, teste de convergência por corrente
   prevista (`cdhat`), nó interno `nome#internal` quando `RS≠0`,
   ajuste de temperatura de `IS` (EG/XTI) e o casamento iterativo de
-  `BV`/`IBV` (25 iterações, mesmos avisos).
+  `BV`/`IBV` (25 iterações, mesmos avisos; com `N·vt` e `IS·AREA`
+  como o ngspice-47 — seção "Ruptura do diodo").
 - **Gmin na diagonal** (`engine.rs::gmin_slots` ← `spsmp.c::LoadGmin`
   + `sputils.c::spMNA_Preorder`): o `diagGmin` vai para a diagonal
   *depois* do pré-ordenamento do Sparse — ver "Cadeia do op".
@@ -1081,6 +1082,96 @@ porque o consumidor é outro crate (`dune-wasm`).
   `.sens` acima (contratos com arquivo/linha; sondas
   `regress/rnoisetemp`, `regress/sens_rtemp`).
 
+## Ruptura do diodo (2026-11-08)
+
+**Mecanismo** (`diotemp.c` + `dioload.c`, 3f5 e ngspice-47). Com `BV`
+dado, o `DIOtemp` acha `xbv` (`DIOtBrkdwnV`) pelo ponto fixo
+
+    xbv₀ = BV − nbv·vt·ln(1 + IBV/IS)
+    xbv  = BV − nbv·vt·ln(IBV/IS + 1 − xbv/vt)          (≤ 25 passos)
+    para quando |IS·(exp((BV−xbv)/(nbv·vt)) − 1 + xbv/vt) − IBV| ≤ reltol·IBV
+
+(se `IBV < IS·BV/vt`, `xbv = BV` e o aviso "breakdown current
+increased"; sem casar em 25 passos, o aviso "unable to match forward
+and reverse diode regions"). O load tem três regiões, com
+`vte = N·vt`: direta `vd ≥ −3·vte` (exponencial), reversa
+`−xbv ≤ vd < −3·vte` (`−csat·(1 + (3vte/(vd·e))³)`) e ruptura
+`vd < −xbv`: `cd = −csat·exp(−(xbv+vd)/vte) + gmin·vd`,
+`gd = csat·exp(…)/vte + gmin`; abaixo de `−xbv + 10·vte` o
+`DEVpnjlim` age sobre `−(vd + xbv)` com `vte`. No ngspice-47 o load é
+o mesmo com `vtebrk = NBV·vt` no lugar de `vte` (ruptura e limitação)
+— idêntico, porque `NBV` default é `N` (`diosetup.c:131`).
+
+**Causa do sintoma** (`i 1.6 A`, `is=6.79e-18 n=1.47 bv=50`: Dune
+50.70 V, ngspice 50.32 V). Duas diferenças do `diotemp.c`, nenhuma
+no load:
+
+1. **Coeficiente de emissão do casamento.** O 3f5 casa com `vt` puro
+   (`diotemp.c:132-139`: `vt*log(…)`, `exp((BV−xbv)/vt)`), mas o load
+   usa `N·vt`; o ngspice casa com `DIObrkdEmissionCoeff*vt`
+   (`diotemp.c:231-237`), isto é, `N·vt` por default. Para `N ≠ 1`, a
+   corrente do 3f5 em `vd = −BV` é `IS·(IBV/IS)^(1/N)` — 2.9e-8 A em
+   vez de 1 mA com N=1.47 —, contra a própria tabela do `spice.txt`
+   ("IBV current at breakdown voltage"). `xbv`: 49.1562 (3f5) ×
+   48.7596 (ngspice), 0.397 V = `(N−1)·vt·ln(IBV/IS)`. Curvas
+   convergidas a 1.6 A: 50.6771 × 50.2805 V. **Bug do 3f5; segue o
+   ngspice** (o `NBV` em si, extensão, não entra: o default `N` é o
+   que corrige).
+2. **Área.** O 3f5 casa o `DIOtSatCur` *por área* com o IBV absoluto
+   (o load usa `csat = DIOtSatCur·AREA`), então em `−BV` passa
+   `AREA·IBV`; o `spice.txt` escala só IS/RS/CJO. O ngspice casa
+   `IS·AREA·M` com `M·IBV` (nível 1, `diotemp.c:216-221`). Desvio de
+   `vt·ln(AREA)` (60 mV com AREA=10). **Segue o ngspice** (o `M` não
+   entra na razão; `DiodeTemp::new` separa `area` de `mult`).
+
+Gate: `regress/diobv_dc` (`.dc` 0→20 V por 10 Ω em três diodos com
+BV=5: N=1.47, AREA=10 e AREA=1; da fuga a ~1.5 A) PASS 0.476; com o
+casamento em `vt` FALHA a 495 (0.396 V); com o casamento por área
+FALHA a 197 (59.5 mV). Teste unitário `breakdown_carries_ibv_at_bv`
+pina `cd(−BV) = IBV` e os deslocamentos. Nenhuma margem do corpus
+mudou (o `opfall_gmin`, N=1.02/1.05 na ruptura, e os `ltra_*`, N=2.25
+com BV=10, ficaram iguais).
+
+**O resto da diferença (50.32 × 50.28 V) é o Newton do ngspice
+parando fora da curva**, não modelo. Com BV=50 a tolerância de nó é
+`reltol·50 V = 50 mV > vte = 38 mV`: o NR aceita pontos com a KCL
+violada por até 100× (varredura `.dc` de 1e-6 a 1.9 A: o ngspice dá
+uma curva não monótona, 50.405 V a 0.4 A e 50.249 V a 0.7 A; com
+`reltol=1e-6` ele cai na curva analítica, que o Dune já dá). Por isso
+a sonda usa BV=5. Reproduzi o ngspice a ~1e-5 (diferença das
+constantes) somando três mudanças de **motor**, medidas e **não
+portadas** (cruzam todas as análises; mudam ~36 margens do corpus):
+
+- **Saída = `CKTrhsOld`.** Os dois C saem do `NIiter` convergido sem
+  o `SWAP` (`niiter.c` do 3f5 l.198-200; do ngspice idem), e o
+  `CKTdump` lê `CKTrhsOld` (`cktdump.c:30`) — o *penúltimo* iterado,
+  onde os dispositivos foram carregados. O Dune troca e reporta o
+  último solve. Só com isso o `.op` de 1.6 A dá 50.29786 V, igual ao
+  ngspice.
+- **`MODEINITPRED` no `.dc`.** Os dois `DCtrCurv` (3f5
+  `dctrcurv.c:166-183`, 224) rodam estados antes de cada ponto,
+  copiam state0→state1 depois do primeiro e carregam os pontos
+  seguintes em `INITPRED` (extrapolação linear `DEVpred` com
+  `CKTdelta = CKTdeltaOld = passo`). O Dune parte de `INITFLOAT` com
+  o state0 do ponto anterior.
+- **`DEVpnjlim` direto do ngspice-47** (`devsup.c:54-61`):
+  `vold + vt·(2 + ln(arg − 2))`, `arg = (vnew − vold)/vt` (e
+  `vold − vt·(2 + ln(2 − arg))` no ramo negativo), contra o
+  `vold + vt·ln(1 + arg)` / `vcrit` do 3f5. Mudança de heurística,
+  não de bug — fica o 3f5 (KNOWN_DIFFS).
+
+Medido no `--ci` (111 decks, todos seguem PASS/XFAIL): só `CKTrhsOld`
+muda 40 margens (piora alguns `.dc`: bsim3_iv 0→0.494, bsim2tst
+0→0.486, bsim1tst 0.083→0.474, rca3040 dc 0.265→0.522); com
+`INITPRED` também, 36 mudam, quase todas para menos (dcdiode
+0.578→0.279, dctemp 0.475→0.074, mos3_iv 0.429→0.065, urc_diode dc
+0.524→0.124, bsim3_vg 0.211→0, bsrc_dc 0.407→0; sobem um pouco
+b1disto_im 0.084→0.105 e ltra_3 XFAIL 29.89→29.93); com o pnjlim do
+ngspice, 39 (dcisweep 0.318→0.014, schmitt XFAIL 3.02→3.24). Os dois
+primeiros são divergências do Dune em relação aos *dois* C — candidatos
+a uma leva própria do motor (o patch experimental está em
+`.claude/scratch/diobv/engine-experiment.diff`).
+
 ## Pendências (fases seguintes)
 
 - Variantes do ngspice não modeladas: `ngbehavior=spice3` (forma
@@ -1109,11 +1200,11 @@ porque o consumidor é outro crate (`dune-wasm`).
   em 2026-11-08 ("Cadeia do op"). Fica: espelhar `trytocompact` nas
   listas de override dos bindings (Py/R/wasm), como `keepopinfo` (o
   cartão `.options` já funciona em todos).
-- Ruptura do diodo diverge do ngspice-47 com corrente alta (medido ao
-  construir as sondas do op: `i1 0 1 1.6; d1 0 1 (is=6.79e-18
-  n=1.47 bv=50)` dá 50.70 V no Dune e 50.32 V no ngspice; não é o
-  `NBV`, cujo default no ngspice é `N`, `diosetup.c:131`). Não
-  investigado; nenhum deck do corpus opera na ruptura forte.
+- ~~Ruptura do diodo diverge do ngspice-47 com corrente alta~~ —
+  resolvido em 2026-11-08 ("Ruptura do diodo", acima). Fica: o
+  caminho de Newton do motor (relatório de `CKTrhsOld`, `MODEINITPRED`
+  no `.dc`, forma direta do `DEVpnjlim` do ngspice-47) — medido lá,
+  não portado.
 
 ## Transiente robusto (opt-in, issue #6)
 
