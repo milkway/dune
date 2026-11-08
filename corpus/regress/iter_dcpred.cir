@@ -1,0 +1,18 @@
+Reported iterate: .dc continuation in MODEINITPRED
+* DCtrCurv rotates the state banks before every point and solves the
+* points after the first in MODEINITPRED: the MOSFET starts from its
+* extrapolated vbs/vgs/vds (2*state1 - state2), the switch reads the
+* previous point's state from the rotated state1 (swload.c). Starting
+* the points in INITFLOAT instead moves v(3) by up to 5e-4 V; with the
+* C's continuation the sweep matches ngspice-47 to ~1e-15
+* (crates/dune-core/tests/iterate.rs).
+vdd 1 0 dc 5
+vin 2 0 dc 0
+rl 1 3 20k
+m1 3 2 0 0 nm l=2u w=10u
+s1 3 4 2 0 sm
+r4 4 0 50k
+.model nm nmos(level=1 vto=0.8 kp=50u lambda=0.02 gamma=0.4 phi=0.6)
+.model sm sw(vt=2.5 vh=0.5 ron=1k roff=1e9)
+.dc vin 0 5 0.25
+.end
