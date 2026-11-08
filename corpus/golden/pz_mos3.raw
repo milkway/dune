@@ -1,0 +1,27 @@
+Title: mos3 pole-zero: common-source stage and a reversed follower
+Date: Sun Nov  8 09:08:24  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 9
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(pole(4))	voltage
+	4	v(pole(5))	voltage
+	5	v(zero(1))	voltage
+	6	v(zero(2))	voltage
+	7	v(zero(3))	voltage
+	8	v(zero(4))	voltage
+Values:
+0		-7.095531321637289e+12,0.000000000000000e+00
+	-3.429017955519504e+12,0.000000000000000e+00
+	-2.167185853521738e+12,0.000000000000000e+00
+	-1.592282988814239e+10,0.000000000000000e+00
+	-5.078125416723337e+08,0.000000000000000e+00
+	-3.409032922056958e+12,0.000000000000000e+00
+	-2.287872371053247e+12,0.000000000000000e+00
+	1.510976762571878e+10,0.000000000000000e+00
+	1.853046856469594e+11,0.000000000000000e+00
