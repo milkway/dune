@@ -227,7 +227,7 @@ pub fn measure_plot(
 
 /// The option names `apply_options` accepts, in `Options` field order
 /// (the card's names, as in `spice.txt` §SIMULATOR VARIABLES).
-pub const OPTION_NAMES: [&str; 25] = [
+pub const OPTION_NAMES: [&str; 30] = [
     "reltol",
     "abstol",
     "vntol",
@@ -253,6 +253,11 @@ pub const OPTION_NAMES: [&str; 25] = [
     "defw",
     "defad",
     "defas",
+    "seed",
+    "notrnoise",
+    "devnoise",
+    "devnt",
+    "keepopinfo",
 ];
 
 /// `.include` from an in-memory map (the `dune-wasm` `MapLoader`).
@@ -290,6 +295,22 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
                 Ok(*x as usize)
             }
             _ => Err(format!("option `{name}` needs a non-negative whole number")),
+        }
+    }
+    fn seed(name: &str, v: &OptValue) -> Result<u64, String> {
+        match v {
+            OptValue::Num(x) if *x >= 1.0 && *x < 9.007_199_254_740_992e15 && x.fract() == 0.0 => {
+                Ok(*x as u64)
+            }
+            _ => Err(format!(
+                "option `{name}` needs a whole number >= 1 (no \"random\": runs are reproducible)"
+            )),
+        }
+    }
+    fn step(name: &str, v: &OptValue) -> Result<f64, String> {
+        match v {
+            OptValue::Num(x) if x.is_finite() && *x > 0.0 => Ok(*x),
+            _ => Err(format!("option `{name}` needs a positive time step")),
         }
     }
     fn flag(name: &str, v: &OptValue) -> Result<bool, String> {
@@ -343,6 +364,11 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
             "defw" => opts.defw = num(n, v)?,
             "defad" => opts.defad = num(n, v)?,
             "defas" => opts.defas = num(n, v)?,
+            "seed" => opts.seed = seed(n, v)?,
+            "notrnoise" => opts.notrnoise = flag(n, v)?,
+            "devnoise" => opts.dev_noise = flag(n, v)?,
+            "devnt" => opts.dev_noise_step = Some(step(n, v)?),
+            "keepopinfo" => opts.keepopinfo = flag(n, v)?,
             other => return Err(format!("unknown option `{other}`")),
         }
     }
