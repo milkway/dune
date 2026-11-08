@@ -55,6 +55,17 @@ line from R2.N to V1.N; ground(V1.N)
 .PE
 "
 
+# Figures whose extraction warns by design: figure = the nets of its
+# dangling pins (warnings), in order. mos6inv leaves the deck's test
+# nodes 11..43 and its output open, as the deck does (dune-pic's
+# same_as_deck_dangling). Every other figure extracts clean.
+expected_dangling <- list(
+  mos6inv = c(
+    "N11", "N12", "N13", "N21", "N22", "N23",
+    "N31", "N32", "N33", "N41", "N42", "N43", "N5"
+  )
+)
+
 pic_figures <- function() {
   dir <- corpus_path("pic")
   figs <- sort(Sys.glob(file.path(dir, "*.pic")))
@@ -72,12 +83,16 @@ same_result <- function(a, b) {
 
 test_that("every corpus figure extracts to its golden and simulates as it", {
   figs <- pic_figures()
-  expect_gte(length(figs), 27L)
+  expect_gte(length(figs), 29L)
   for (fig in figs) {
     name <- sub("\\.pic$", "", basename(fig))
     golden <- read_bytes(file.path(dirname(fig), "golden", paste0(name, ".cir")))
     p <- spice_pic(fig)
-    expect_equal(nrow(p$diagnostics), 0L, label = name)
+    d <- p$diagnostics
+    dangling <- if (is.null(expected_dangling[[name]])) character() else expected_dangling[[name]]
+    expect_true(all(d$severity == "warning" & d$kind == "dangling-pin"), label = name)
+    nets <- vapply(strsplit(d$message, "`", fixed = TRUE), `[[`, "", 2L)
+    expect_identical(nets, dangling, label = name)
     expect_identical(p$netlist, golden, label = name)
     expect_identical(p$path, fig)
     # The golden deck, given the figure's includes (it sits in golden/,

@@ -68,6 +68,18 @@ line from R2.N to V1.N; ground(V1.N)
 """
 
 
+# Figures whose extraction warns by design: figure -> the nets of its
+# dangling pins (warnings), in order. mos6inv leaves the deck's test
+# nodes 11..43 and its output open, as the deck does (dune-pic's
+# same_as_deck_dangling). Every other figure extracts clean.
+EXPECTED_DANGLING: dict[str, list[str]] = {
+    "mos6inv": [
+        "N11", "N12", "N13", "N21", "N22", "N23",
+        "N31", "N32", "N33", "N41", "N42", "N43", "N5",
+    ],
+}
+
+
 def figures(corpus: Path) -> list[Path]:
     return sorted(p for p in (corpus / "pic").glob("*.pic") if p.name != "spice.pic")
 
@@ -80,11 +92,15 @@ def same_result(a: spice.Result, b: spice.Result) -> bool:
 
 def test_every_corpus_figure_extracts_to_its_golden_and_simulates_as_it(corpus: Path) -> None:
     figs = figures(corpus)
-    assert len(figs) >= 27
+    assert len(figs) >= 29
     for fig in figs:
         golden = (corpus / "pic" / "golden" / f"{fig.stem}.cir").read_bytes()
         ex = spice.pic.extract(fig)
-        assert ex.diagnostics == (), fig.name
+        dangling = EXPECTED_DANGLING.get(fig.stem, [])
+        assert all(
+            (d.severity, d.kind) == ("warning", "dangling-pin") for d in ex.diagnostics
+        ), fig.name
+        assert [d.message.split("`")[1] for d in ex.diagnostics] == dangling, fig.name
         assert ex.netlist.encode() == golden, fig.name
         assert ex.path == str(fig)
         # The golden deck, given the figure's includes (it sits in
