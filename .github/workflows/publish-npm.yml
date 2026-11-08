@@ -69,6 +69,20 @@ jobs:
           registry-url: https://registry.npmjs.org
       - name: npm >= 11.5.1 (required for OIDC publishing)
         run: npm install -g npm@latest && npm --version
+      # A GitHub release may be cut without bumping the package (e.g.
+      # a repo release that mints a Zenodo DOI): publishing an
+      # already-published version would fail the run, so skip it.
+      - name: Skip when this version is already on npm
+        id: gate
+        working-directory: npm-package
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          if npm view "$PKG@$VER" version >/dev/null 2>&1; then
+            echo "$PKG@$VER is already published; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Publish
+        if: steps.gate.outputs.skip != 'true'
         working-directory: npm-package
         run: npm publish --access public
