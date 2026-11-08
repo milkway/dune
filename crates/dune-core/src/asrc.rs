@@ -20,8 +20,8 @@
 //! one and can never fail), the derivative of `f^g` with a
 //! non-constant exponent uses `ln f` (the 3f5 writes `ln f'`), and
 //! the value is scaled by `srcFact` under the transient operating
-//! point (D-0012), and `exp` overflow and `ln`/`log` of zero return
-//! ngspice's finite 1e99 / −1e99 instead of infinities. The function semantics stay the 3f5's (`log` is
+//! point (D-0012), and `ln`/`log` of zero return ngspice's finite
+//! −1e99 instead of −∞. The function semantics stay the 3f5's (`log` is
 //! base 10; `ln`, `log`, `sqrt` take `|x|`; `x^y` with `x < 0` and a
 //! non-integer `y` is `|x|^y`).
 
@@ -437,8 +437,8 @@ fn pt_power(mut a: f64, mut b: f64) -> f64 {
 
 /// The one-argument functions of `ptfuncs.c` (3f5 semantics; the
 /// inverse hyperbolics are libm's, as with `HAS_ATRIGH`), with
-/// ngspice-47's finite returns where the 3f5 would put an infinity
-/// into the matrix (`exp` overflow, `ln`/`log` of 0).
+/// ngspice-47's finite −1e99 for `ln`/`log` of 0, where the 3f5
+/// would put −∞ into the matrix.
 fn func(f: ExprFunc, x: f64) -> f64 {
     use std::f64::consts::PI;
     match f {
@@ -466,15 +466,9 @@ fn func(f: ExprFunc, x: f64) -> f64 {
         ExprFunc::Atanh => x.atanh(),
         ExprFunc::Cos => modulus(x, 2.0 * PI).cos(),
         ExprFunc::Cosh => x.cosh(),
-        // ngspice-47's `PTexp` cap: the 3f5 overflows to `HUGE` and
-        // fails the load, a Newton iterate away from any solution.
-        ExprFunc::Exp => {
-            if x > 227.955_924_2 {
-                1e99
-            } else {
-                x.exp()
-            }
-        }
+        // Overflow is `HUGE`, an evaluation error, as in the 3f5
+        // (ngspice-47 caps at 1e99 past 227.96; no probe needs it).
+        ExprFunc::Exp => x.exp(),
         // `|x|` as in the 3f5; at exactly 0 ngspice-47's -1e99 (the
         // 3f5's -inf poisons the first iterate of every `ln(v(n))`,
         // which starts from v = 0).
@@ -749,8 +743,9 @@ mod tests {
         // `HUGE` is an evaluation error.
         let t = tree("v(1)^(-1)");
         assert!(t.eval(0.0, &[0.0], &mut d).is_err());
-        // ngspice's finite stand-ins.
-        assert_eq!(at("exp(v(1))", &[1000.0]).0, 1e99);
+        let t = tree("exp(v(1))");
+        assert!(t.eval(0.0, &[1000.0], &mut d).is_err());
+        // ngspice's finite stand-in for ln(0).
         let t = tree("ln(v(1))");
         assert_eq!(t.eval(1e-12, &[0.0], &mut d).unwrap(), -1e99);
     }
