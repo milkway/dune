@@ -40,16 +40,21 @@ await ready(wasmUrl);
 ## API
 
 - `ready(wasm?)` — initialize once (idempotent; a failed init can be retried).
-- `simulate(netlist, { includes? })` → `{ plots, measurements, notes, diagnostics }`. Plots
+- `simulate(netlist, { includes? })` → `{ plots, measurements, notes, diagnostics, pss }`. Plots
   mirror the SPICE rawfile: `variables` (first = scale) and `columns`
   (numbers, or `[re, im]` pairs in complex plots; NaN/±inf as `null`).
   `includes` maps `.include` paths to file text (there is no file system).
   A `.pss` card gives two plots on this same path: the period
   (`Time Domain Periodic Steady State Analysis`, real, like a `.tran`) and
   its complex harmonics (`Frequency Domain Periodic Steady State Analysis`,
-  `[re, im]` pairs, like an `.ac`); a shooting that does not converge
-  throws kind `analysis`. Python's `spice.pss()` and R's `spice_pss()` run
-  the same engine call with the period and shooting history attached.
+  `[re, im]` pairs, like an `.ac`), and the result's `pss` list gets one
+  entry per card: `{ plot, period, t0, residuals, periods }` — the period
+  (the shooting's result for an autonomous oscillator), where it starts,
+  and the residual and period of each shooting iteration (`[]` without a
+  `.pss` card). A shooting that does not converge throws kind `pss` with
+  `iterations`, `residuals` and `period` (the last period iterate of an
+  autonomous oscillator, `null` for a driven circuit). Python's
+  `spice.pss()` and R's `spice_pss()` carry the same numbers.
   `measurements` holds the deck's `.measure` results — the rows Python's
   `Result.measurements` and R's `res$measurements` carry, one per card and
   measured plot:

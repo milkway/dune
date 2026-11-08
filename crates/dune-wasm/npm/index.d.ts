@@ -160,6 +160,38 @@ export interface Rawfile {
   notes: string[];
   /** Netlist parser and `.options` warnings (file `deck.cir`). */
   diagnostics: Diagnostic[];
+  /**
+   * One entry per `.pss` card, in deck order: the shooting's numbers that
+   * its two plots do not carry. `[]` when the deck has none.
+   */
+  pss: PssInfo[];
+}
+
+/**
+ * The periodic steady state of one `.pss` card — what Python's
+ * `spice.PssResult` and R's `spice_pss` add to the two plots.
+ */
+export interface PssInfo {
+  /** Index in `plots` of the card's time-domain plot; its spectrum is `plot + 1`. */
+  plot: number;
+  /**
+   * The period `T` (s): the drive's for a driven circuit, the shooting's
+   * result for an autonomous oscillator (`T` is a Newton unknown there).
+   */
+  period: number;
+  /** Start of the reported period (s). */
+  t0: number;
+  /**
+   * The period mismatch `max_i |x_i(t0+T) - x_i(t0)| / tol_i` of each
+   * shooting iteration (the last one ≤ STEADYCOEFF); `null` for an iteration
+   * whose transient failed and was backtracked (an infinite residual).
+   */
+  residuals: (number | null)[];
+  /**
+   * The period of each iteration, aligned with `residuals`: constant for a
+   * driven circuit, the Newton iterate of an autonomous one.
+   */
+  periods: number[];
 }
 
 /**
@@ -369,10 +401,27 @@ export interface PicRun extends Rawfile {
 }
 
 export interface SimError extends Error {
-  kind: 'options' | 'parse' | 'elaborate' | 'analysis' | 'pic' | 'alter' | 'internal';
+  /**
+   * `pss`: a `.pss` card whose shooting did not converge in its iterations
+   * (the history is in `iterations`, `residuals` and `period`); every other
+   * engine failure is `analysis`.
+   */
+  kind: 'options' | 'parse' | 'elaborate' | 'analysis' | 'pss' | 'pic' | 'alter' | 'internal';
   diagnostics: Diagnostic[];
   /** `simulatePic` failures after extraction: the extraction, netlist included. */
   pic?: PicExtraction;
+  /** Kind `pss` only: the shooting iterations run. */
+  iterations?: number;
+  /**
+   * Kind `pss` only: the mismatch of each iteration in units of the
+   * tolerance, as in {@link PssInfo.residuals} (`null` for an infinite one).
+   */
+  residuals?: (number | null)[];
+  /**
+   * Kind `pss` only: the last period iterate of an autonomous oscillator;
+   * `null` for a driven circuit, whose period is fixed.
+   */
+  period?: number | null;
 }
 
 /**

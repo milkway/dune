@@ -1001,16 +1001,134 @@ fn pss_plots_travel_like_tran_and_ac() {
     assert_eq!((re, im), (Some(h1.re), Some(h1.im)));
 }
 
-/// A shooting that does not converge fails as any analysis does (kind
-/// `analysis`; the history is in the message).
+/// A shooting that does not converge is kind `pss`, with the history
+/// as structured fields (flat beside `kind` in the JSON, as on the JS
+/// error): a driven circuit has no period iterate (`null`).
 #[test]
-fn pss_convergence_failure_is_an_analysis_error() {
+fn pss_convergence_failure_is_kind_pss() {
     let deck = "rc pss\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.pss 1k 5m 2 128 10 1\n.end\n";
     let err = simulate_json(deck, None).unwrap_err();
-    assert_eq!(err.kind, "analysis");
+    assert_eq!(err.kind, "pss");
     assert!(
         err.message.contains("did not converge in 1 shooting"),
         "{}",
         err.message
     );
+    let h = *err.pss.clone().expect("the shooting history");
+    assert_eq!(h.iterations, 1);
+    assert_eq!(h.residuals.len(), 1);
+    assert!(h.residuals[0].unwrap() > 1.0);
+    assert_eq!(h.period, None);
+    let v = serde_json::to_value(&err).unwrap();
+    assert_eq!(v["iterations"], 1);
+    assert_eq!(v["residuals"].as_array().unwrap().len(), 1);
+    assert!(v["period"].is_null() && v.get("period").is_some());
+
+    // The same failure from a Session.
+    let mut s = SimSession::open(deck, &SimOptions::default()).unwrap();
+    assert_eq!(s.run().unwrap_err(), err);
+
+    // Every other engine failure keeps kind `analysis` and no history.
+    let e = simulate_json("rc pss\nr1 1 0 1k\n.pss 1k 5m 1\n.end\n", None).unwrap_err();
+    assert_eq!(e.kind, "analysis");
+    assert!(e.pss.is_none());
+    assert!(
+        serde_json::to_value(&e)
+            .unwrap()
+            .get("iterations")
+            .is_none()
+    );
+}
+
+fn corpus_pss(name: &str) -> String {
+    let path = format!("{}/../../corpus/pss/{name}.cir", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(path).unwrap()
+}
+
+/// An autonomous oscillator cut short reports its last period iterate.
+#[test]
+fn autonomous_pss_failure_carries_the_period() {
+    let deck = corpus_pss("osc_vdp").replace(".pss 0 4m 1 256 10 uic", ".pss 0 4m 1 256 10 1 uic");
+    let err = simulate_json(&deck, None).unwrap_err();
+    assert_eq!(err.kind, "pss");
+    let h = *err.pss.unwrap();
+    assert_eq!((h.iterations, h.residuals.len()), (1, 1));
+    let t = h.period.expect("an autonomous shooting's period");
+    // The frequency counter's estimate: near 2π√(LC).
+    let t_lc = 2.0 * std::f64::consts::PI * (1e-3f64 * 1e-6).sqrt();
+    assert!((t / t_lc - 1.0).abs() < 0.05, "{t}");
+}
+
+/// The `.pss` entry of a run: the period, `t0` and the history of the
+/// card's own engine call, pointing at its two plots.
+#[test]
+fn pss_entry_of_an_autonomous_oscillator() {
+    let raw = run(&corpus_pss("osc_vdp"), &SimOptions::default()).unwrap();
+    assert_eq!(raw.pss.len(), 1);
+    let p = &raw.pss[0];
+    assert_eq!(p.plot, 0);
+    assert_eq!(raw.plots[p.plot].plotname, dune_core::PSS_TIME_PLOT);
+    assert_eq!(raw.plots[p.plot + 1].plotname, dune_core::PSS_FREQ_PLOT);
+    assert_eq!(p.periods.len(), p.residuals.len());
+    assert!(p.residuals.len() >= 2);
+    assert_eq!(*p.periods.last().unwrap(), p.period);
+    assert!(p.residuals.last().unwrap().unwrap() <= 1.0);
+    // The Newton iterate moved T (an autonomous circuit's unknown).
+    assert_ne!(p.periods[0], p.period);
+    // docs/dune-core.md: T = 199.36609 µs (ngspice's long .tran 3.0e-5 off).
+    assert!((p.period / 199.36609e-6 - 1.0).abs() < 1e-6, "{}", p.period);
+    let Columns::Real(cols) = &raw.plots[0].columns else {
+        panic!("the period is real")
+    };
+    assert_eq!(cols[0][0], Some(p.t0));
+    // A deck without `.pss` has an empty list, serialized all the same.
+    let json = simulate_json("t\nv1 1 0 1\nr1 1 0 1k\n.op\n.end\n", None).unwrap();
+    assert!(json.contains("\"pss\":[]"), "{json}");
+}
+
+/// The `.pss` mapping repeated in `pss_params` is `Circuit::run`'s:
+/// every `.pss` deck of the corpus gives the same plots and notes as
+/// the engine's own dispatch, and a Session the same result as a
+/// fresh run.
+#[test]
+fn pss_cards_run_as_the_engine_runs_them() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus/pss");
+    let mut decks: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "cir"))
+        .collect();
+    decks.sort();
+    assert!(decks.len() >= 9);
+    for path in decks {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let data = run_data(&text, &SimOptions::default()).unwrap();
+        let parsed = dune_netlist::parse_str("deck.cir", &text);
+        let (circuit, notes) = Circuit::from_netlist(&parsed.netlist).unwrap();
+        let mut opts = Options::default();
+        opts.apply(&parsed.netlist.options, &mut Vec::new());
+        let mut want_notes = notes;
+        let mut want = Vec::new();
+        for a in &parsed.netlist.analyses {
+            let (sols, n) = circuit.run(a, &opts).unwrap();
+            want.extend(sols.iter().map(|s| s.to_plot(&parsed.netlist.title, "")));
+            want_notes.extend(n);
+        }
+        assert_eq!(data.plots, want, "{}", path.display());
+        assert_eq!(data.notes, want_notes, "{}", path.display());
+        let cards = parsed
+            .netlist
+            .analyses
+            .iter()
+            .filter(|a| pss_params(a).is_some())
+            .count();
+        assert_eq!(data.pss.len(), cards);
+        let mut s = SimSession::open(&text, &SimOptions::default()).unwrap();
+        assert_eq!(
+            s.run().unwrap().to_json(),
+            data.to_json(),
+            "{}",
+            path.display()
+        );
+    }
 }

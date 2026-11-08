@@ -29,8 +29,9 @@
 //!
 //! On failure each throws a JS `Error` whose `message` is the
 //! engine's, parser's or extractor's message, with `kind` and
-//! `diagnostics` properties (and `pic`, for the pic entry points) as
-//! in [`SimError`].
+//! `diagnostics` properties (and `pic`, for the pic entry points;
+//! `iterations`/`residuals`/`period` for a `.pss` that did not
+//! converge, kind `pss`) as in [`SimError`].
 //!
 //! Native builds (the `rlib`) expose the same paths as
 //! [`simulate_json`]/[`run`], [`extract_pic_json`]/[`extract`],
@@ -50,8 +51,8 @@ mod session;
 pub use schema::{
     CanvasJson, Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, MeasurementJson,
     NetOverlayJson, OverlayMapJson, ParamSpanJson, PicJson, PicRunJson, PicSimOptions, PlotJson,
-    RawfileJson, RenderOptionsJson, ShapeRangeJson, SimError, SimOptions, SourceRangeJson,
-    ValueSpanJson, VariableJson,
+    PssFailureJson, PssJson, RawfileJson, RenderOptionsJson, ShapeRangeJson, SimError, SimOptions,
+    SourceRangeJson, ValueSpanJson, VariableJson,
 };
 
 pub use overrides::Overrides;
@@ -62,7 +63,7 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use dune_core::{Circuit, Options, Solution};
+use dune_core::{Circuit, Options, PssParams, Solution};
 use dune_netlist::{IncludeLoader, Severity};
 use dune_pic::{ExtractOptions, PicError};
 use dune_raw::{Data, Plot};
@@ -196,6 +197,7 @@ fn pic_error(e: PicError) -> SimError {
         message: shown,
         diagnostics: vec![DiagnosticJson::pic_located("error", kind, message, span)],
         pic: None,
+        pss: None,
     }
 }
 
@@ -244,6 +246,7 @@ pub(crate) fn extract_runnable(src: &str, snap: Option<f64>) -> Result<PicJson, 
             message,
             diagnostics: pic.diagnostics.clone(),
             pic: Some(Box::new(pic)),
+            pss: None,
         });
     }
     Ok(pic)
@@ -293,6 +296,8 @@ pub struct RunData {
     pub measurements: Vec<MeasurementJson>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<DiagnosticJson>,
+    /// One per `.pss` card (as [`RawfileJson::pss`]).
+    pub pss: Vec<PssJson>,
 }
 
 impl RunData {
@@ -303,6 +308,7 @@ impl RunData {
             measurements: self.measurements.clone(),
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
+            pss: self.pss.clone(),
         }
     }
 
@@ -314,6 +320,7 @@ impl RunData {
             measurements: self.measurements.clone(),
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
+            pss: self.pss.clone(),
         }
     }
 }
@@ -340,17 +347,98 @@ fn run_includes(
     let mut prepared = prepare(netlist, includes)?;
     let (options, override_diags) = overrides.apply(&prepared.options);
     prepared.override_diagnostics = override_diags;
-    let mut solutions: Vec<Solution> = Vec::new();
-    let mut notes = prepared.notes.clone();
+    let mut out = Outcome::new(prepared.notes.clone());
     for analysis in &prepared.analyses {
-        let (sols, analysis_notes) = prepared
-            .circuit
-            .run(analysis, &options)
-            .map_err(|e| SimError::new("analysis", e.to_string()))?;
-        notes.extend(analysis_notes);
-        solutions.extend(sols);
+        let card = match pss_params(analysis) {
+            Some(p) => prepared
+                .circuit
+                .pss(&options, &p)
+                .map(|p| Card::Pss(Box::new(p))),
+            None => prepared.circuit.run(analysis, &options).map(Card::Plain),
+        };
+        out.push(card.map_err(SimError::analysis)?);
     }
-    Ok(prepared.finish(solutions, notes))
+    Ok(prepared.finish(out))
+}
+
+/// What one analysis card produced: a `.pss` keeps its engine result
+/// (period, history) besides the plots.
+pub(crate) enum Card {
+    Plain((Vec<Solution>, Vec<String>)),
+    Pss(Box<dune_core::Pss>),
+}
+
+/// The cards of a run so far, in deck order.
+pub(crate) struct Outcome {
+    solutions: Vec<Solution>,
+    notes: Vec<String>,
+    pss: Vec<PssJson>,
+}
+
+impl Outcome {
+    /// An empty run whose notes start with `notes` (the elaboration's).
+    pub fn new(notes: Vec<String>) -> Self {
+        Outcome {
+            solutions: Vec::new(),
+            notes,
+            pss: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, card: Card) {
+        match card {
+            Card::Plain((sols, notes)) => {
+                self.notes.extend(notes);
+                self.solutions.extend(sols);
+            }
+            Card::Pss(pss) => {
+                self.pss.push(PssJson::new(&pss, self.solutions.len()));
+                self.notes.extend(pss.notes);
+                self.solutions.push(pss.time);
+                self.solutions.push(pss.spectrum);
+            }
+        }
+    }
+}
+
+/// The [`PssParams`] a `.pss` card asks for — the mapping of
+/// [`Circuit::run`] (`dune_core::run`), repeated here because `run`
+/// returns only the plots and the period, `t0` and the shooting
+/// history travel in [`RawfileJson::pss`]. `None` for any other card.
+/// `pss_cards_run_as_the_engine_runs_them` (tests) pins the two
+/// mappings together on every `.pss` deck of the corpus.
+pub(crate) fn pss_params(analysis: &dune_netlist::ir::Analysis) -> Option<PssParams> {
+    let dune_netlist::ir::Analysis::Pss {
+        freq,
+        tstab,
+        osc_node,
+        points,
+        harmonics,
+        sc_iter,
+        steady_coeff,
+        uic,
+        ..
+    } = analysis
+    else {
+        return None;
+    };
+    let d = PssParams::default();
+    // ngspice reads the counts as IF_INTEGER (truncated).
+    let count = |v: Option<f64>, default: usize| match v {
+        Some(v) if v.is_finite() && v >= 0.0 => v.trunc().min(1e9) as usize,
+        Some(_) => 0,
+        None => default,
+    };
+    Some(PssParams {
+        freq: (*freq != 0.0).then_some(*freq),
+        tstab: *tstab,
+        osc_node: Some(osc_node.clone()),
+        points: count(*points, d.points),
+        harmonics: count(*harmonics, d.harmonics),
+        max_iter: count(*sc_iter, d.max_iter),
+        steady_coeff: steady_coeff.unwrap_or(d.steady_coeff),
+        uic: *uic,
+    })
 }
 
 /// A deck parsed and elaborated, ready to run: what a fresh run and a
@@ -374,7 +462,12 @@ pub(crate) struct Prepared {
 impl Prepared {
     /// A run's [`RunData`] from its plots and notes (the elaboration
     /// notes first), with the deck's `.measure` cards evaluated on it.
-    pub fn finish(&self, solutions: Vec<Solution>, mut notes: Vec<String>) -> RunData {
+    pub fn finish(&self, out: Outcome) -> RunData {
+        let Outcome {
+            solutions,
+            mut notes,
+            pss,
+        } = out;
         if solutions.is_empty() {
             notes.push("no analyses in the deck; nothing to do".into());
         }
@@ -395,6 +488,7 @@ impl Prepared {
                 .chain(&self.override_diagnostics)
                 .cloned()
                 .collect(),
+            pss,
         }
     }
 }
@@ -420,6 +514,7 @@ pub(crate) fn prepare(
             message: first.render(&parsed.sources),
             diagnostics,
             pic: None,
+            pss: None,
         });
     }
 
@@ -606,7 +701,8 @@ fn to_js<T: serde::Serialize>(v: &T) -> Option<JsValue> {
         .and_then(|s| js_sys::JSON::parse(&s).ok())
 }
 
-/// A JS `Error` carrying `kind`, `diagnostics` and, when present, `pic`.
+/// A JS `Error` carrying `kind`, `diagnostics` and, when present, `pic`
+/// and (kind `pss`) `iterations`, `residuals`, `period`.
 fn js_error(e: &SimError) -> JsValue {
     let err = js_sys::Error::new(&e.message);
     let _ = js_sys::Reflect::set(&err, &"kind".into(), &e.kind.as_str().into());
@@ -614,6 +710,13 @@ fn js_error(e: &SimError) -> JsValue {
     let _ = js_sys::Reflect::set(&err, &"diagnostics".into(), &diags);
     if let Some(pic) = e.pic.as_deref().and_then(to_js) {
         let _ = js_sys::Reflect::set(&err, &"pic".into(), &pic);
+    }
+    if let Some(p) = &e.pss {
+        let _ = js_sys::Reflect::set(&err, &"iterations".into(), &(p.iterations as f64).into());
+        let residuals = to_js(&p.residuals).unwrap_or_else(|| js_sys::Array::new().into());
+        let _ = js_sys::Reflect::set(&err, &"residuals".into(), &residuals);
+        let period = p.period.map_or(JsValue::NULL, JsValue::from);
+        let _ = js_sys::Reflect::set(&err, &"period".into(), &period);
     }
     err.into()
 }

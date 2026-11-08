@@ -22,7 +22,8 @@ use crate::overrides::Overrides;
 ///   "plots": [ PlotJson, ... ],
 ///   "measurements": [ MeasurementJson, ... ],
 ///   "notes": [ "string", ... ],
-///   "diagnostics": [ DiagnosticJson, ... ]
+///   "diagnostics": [ DiagnosticJson, ... ],
+///   "pss": [ PssJson, ... ]
 /// }
 /// ```
 ///
@@ -37,6 +38,9 @@ use crate::overrides::Overrides;
 ///   analysis (`note: …` lines on the CLI's stderr), in order.
 /// * `diagnostics` — the non-fatal parser and `.options`
 ///   diagnostics (warnings); errors abort the run instead.
+/// * `pss` — one entry per `.pss` card of the deck, in deck order
+///   ([`PssJson`]): the numbers of the shooting that the two plots
+///   alone do not carry. Empty when the deck has no `.pss` card.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawfileJson {
     pub plots: Vec<PlotJson>,
@@ -44,6 +48,71 @@ pub struct RawfileJson {
     pub measurements: Vec<MeasurementJson>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<DiagnosticJson>,
+    #[serde(default)]
+    pub pss: Vec<PssJson>,
+}
+
+/// The periodic steady state of one `.pss` card: what Python's
+/// `spice.PssResult` and R's `spice_pss` add to the two plots.
+///
+/// ```json
+/// { "plot": 0, "period": 1.9936609e-4, "t0": 4.0e-3,
+///   "residuals": [4.9e-3, 1.6e-7], "periods": [1.99366e-4, 1.9936609e-4] }
+/// ```
+///
+/// * `plot` — index in `plots` of the card's time-domain plot; its
+///   spectrum is `plot + 1`.
+/// * `period` — the period `T` (s): the drive's for a driven circuit,
+///   the shooting's result for an autonomous oscillator (where `T` is
+///   a Newton unknown, D-0035).
+/// * `t0` — start of the reported period.
+/// * `residuals` — the period mismatch `max_i |x_i(t0+T) − x_i(t0)| /
+///   tol_i` of each shooting iteration (the last one ≤ STEADYCOEFF);
+///   `null` for an iteration whose transient failed and was
+///   backtracked (an infinite residual).
+/// * `periods` — the period of each iteration, aligned with
+///   `residuals`: constant for a driven circuit, the Newton iterate of
+///   an autonomous one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PssJson {
+    pub plot: usize,
+    pub period: f64,
+    pub t0: f64,
+    pub residuals: Vec<Option<f64>>,
+    pub periods: Vec<f64>,
+}
+
+impl PssJson {
+    /// The entry of `pss`, whose time plot is `plots[plot]`.
+    pub fn new(pss: &dune_core::Pss, plot: usize) -> Self {
+        PssJson {
+            plot,
+            period: pss.period,
+            t0: pss.t0,
+            residuals: finite_all(&pss.residuals),
+            periods: pss.periods.clone(),
+        }
+    }
+}
+
+/// The shooting history of a `.pss` that did not converge: the extra
+/// properties of a [`SimError`] of kind `pss`.
+///
+/// * `iterations` — the shooting iterations run;
+/// * `residuals` — the mismatch of each, in units of the tolerance
+///   (as in [`PssJson::residuals`]; `null` for an infinite one);
+/// * `period` — the last period iterate of an autonomous oscillator,
+///   `null` for a driven circuit (whose period is fixed).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PssFailureJson {
+    pub iterations: usize,
+    pub residuals: Vec<Option<f64>>,
+    pub period: Option<f64>,
+}
+
+/// Non-finite values as `null`, as in `columns`.
+fn finite_all(v: &[f64]) -> Vec<Option<f64>> {
+    v.iter().copied().map(finite).collect()
 }
 
 /// One `.measure` result: the flat row Python's `Result.measurements`
@@ -309,8 +378,11 @@ impl SimOptions {
 /// `kind` is one of `options` (bad `opts`), `parse` (the deck has
 /// errors; `diagnostics` lists all of them, warnings included),
 /// `elaborate` (the deck parsed but does not build into a circuit)
-/// or `analysis` (an analysis failed: no convergence, timestep too
-/// small, singular matrix, …).
+/// `analysis` (an analysis failed: no convergence, timestep too
+/// small, singular matrix, …) or `pss` (a `.pss` card whose shooting
+/// did not converge in its iterations; the error also carries the
+/// history as `iterations`, `residuals` and `period`,
+/// [`PssFailureJson`]).
 ///
 /// The pic entry points (`extract_pic`, `simulate_pic`) add:
 ///
@@ -334,6 +406,9 @@ pub struct SimError {
     pub diagnostics: Vec<DiagnosticJson>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pic: Option<Box<PicJson>>,
+    /// Kind `pss` only: the shooting history (flat on the JS error).
+    #[serde(default, flatten, skip_serializing_if = "Option::is_none")]
+    pub pss: Option<Box<PssFailureJson>>,
 }
 
 impl SimError {
@@ -343,6 +418,28 @@ impl SimError {
             message: message.into(),
             diagnostics: Vec::new(),
             pic: None,
+            pss: None,
+        }
+    }
+
+    /// An engine failure: kind `pss`, with the shooting history, for a
+    /// `.pss` that did not converge; kind `analysis` otherwise.
+    pub(crate) fn analysis(e: dune_core::Error) -> Self {
+        let message = e.to_string();
+        match e {
+            dune_core::Error::PssConvergence {
+                iterations,
+                residuals,
+                period,
+            } => SimError {
+                pss: Some(Box::new(PssFailureJson {
+                    iterations,
+                    residuals: finite_all(&residuals),
+                    period,
+                })),
+                ..SimError::new("pss", message)
+            },
+            _ => SimError::new("analysis", message),
         }
     }
 }

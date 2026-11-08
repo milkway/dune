@@ -130,6 +130,27 @@ for (const [k, tp] of ty.plots.entries()) {
 // .pss: the period real (like .tran), the harmonics [re, im] pairs (like .ac).
 const pss = simulate('rc\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.pss 1k 5m 2 128 10\n.end\n');
 assert.deepEqual(pss.plots.map((p) => [p.flags, p.npoints, p.columns[1][1].length]), [['real', 129, undefined], ['complex', 10, 2]]);
+// ...and its numbers: one `pss` entry per card (period, t0, history).
+assert.equal(pss.pss.length, 1);
+assert.deepEqual([pss.pss[0].plot, pss.pss[0].period, pss.pss[0].t0], [0, 1e-3, 5e-3]);
+assert.equal(pss.pss[0].periods.length, pss.pss[0].residuals.length);
+assert.ok(pss.pss[0].residuals.at(-1) <= 1);
+assert.equal(pss.plots[0].columns[0][0], pss.pss[0].t0);
+assert.deepEqual(simulateTyped('rc\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.pss 1k 5m 2 128 10\n.end\n').pss, pss.pss);
+assert.deepEqual(simulate('d\nv1 1 0 1\nr1 1 0 1k\n.op\n.end\n').pss, []);
+// A shooting cut short (SCITER 1): kind pss with the history; a driven
+// circuit has no period iterate.
+const pssCut = 'rc\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.pss 1k 5m 2 128 10 1\n.end\n';
+const isCut = (e) =>
+  e.kind === 'pss' && e.iterations === 1 && e.residuals.length === 1 && e.residuals[0] > 1 &&
+  e.period === null && /did not converge/.test(e.message);
+assert.throws(() => simulate(pssCut), isCut);
+assert.throws(() => simulateTyped(pssCut), isCut);
+{
+  const s = Session.fromDeck(pssCut);
+  assert.throws(() => s.run(), isCut);
+  s.free();
+}
 // Own buffers: transferable, and they survive later calls (memory growth).
 const tr = simulatePicTyped(rc);
 assert.equal(tr.pic.netlist, ex.netlist);
