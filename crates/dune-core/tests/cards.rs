@@ -85,6 +85,23 @@ fn instance_dtemp_offsets_the_circuit_temperature() {
 }
 
 #[test]
+fn bsim1_instance_temp_is_an_unknown_parameter() {
+    // b1.c has `temp` only in the model table (3f5 and ngspice-47,
+    // whose parser stops on "unknown parameter (temp)"); the card
+    // used to drop it silently.
+    for kw in ["temp=50", "dtemp=5"] {
+        let deck = format!(
+            "b1\nv1 1 0 2\nm1 1 1 0 0 nb l=2u w=10u {kw}\n.model nb nmos level=4\n.op\n.end\n"
+        );
+        let parsed = dune_netlist::parse_str("b1.cir", &deck);
+        let err = Circuit::from_netlist(&parsed.netlist)
+            .err()
+            .expect("must fail");
+        assert!(err.to_string().contains("unknown parameter"), "{err}");
+    }
+}
+
+#[test]
 fn capacitor_geometry_narrow_is_the_3f5_formula() {
     // C = CJ*(W-N)*(L-N) + 2*CJSW*((L-N)+(W-N)), N=1u, L=11u, W=6u:
     // 1e-3*5u*10u + 2*1e-9*15u = 5e-14 + 3e-14 = 8e-14.

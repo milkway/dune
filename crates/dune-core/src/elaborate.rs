@@ -589,7 +589,18 @@ impl Circuit {
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
-                    if let Some(d) = inst.dtemp {
+                    if matches!(mm, MosModel::B1(_) | MosModel::B2(_)) {
+                        // `b1.c`/`b2.c` have `temp` only as a model
+                        // parameter; neither table has `dtemp`.
+                        for (given, kw) in [
+                            (inst.temp.is_some(), "temp"),
+                            (inst.dtemp.is_some(), "dtemp"),
+                        ] {
+                            if given {
+                                problems.push(format!("`{name}`: unknown parameter ({kw})"));
+                            }
+                        }
+                    } else if let Some(d) = inst.dtemp {
                         ckt.set_dtemp(&name, d);
                     }
                     let nodes = four(&el.nodes);
