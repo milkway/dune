@@ -1,0 +1,19 @@
+Title: mesfet pole-zero: common-source stage with series resistances
+Date: Sun Nov  8 09:08:24  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 5
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(zero(1))	voltage
+	4	v(zero(2))	voltage
+Values:
+0		-8.555974170335543e+11,0.000000000000000e+00
+	-1.826322209893882e+11,0.000000000000000e+00
+	-3.158711311315812e+09,0.000000000000000e+00
+	-2.119869539408888e+11,0.000000000000000e+00
+	2.849776911378996e+10,0.000000000000000e+00

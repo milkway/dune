@@ -1,0 +1,19 @@
+Title: jfet pole-zero: common-source stage with series resistances
+Date: Sun Nov  8 09:08:24  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 5
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(zero(1))	voltage
+	4	v(zero(2))	voltage
+Values:
+0		-8.802921662959363e+10,0.000000000000000e+00
+	-2.375917013085417e+10,0.000000000000000e+00
+	-3.472903725848382e+08,0.000000000000000e+00
+	-3.013158449477484e+10,0.000000000000000e+00
+	6.313419638957799e+09,0.000000000000000e+00
