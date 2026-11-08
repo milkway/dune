@@ -557,17 +557,36 @@ function spiceNum(tok) {
   return parseFloat(m[1]) * scale[(m[2] || '').toLowerCase()];
 }
 
-const DISPLAY_PTS = 600; // ≥ this many timepoints across every tran chart
+const DISPLAY_PTS = 600; // ≥ this many points across every swept chart
 
 /**
- * The display grid: tran output lands on the internal timepoints, whose
- * ceiling is TMAX = min(tstep, span/50) by default — ~50 segments on
- * many corpus decks, visibly angular and clipping ringing peaks. For the
- * charts only, cap TMAX at span/600 (same engine, same contract, just
- * more timepoints). Decks already that dense, and cards whose arguments
- * this cannot parse, are left alone.
+ * The display grid: a sweep draws from exactly the points the card asks
+ * for — tran lands on the internal timepoints (ceiling TMAX =
+ * min(tstep, span/50) by default), .ac on its dec/oct/lin count, .dc on
+ * its step — often ~50 segments on corpus decks, visibly angular and
+ * clipping peaks. For the charts only, refine each card to carry at
+ * least DISPLAY_PTS points (same engine, same contract, just more
+ * points). Decks already that dense, and cards whose arguments this
+ * cannot parse, are left alone.
  */
 function displayDeck(deck) {
+  // .ac: raise the point count; dec/oct counts are per decade/octave.
+  deck = deck.replace(/^([ \t]*)\.ac\s+(dec|oct|lin)\s+(\S+)\s+(\S+)\s+(\S+)[ \t]*$/gim, (line, ind, kind, n, f1, f2) => {
+    const [np, a, b] = [spiceNum(n), spiceNum(f1), spiceNum(f2)];
+    if (![np, a, b].every(Number.isFinite) || !(a > 0) || !(b > a)) return line;
+    const k = kind.toLowerCase();
+    const spans = k === 'dec' ? Math.log10(b / a) : k === 'oct' ? Math.log2(b / a) : 1;
+    if (!(spans > 0) || np * spans >= DISPLAY_PTS) return line;
+    return `${ind}.ac ${kind} ${Math.ceil(DISPLAY_PTS / spans)} ${f1} ${f2}`;
+  });
+  // .dc: refine the first (x-axis) source's step; a second sweep source
+  // multiplies curves, not points per curve, and is left alone.
+  deck = deck.replace(/^([ \t]*)\.dc\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)([^\r\n]*)/gim, (line, ind, src, s0, s1, st, rest) => {
+    const [a, b, step] = [spiceNum(s0), spiceNum(s1), spiceNum(st)];
+    if (![a, b, step].every(Number.isFinite) || !((b - a) / step > 0)) return line;
+    if (Math.abs((b - a) / step) >= DISPLAY_PTS) return line;
+    return `${ind}.dc ${src} ${s0} ${s1} ${((b - a) / DISPLAY_PTS).toExponential(6)}${rest}`;
+  });
   return deck.replace(/^([ \t]*)\.tran\b([^\r\n]*)/gim, (line, ind, rest) => {
     const toks = rest.trim().split(/\s+/).filter(Boolean);
     const uic = toks.length && /^uic$/i.test(toks[toks.length - 1]) ? toks.pop() : '';
@@ -862,7 +881,7 @@ const html = `<!doctype html>
     <div class="wrap">
       <a href="../">← dune home</a>
       <h1>Examples</h1>
-      <p class="lead">Every circuit in the oracle corpus — ${stats.total - picItems.length} decks — plus ${picItems.length} pic schematics: the netlist, and what Dune computes for it. Each result was produced by Dune's WebAssembly build (dune-sim ${esc(pkgVersion)}) when this page was generated; the same decks are checked point by point against ngspice-47 in CI. Transient charts are re-run with the max internal step capped at 1/${DISPLAY_PTS} of the window, so the curves carry enough timepoints to draw smoothly — the deck shown, on its own grid, is what CI compares.</p>
+      <p class="lead">Every circuit in the oracle corpus — ${stats.total - picItems.length} decks — plus ${picItems.length} pic schematics: the netlist, and what Dune computes for it. Each result was produced by Dune's WebAssembly build (dune-sim ${esc(pkgVersion)}) when this page was generated; the same decks are checked point by point against ngspice-47 in CI. Swept charts (tran, ac, dc) are re-run on a display grid of at least ${DISPLAY_PTS} points, so the curves draw smoothly — the deck shown, on its own grid, is what CI compares.</p>
       <p class="note">Charts show at most ${MAX_TRACES} vectors (the deck's own <code>.plot</code>/<code>.print</code> choice when it has one), decimated to min/max per pixel column; complex plots show magnitude. Known-marginal circuits (<code>corpus/XFAIL</code>) and failures are shown as they are.</p>
       <nav class="toc" aria-label="Contents">
 ${tocHtml}
