@@ -1,0 +1,17 @@
+Title: floating off-diode chain - cktop fallback: true gmin stepping
+Date: Sun Nov  8 10:31:42  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 4
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	i(v1)	current
+Values:
+0		1.000000000000000e+03
+	1.000000821992610e+03
+	1.000000821992610e+03
+	-9.999999999989609e-01

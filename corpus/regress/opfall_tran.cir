@@ -1,0 +1,16 @@
+off bjt behind an unscaled pulse source - CKTop fallback: transient op
+* `.op` of the offbjt.cir circuit. The pulse has no DC value, so in
+* MODEDCOP the source takes its t=0 transient value unscaled by
+* srcFact (vsrcload.c: only a `dc` value is scaled outside TRANOP):
+* source stepping cannot zero it, and the `off` BJT in INITFIX never
+* passes BJTconvTest. In ngspice-47 dynamic gmin, true gmin and
+* Gillespie source stepping all fail (set ngdebug shows each), and
+* only the default transient operating point (OPtran, optran.c,
+* `optran 1 1 1 100n 10u 0`) closes it.
+vin b 0 pulse(-1.6 -1.2 10ns 400ns 400ns 100ns 10000ns)
+vc c 0 1
+re e 0 260
+q1 c b e qstd off
+.model qstd npn(is=1.0e-16 bf=50 br=0.1 rb=50 rc=10 va=50)
+.op
+.end
