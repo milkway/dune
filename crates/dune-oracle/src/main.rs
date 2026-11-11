@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod accuracy;
 mod compare;
 mod corpus;
 mod dune_run;
@@ -29,6 +30,7 @@ usage:
   dune-oracle --ci                   check every golden rawfile (no ngspice)
   dune-oracle --gen-golden [NAME..]  run ngspice, write corpus/golden/
   dune-oracle --compare A.raw B.raw  compare two rawfiles
+  dune-oracle --accuracy [NAME..]    transient error vs a refined run (no ngspice)
   dune-oracle NAME..                 run ngspice afresh, compare vs golden";
 
 fn main() -> Result<()> {
@@ -38,6 +40,7 @@ fn main() -> Result<()> {
         Some("--ci") => ci()?,
         Some("--gen-golden") => gen_golden(&args[1..])?,
         Some("--compare") => compare_files(&args[1..])?,
+        Some("--accuracy") => accuracy::run(&args[1..])?,
         Some(flag) if flag.starts_with('-') => bail!("unknown flag `{flag}`\n{USAGE}"),
         Some(_) => run_circuits(&args)?,
         None => bail!("missing arguments\n{USAGE}"),

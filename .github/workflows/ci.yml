@@ -45,6 +45,11 @@ jobs:
           cargo test -p dune-core --features parallel --release --lib --test parload
       - name: Oracle golden check
         run: cargo run -p dune-oracle -- --ci
+      # Fidelity is the golden check above; this is accuracy: every
+      # transient deck at its own step against Dune's refined run,
+      # held to the caps of corpus/ACCURACY (release: 40x the steps).
+      - name: Accuracy ruler
+        run: cargo run -p dune-oracle --release -- --accuracy
       - name: Sparse backend (solver-xingo)
         run: |
           cargo clippy -p dune-core --features solver-xingo --all-targets -- -D warnings
