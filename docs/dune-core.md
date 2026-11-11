@@ -1626,7 +1626,9 @@ fundamental (VCO travado, injeção) seguem o caminho excitado — não
 há opção para forçar o autônomo com fontes; o modo de fase quase
 neutro do `osc_tline` converge devagar (×0,85/iteração, 16
 corridas) e pede aceleração; `.pss` com `devnoise` ligado não
-injeta nem recusa (decidir). ~~`Circuit::run_card` devolvendo o
+injeta nem recusa — **decidido em 2026-11-11 (issue #22): recusa**, com
+`Error::Build`, pela mesma razão das fontes TRNOISE/TRRANDOM (estímulo
+aleatório não tem regime periódico). ~~`Circuit::run_card` devolvendo o
 `Pss`~~ e ~~espelhos de `notrnoise`/`devnoise` nos bindings~~:
 feitos (2026-11-08, §Caminho único cartão → análise e
 `docs/dune-sessao.md` §Opções nos bindings).

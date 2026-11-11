@@ -136,7 +136,9 @@ second half of \code{tstab} (both are required then; a \code{freq} given is
 only a fallback for fewer than three crossings). The deck must start
 the oscillation itself (\code{.ic} with \code{uic = TRUE}, or a ramp): there is
 no automatic kick. The result's \code{periods} follows the period per
-iteration. Transmission lines take part: the lossless ones (\code{T}, and
+iteration. A deck with a transient-noise source or with \code{devnoise}
+on is refused: a random stimulus has no periodic steady state.
+Transmission lines take part: the lossless ones (\code{T}, and
 \code{O} in its LC regime) as they are, the lossy RLC/RC lines of \code{O} with
 \code{options = list(ltrafit = TRUE)}.
 }
