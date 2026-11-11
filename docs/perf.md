@@ -86,6 +86,61 @@ O caminho sequencial (`load_threads = 1`) não perdeu nada mensurável:
 e depois (ruído da máquina); rawfile e stdout dos 88 decks do corpus
 (examples, basic, regress, measure, pss) **byte-idênticos** ao main.
 
+### Depois do backend esparso: onde o tempo ficou (2026-11-11)
+
+Com a LU fora do caminho (`--features parallel,solver-xingo`), o
+perfil (`sample`, 1 thread) da cadeia de 800 inversores (1600 BSIM3,
+852 loads por `.tran`) fica assim:
+
+| parcela | fração do tempo |
+|---|---|
+| load dos dispositivos (`bsim3::eval`, `load`, `exp`/`log`, `integrate`) | ~80% |
+| LU esparsa + solve | ~12% |
+| `trunc` (`integ::terr`) | ~3,5% |
+| `conv_test` | ~0,6% |
+| `accept` | ~0% |
+
+Duas consequências:
+
+- **Estender o esquema a `conv_test`/`trunc`/`accept` não paga.** Os
+  três somam ~4% do tempo; paralelizados perfeitamente em 4 threads
+  devolveriam ~2,5% do tempo total, antes de descontar um despacho a
+  mais por passo aceito. Ficam sequenciais, por medição — não por
+  falta de desenho (o `trunc` é uma redução por `min`, o `conv_test`
+  um `all`; ambos seriam bit-idênticos por chunk).
+- **O que limita o load paralelo é o próprio despacho e o replay.**
+  Por load (800 inversores): 557 µs sequencial; via log num thread só
+  ~610 µs de avaliação + ~80 µs de replay serial. O replay passa a
+  ser o piso (13% do load, constante com o nº de threads).
+
+**Despacho**: até aqui o `load` entregava a corrida inteira ao pool
+(`install`), estacionando a thread chamadora — duas trocas de thread
+por iteração de Newton. Agora os chunks saem de um contador
+compartilhado e a chamadora trabalha junto com os workers
+(`in_place_scope`); `load_threads = n` passa a ser `n` threads
+*contando a chamadora* (o pool tem `n − 1`). Mesmos logs, mesmo
+replay em ordem de chunk: a bit-identidade não muda (gate do corpus
+com 2/3/64 threads, nos dois backends).
+
+Antes × depois, mesmo binário de bench, rodadas alternadas, melhor de
+5 (M2 Pro, load average 8–11 de outros processos — acima de 3 threads
+os workers disputam os núcleos P, então as colunas de 4 e 6 são
+pessimistas):
+
+| caso | versão | 1 thr | 2 thr | 3 thr | 4 thr | 6 thr |
+|---|---|---|---|---|---|---|
+| 800 em série (1600 MOS) | antes | 604 ms | 485 ms (1,25×) | 442 ms (1,37×) | 404 ms (1,50×) | 405 ms (1,49×) |
+| | depois | 612 ms | 488 ms (1,25×) | 447 ms (1,37×) | 420 ms (1,46×) | 428 ms (1,43×) |
+| 100 × largura 8 (1600 MOS) | antes | 584 ms | 487 ms (1,20×) | 435 ms (1,34×) | 417 ms (1,40×) | 404 ms (1,45×) |
+| | depois | 594 ms | 438 ms (1,36×) | 375 ms (1,58×) | 364 ms (1,63×) | 352 ms (1,69×) |
+
+A cadeia em série fica no ruído; o caso em que o load domina ganha
+~15% (1,40× → 1,65× em 4 threads). Manter os workers girando entre
+loads (spin de até 300 µs) foi testado e **não** mudou o tempo da
+seção paralela — a latência de despertar não é o gargalo — e foi
+descartado. Próximo passo, se alguém precisar: o replay paralelo por
+faixa de posições.
+
 ## Backend esparso `solver-xingo` (issue #9, alavanca do solver; D-0013)
 
 Medido em 2026-11-10/11, Apple Silicon, `xingo-sparse 0.3.0` com
