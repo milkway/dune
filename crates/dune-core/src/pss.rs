@@ -1051,6 +1051,85 @@ impl PeriodOut {
     }
 }
 
+/// Aitken's extrapolation of the autonomous line iteration. Each
+/// pass of `lines_autonomous` is a fixed-point iteration on
+/// `(x₀, T, orbit)` whose slowest mode is the nearly neutral phase
+/// mode of the history (shifting the past in time): the residual
+/// falls by a constant factor `ρ` per replay (0.85 on `osc_tline`).
+/// Once three successive residuals show the same `ρ`, the iterate is
+/// moved to the limit of that geometric sequence, `z + ρ/(1−ρ)·Δz`,
+/// and the estimate starts over.
+#[derive(Default)]
+struct Aitken {
+    /// The last iterates.
+    seen: Vec<Iterate>,
+}
+
+/// One iterate of the autonomous line iteration.
+struct Iterate {
+    residual: f64,
+    x: Vec<f64>,
+    period: f64,
+    /// The orbit's values, row by row.
+    orbit: Vec<Vec<f64>>,
+}
+
+impl Aitken {
+    /// Two successive ratios must agree this closely.
+    const AGREE: f64 = 0.05;
+
+    /// Record the iterate just computed (`cur` is the orbit of
+    /// `x`/`period` before the Newton step that produced them) and,
+    /// when the residuals are geometric, extrapolate all three in
+    /// place.
+    fn push(&mut self, x: &mut [f64], period: &mut f64, cur: &mut PeriodOut, t0: f64) -> bool {
+        let values: Vec<Vec<f64>> = cur.rows.iter().map(|(_, v)| v.clone()).collect();
+        if self
+            .seen
+            .last()
+            .is_some_and(|l| l.orbit.len() != values.len())
+        {
+            self.seen.clear();
+        }
+        self.seen.push(Iterate {
+            residual: cur.total(),
+            x: x.to_vec(),
+            period: *period,
+            orbit: values,
+        });
+        let n = self.seen.len();
+        if n < 3 {
+            return false;
+        }
+        let (a, b, c) = (&self.seen[n - 3], &self.seen[n - 2], &self.seen[n - 1]);
+        let (r1, r2) = (b.residual / a.residual, c.residual / b.residual);
+        if !(0.3..0.98).contains(&r2) || (r1 - r2).abs() > Self::AGREE * r2 {
+            return false;
+        }
+        let f = r2 / (1.0 - r2);
+        for (xi, (ci, bi)) in x.iter_mut().zip(c.x.iter().zip(&b.x)) {
+            *xi += f * (ci - bi);
+        }
+        let old = cur.period;
+        *period += f * (c.period - b.period);
+        // The orbit moves with it; its times stretch to its period
+        // the way the grid does.
+        let new = old + f * (c.period - b.period);
+        for ((t, v), (cv, bv)) in cur.rows.iter_mut().zip(c.orbit.iter().zip(&b.orbit)) {
+            *t = t0 + (*t - t0) * new / old;
+            for (vi, (ci, bi)) in v.iter_mut().zip(cv.iter().zip(bv)) {
+                *vi += f * (ci - bi);
+            }
+        }
+        for rec in &mut cur.log {
+            rec.time = t0 + (rec.time - t0) * new / old;
+        }
+        cur.period = new;
+        self.seen.clear();
+        true
+    }
+}
+
 /// The periodic past of the transmission lines (issue #20) — the
 /// device-facing orbit — and the breakpoint rows to interpolate it on
 /// when checking the next orbit against it.
@@ -1421,10 +1500,13 @@ impl Shooter<'_> {
         residuals.push(seed.rnorm);
         periods.push(*period);
         let mut dt = 0.0;
+        let mut stepped = false;
         for pass in 0..GRID_PASSES {
             let grid = Grid::of(self.run, &seed.log);
             let mut cur = seed;
-            let mut stepped = false;
+            let mut aitken = Aitken::default();
+            // The replay after an extrapolation only measures it.
+            let mut settle = false;
             let done = loop {
                 if residuals.len() >= p.max_iter {
                     return Err(fail(residuals, *period));
@@ -1436,7 +1518,7 @@ impl Shooter<'_> {
                 if r.total() <= p.steady_coeff && stepped {
                     break r;
                 }
-                if r.rnorm > p.steady_coeff || !stepped {
+                if (r.rnorm > p.steady_coeff && !settle) || !stepped {
                     let (mut sx, mut st) = self.newton_step_osc(x, *period, osc, &r)?;
                     if st.abs() > MAX_DT * *period {
                         let k = MAX_DT * *period / st.abs();
@@ -1451,6 +1533,7 @@ impl Shooter<'_> {
                     stepped = true;
                 }
                 cur = r;
+                settle = aitken.push(x, period, &mut cur, self.run.t0);
             };
             if pass + 1 == GRID_PASSES {
                 return Ok((done, dt));

@@ -155,7 +155,8 @@ fn margin(driver: &Rawfile, other: &Rawfile) -> Result<f64, String> {
 
 /// What the ruler found for one deck.
 enum Measured {
-    Margin(f64),
+    /// The margin, and the candidate's timepoints (what it cost).
+    Margin(f64, usize),
     /// The reference disagrees with the half-refined run by this much.
     Unconverged(f64),
     Failed(String),
@@ -172,8 +173,9 @@ fn measure(path: &Path) -> Measured {
         Ok(conv) if conv > CONVERGED => return Measured::Unconverged(conv),
         Ok(_) => {}
     }
+    let points = cand.plots.iter().map(|p| p.num_points()).sum();
     match margin(&cand, &reference) {
-        Ok(m) => Measured::Margin(m),
+        Ok(m) => Measured::Margin(m, points),
         Err(e) => Measured::Failed(e),
     }
 }
@@ -184,8 +186,11 @@ pub fn run(args: &[String]) -> Result<bool> {
     let corpus = Corpus::load()?;
     let registry = read_registry(&corpus.root)?;
     let mut ok = true;
-    let (mut measured, mut sum) = (0usize, 0.0f64);
-    println!("{:<14} {:>8} {:>6}  result", "circuit", "margin", "cap");
+    let (mut measured, mut sum, mut total) = (0usize, 0.0f64, 0usize);
+    println!(
+        "{:<14} {:>8} {:>6} {:>7}  result",
+        "circuit", "margin", "cap", "points"
+    );
     for c in &corpus.circuits {
         if !args.is_empty() && !args.iter().any(|a| a.trim_end_matches(".cir") == c.stem) {
             continue;
@@ -206,9 +211,10 @@ pub fn run(args: &[String]) -> Result<bool> {
             _ => DEFAULT_CAP,
         };
         match measure(&c.path) {
-            Measured::Margin(m) => {
+            Measured::Margin(m, points) => {
                 measured += 1;
                 sum += m;
+                total += points;
                 let verdict = if m > cap {
                     ok = false;
                     "FAIL: over its cap"
@@ -219,7 +225,7 @@ pub fn run(args: &[String]) -> Result<bool> {
                 } else {
                     "ok"
                 };
-                println!("{:<14} {m:>8.3} {cap:>6.2}  {verdict}", c.stem);
+                println!("{:<14} {m:>8.3} {cap:>6.2} {points:>7}  {verdict}", c.stem);
             }
             Measured::Unconverged(conv) => {
                 ok = false;
@@ -244,6 +250,8 @@ pub fn run(args: &[String]) -> Result<bool> {
             println!("{stem:<14} FAIL: listed in corpus/ACCURACY but not in the corpus");
         }
     }
-    println!("\n{measured} transient deck(s) measured, margins sum to {sum:.3}");
+    println!(
+        "\n{measured} transient deck(s) measured, margins sum to {sum:.3}, {total} timepoints"
+    );
     Ok(ok)
 }

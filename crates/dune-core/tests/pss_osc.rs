@@ -435,7 +435,10 @@ fn the_dune_profile_shoots_with_trbdf2() {
     let colpitts = run("osc_colpitts", |o, _| dune(o)).period;
     for method in [dune_core::Method::TrBdf2, dune_core::Method::Gear] {
         let t = run("osc_colpitts", |o, _| o.method = Some(method)).period;
-        println!("osc_colpitts {method:?}: {:.2e} from the default", rel(t, colpitts));
+        println!(
+            "osc_colpitts {method:?}: {:.2e} from the default",
+            rel(t, colpitts)
+        );
         assert!(rel(t, colpitts) < 1e-3, "{method:?}: {t:e}");
     }
 }

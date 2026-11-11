@@ -42,6 +42,18 @@ fn worst_diff(a: &dune_core::Solution, b: &dune_core::Solution, node: &str) -> f
     w
 }
 
+/// The two models are compared on (nearly) the same grid: with
+/// SPICE's `TRTOL` allowance both runs ride TMAX. Under the Dune
+/// profile's tighter TR-BDF2 control (`TRTOL/7`, D-0049) each run
+/// picks its own steps at the pulse corners, and the pointwise
+/// difference measures the grids (7.6e-3), not the models.
+fn shared_grid(opts: Options) -> Options {
+    Options {
+        trtol: dune_core::SPICE_TRTOL * opts.trtol,
+        ..opts
+    }
+}
+
 fn reported_errors(note: &str) -> Vec<f64> {
     let tail = note.split("history lags:").nth(1).expect("error list");
     tail.split(',')
@@ -69,6 +81,7 @@ fn option_parses_as_flag_or_value() {
 fn recursive_mode_meets_its_budget_and_tracks_the_faithful_walk() {
     let (ckt, opts, tran) = load("ltrafit.cir", &corpus("regress/ltrafit.cir"));
     assert!(opts.ltra_fit);
+    let opts = shared_grid(opts);
     let (on, notes) = ckt.run(&tran, &opts).unwrap();
     let fits: Vec<&String> = notes.iter().filter(|n| n.contains("ltrafit")).collect();
     assert_eq!(fits.len(), 2, "{notes:?}");
@@ -98,6 +111,7 @@ fn recursive_mode_meets_its_budget_and_tracks_the_faithful_walk() {
 #[test]
 fn recursive_mode_under_trbdf2() {
     let (ckt, opts, tran) = load("ltrafit.cir", &corpus("regress/ltrafit.cir"));
+    let opts = shared_grid(opts);
     let tb = Options {
         method: Some(Method::TrBdf2),
         ..opts.clone()

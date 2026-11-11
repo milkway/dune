@@ -1394,6 +1394,14 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   o Colpitts parte e converge (gear: período a 1,7e-4 do default).
   Teste
   `tests/pss_osc.rs::the_dune_profile_shoots_with_trbdf2`.
+- **`TRTOL` do TR-BDF2** (D-0049): no perfil Dune o controle de
+  passo do composto usa `TRTOL/7` (`Options::lte_trtol()`). O 7 do
+  SPICE compensa a superestimativa do `CKTterr` por diferenças
+  divididas; a estimativa embutida do composto não superestima.
+  Régua: soma 1,83 → 1,17 com 3 % a mais de pontos; `mosamp2`
+  0,445 → 0,075, `mos6inv` 0,148 → 0,040, `ltrafit` 0,332 → 0,253;
+  pior caso `schmitt` 0,097 → 0,124. `.options trtol=` continua
+  escalando; `method=trap|gear` e `compat=spice3` usam `TRTOL` puro.
 - **`Options.tmax_divisor`** (issue #16; argumento de API, não
   chave de `.options` — o TMAX é parâmetro do cartão `.tran`, e o
   divisor vale para todo cartão `.tran` do deck): `Some(d)`, d ≥ 1
@@ -1695,9 +1703,8 @@ amplitude assentar.
 
 **Pendências:** osciladores com fonte periódica que *não* é a
 fundamental (VCO travado, injeção) seguem o caminho excitado — não
-há opção para forçar o autônomo com fontes; o modo de fase quase
-neutro do `osc_tline` converge devagar (×0,85/iteração, 16
-corridas) e pede aceleração; `.pss` com `devnoise` ligado não
+há opção para forçar o autônomo com fontes; ~~o modo de fase quase
+neutro do `osc_tline` converge devagar~~ (acelerado, D-0050); `.pss` com `devnoise` ligado não
 injeta nem recusa — **decidido em 2026-11-11 (issue #22): recusa**, com
 `Error::Build`, pela mesma razão das fontes TRNOISE/TRRANDOM (estímulo
 aleatório não tem regime periódico). ~~`Circuit::run_card` devolvendo o
@@ -1843,8 +1850,14 @@ Sem aceleração (Anderson sobre o passado foi descartado para o DC:
 o mesmo `1 − λ ≈ 1e-5` deixa a secante no ruído).
 
 **Pendências:** linha num deck com `TD` de muitos períodos custa
-`TD/T` cópias do passado (limite `MAX_PAST_SAMPLES`, erro claro);
-acelerar o modo de fase do autônomo com linha. (A documentação de
+`TD/T` cópias do passado (limite `MAX_PAST_SAMPLES`, erro claro).
+~~Acelerar o modo de fase do autônomo com linha~~ — feito (D-0050):
+quando três resíduos sucessivos caem na mesma razão, o iterado
+`(x₀, T, órbita)` é extrapolado por Aitken para o limite da sequência
+geométrica, e o passo de Newton obrigatório vale uma vez para o
+shooting, não uma por grade. `osc_tline`: 16 → 6 iterações no
+trapézio, 27 → 10 com TR-BDF2; período a 5,8e-5 do ngspice a 256
+pontos e 1,6e-6 a 1024 (os números da tabela acima são de antes). (A documentação de
 `spice.pss`/`spice_pss` que ainda dizia recusar linhas foi corrigida
 em 2026-11-11.)
 

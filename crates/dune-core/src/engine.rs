@@ -1443,7 +1443,7 @@ impl Engine {
             reltol: opts.reltol,
             abstol: opts.abstol,
             chgtol: opts.chgtol,
-            trtol: opts.trtol,
+            trtol: opts.lte_trtol(),
         };
         for d in &self.devices {
             d.trunc(&t, &mut timetemp);

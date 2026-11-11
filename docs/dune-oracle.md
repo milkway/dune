@@ -201,12 +201,20 @@ dá o teto de quem passa de 0,2; estourar o teto derruba o CI.
 | trapézio (até D-0046) | 25 de 34 | 10,16 | 3,07 | 1,32 |
 | TR-BDF2 (D-0046) | 31 de 34 | 4,33 | 0,10 | 0,45 |
 | + eventos de chave localizados (D-0047) | 33 de 35 | 1,83 | 0,10 | 0,45 |
+| + TR-BDF2 controlado por `TRTOL/7` (D-0049) | 34 de 35 | 1,17 | 0,12 | 0,08 |
 
 Na linha da D-0047 o `sw_hyst` vai de 2,54 a 0,000 (antes os
 limiares da chave eram cruzados dentro de um passo, qualquer que
 fosse o método) e o `csw_rly` entra na conta (0,04; antes a
-referência refinada não convergia). Fora de 0,2 ficam `ltrafit`
-(0,33) e `mosamp2` (0,45). É o número a bater em qualquer mudança de integração ou
+referência refinada não convergia). Na linha da D-0049 só o
+`ltrafit` (0,25) fica fora de 0,2, e a régua passa a mostrar os pontos
+de tempo de cada deck (18 728 → 19 302 no total, +3 %). `ltra_1/2/3`
+seguem sem medida: os diodos da carga cortam em menos de 1 ps quando a
+carga armazenada acaba, e mesmo com dois refinamentos concordando no
+instante a 2 fs o salto estoura a régua num vetor cuja excursão
+inteira é o salto. No passo do deck o `ltra_1` fica a até 0,4 V da
+corrida refinada nas tensões da linha e a 0,3 ns nas bordas internas
+do driver, e apertar a tolerância não muda isso (é o TMAX do deck). É o número a bater em qualquer mudança de integração ou
 de controle de passo. Custo do TR-BDF2 no `dune -b` sobre os 37 decks
 transientes (release, melhor de 3): mediana ×1,12 por deck, pior
 ×1,7 (`ltra_1`, `ltra_3`), total ×0,82 (o `ltra_2`, que domina, fica

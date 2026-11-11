@@ -11,6 +11,14 @@
   `points`. Only the start-up transient of an autonomous oscillator
   stays on the trapezoidal rule, which lets the oscillation grow at
   any step, whatever `method=` says; `method=` decides the shooting.
+- **Tighter step control under TR-BDF2.** `trtol` (7) is SPICE's
+  allowance for an error estimate that overestimates; TR-BDF2's own
+  estimate does not, so the default profile holds it to `trtol/7`.
+  About 3 % more timepoints on the test corpus for roughly a third
+  less error at the deck's step. `trtol=` still scales it;
+  `compat="spice3"` and `method="trap"`/`"gear"` are unchanged.
+- An autonomous `spice.pss()` over transmission lines converges in
+  about a third of the iterations.
 - **`ltrabkrate` defaults to 10** (the cap on the slope breakpoints
   of LTRA lines per maximum step): a transient whose line
   echoes cascade into breakpoints now ends instead of exhausting its
