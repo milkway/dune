@@ -99,7 +99,7 @@ fn recursive_mode_meets_its_budget_and_tracks_the_faithful_walk() {
 fn recursive_mode_under_trbdf2() {
     let (ckt, opts, tran) = load("ltrafit.cir", &corpus("regress/ltrafit.cir"));
     let tb = Options {
-        method: Method::TrBdf2,
+        method: Some(Method::TrBdf2),
         ..opts.clone()
     };
     let (on, _) = ckt.run(&tran, &tb).unwrap();
@@ -112,7 +112,15 @@ fn recursive_mode_under_trbdf2() {
             },
         )
         .unwrap();
-    let (trap, _) = ckt.run(&tran, &opts).unwrap();
+    let (trap, _) = ckt
+        .run(
+            &tran,
+            &Options {
+                method: Some(Method::Trapezoidal),
+                ..opts.clone()
+            },
+        )
+        .unwrap();
     assert_ne!(on[0].data, trap[0].data, "trbdf2 must change this deck");
     for node in ["v(2)", "v(3)", "v(4)", "v(5)"] {
         let w = worst_diff(&on[0], &off[0], node);

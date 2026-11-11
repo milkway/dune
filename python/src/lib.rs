@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    AlterValue, Circuit, Data, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT,
+    AlterValue, Circuit, Compat, Data, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT,
     PSS_TIME_PLOT, PssParams, Session, Solution, SweepParam, SweepRun, VarType, measure_all,
 };
 use dune_netlist::ir::Netlist;
@@ -51,7 +51,7 @@ const DECK_NAME: &str = "deck.cir";
 
 /// Every `options` key accepted (the `.options` card names), in
 /// `Options` field order.
-const OPTION_NAMES: [&str; 31] = [
+const OPTION_NAMES: [&str; 32] = [
     "reltol",
     "abstol",
     "vntol",
@@ -69,6 +69,7 @@ const OPTION_NAMES: [&str; 31] = [
     "trtol",
     "chgtol",
     "method",
+    "compat",
     "ltrabkrate",
     "ltrafit",
     "maxord",
@@ -535,7 +536,22 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
                         )));
                     }
                 };
-                Box::new(move |o: &mut Options| o.method = m) as Override
+                Box::new(move |o: &mut Options| o.method = Some(m)) as Override
+            }
+            "compat" => {
+                let s: String = v
+                    .extract()
+                    .map_err(|_| PyTypeError::new_err("option compat must be a str"))?;
+                let c = match s.to_ascii_lowercase().as_str() {
+                    "dune" => Compat::Dune,
+                    "spice3" => Compat::Spice3,
+                    _ => {
+                        return Err(PyValueError::new_err(format!(
+                            "option compat must be 'dune' or 'spice3', got {s:?}"
+                        )));
+                    }
+                };
+                Box::new(move |o: &mut Options| o.compat = c) as Override
             }
             "ltrafit" => set!(ltra_fit, bool_value(key, &v)?),
             "ltrabkrate" => {

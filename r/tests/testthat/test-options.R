@@ -29,7 +29,10 @@ test_that("each new option is the edited deck", {
     list(noisy_deck, list(seed = 9L), ".options seed=9"),
     list(noisy_deck, list(notrnoise = TRUE), ".options notrnoise"),
     list(noisy_deck, list(DevNoise = TRUE, devnt = 2e-7, seed = 5), ".options devnoise devnt=0.2u seed=5"),
-    list(noisy_deck, list(method = "trbdf2"), ".options method=trbdf2")
+    # TR-BDF2 is the `.tran` default (D-0046): the trapezoidal rule
+    # and the SPICE3 profile are what change the deck now.
+    list(noisy_deck, list(method = "trap"), ".options method=trap"),
+    list(noisy_deck, list(compat = "spice3"), ".options compat=spice3")
   )
   for (cs in cases) {
     deck <- cs[[1]]

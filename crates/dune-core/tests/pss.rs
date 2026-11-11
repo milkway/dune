@@ -167,14 +167,14 @@ fn rlc_matches_the_forced_response_from_far_off() {
 fn every_integration_method_shoots() {
     let h = rc_h(1e3);
     for (m, name) in [(Method::Gear, "gear"), (Method::TrBdf2, "trbdf2")] {
-        let pss = run("pss_rc", |o, _| o.method = m);
+        let pss = run("pss_rc", |o, _| o.method = Some(m));
         let (e, e1) = sine_errors(&pss, "v(2)", 1e3, h);
         println!(
             "pss_rc {name}: max err {e:.2e}, X1 {e1:.2e}, residuals {:?}",
             pss.residuals
         );
         assert!(pss.residuals.len() <= 3 && e < 2e-3, "{name}: {e}");
-        let pss = run("pss_rect", |o, _| o.method = m);
+        let pss = run("pss_rect", |o, _| o.method = Some(m));
         println!("pss_rect {name}: residuals {:?}", pss.residuals);
         assert!(pss.residuals.len() <= 4, "{name}");
     }

@@ -87,7 +87,8 @@ def test_measure_rawfile_of_ngspice(corpus: Path) -> None:
         name, rest = line.split("=", 1)
         expect[name.strip()] = float(rest.split()[0])
     deck = (corpus / "measure" / "meas_rlc.cir").read_text()
-    res = spice.simulate(deck)
+    # ngspice's numbers: the SPICE3 profile (a trapezoidal `.tran`).
+    res = spice.simulate(deck, options={"compat": "spice3"})
     tran = res[0]
     # Re-measuring Dune's own plot with the card bodies gives the cards'
     # values; ngspice's numbers on its own plot agree to the simulation.

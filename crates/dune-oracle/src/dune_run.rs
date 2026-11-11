@@ -45,7 +45,8 @@ pub fn run(path: &Path) -> Result<Rawfile, String> {
         return Err(errors.join("; "));
     }
     let (circuit, _notes) = Circuit::from_netlist(&parsed.netlist).map_err(|e| e.to_string())?;
-    let mut options = Options::default();
+    // The goldens are ngspice runs: the oracle is the SPICE3 profile.
+    let mut options = Options::spice3();
     let mut opt_diags = Vec::new();
     options.apply(&parsed.netlist.options, &mut opt_diags);
 

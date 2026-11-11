@@ -1,7 +1,10 @@
-//! Simulator options with the 3f5 defaults
-//! (`lib/ckt/cktinit.c`, `lib/ckt/cktntask.c`; names from
-//! `spice.txt` §SIMULATOR VARIABLES). Temperatures arrive in °C on
-//! the card and live in kelvin here, like the C.
+//! Simulator options (`lib/ckt/cktinit.c`, `lib/ckt/cktntask.c`;
+//! names from `spice.txt` §SIMULATOR VARIABLES). Temperatures arrive
+//! in °C on the card and live in kelvin here, like the C.
+//!
+//! [`Options::default`] is Dune's profile; [`Options::spice3`]
+//! (`.options compat=spice3`) restores every default where Dune
+//! departs from the 3f5 — see [`Compat`].
 
 use dune_netlist::Diagnostic;
 use dune_netlist::ir::{Param, ParamValue};
@@ -9,8 +12,28 @@ use dune_netlist::ir::{Param, ParamValue};
 use crate::consts::{CTOK, REFTEMP};
 use crate::integ::Method;
 
+/// The defaults profile (`.options compat=`, D-0046).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Compat {
+    /// `dune` (default): a `.tran` without `method=` integrates with
+    /// [`Method::TrBdf2`]. Measured on the corpus against refined
+    /// references (`dune-oracle --accuracy`, docs/dune-oracle.md), it
+    /// is closer to the converged answer than the trapezoidal rule at
+    /// the same step on 16 of 29 decks and farther on none, and it
+    /// does not ring.
+    #[default]
+    Dune,
+    /// `spice3`: the SPICE3f5 defaults — a `.tran` without `method=`
+    /// uses the trapezoidal rule. What the ngspice oracle runs under,
+    /// and what reproduces a SPICE3 run.
+    Spice3,
+}
+
 #[derive(Clone, Debug)]
 pub struct Options {
+    /// The defaults profile: what an analysis does where the fields
+    /// below leave it the choice (today: [`Options::method`]).
+    pub compat: Compat,
     /// `RELTOL`, default 1e-3.
     pub reltol: f64,
     /// `ABSTOL`, default 1e-12 (amperes).
@@ -51,9 +74,11 @@ pub struct Options {
     pub trtol: f64,
     /// `CHGTOL`: charge tolerance, default 1e-14.
     pub chgtol: f64,
-    /// `METHOD`: `trap` (default), `gear`, or Dune's opt-in `trbdf2`
-    /// ([`Method::TrBdf2`]; not a SPICE value).
-    pub method: Method,
+    /// `METHOD`: `trap`, `gear` or Dune's `trbdf2`
+    /// ([`Method::TrBdf2`]; not a SPICE value). `None` (default)
+    /// leaves it to the analysis: see [`Options::tran_method`] and
+    /// [`Options::pss_method`].
+    pub method: Option<Method>,
     /// `MAXORD` for Gear, default 2.
     pub maxord: usize,
     /// `NOPAGE`: suppress page breaks in printed output.
@@ -173,6 +198,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
+            compat: Compat::Dune,
             reltol: 1e-3,
             abstol: 1e-12,
             vntol: 1e-6,
@@ -189,7 +215,7 @@ impl Default for Options {
             noopiter: false,
             trtol: 7.0,
             chgtol: 1e-14,
-            method: Method::Trapezoidal,
+            method: None,
             maxord: 2,
             nopage: false,
             defl: 1e-4,
@@ -221,6 +247,33 @@ pub const TRAN_STEP_FLOOR: usize = 10_000;
 pub const TRAN_STEPS_PER_TMAX: usize = 50;
 
 impl Options {
+    /// The SPICE3f5 defaults ([`Compat::Spice3`]).
+    pub fn spice3() -> Self {
+        Options {
+            compat: Compat::Spice3,
+            ..Options::default()
+        }
+    }
+
+    /// The integration method of a `.tran`: [`Options::method`] when
+    /// given, else the profile's — TR-BDF2 under [`Compat::Dune`],
+    /// the trapezoidal rule under [`Compat::Spice3`].
+    pub fn tran_method(&self) -> Method {
+        self.method.unwrap_or(match self.compat {
+            Compat::Dune => Method::TrBdf2,
+            Compat::Spice3 => Method::Trapezoidal,
+        })
+    }
+
+    /// The integration method of the `.pss` shooting:
+    /// [`Options::method`] when given, else the trapezoidal rule
+    /// under either profile. The shooting of autonomous oscillators
+    /// was built and measured on it (D-0035); under TR-BDF2 some of
+    /// them do not converge yet (`osc_colpitts`, `osc_tline`).
+    pub fn pss_method(&self) -> Method {
+        self.method.unwrap_or(Method::Trapezoidal)
+    }
+
     /// The step budget of a `.tran` running to `tstop` with effective
     /// maximum step `max_step` (see [`Options::max_tran_steps`]).
     pub fn tran_step_budget(&self, tstop: f64, max_step: f64) -> usize {
@@ -288,14 +341,23 @@ impl Options {
                 "trtol" => num_opt!(trtol),
                 "chgtol" => num_opt!(chgtol),
                 "method" => match &p.value {
-                    ParamValue::Str(s) if s == "gear" => self.method = Method::Gear,
+                    ParamValue::Str(s) if s == "gear" => self.method = Some(Method::Gear),
                     ParamValue::Str(s) if s == "trap" || s == "trapezoidal" => {
-                        self.method = Method::Trapezoidal;
+                        self.method = Some(Method::Trapezoidal);
                     }
-                    // Dune's opt-in L-stable composite (issue #6).
-                    ParamValue::Str(s) if s == "trbdf2" => self.method = Method::TrBdf2,
+                    // Dune's L-stable composite (issue #6).
+                    ParamValue::Str(s) if s == "trbdf2" => self.method = Some(Method::TrBdf2),
                     _ => diags.push(Diagnostic::warning(
                         "method must be trap, gear or trbdf2".to_string(),
+                        p.span,
+                    )),
+                },
+                // The defaults profile (D-0046).
+                "compat" => match &p.value {
+                    ParamValue::Str(s) if s == "spice3" => self.compat = Compat::Spice3,
+                    ParamValue::Str(s) if s == "dune" => self.compat = Compat::Dune,
+                    _ => diags.push(Diagnostic::warning(
+                        "compat must be spice3 or dune".to_string(),
                         p.span,
                     )),
                 },

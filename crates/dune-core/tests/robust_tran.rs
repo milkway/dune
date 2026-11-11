@@ -42,11 +42,49 @@ fn options_parse_the_robust_values() {
         "o.cir",
         "o\nr1 1 0 1\nv1 1 0 1\n.options method=trbdf2 ltrabkrate=10\n.tran 1n 10n\n.end\n",
     );
-    assert_eq!(opts.method, Method::TrBdf2);
+    assert_eq!(opts.method, Some(Method::TrBdf2));
     assert_eq!(opts.ltra_break_rate, Some(10));
     let d = Options::default();
-    assert_eq!(d.method, Method::Trapezoidal);
+    assert_eq!(d.method, None);
     assert_eq!(d.ltra_break_rate, None);
+}
+
+/// The defaults profile (D-0046): a `.tran` without `method=`
+/// integrates with TR-BDF2 under Dune's profile and with the
+/// trapezoidal rule under `compat=spice3`; the `.pss` shooting stays
+/// on the trapezoidal rule under both; an explicit method wins
+/// everywhere, wherever it sits on the card.
+#[test]
+fn the_profile_picks_the_default_method() {
+    use dune_core::Compat;
+    let deck = |opt: &str| format!("o\nr1 1 0 1\nv1 1 0 1\n{opt}\n.tran 1n 10n\n.end\n");
+    let opts = |opt: &str| load("o.cir", &deck(opt)).1;
+
+    let d = opts("");
+    assert_eq!(d.compat, Compat::Dune);
+    assert_eq!(d.tran_method(), Method::TrBdf2);
+    assert_eq!(d.pss_method(), Method::Trapezoidal);
+
+    let s = opts(".options compat=spice3");
+    assert_eq!((s.compat, s.method), (Compat::Spice3, None));
+    assert_eq!(s.tran_method(), Method::Trapezoidal);
+    assert_eq!(s.pss_method(), Method::Trapezoidal);
+    assert_eq!(Options::spice3().tran_method(), Method::Trapezoidal);
+
+    for card in [
+        ".options compat=spice3 method=gear",
+        ".options method=gear compat=spice3",
+    ] {
+        let g = opts(card);
+        assert_eq!(g.tran_method(), Method::Gear, "{card}");
+        assert_eq!(g.pss_method(), Method::Gear, "{card}");
+    }
+    assert_eq!(opts(".options compat=dune").tran_method(), Method::TrBdf2);
+    // An unknown profile is a warning and changes nothing.
+    let parsed = dune_netlist::parse_str("o.cir", &deck(".options compat=hspice"));
+    let (mut o, mut diags) = (Options::default(), Vec::new());
+    o.apply(&parsed.netlist.options, &mut diags);
+    assert_eq!((o.compat, diags.len()), (Compat::Dune, 1));
 }
 
 /// `corpus/regress/trbdf2_ring.cir`: the dioload diode string of
@@ -55,12 +93,12 @@ fn options_parse_the_robust_values() {
 #[test]
 fn trbdf2_does_not_ring_where_trap_does() {
     let (ckt, opts, tran) = load("ring.cir", &corpus("regress/trbdf2_ring.cir"));
-    assert_eq!(opts.method, Method::TrBdf2);
+    assert_eq!(opts.method, Some(Method::TrBdf2));
     let tb = run(&ckt, &opts, &tran);
     let trap = run(
         &ckt,
         &Options {
-            method: Method::Trapezoidal,
+            method: Some(Method::Trapezoidal),
             ..opts.clone()
         },
         &tran,
@@ -95,7 +133,7 @@ fn trbdf2_error_does_not_exceed_trap_on_rc() {
         let sol = run(
             &ckt,
             &Options {
-                method,
+                method: Some(method),
                 ..opts.clone()
             },
             &tran,

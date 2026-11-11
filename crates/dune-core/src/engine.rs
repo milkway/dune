@@ -1624,13 +1624,14 @@ impl Engine {
 
     /// The integration method fields of `DCtran`'s setup.
     fn set_tran_method(&mut self, opts: &Options) {
-        self.trbdf2 = opts.method == Method::TrBdf2;
+        let method = opts.tran_method();
+        self.trbdf2 = method == Method::TrBdf2;
         self.method = if self.trbdf2 {
             Method::Trapezoidal
         } else {
-            opts.method
+            method
         };
-        self.maxord = match opts.method {
+        self.maxord = match method {
             Method::Trapezoidal | Method::TrBdf2 => 2,
             Method::Gear => opts.maxord.clamp(1, 6),
         };

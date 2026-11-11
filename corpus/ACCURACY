@@ -7,12 +7,9 @@ ltra_1_gear|unmeasured|already runs at the refined step; gated against ngspice i
 ltra_3_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 ltra_compact|unmeasured|the refined run exceeds the transient step budget (trytocompact probe; the breakpoint density grows with 1/TMAX)
 csw_rly|unmeasured|switch events: the refined reference is still 0.26 of the ruler from its half-refined run
-schmitt|4.0|regenerative edges crossed at the 10 ns print step (measured 3.07 with the trapezoidal default)
-mosamp2|1.8|the LTE controller cruises at TMAX over the Meyer-charge transients (measured 1.32)
 sw_hyst|3.3|the switch thresholds are crossed inside one default step (measured 2.54)
-rca3040|0.95|100 points over the whole run (measured 0.70)
-schmitt_fine|0.8|the companion's 1 ns step against a 0.025 ns reference (measured 0.61)
 ltrafit|0.65|recursive-convolution lines at the default step (measured 0.47)
-tra_pulse|0.5|lossless-line reflections at the default step (measured 0.37)
-uic_getic|0.45|measured 0.32
-mos6inv|0.35|measured 0.26
+mosamp2|0.6|the LTE controller over the Meyer-charge transients (measured 0.45 with the TR-BDF2 default; 1.32 with the trapezoidal rule)
+tra_pulse|0.25|measured 0.18, close to the default cap
+uic_getic|0.25|measured 0.17, close to the default cap
+mos6inv|0.25|measured 0.15, close to the default cap

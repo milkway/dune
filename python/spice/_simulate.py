@@ -17,7 +17,7 @@ from .pic import PicExtraction, _runnable
 __all__ = ["OPTION_NAMES", "OptionValue", "simulate"]
 
 OptionValue = float | int | bool | str
-"""Value of a simulator option: a number, a count, a flag or ``"trap"``/``"gear"``/``"trbdf2"``."""
+"""Value of a simulator option: a number, a count, a flag or a word (``method``, ``compat``)."""
 
 OPTION_NAMES: tuple[str, ...] = tuple(_spice.OPTION_NAMES)
 """Every key :func:`simulate` accepts in ``options`` (the 3f5 ``.options`` names)."""
@@ -135,7 +135,10 @@ def simulate(
             ``defas``), counts as ints (``itl1``, ``itl2``, ``itl4``,
             ``gminsteps``, ``srcsteps``, ``maxord``, ``ltrabkrate``),
             ``temp``/``tnom`` in degrees Celsius as on the card, ``method``
-            as ``"trap"``, ``"gear"`` or ``"trbdf2"``, flags as bools
+            as ``"trap"``, ``"gear"`` or ``"trbdf2"`` (unset, a ``.tran``
+            integrates with ``"trbdf2"``), ``compat`` as ``"dune"`` or
+            ``"spice3"`` (the SPICE3f5 defaults: a trapezoidal ``.tran``),
+            flags as bools
             (``noopiter``, ``nopage``, ``ltrafit``, ``keepopinfo``, ``trytocompact``,
             ``notrnoise``, ``devnoise``), ``seed`` as a positive int (the
             transient-noise seed; no ``"random"``) and ``devnt`` (the

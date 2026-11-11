@@ -174,7 +174,7 @@ mod tests {
         );
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(o.trtol, 1.0);
-        assert_eq!(o.method, dune_core::Method::Gear);
+        assert_eq!(o.method, Some(dune_core::Method::Gear));
         assert_eq!(o.maxord, 3);
         assert_eq!(o.reltol, 1e-3);
         assert_eq!(o.temp, 50.0 + dune_core::consts::CTOK);
@@ -196,7 +196,7 @@ mod tests {
         // "200n" is read as the card's text is (200 × 1e-9).
         assert!((o.dev_noise_step.unwrap() - 2e-7).abs() < 1e-21);
         assert_eq!(o.ltra_break_rate, Some(4));
-        assert_eq!(o.method, dune_core::Method::TrBdf2);
+        assert_eq!(o.method, Some(dune_core::Method::TrBdf2));
         let (o, d) = apply(r#"{"devnt": 2e-7}"#);
         assert!(d.is_empty(), "{d:?}");
         assert_eq!(o.dev_noise_step, Some(2e-7));

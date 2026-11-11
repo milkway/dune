@@ -7,8 +7,8 @@ use std::path::Path;
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    AlterValue, Circuit, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT, PSS_TIME_PLOT,
-    PssParams, Session, Solution, SweepParam, measure_all,
+    AlterValue, Circuit, Compat, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT,
+    PSS_TIME_PLOT, PssParams, Session, Solution, SweepParam, measure_all,
 };
 use dune_netlist::{IncludeLoader, ParseOutcome, Severity};
 use dune_raw::{Data, Plot, Rawfile};
@@ -273,7 +273,7 @@ pub fn measure_plot(
 
 /// The option names `apply_options` accepts, in `Options` field order
 /// (the card's names, as in `spice.txt` §SIMULATOR VARIABLES).
-pub const OPTION_NAMES: [&str; 31] = [
+pub const OPTION_NAMES: [&str; 32] = [
     "reltol",
     "abstol",
     "vntol",
@@ -291,6 +291,7 @@ pub const OPTION_NAMES: [&str; 31] = [
     "trtol",
     "chgtol",
     "method",
+    "compat",
     "ltrabkrate",
     "ltrafit",
     "maxord",
@@ -387,7 +388,7 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
             "trtol" => opts.trtol = num(n, v)?,
             "chgtol" => opts.chgtol = num(n, v)?,
             "method" => {
-                opts.method = match v {
+                opts.method = Some(match v {
                     OptValue::Str(s) if s.eq_ignore_ascii_case("gear") => Method::Gear,
                     OptValue::Str(s) if s.eq_ignore_ascii_case("trbdf2") => Method::TrBdf2,
                     OptValue::Str(s)
@@ -401,6 +402,13 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
                             "option `method` must be \"trap\", \"gear\" or \"trbdf2\"".into()
                         );
                     }
+                })
+            }
+            "compat" => {
+                opts.compat = match v {
+                    OptValue::Str(s) if s.eq_ignore_ascii_case("dune") => Compat::Dune,
+                    OptValue::Str(s) if s.eq_ignore_ascii_case("spice3") => Compat::Spice3,
+                    _ => return Err("option `compat` must be \"dune\" or \"spice3\"".into()),
                 }
             }
             "ltrafit" => opts.ltra_fit = flag(n, v)?,
