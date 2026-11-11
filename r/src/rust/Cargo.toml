@@ -1,7 +1,7 @@
 [package]
 name = "spice"
 description = "R bindings (savvy) of the Dune simulator for the `spice` R package"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "BSD-3-Clause"
@@ -18,9 +18,8 @@ crate-type = ["staticlib", "lib"]
 savvy = "0.11"
 num-complex = "0.4"
 # The engine. Relative to src/rust inside the dune repository; the
-# package's `configure` rewrites these paths from DUNE_ROOT when the
-# package is built from a tarball outside the repository (vendoring
-# for a real CRAN submission is a later task).
+# package's `configure` rewrites these paths away from it (to the
+# vendored copy tools/r-vendor.sh archives, or to DUNE_ROOT).
 # `parallel`: `spice_sweep(.threads =)` (issue #10).
 dune-core = { path = "../../../crates/dune-core", features = ["parallel"] }
 dune-netlist = { path = "../../../crates/dune-netlist" }

@@ -255,7 +255,9 @@ CLAUDE.md §Pacotes)
 
 - CI: o smoke test C do dune-ffi precisa de `cc` no runner
   (ubuntu-latest tem; Windows pula).
-- Vendoring CRAN (crates por path + registry) e Makevars.win real.
+- ~~Vendoring CRAN (crates por path + registry) e Makevars.win real.~~
+  Feito na 0.1.0: `tools/r-vendor.sh` + build offline; sdist do
+  Python instalável. Receita em `docs/release-py-r.md`.
 - Placeholder `spice` no PyPI (wheel 0.0.1 pronto; publicação é do
   usuário).
 - LICENSE na raiz do repo — confirmar titulares (proposta do pacote

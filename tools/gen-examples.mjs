@@ -767,7 +767,7 @@ const picGroup = { id: 'pic', name: 'Figures (pic)' };
 toc.push({ g: picGroup, items: picItems });
 sections.push(
   `<section id="pic"><div class="wrap"><h2>Figures (pic) <span class="count">${picItems.length}</span></h2>` +
-    `<p class="sub">Schematics in rpic's pic language (<code>corpus/pic/</code>): the source, the figure Dune renders from it, the netlist its extractor derives, and the simulation of that netlist. <code>corpus/pic/spice.pic</code> is the prelude itself, not a figure.</p>` +
+    `<p class="sub">Schematics in rpic's pic language (<code>corpus/pic/</code>): the source, the figure Dune renders from it, the netlist its extractor derives, and the simulation of that netlist. The prelude itself lives in <code>crates/dune-pic/src/spice.pic</code>.</p>` +
     `${picItems.map((i) => i.html).join('')}</div></section>`,
 );
 

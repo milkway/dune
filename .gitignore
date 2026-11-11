@@ -39,3 +39,11 @@ r/src/*.dll
 # macOS
 .DS_Store
 !corpus/pss/golden/*.raw
+
+# R release artifacts (tools/r-vendor.sh, R CMD build)
+r/src/rust/vendor.tar.xz
+r/src/.cargo/
+r/src/vendor/
+r/src/dune/
+r/tests/testthat/corpus/
+spice_*.tar.gz

@@ -11,17 +11,33 @@ LIBDIR = $(TARGET_DIR)/$(TARGET)/$(subst dev,debug,$(PROFILE))
 STATLIB = $(LIBDIR)/libspice.a
 PKG_LIBS = -L$(LIBDIR) -lspice
 
-CARGO_BUILD_ARGS = --lib --profile $(PROFILE) $(FEATURE_FLAGS) --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR)
+# Offline build from the vendored sources (configure: VENDORED = 1
+# when rust/vendor.tar.xz is present, which tools/r-vendor.sh makes
+# for a CRAN tarball). CRAN's Rust policy: no network, at most two
+# build jobs, nothing written outside the package directory — the
+# cargo home is .cargo here and the target directory rust/target.
+VENDORED = @VENDORED@
+CARGOTMP = $(CURDIR)/.cargo
+CARGO_OFFLINE = @CARGO_OFFLINE@
+
+CARGO_BUILD_ARGS = --lib --profile $(PROFILE) $(FEATURE_FLAGS) $(CARGO_OFFLINE) --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR)
 
 all: $(SHLIB) clean_intermediate
 
 $(SHLIB): $(STATLIB)
 
 $(STATLIB):
+	if [ "$(VENDORED)" = "1" ]; then \
+	  echo "=== spice: offline build from rust/vendor.tar.xz ===" && \
+	  tar xf rust/vendor.tar.xz && \
+	  mkdir -p $(CARGOTMP) && \
+	  cp rust/vendor-config.toml $(CARGOTMP)/config.toml; \
+	fi
 	# In some environments, ~/.cargo/bin might not be included in PATH, so we need
 	# to set it here to ensure cargo can be invoked. It is appended to PATH and
 	# therefore is only used if cargo is absent from the user's PATH.
 	export PATH="$(PATH):$(HOME)/.cargo/bin" && \
+	  if [ "$(VENDORED)" = "1" ]; then export CARGO_HOME="$(CARGOTMP)"; fi && \
 	  export CC="$(CC)" && \
 	  export CFLAGS="$(CFLAGS)" && \
 	  export RUSTFLAGS="$(RUSTFLAGS)" && \
@@ -34,11 +50,13 @@ $(STATLIB):
 	    export RUSTFLAGS="$(RUSTFLAGS) -Zdefault-visibility=hidden" && \
 	    cargo +nightly build $(CARGO_BUILD_ARGS) --target $(TARGET) -Zbuild-std=panic_abort,std; \
 	  fi
+	rm -Rf $(CARGOTMP)
 
 clean_intermediate: $(SHLIB)
 	rm -f $(STATLIB)
+	rm -Rf $(CARGOTMP) vendor dune @CLEAN_TARGET@
 
 clean:
-	rm -Rf $(SHLIB) $(OBJECTS) $(STATLIB)
+	rm -Rf $(SHLIB) $(OBJECTS) $(STATLIB) $(CARGOTMP) vendor dune @CLEAN_TARGET@
 
 .PHONY: all clean_intermediate clean

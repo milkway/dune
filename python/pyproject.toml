@@ -7,7 +7,7 @@ build-backend = "maturin"
 # not free (D-0017), so the dist is spice3 — the module stays
 # `import spice` (dist and import names are independent).
 name = "spice3"
-# The version comes from Cargo.toml (single source; 0.0.1).
+# The version comes from python/Cargo.toml (single source).
 dynamic = ["version"]
 description = "SPICE3f5-faithful circuit simulation (the Dune engine) for Python"
 readme = "README.md"

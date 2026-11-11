@@ -13,8 +13,12 @@ import pytest
 import spice
 
 
-def test_version() -> None:
-    assert spice.__version__ == "0.0.1"
+def test_version(corpus: Path) -> None:
+    # The single source is python/Cargo.toml (pyproject's dynamic version).
+    manifest = (corpus.parent / "python" / "Cargo.toml").read_text()
+    version = re.search(r'^version = "([^"]+)"', manifest, re.MULTILINE)
+    assert version is not None
+    assert spice.__version__ == version.group(1)
 
 
 def test_rc_transient(examples: Path) -> None:

@@ -1,0 +1,9 @@
+# Cargo configuration for the offline build from the vendored sources
+# (src/Makevars copies it to src/.cargo/config.toml, the CARGO_HOME of
+# the build). `vendor` resolves against src/, where Makevars unpacks
+# rust/vendor.tar.xz.
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"

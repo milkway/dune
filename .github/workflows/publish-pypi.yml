@@ -43,12 +43,35 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: python/dist/*.whl
 
-  # No sdist yet: the crate builds from path dependencies on the
-  # workspace, which an sdist consumer would not have (vendoring is a
-  # pending Phase 4 task, shared with the CRAN build).
+  # The sdist builds on its own: maturin copies the path dependencies
+  # (crates/dune-{core,netlist,raw,pic}) and the workspace manifest
+  # they inherit from into the tarball, keeping the ../crates layout,
+  # and ships python/Cargo.lock. Registry crates are fetched by the
+  # consumer's cargo at install time (a Rust toolchain is required).
+  sdist:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          command: sdist
+          args: -o dist
+      # Fail before publishing if the sdist does not build away from
+      # the repository.
+      - name: Install the sdist outside the repository
+        run: |
+          python -m venv /tmp/sdist-venv
+          /tmp/sdist-venv/bin/pip install python/dist/*.tar.gz
+          cd /tmp && /tmp/sdist-venv/bin/python -I -c "import spice; print(spice.__version__)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: python/dist/*.tar.gz
 
   publish:
-    needs: wheels
+    needs: [wheels, sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

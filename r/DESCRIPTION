@@ -1,10 +1,12 @@
 Package: spice
 Title: Circuit Simulation with a 'SPICE3f5'-Derived Engine
-Version: 0.0.0.9000
+Version: 0.1.0
 Authors@R: c(
     person("André", "Leite", email = "leite@de.ufpe.br", role = c("aut", "cre")),
     person("The Regents of the University of California", role = "cph",
-           comment = "'SPICE3f5', from which the simulation engine is derived")
+           comment = "'SPICE3f5', from which the simulation engine is derived"),
+    person("The authors of the dependency Rust crates", role = "cph",
+           comment = "see inst/AUTHORS for details")
   )
 Description: Runs 'SPICE3' circuit netlists (operating point, DC sweep,
     transient, small-signal AC, pole-zero, noise, distortion, transfer
@@ -14,10 +16,12 @@ Description: Runs 'SPICE3' circuit netlists (operating point, DC sweep,
     plotting, and plots can be read from and written to 'SPICE3'
     rawfiles for exchange with other simulators.
 License: BSD_3_clause + file LICENSE
+URL: https://github.com/milkway/dune, https://milkway.github.io/dune/
+BugReports: https://github.com/milkway/dune/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 8.0.0
-SystemRequirements: Cargo (Rust's package manager), rustc >= 1.88
+SystemRequirements: Cargo (Rust's package manager), rustc (>= 1.88.0)
 Depends:
     R (>= 4.2)
 Imports:

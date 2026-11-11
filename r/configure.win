@@ -48,7 +48,43 @@ case "$($CC -dumpmachine)" in
 esac
 echo "using Rust target: '${TARGET}'"
 
+# --- spice: vendored sources and the dune engine crates ------------
+# As in configure: src/rust/vendor.tar.xz (tools/r-vendor.sh) means an
+# offline build (at most two jobs); away from the repository the crate
+# paths point at the vendored copy (src/dune) or at DUNE_ROOT.
+if [ -f "src/rust/vendor.tar.xz" ]; then
+  VENDORED=1
+  CARGO_OFFLINE="--offline -j 2"
+  echo "using vendored Rust sources: src/rust/vendor.tar.xz (offline build)"
+else
+  VENDORED=0
+  CARGO_OFFLINE=""
+fi
+if [ ! -f "src/rust/../../../crates/dune-core/Cargo.toml" ]; then
+  if [ "${VENDORED}" = "1" ]; then
+    DUNE_CRATES="../dune/crates/"
+  elif [ -n "${DUNE_ROOT}" ] && [ -f "${DUNE_ROOT}/crates/dune-core/Cargo.toml" ]; then
+    echo "using dune crates from DUNE_ROOT: '${DUNE_ROOT}'"
+    DUNE_CRATES="${DUNE_ROOT}/crates/"
+  else
+    echo "-------------- ERROR: CONFIGURATION FAILED --------------------"
+    echo ""
+    echo "The dune engine crates were not found next to the package, and"
+    echo "src/rust/vendor.tar.xz is missing. Build from the dune repository"
+    echo "(r/), run tools/r-vendor.sh there before R CMD build, or set"
+    echo "DUNE_ROOT to the root of a dune checkout."
+    echo ""
+    echo "---------------------------------------------------------------"
+    exit 1
+  fi
+  sed -e "s|\.\./\.\./\.\./crates/|${DUNE_CRATES}|g" \
+    src/rust/Cargo.toml > src/rust/Cargo.toml.tmp && \
+    mv src/rust/Cargo.toml.tmp src/rust/Cargo.toml
+fi
+
 sed \
+  -e "s/@VENDORED@/${VENDORED}/" \
+  -e "s/@CARGO_OFFLINE@/${CARGO_OFFLINE}/" \
   -e "s/@TARGET@/${TARGET}/" \
   -e "s/@PROFILE@/${PROFILE}/" \
   -e "s/@FEATURE_FLAGS@/${FEATURE_FLAGS}/" \
