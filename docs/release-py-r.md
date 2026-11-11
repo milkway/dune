@@ -63,7 +63,11 @@ arquivo leva duas árvores:
 
 - `vendor/` — `cargo vendor --locked` do `r/src/rust` (os crates do
   crates.io, com checksums);
-- `dune/` — `crates/dune-{core,netlist,raw,pic}` (manifesto + `src/`)
+- `dune/` — `crates/dune-{core,netlist,raw,pic}` (manifesto + `src/`;
+  do `dune-core` também os fontes de `examples/` e `benches/*.rs`,
+  porque o manifesto declara esses alvos e o cargo recusa um
+  manifesto cujo alvo não existe — um `[[bench]]`/`[[example]]` novo
+  num crate do motor precisa entrar no script)
   e uma cópia enxuta do `Cargo.toml` do workspace (só
   `[workspace.package]`/`[workspace.dependencies]` e esses 4 membros).
 

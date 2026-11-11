@@ -46,9 +46,10 @@ for c in $CRATES; do
   (cd "$ROOT" && git ls-files "crates/$c/Cargo.toml" "crates/$c/src") |
     (cd "$ROOT" && tar $TARFLAGS -cf - -T -) | (cd "$STAGE/dune" && tar xf -)
 done
-# dune-core declares an example target; a path dependency's manifest
-# must still resolve its targets, so the example source goes along.
-(cd "$ROOT" && git ls-files crates/dune-core/examples) |
+# dune-core declares example and bench targets; a path dependency's
+# manifest must still resolve its targets, so their sources go along
+# (not the bench fixtures: nothing here builds the benches).
+(cd "$ROOT" && git ls-files crates/dune-core/examples 'crates/dune-core/benches/*.rs') |
   (cd "$ROOT" && tar $TARFLAGS -cf - -T -) | (cd "$STAGE/dune" && tar xf -)
 {
   echo "# Trimmed copy of the dune workspace manifest (tools/r-vendor.sh)."
