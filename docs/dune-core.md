@@ -1370,8 +1370,8 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   `located_flips_do_not_move_with_the_step`).
 - **Método do `.pss`** (D-0047): `Options::pss_method()` = o do
   `.tran` (TR-BDF2 no perfil Dune). A estabilização do autônomo
-  (`Options::pss_stab_method()`) fica no trapézio quando o deck não
-  dá `method=`: ela roda com TMAX = TSTAB/1000, que pode exceder o
+  (`Options::pss_stab_method()`) fica sempre no trapézio, mesmo com
+  `method=` no deck: ela roda com TMAX = TSTAB/1000, que pode exceder o
   período (Colpitts: 500 ns contra T = 299 ns), e o trapézio é o
   único dos métodos cuja região de crescimento é exatamente o
   semiplano direito — modo que cresce no circuito cresce na corrida
@@ -1388,9 +1388,11 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   | `osc_colpitts` | 5,07e-5 | 2,35e-5 |
 
   `osc_tline` converge em 27 iterações (trapézio: 16), período a
-  4,1e-5 do trapézio. `method=` explícito vale também para a
-  estabilização, como antes (com `method=trbdf2` o Colpitts segue
-  sem partir, erro claro). Teste
+  4,1e-5 do trapézio. `method=` explícito vale para o refino e
+  o shooting (o resultado), não para a estabilização, que só
+  fornece o ponto de partida: com `method=trbdf2` ou `method=gear`
+  o Colpitts parte e converge (gear: período a 1,7e-4 do default).
+  Teste
   `tests/pss_osc.rs::the_dune_profile_shoots_with_trbdf2`.
 - **`Options.tmax_divisor`** (issue #16; argumento de API, não
   chave de `.options` — o TMAX é parâmetro do cartão `.tran`, e o

@@ -315,16 +315,18 @@ impl Options {
 
     /// The integration method of the stabilization run of an
     /// autonomous `.pss` (the transient to TSTAB in which the
-    /// oscillation starts and its period is counted):
-    /// [`Options::method`] when given, else the trapezoidal rule
-    /// under either profile. That run steps on a grid that does not
-    /// know the period yet (TMAX = TSTAB/1000, which may exceed it),
-    /// and the trapezoidal rule is the one method whose growth region
-    /// is exactly the right half-plane: a mode that grows in the
-    /// circuit grows in the run at any step. An L-stable method damps
-    /// it instead (`osc_colpitts` never starts under TR-BDF2 there).
+    /// oscillation starts and its period is counted): the trapezoidal
+    /// rule, whatever [`Options::method`] says. That run steps on a
+    /// grid that does not know the period yet (TMAX = TSTAB/1000,
+    /// which may exceed it), and the trapezoidal rule is the one
+    /// method whose growth region is exactly the right half-plane: a
+    /// mode that grows in the circuit grows in the run at any step.
+    /// An L-stable method damps it instead (`osc_colpitts` never
+    /// starts under TR-BDF2 or Gear there). The run only supplies the
+    /// shooting's starting point and period estimate; the result is
+    /// integrated with [`Options::pss_method`].
     pub fn pss_stab_method(&self) -> Method {
-        self.method.unwrap_or(Method::Trapezoidal)
+        Method::Trapezoidal
     }
 
     /// The step budget of a `.tran` running to `tstop` with effective

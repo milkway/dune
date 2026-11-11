@@ -52,9 +52,9 @@ fn options_parse_the_robust_values() {
 /// The defaults profile (D-0046): a `.tran` without `method=`
 /// integrates with TR-BDF2 under Dune's profile and with the
 /// trapezoidal rule under `compat=spice3`; the `.pss` shooting
-/// follows (D-0047), its autonomous start-up stays on the
-/// trapezoidal rule under both; an explicit method wins everywhere,
-/// wherever it sits on the card.
+/// follows (D-0047); an explicit method wins in both, wherever it
+/// sits on the card. The start-up of an autonomous `.pss` is always
+/// trapezoidal.
 #[test]
 fn the_profile_picks_the_default_method() {
     use dune_core::Compat;
@@ -81,7 +81,7 @@ fn the_profile_picks_the_default_method() {
         let g = opts(card);
         assert_eq!(g.tran_method(), Method::Gear, "{card}");
         assert_eq!(g.pss_method(), Method::Gear, "{card}");
-        assert_eq!(g.pss_stab_method(), Method::Gear, "{card}");
+        assert_eq!(g.pss_stab_method(), Method::Trapezoidal, "{card}");
     }
     assert_eq!(opts(".options compat=dune").tran_method(), Method::TrBdf2);
     // An unknown profile is a warning and changes nothing.

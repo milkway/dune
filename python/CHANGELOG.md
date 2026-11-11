@@ -10,7 +10,7 @@
   about half the period error of the trapezoidal rule at the same
   `points`. Only the start-up transient of an autonomous oscillator
   stays on the trapezoidal rule, which lets the oscillation grow at
-  any step. `method=` still decides everything when given.
+  any step, whatever `method=` says; `method=` decides the shooting.
 - **`ltrabkrate` defaults to 10** (the cap on the slope breakpoints
   of LTRA lines per maximum step): a transient whose line
   echoes cascade into breakpoints now ends instead of exhausting its
