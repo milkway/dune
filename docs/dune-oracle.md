@@ -175,3 +175,43 @@ Medidas que definiram a escolha (arm64, ngspice-47):
   método, mesmo passo, mesma resposta", não a convergência da física.
 - Mesmo veredito no backend esparso (`solver-xingo`).
 
+## Régua de precisão (`--accuracy`, 2026-11-11)
+
+O `--ci` mede **fidelidade** (Dune contra UMA execução do ngspice nas
+mesmas configurações). Ele não distingue execução precisa de
+imprecisa: um deck com passo default grosso passa quando os dois
+motores erram igual (`csw_rly`) e falha quando erram diferente (os
+XFAILs). O `dune-oracle --accuracy` mede a outra coisa, sem ngspice:
+
+- **candidato**: o deck como escrito;
+- **referência**: o mesmo deck com `TMAX/40`, rodado pelo próprio
+  Dune (que o Dune refinado coincide com o ngspice refinado é o que
+  os companheiros acima e o levantamento abaixo estabelecem);
+- a referência só vale se convergiu: `TMAX/20` tem de estar a ≤ 0,2
+  régua dela; senão o deck entra como `unmeasured` em
+  `corpus/ACCURACY`;
+- **margem**: pior razão do comparador com a grade do candidato
+  dirigindo — o erro nos pontos que o motor calculou.
+
+`corpus/ACCURACY` (`stem|teto|motivo` ou `stem|unmeasured|motivo`)
+dá o teto de quem passa de 0,2; estourar o teto derruba o CI. Hoje:
+34 decks medidos, 25 dentro de 0,2, soma das margens 10,16 (trapézio
+default). É o número a bater em qualquer mudança de integração ou de
+controle de passo.
+
+**Levantamento que calibrou a régua** (ngspice-47 como referência,
+`TMAX/40`, trap; 29 decks com referência convergida e Dune-refinado
+≡ ngspice-refinado):
+
+| execução no passo default | mediana | pior | > 1 | soma |
+|---|---|---|---|---|
+| ngspice trapézio | 0,013 | 4,54 | 2 | 9,20 |
+| Dune trapézio | 0,013 | 3,07 | 2 | 6,49 |
+| Dune gear | 0,055 | 1,45 | 1 | 4,97 |
+| Dune trbdf2 | 0,008 | 0,41 | 0 | 1,27 |
+
+`trbdf2` contra trapézio no Dune: melhor em 16, igual em 13, pior em
+nenhum; passos aceitos ×0,98 (dois Newtons por passo). Gear piora 17.
+Script e dados brutos do levantamento: `.claude/scratch/accuracy/`
+(local, não versionado).
+

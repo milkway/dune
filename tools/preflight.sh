@@ -24,6 +24,7 @@ echo "== clippy (parallel)" && cargo +stable clippy -p dune-core --features para
 echo "== test" && cargo +stable test --workspace
 echo "== parallel bit-identity" && cargo +stable test -p dune-core --features parallel --release --lib --test parload
 echo "== oracle" && cargo +stable run -q -p dune-oracle -- --ci
+echo "== accuracy" && cargo +stable run -q -p dune-oracle --release -- --accuracy
 echo "== sparse backend" && cargo +stable clippy -p dune-core --features solver-xingo --all-targets -- -D warnings && cargo +stable test -q -p dune-core --features solver-xingo --release && cargo +stable run -q -p dune-oracle --release --features dune-core/solver-xingo -- --ci
 echo "== wasm" && cargo +stable clippy -p dune-wasm --target wasm32-unknown-unknown -- -D warnings
 echo "== preflight: tudo verde (falta só o x86_64 do CI)"
