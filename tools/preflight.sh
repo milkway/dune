@@ -11,11 +11,19 @@
 # shared one is unsafe across concurrent worktrees).
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-stage=$(mktemp -d)
+export CARGO_TARGET_DIR="${DUNE_PREFLIGHT_TARGET:-$HOME/.cargo/preflight-target}"
+# The export always lands on the same path, next to the target dir.
+# `git archive` stamps every file with the commit time, so on a rerun
+# of the same commit cargo finds its test binaries fresh and reuses
+# them - with the CARGO_MANIFEST_DIR of the run that built them baked
+# in (env!). Under a fresh mktemp dir per run that path was gone, and
+# every test reading the corpus through it failed with "No such file".
+stage="$CARGO_TARGET_DIR.stage"
+rm -rf "$stage"
+mkdir -p "$stage"
 trap 'rm -rf "$stage"' EXIT
 git -C "$root" archive HEAD | tar -x -C "$stage"
 cd "$stage"
-export CARGO_TARGET_DIR="${DUNE_PREFLIGHT_TARGET:-$HOME/.cargo/preflight-target}"
 rustup update stable --no-self-update >/dev/null 2>&1 || true
 echo "== toolchain: $(rustc +stable --version)"
 echo "== fmt" && cargo +stable fmt --check
