@@ -1,7 +1,7 @@
 //! LU benchmark (P-3): `factor` + `solve_in_place` of fixed MNA
 //! matrices with the pattern analyzed once, i.e. one Newton
 //! iteration's linear-algebra cost, for every backend this build has
-//! (faer dense always; xingo-sparse with `--features sparse`).
+//! (faer dense always; xingo-sparse with `--features solver-xingo`).
 //!
 //! Fixtures (`benches/fixtures/*.mna`) are the last real matrix the
 //! first engine of each corpus deck factored (captured from a

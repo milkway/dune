@@ -5,7 +5,7 @@
 //!
 //! ```sh
 //! cargo bench -p dune-core --bench sim                    # faer
-//! cargo bench -p dune-core --bench sim --features sparse  # xingo
+//! cargo bench -p dune-core --bench sim --features solver-xingo  # xingo
 //! ```
 //!
 //! Benchmark ids carry the backend label, so both runs coexist in
