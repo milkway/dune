@@ -121,3 +121,19 @@ win-builder (`devtools::check_win_devel("r")` — sobe o tarball, ou
 seja, é publicação de fato: decisão do mantenedor) e
 `devtools::submit_cran("r")`. Não comitar `vendor.tar.xz` nem o
 tarball (estão no `.gitignore`).
+
+## crates.io (D-0045)
+
+Só os quatro crates de biblioteca; os demais são `publish = false`.
+A versão é a do workspace (`[workspace.package]`), repetida nas
+quatro dependências internas de `[workspace.dependencies]`; depois de
+mudá-la, rode `cargo metadata` na raiz, em `python/` e em `r/src/rust/`
+para atualizar os três lockfiles.
+
+```sh
+cargo publish --dry-run -p dune-netlist -p dune-raw -p dune-core -p dune-pic
+cargo publish           -p dune-netlist -p dune-raw -p dune-core -p dune-pic
+```
+
+O `--dry-run` empacota e compila cada crate fora do workspace (os
+internos vêm de um registro temporário). Publicado não se apaga.
