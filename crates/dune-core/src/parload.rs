@@ -40,6 +40,8 @@
 //! after it, which keeps its position in the sequential order.
 
 use std::ops::Range;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::devices::Device;
 use crate::matrix::{LoadEnv, StampLog, StampSink};
@@ -77,11 +79,17 @@ impl ParLoad {
         devices: &[Box<dyn Device>],
         ranges: &[(usize, usize)],
     ) -> Option<Self> {
+        // The calling thread loads too (see [`load`]), so the pool
+        // holds the other `threads - 1`.
+        let total = match threads {
+            0 => std::thread::available_parallelism().map_or(1, |n| n.get()),
+            n => n,
+        };
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(threads)
+            .num_threads(total.saturating_sub(1).max(1))
             .build()
             .ok()?;
-        let chunks = pool.current_num_threads() * CHUNKS_PER_THREAD;
+        let chunks = (pool.current_num_threads() + 1) * CHUNKS_PER_THREAD;
         let safe: Vec<bool> = devices.iter().map(|d| d.par_load()).collect();
         let plan = plan(&safe, ranges, chunks);
         let nlogs = plan
@@ -213,9 +221,22 @@ pub(crate) fn load(
                         fault: None,
                     });
                 }
-                par.pool.install(|| {
-                    use rayon::prelude::*;
-                    jobs.par_iter_mut().for_each(|job| {
+                // The chunks are claimed off a shared counter by the
+                // pool's workers *and* by the calling thread. Handing
+                // the whole run to the pool (`install`) parks the
+                // caller and pays two thread hand-offs per load —
+                // per Newton iteration; with the caller working, a
+                // worker that is slow to wake only means the caller
+                // takes more of the chunks.
+                let jobs: Vec<Mutex<Job>> = jobs.into_iter().map(Mutex::new).collect();
+                let next = AtomicUsize::new(0);
+                let work = || {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(job) = jobs.get(i) else { break };
+                        // Uncontended: each index is claimed once.
+                        let mut job = job.lock().expect("a load panicked");
+                        let job = &mut *job;
                         let view = job.states.take().expect("one load per job");
                         let mut c = env.ctx(StampSink::Record(&mut *job.log), view);
                         for d in job.devices.iter_mut() {
@@ -223,8 +244,19 @@ pub(crate) fn load(
                         }
                         job.noncon = c.noncon;
                         job.fault = c.fault;
-                    });
+                    }
+                };
+                let helpers = par.pool.current_num_threads().min(jobs.len() - 1);
+                par.pool.in_place_scope(|s| {
+                    for _ in 0..helpers {
+                        s.spawn(|_| work());
+                    }
+                    work();
                 });
+                let jobs: Vec<Job> = jobs
+                    .into_iter()
+                    .map(|j| j.into_inner().expect("a load panicked"))
+                    .collect();
                 // The deterministic reduction: chunk order = device
                 // order, whatever order the workers finished in.
                 for job in &jobs {
