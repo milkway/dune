@@ -38,7 +38,8 @@ units (temperatures \code{temp}/\code{tnom} in degrees Celsius): \code{reltol},
 \code{ltrabkrate}, \code{ltrafit}, \code{maxord}, \code{nopage}, \code{defl}, \code{defw},
 \code{defad}, \code{defas}, \code{seed} (the transient-noise seed, a whole number
 \verb{>= 1}; no \code{"random"}), \code{notrnoise}, \code{devnoise}, \code{devnt} (the
-device-noise grid step, seconds, \verb{> 0}) and \code{keepopinfo}. The flags
+device-noise grid step, seconds, \verb{> 0}), \code{keepopinfo} and
+\code{trytocompact}. The flags
 \code{noopiter}, \code{nopage}, \code{ltrafit}, \code{notrnoise}, \code{devnoise} and
 \code{keepopinfo} take \code{TRUE}/\code{FALSE} (\code{FALSE} clears a flag the deck's
 card set). Unlike a \code{.options} card, which only warns, an unknown

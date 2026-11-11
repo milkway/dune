@@ -1,5 +1,14 @@
 # Changelog — spice3 (Python)
 
+## 0.1.1
+
+- The Linux wheel is now `manylinux2014` (glibc >= 2.17). The 0.1.0
+  wheel was tagged `manylinux_2_39`, so pip fell back to the sdist
+  (and needed a Rust toolchain) on anything older than Ubuntu 24.04.
+- `spice.pss()` documentation: transmission lines are supported (the
+  lossy RLC/RC lines of the O element need `.options ltrafit`); the
+  0.1.0 docstring still said they were not.
+
 ## 0.1.0
 
 First functional release, aligned with Dune v0.1.0.

@@ -8,6 +8,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload to PyPI (off: build and check the artifacts only)"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -38,6 +43,15 @@ jobs:
           working-directory: python
           command: build
           args: --release -o dist
+          # Linux: build in the manylinux2014 container (glibc 2.17).
+          # Without this the wheel is built on the runner and tagged
+          # with its glibc (0.1.0 went out as manylinux_2_39, which
+          # pip refuses on anything older than Ubuntu 24.04). Ignored
+          # on the other platforms.
+          manylinux: "2014"
+      - name: The Linux wheel is manylinux2014
+        if: runner.os == 'Linux'
+        run: ls python/dist && ls python/dist/*manylinux_2_17_x86_64*.whl
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
@@ -72,6 +86,7 @@ jobs:
 
   publish:
     needs: [wheels, sdist]
+    if: github.event_name == 'release' || inputs.publish
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

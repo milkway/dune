@@ -305,7 +305,8 @@ resultados espelhando o rawfile).
   o VJ *do modelo*, não o ajustado por temperatura, e o ramo de
   ruptura sobre `vt` — tudo como o C, dúvidas dele preservadas em
   comentário); os lineares declaram-se sem não-linearidade
-  (`DEVdisto == NULL`); BJT/MOS/BSIM ainda não (erro estruturado).
+  (`DEVdisto == NULL`); BJT, JFET, MES, MOS1/2/3 e BSIM1 entraram
+  depois (D-0037, matriz análise×dispositivo completa).
   Fontes estampam por **atribuição** (não soma), VSRC no ramo, ISRC
   nos nós com a polaridade do ngspice (flip de ordem ímpar medido —
   `corpus/KNOWN_DIFFS.md`). **Dispositivos** (2026-11-06): diodo,
@@ -1241,8 +1242,8 @@ a uma leva própria do motor (o patch experimental está em
   em 2026-11-08 (seção "Temperatura de instância"). Fica: o `DTEMP`
   e o modelo/`TEMP=` do R nos specs tipados (proposta em
   `docs/fase4-api.md`, item 7); gmin do ngspice na junção de
-  substrato do BJT (KNOWN_DIFFS). Espelho de `keepopinfo` nas listas
-  de override dos bindings (Py/R/wasm).
+  substrato do BJT (KNOWN_DIFFS). (O espelho de `keepopinfo` nas
+  listas de override dos bindings está feito nos três.)
 - JFET nível 2 (Parker–Skellern) e MES 2/5/6 (MESA/HFET) são
   ngspice, fora do contrato 3f5. (Linha U e fonte B entraram em
   2026-11-08 — seções próprias.)
@@ -1255,14 +1256,13 @@ a uma leva própria do motor (o patch experimental está em
   de ~1 fF mata o passo no BSIM1/2 (ver o caso-limite acima).
 - Bypass de dispositivos (`CKTbypass`) — otimização, não semântica.
 - ~~Fallbacks restantes do op do ngspice~~ — a cadeia inteira entrou
-  em 2026-11-08 ("Cadeia do op"). Fica: espelhar `trytocompact` nas
-  listas de override dos bindings (Py/R/wasm), como `keepopinfo` (o
-  cartão `.options` já funciona em todos).
+  em 2026-11-08 ("Cadeia do op"), e o `trytocompact` está espelhado
+  nas listas de override de Py/R/wasm (`94cbb75`).
 - ~~Ruptura do diodo diverge do ngspice-47 com corrente alta~~ —
-  resolvido em 2026-11-08 ("Ruptura do diodo", acima). Fica: o
-  caminho de Newton do motor (relatório de `CKTrhsOld`, `MODEINITPRED`
-  no `.dc`, forma direta do `DEVpnjlim` do ngspice-47) — medido lá,
-  não portado.
+  resolvido em 2026-11-08 ("Ruptura do diodo", acima). O caminho de
+  Newton do motor entrou depois (D-0041: relatório de `CKTrhsOld` e
+  `MODEINITPRED` no `.dc`); a forma direta do `DEVpnjlim` do
+  ngspice-47 fica de fora por decisão (o Dune segue o pnjlim do 3f5).
 
 ## Transiente robusto (opt-in, issue #6)
 
@@ -1770,8 +1770,9 @@ o mesmo `1 − λ ≈ 1e-5` deixa a secante no ruído).
 
 **Pendências:** linha num deck com `TD` de muitos períodos custa
 `TD/T` cópias do passado (limite `MAX_PAST_SAMPLES`, erro claro);
-acelerar o modo de fase do autônomo com linha; bindings (`spice.pss`,
-`spice_pss`) ainda documentam linhas como recusadas (outro território).
+acelerar o modo de fase do autônomo com linha. (A documentação de
+`spice.pss`/`spice_pss` que ainda dizia recusar linhas foi corrigida
+em 2026-11-11.)
 
 ## Ruído transiente — `TRNOISE`/`TRRANDOM` (issue #13, parte 2)
 

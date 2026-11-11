@@ -139,8 +139,9 @@ def pss(
     only a fallback for fewer than three crossings). The deck must start the
     oscillation itself (``.ic`` with ``uic=True``, or a ramp): there is no
     automatic kick. :attr:`PssResult.periods` follows ``T`` per iteration.
-    Transmission lines are not supported yet. The simulation releases the
-    GIL.
+    Transmission lines take part: the lossless ones (``T``, and ``O`` in its
+    LC regime) as they are, the lossy RLC/RC lines of ``O`` with
+    ``options={"ltrafit": True}``. The simulation releases the GIL.
 
     >>> import spice
     >>> res = spice.pss(\"\"\"rc low-pass
@@ -200,7 +201,7 @@ def pss(
         SpiceError: the deck does not parse or build, or the analysis fails
             otherwise (kind ``"analysis"``: an unknown ``osc_node``, an
             autonomous circuit without ``osc_node`` or ``tstab``, a shooting
-            that settles on the equilibrium, a transmission line, a
+            that settles on the equilibrium, a lossy line without ``ltrafit``, a
             transient that does not converge...).
         ValueError: an argument out of range; bad ``options`` or
             ``includes``, as for :func:`spice.simulate`.
