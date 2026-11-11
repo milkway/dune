@@ -23,7 +23,10 @@ First release, aligned with Dune v0.1.0.
 * A switch (`S`, `W`) flips at the instant its control crosses the
   threshold, located to `reltol` times the maximum step, not at
   whatever timepoint first sees it crossed (`compat = "spice3"`
-  restores that). The slope breakpoints of 'LTRA' lines are
+  restores that). Under TR-BDF2 the step control is held to `trtol / 7`
+  (its error estimate does not overestimate as the one `trtol`
+  was made for), about 3% more timepoints for a third less error.
+  The slope breakpoints of 'LTRA' lines are
   capped at 10 per maximum step (`ltrabkrate = 0` schedules every
   request, as 'SPICE' does).
 * On Windows every simulation runs on a worker thread, so that a

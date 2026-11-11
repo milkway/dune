@@ -78,6 +78,7 @@ pub struct Options {
     /// `NOOPITER`: go directly to gmin stepping.
     pub noopiter: bool,
     /// `TRTOL`: truncation-error overestimation factor, default 7.
+    /// What the step control uses is [`Options::lte_trtol`].
     pub trtol: f64,
     /// `CHGTOL`: charge tolerance, default 1e-14.
     pub chgtol: f64,
@@ -223,7 +224,7 @@ impl Default for Options {
             pivtol: 1e-13,
             pivrel: 1e-3,
             noopiter: false,
-            trtol: 7.0,
+            trtol: SPICE_TRTOL,
             chgtol: 1e-14,
             method: None,
             maxord: 2,
@@ -255,6 +256,10 @@ pub const TRAN_STEP_FLOOR: usize = 10_000;
 /// automatic transient step budget (3.8× the corpus maximum of
 /// 13.0, `ltra_2`).
 pub const TRAN_STEPS_PER_TMAX: usize = 50;
+
+/// SPICE's default `TRTOL`, the overestimation its step control
+/// assumes of `CKTterr` ([`Options::lte_trtol`]).
+pub const SPICE_TRTOL: f64 = 7.0;
 
 /// The LTRA breakpoint hygiene of the Dune profile
 /// ([`Options::ltra_break_rate`] `= None`): about this many slope
@@ -295,6 +300,24 @@ impl Options {
         self.compat == Compat::Dune
     }
 
+    /// The factor the transient step control multiplies its error
+    /// tolerance by. `TRTOL` (7 by default) exists because the
+    /// divided-difference estimate of `CKTterr` overestimates the
+    /// local truncation error of the trapezoidal rule and of Gear.
+    /// The composite TR-BDF2 step carries an embedded estimate that
+    /// does not, so under [`Compat::Dune`] a TR-BDF2 transient is
+    /// held to `TRTOL/7` — the default is the estimate itself — and
+    /// `.options trtol=` still scales it (D-0049). Measured on the
+    /// accuracy ruler: margins sum 1.83 → 1.17 for 3 % more
+    /// timepoints (`mosamp2` 0.45 → 0.08). Every other combination
+    /// uses `TRTOL` as SPICE does.
+    pub fn lte_trtol(&self) -> f64 {
+        match (self.compat, self.tran_method()) {
+            (Compat::Dune, Method::TrBdf2) => self.trtol / SPICE_TRTOL,
+            _ => self.trtol,
+        }
+    }
+
     /// The LTRA breakpoint hygiene in force
     /// ([`Options::ltra_break_rate`]): the slope breakpoints allowed
     /// per TMAX span, `None` when every request is scheduled.
@@ -315,16 +338,18 @@ impl Options {
 
     /// The integration method of the stabilization run of an
     /// autonomous `.pss` (the transient to TSTAB in which the
-    /// oscillation starts and its period is counted):
-    /// [`Options::method`] when given, else the trapezoidal rule
-    /// under either profile. That run steps on a grid that does not
-    /// know the period yet (TMAX = TSTAB/1000, which may exceed it),
-    /// and the trapezoidal rule is the one method whose growth region
-    /// is exactly the right half-plane: a mode that grows in the
-    /// circuit grows in the run at any step. An L-stable method damps
-    /// it instead (`osc_colpitts` never starts under TR-BDF2 there).
+    /// oscillation starts and its period is counted): the trapezoidal
+    /// rule, whatever [`Options::method`] says. That run steps on a
+    /// grid that does not know the period yet (TMAX = TSTAB/1000,
+    /// which may exceed it), and the trapezoidal rule is the one
+    /// method whose growth region is exactly the right half-plane: a
+    /// mode that grows in the circuit grows in the run at any step.
+    /// An L-stable method damps it instead (`osc_colpitts` never
+    /// starts under TR-BDF2 or Gear there). The run only supplies the
+    /// shooting's starting point and period estimate; the result is
+    /// integrated with [`Options::pss_method`].
     pub fn pss_stab_method(&self) -> Method {
-        self.method.unwrap_or(Method::Trapezoidal)
+        Method::Trapezoidal
     }
 
     /// The step budget of a `.tran` running to `tstop` with effective

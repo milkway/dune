@@ -430,11 +430,15 @@ fn the_dune_profile_shoots_with_trbdf2() {
     );
     assert!(d < 1e-4, "{d:e}");
 
-    // An explicit method runs the start-up too, as before.
-    let (c, _, an) = load("osc_colpitts");
-    let opts = Options {
-        method: Some(dune_core::Method::TrBdf2),
-        ..Options::default()
-    };
-    assert!(matches!(c.pss(&opts, &params(&an)), Err(Error::Build(m)) if m.contains("oscillate")));
+    // An explicit method shoots with it; the start-up stays
+    // trapezoidal, so the Colpitts starts under TR-BDF2 and Gear too.
+    let colpitts = run("osc_colpitts", |o, _| dune(o)).period;
+    for method in [dune_core::Method::TrBdf2, dune_core::Method::Gear] {
+        let t = run("osc_colpitts", |o, _| o.method = Some(method)).period;
+        println!(
+            "osc_colpitts {method:?}: {:.2e} from the default",
+            rel(t, colpitts)
+        );
+        assert!(rel(t, colpitts) < 1e-3, "{method:?}: {t:e}");
+    }
 }

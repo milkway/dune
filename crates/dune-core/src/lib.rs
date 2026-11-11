@@ -91,7 +91,7 @@ pub use mos3::Mos3Model;
 pub use mos6::Mos6Model;
 pub use noise::Noise;
 pub use op::Op;
-pub use options::{Compat, LTRA_BREAK_RATE, Options};
+pub use options::{Compat, LTRA_BREAK_RATE, Options, SPICE_TRTOL};
 pub use pss::{PSS_FREQ_PLOT, PSS_TIME_PLOT, Pss, PssParams};
 pub use pz::{Pz, PzInput, PzWhich};
 pub use run::CardOutput;
