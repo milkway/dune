@@ -1,5 +1,11 @@
 # Changelog — spice3 (Python)
 
+## Unreleased
+
+- `spice.pss()` refuses a deck with `devnoise` on (a `SpiceError`),
+  as it already did for `TRNOISE`/`TRRANDOM` sources; the option used
+  to be silently ignored by the shooting.
+
 ## 0.1.1
 
 - The Linux wheel is now `manylinux2014` (glibc >= 2.17). The 0.1.0

@@ -173,6 +173,17 @@ impl Circuit {
         if !(p.steady_coeff.is_finite() && p.steady_coeff > 0.0) {
             return bad("steady coefficient must be positive");
         }
+        if opts.dev_noise {
+            // Issue #22: the same reason as the TRNOISE/TRRANDOM
+            // sources below. The option used to be ignored here
+            // (only `.tran` installs the generators), so the result
+            // looked as if it had taken the noise into account.
+            return Err(Error::Build(
+                ".pss: `.options devnoise` is on, and transient device noise is a random \
+                 stimulus, which has no periodic steady state; turn it off for the shooting"
+                    .into(),
+            ));
+        }
         for spec in &self.specs {
             let noisy = match spec {
                 Spec::Vsource(v) => &v.wave,

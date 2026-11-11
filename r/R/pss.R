@@ -24,7 +24,9 @@
 #' only a fallback for fewer than three crossings). The deck must start
 #' the oscillation itself (`.ic` with `uic = TRUE`, or a ramp): there is
 #' no automatic kick. The result's `periods` follows the period per
-#' iteration. Transmission lines take part: the lossless ones (`T`, and
+#' iteration. A deck with a transient-noise source or with `devnoise`
+#' on is refused: a random stimulus has no periodic steady state.
+#' Transmission lines take part: the lossless ones (`T`, and
 #' `O` in its LC regime) as they are, the lossy RLC/RC lines of `O` with
 #' `options = list(ltrafit = TRUE)`.
 #'

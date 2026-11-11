@@ -353,6 +353,30 @@ fn pss_refuses_transient_noise() {
     }
 }
 
+/// Issue #22: transient device noise is refused for the same reason,
+/// instead of being silently left out of the shooting.
+#[test]
+fn pss_refuses_device_noise() {
+    let deck = "pss\nvs 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 1u\n.options devnoise\n\
+                .tran 1u 1m\n.end\n";
+    let (c, opts, _) = load_str("pss", deck);
+    assert!(opts.dev_noise);
+    let p = PssParams {
+        freq: Some(1e3),
+        ..PssParams::default()
+    };
+    match c.pss(&opts, &p).unwrap_err() {
+        Error::Build(m) => assert!(m.contains("devnoise"), "{m}"),
+        e => panic!("{e:?}"),
+    }
+    // Without the option the same deck shoots.
+    let quiet = Options {
+        dev_noise: false,
+        ..opts
+    };
+    c.pss(&quiet, &p).expect("converges without the noise");
+}
+
 #[test]
 fn invalid_noise_arguments_fail_the_build() {
     let deck = "bad\nv1 1 0 trrandom(7 1u)\nr1 1 0 1\n.tran 1u 10u\n.end\n";
