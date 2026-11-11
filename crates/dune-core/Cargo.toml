@@ -9,9 +9,13 @@ license.workspace = true
 [features]
 default = ["solver-faer"]
 # Dense LU backend over the `faer` crate (D-0005 naming; D-0013 keeps
-# it the default). The sparse `solver-xingo` backend lives on the
-# `p3-sparse` branch until xingo is published (D-0013).
+# it the default).
 solver-faer = ["dep:faer"]
+# Sparse LU backend over the published `xingo-sparse` crate (D-0005's
+# target; D-0013). When enabled it replaces faer as the engine's
+# solver. Opt-in: it needs rustc >= 1.90 (xingo-sparse's MSRV; the
+# workspace's own stays 1.88 without it).
+solver-xingo = ["dep:xingo-sparse"]
 # `sweep_parallel`: the runs of a sweep over a rayon thread pool
 # (issue #10); `Options::load_threads`: the per-iteration device load
 # over one (issue #9, lever 1). Native only — off by default and never enabled for
@@ -29,6 +33,21 @@ faer = { version = "0.24", optional = true, default-features = false, features =
     "std",
     "linalg",
 ] }
+xingo-sparse = { workspace = true, optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
+# P-3 benchmarks (faer dense vs xingo-sparse). `lu` runs both
+# backends in one binary when `solver-xingo` is on; `sim` measures whichever
+# backend the build selected, so run it once per feature set.
+[[bench]]
+name = "lu"
+harness = false
+
+[[bench]]
+name = "sim"
+harness = false
 
 [[example]]
 name = "parload_bench"

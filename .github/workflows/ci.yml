@@ -45,6 +45,12 @@ jobs:
           cargo test -p dune-core --features parallel --release --lib --test parload
       - name: Oracle golden check
         run: cargo run -p dune-oracle -- --ci
+      - name: Sparse backend (solver-xingo)
+        run: |
+          cargo clippy -p dune-core --features solver-xingo --all-targets -- -D warnings
+          cargo test -p dune-core --features solver-xingo --release
+          cargo run -p dune-oracle --release --features dune-core/solver-xingo -- --ci
+          cargo check -p dune-core --no-default-features --features solver-xingo --target wasm32-unknown-unknown
       - name: Clippy (wasm32)
         run: cargo clippy -p dune-wasm --target wasm32-unknown-unknown -- -D warnings
       - name: Build dune-wasm (wasm32)

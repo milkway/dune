@@ -160,10 +160,17 @@ fn dune_period(deck: &str, var: &str, tmax: Option<f64>, tight: bool) -> (f64, f
     counter(col(&tr.solution, "time"), col(&tr.solution, var))
 }
 
+/// RELTOL and VNTOL a thousand times tighter. ABSTOL stays at the
+/// default 1e-12: the Wien bridge's op-amp output current
+/// `(v(int) − v(out)) / 75 Ω` inherits the rounding of
+/// `v(int) = 200k · (v(p) − v(m))`, about `200k · ε / 75 ≈ 4e-13 A`,
+/// and where that current crosses zero ABSTOL alone guards the
+/// Newton test. Below that floor convergence depends on the linear
+/// solver landing on a bit-exact fixed point (the dense LU did at
+/// 1e-14; the sparse LU's elimination order does not).
 fn tighten(o: &mut Options) {
     o.reltol = 1e-6;
     o.vntol = 1e-9;
-    o.abstol = 1e-14;
 }
 
 fn rel(a: f64, b: f64) -> f64 {
