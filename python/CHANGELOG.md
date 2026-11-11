@@ -1,6 +1,6 @@
 # Changelog — spice3 (Python)
 
-## Unreleased
+## 0.3.0
 
 - **Switch events are located.** An `S`/`W` switch flips at the
   instant its control crosses the threshold, to within `reltol` times
