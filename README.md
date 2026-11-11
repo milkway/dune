@@ -45,9 +45,15 @@ npm install @strategicprojects/dune-sim
 # R — tidy tibbles (CRAN submission planned)
 Rscript -e 'remotes::install_github("milkway/dune", subdir = "r")'
 
-# CLI and Rust library — from source (Rust 1.88+)
+# Rust library — crates.io (dune-netlist, dune-raw, dune-core, dune-pic)
+cargo add dune-core dune-netlist
+
+# CLI — from source (Rust 1.88+)
 git clone https://github.com/milkway/dune && cd dune && cargo build --release
 ```
+
+The Rust crates are 0.x: the public API of `dune-core` may change
+between minor versions.
 
 ```python
 import spice
