@@ -221,7 +221,7 @@ fn ffi_measure(
         .map(|(n, s)| (n.to_string(), s.to_string()))
         .collect();
     let mut out = OwnedListSexp::new(3, true)?;
-    match engine::measure_plot(p, scale, &specs) {
+    match engine::compute(|| engine::measure_plot(p, scale, &specs)) {
         Ok(rows) => {
             out.set_name_and_value(0, "ok", logical(true)?)?;
             out.set_name_and_value(1, "message", savvy::NullSexp)?;
@@ -268,7 +268,8 @@ fn ffi_run_deck(
         }
     };
 
-    run_list(engine::run(source, &user, divisor(&tmax_divisor)))
+    let tmax = divisor(&tmax_divisor);
+    run_list(engine::compute(|| engine::run(source, &user, tmax)))
 }
 
 /// `list(ok = FALSE, message, plots = NULL, notes, diagnostics, kind,
@@ -393,7 +394,8 @@ fn ffi_pss_deck(
             includes: &includes,
         }
     };
-    match engine::pss(source, &user, divisor(&tmax_divisor), &params) {
+    let tmax = divisor(&tmax_divisor);
+    match engine::compute(|| engine::pss(source, &user, tmax, &params)) {
         Ok(out) => {
             let mut list = ok_list(&out.run, 4)?;
             list.set_name_and_value(7, "period", OwnedRealSexp::try_from_scalar(out.period)?)?;
@@ -464,8 +466,9 @@ impl SpiceSession {
                 includes: &includes,
             }
         };
+        let tmax = divisor(&tmax_divisor);
         Ok(SpiceSession {
-            live: engine::LiveSession::open(source, &user, divisor(&tmax_divisor)),
+            live: engine::compute(|| engine::LiveSession::open(source, &user, tmax)),
         })
     }
 
@@ -493,7 +496,8 @@ impl SpiceSession {
         } else {
             return Err(savvy::Error::new("a scalar value must have length 1"));
         };
-        outcome(self.live_mut()?.alter(refdes, param, v))
+        let live = self.live_mut()?;
+        outcome(engine::compute(|| live.alter(refdes, param, v)))
     }
 
     /// `list(ok, value, is_list)` or a failure list: `value` a double
@@ -525,7 +529,8 @@ impl SpiceSession {
     }
 
     fn set_temp(&mut self, celsius: f64) -> savvy::Result<Sexp> {
-        outcome(self.live_mut()?.set_temp(celsius))
+        let live = self.live_mut()?;
+        outcome(engine::compute(|| live.set_temp(celsius)))
     }
 
     fn temp(&self) -> savvy::Result<Sexp> {
@@ -565,8 +570,8 @@ impl SpiceSession {
     /// Re-run every analysis card; the list `ffi_run_deck` returns
     /// (measurements included).
     fn run(&mut self) -> savvy::Result<Sexp> {
-        let r = self.live_mut()?.run();
-        run_list(r)
+        let live = self.live_mut()?;
+        run_list(engine::compute(|| live.run()))
     }
 }
 
@@ -613,14 +618,9 @@ fn ffi_sweep_deck(
         }
     };
 
-    let result = engine::sweep(
-        source,
-        &user,
-        divisor(&tmax_divisor),
-        &names,
-        &rows,
-        threads as usize,
-    );
+    let tmax = divisor(&tmax_divisor);
+    let result =
+        engine::compute(|| engine::sweep(source, &user, tmax, &names, &rows, threads as usize));
     let mut out = OwnedListSexp::new(7, true)?;
     match result {
         Ok(r) => {

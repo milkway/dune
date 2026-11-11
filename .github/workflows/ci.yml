@@ -150,3 +150,99 @@ jobs:
         with:
           working-directory: r
           args: 'c("--no-manual", "--as-cran")'
+
+  # The CRAN path: the self-contained tarball (tools/r-vendor.sh +
+  # R CMD build) checked away from the repository, as CRAN does — no
+  # DUNE_ROOT, no network for cargo. The `r` job above builds against
+  # the checkout and cannot see what the tarball is missing (a new
+  # [[bench]] target's source, a corpus file a test reads).
+  r-tarball:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: r
+          extra-packages: any::jsonlite
+          cache: always
+      - name: Vendor
+        run: |
+          tools/r-vendor.sh
+          # inst/AUTHORS is committed and must match the lockfile.
+          git diff --exit-code r/inst/AUTHORS
+      - name: Build the source tarball
+        run: R CMD build r
+      - uses: actions/upload-artifact@v4
+        with:
+          name: r-tarball
+          path: spice_*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  r-vendored:
+    needs: r-tarball
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      _R_CHECK_CRAN_INCOMING_REMOTE_: "false"
+    steps:
+      # Only for r/DESCRIPTION (the dependency list); the check runs
+      # on the tarball, in a directory outside the checkout.
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-gnu' || '' }}
+      - uses: r-lib/actions/setup-pandoc@v2
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: r
+          extra-packages: any::rcmdcheck
+          cache: always
+      - uses: actions/download-artifact@v4
+        with:
+          name: r-tarball
+          path: ${{ runner.temp }}/tarball
+      - name: R CMD check --as-cran on the tarball
+        shell: Rscript {0}
+        working-directory: ${{ runner.temp }}/tarball
+        run: |
+          tarball <- list.files(pattern = "^spice_.*[.]tar[.]gz$")
+          stopifnot(length(tarball) == 1L)
+          res <- rcmdcheck::rcmdcheck(
+            tarball,
+            args = c("--no-manual", "--as-cran"),
+            check_dir = "check",
+            error_on = "never"
+          )
+          print(res)
+          install_log <- file.path("check", "spice.Rcheck", "00install.out")
+          if (file.exists(install_log)) {
+            log <- readLines(install_log, warn = FALSE)
+            # The build must have taken the offline, vendored path.
+            if (!any(grepl("offline build from rust/vendor.tar.xz", log, fixed = TRUE))) {
+              stop("the check did not build from the vendored sources")
+            }
+          }
+          if (length(res$errors) + length(res$warnings) > 0L) {
+            if (file.exists(install_log)) writeLines(tail(log, 80))
+            stop("R CMD check: errors or warnings")
+          }
+      - name: Test results
+        if: always()
+        shell: bash
+        run: |
+          f="$RUNNER_TEMP/tarball/check/spice.Rcheck/tests/testthat.Rout"
+          [ -f "$f" ] && tail -n 15 "$f" || [ -f "$f.fail" ] && tail -n 60 "$f.fail" || true

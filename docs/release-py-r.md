@@ -102,6 +102,20 @@ Resultado esperado do `--as-cran` (0.1.0, macOS, R 4.6): 0 ERROR,
 - *HTML version of manual* — só quando o `tidy` local é o antigo do
   macOS; ambiente, não pacote.
 
+**No CI, a cada push** (`.github/workflows/ci.yml`): o job
+`r-tarball` roda `tools/r-vendor.sh` (e falha se o `inst/AUTHORS`
+commitado não bate com o lockfile) + `R CMD build`; o `r-vendored`
+baixa esse tarball e roda `R CMD check --as-cran` nele fora do
+checkout, sem `DUNE_ROOT`, em `ubuntu-latest` e `windows-latest`, e
+confere no log que o build foi o offline. É o caminho do CRAN; o job
+`r` (contra o checkout) não enxerga o que falta no tarball.
+
+Windows (Rtools, alvo `x86_64-pc-windows-gnu`): o `exp`/`pow` da CRT
+do mingw arredondam conforme o modo x87 da thread, e a thread do R
+difere das threads novas. Por isso o binding roda toda computação do
+motor numa thread de trabalho nesse alvo (`engine::compute`, D-0043)
+— sem isso o sweep com threads não é bit-idêntico ao sequencial.
+
 Depois: `cran-comments.md` (em `r/`, fora do tarball) atualizado,
 win-builder (`devtools::check_win_devel("r")` — sobe o tarball, ou
 seja, é publicação de fato: decisão do mantenedor) e
