@@ -144,3 +144,34 @@ esperados; PASS não pede remoção) e `accept-error=TEXT` (falha
 estruturada contendo TEXT é o desfecho do outro ramo; reportada,
 não falha o CI). O sweep de corpus do pacote R lê este arquivo e
 aplica a mesma política.
+
+## XFAILs e os decks-companheiros convergidos (2026-11-11)
+
+Os quatro XFAILs não são defeitos do motor: são decks em que o passo
+default deixa o resultado sensível ao último bit, e o golden é UMA
+amostra do ngspice. Cada um tem agora um companheiro em
+`corpus/regress/` — o mesmo circuito de Berkeley, num regime em que a
+resposta é única — que **tem de passar** no `--ci`:
+
+| XFAIL | por que falha no default | companheiro | margem |
+|---|---|---|---|
+| `schmitt` | bordas regenerativas, fase do ringing do trapézio | `schmitt_fine` (TMAX = 1 ns) | 0,004 |
+| `mosamp2` | controlador LTE biestável (cargas de Meyer) | `mosamp2_fine` (TMAX = 10 ns) | 0,05 |
+| `ltra_1` | ringing do trapézio na fileira de diodos | `ltra_1_gear` (gear, TMAX = 0,02 ns) | 0,09 |
+| `ltra_3` | idem, mais cascata de breakpoints | `ltra_3_gear` (gear, TMAX = 0,02 ns) | 0,07 |
+
+Medidas que definiram a escolha (arm64, ngspice-47):
+
+- `schmitt` e `mosamp2` convergem com o passo: margem 0,004 em
+  TMAX = 1/0,2/0,05 ns; 0,07/0,003/0,02 em 10/2/0,5 ns.
+- Nos dois decks de linha o **trapézio não converge com o passo**: o
+  `ltra_1` passa a 0,04/0,08/0,10 em TMAX = 0,1/0,05/0,02 ns e FALHA a
+  7,8 em 0,01 ns; o `ltra_3` fica em 39–47 em qualquer passo. O
+  ringing é do método (rs + carga de difusão, sem capacitância de
+  junção no nó), não do passo.
+- Com `method=gear` nos dois motores e o mesmo TMAX, Dune e ngspice
+  coincidem (0,09–0,25). O próprio ngspice-gear entre TMAX = 0,02 e
+  0,01 ns difere de si mesmo em ~1 régua: o companheiro prova "mesmo
+  método, mesmo passo, mesma resposta", não a convergência da física.
+- Mesmo veredito no backend esparso (`solver-xingo`).
+
