@@ -17,6 +17,52 @@ use dune_raw::{Data, Plot, Rawfile};
 /// paths resolve relative to it, i.e. exactly as written.
 pub const DECK_NAME: &str = "deck.cir";
 
+/// Stack of the worker thread of [`on_worker`]: the R main thread's
+/// is large, and the parser and the elaborator recurse.
+const WORKER_STACK: usize = 64 << 20;
+
+/// Run `f` — an engine computation — where its arithmetic gives the
+/// same bits as on a sweep's worker threads.
+///
+/// On `x86_64-pc-windows-gnu` (Rtools) the C runtime's `exp` and
+/// `pow` are x87 code whose rounding follows the thread's precision
+/// control: the main thread runs with the 64-bit mantissa the CRT
+/// start-up (and R) sets, a new thread with Windows' 53-bit default.
+/// Measured on the GitHub Windows runner: 17% of `exp` and 46% of
+/// `powf` results differ in the last bit between the two. A deck run
+/// from the R thread would then disagree with the same deck run by
+/// `spice_sweep(.threads = n)`, breaking the sweep's bit-for-bit
+/// contract. So there every computation runs on a fresh thread — the
+/// one mode the pool's workers have too. Elsewhere the math library
+/// does not look at the x87 control word and `f` runs in place.
+pub fn compute<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    #[cfg(all(windows, target_env = "gnu"))]
+    {
+        on_worker(f)
+    }
+    #[cfg(not(all(windows, target_env = "gnu")))]
+    {
+        f()
+    }
+}
+
+/// `f` on a scoped thread of its own; a panic in it resumes here.
+#[cfg_attr(not(all(windows, target_env = "gnu")), allow(dead_code))]
+fn on_worker<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .name("spice-compute".into())
+            .stack_size(WORKER_STACK)
+            .spawn_scoped(scope, f);
+        match worker {
+            Ok(handle) => handle
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            Err(e) => panic!("cannot start the computation thread: {e}"),
+        }
+    })
+}
+
 /// Where the deck comes from.
 pub enum Source<'a> {
     /// A file on disk; `.include` resolves on the file system,
@@ -806,6 +852,36 @@ pub fn write_raw(path: &Path, plots: Vec<Plot>, binary: bool) -> Result<(), Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The worker-thread path (what Windows/Rtools always takes)
+    /// returns what the in-place call does, and hands a panic back.
+    #[test]
+    fn a_computation_on_the_worker_thread_gives_the_same_plots() {
+        let deck = "rc\nv1 1 0 pulse(0 1 0 1n 1n 1m 2m)\nr1 1 2 1k\nc1 2 0 1u\n\
+                    .tran 10u 2m\n.end\n";
+        let inc = BTreeMap::new();
+        let go = || {
+            let source = Source::Text {
+                text: deck,
+                includes: &inc,
+            };
+            let out = run(source, &[], None).ok().expect("runs");
+            out.plots
+                .iter()
+                .flat_map(|(p, _)| match &p.data {
+                    Data::Real(cols) => cols.iter().flatten().map(|v| v.to_bits()).collect(),
+                    Data::Complex(_) => Vec::new(),
+                })
+                .collect::<Vec<u64>>()
+        };
+        let here = go();
+        assert!(here.len() > 100);
+        assert_eq!(here, on_worker(go));
+        assert_eq!(here, compute(go));
+
+        let caught = std::panic::catch_unwind(|| on_worker(|| panic!("boom")));
+        assert!(caught.is_err());
+    }
 
     const DIVIDER: &str = "divider\nv1 1 0 dc 2\nr1 1 2 1k\nr2 2 0 1k\n.op\n.end\n";
 
