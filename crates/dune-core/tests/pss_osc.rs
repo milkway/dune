@@ -395,3 +395,46 @@ fn too_few_iterations_reports_the_last_period() {
         other => panic!("{other:?}"),
     }
 }
+
+/// The Dune profile shoots with TR-BDF2 (D-0047) after a trapezoidal
+/// start-up. Every oscillator converges under it — `osc_colpitts`
+/// never starts when the start-up itself runs TR-BDF2 on its
+/// TSTAB/1000 grid, wider than the period — and at the deck's 256
+/// points its period is closer than the trapezoidal one to the
+/// period of a 2048-point shooting (measured: about half the error).
+#[test]
+fn the_dune_profile_shoots_with_trbdf2() {
+    let dune = |o: &mut Options| o.compat = dune_core::Compat::Dune;
+    for deck in [
+        "osc_phase",
+        "osc_ring",
+        "osc_vdp",
+        "osc_wien",
+        "osc_colpitts",
+    ] {
+        let trap = run(deck, |_, _| {}).period;
+        let trbdf2 = run(deck, |o, _| dune(o)).period;
+        let fine = run(deck, |_, p| p.points = 2048).period;
+        let (et, eb) = (rel(trap, fine), rel(trbdf2, fine));
+        println!("{deck}: T {fine:e}; trap {et:.2e}, trbdf2 {eb:.2e}");
+        assert!(eb < 0.75 * et, "{deck}: trap {et:e}, trbdf2 {eb:e}");
+    }
+    // The line oscillator: converges, on the same period.
+    let trap = run("osc_tline", |_, _| {});
+    let trbdf2 = run("osc_tline", |o, _| dune(o));
+    let d = rel(trbdf2.period, trap.period);
+    println!(
+        "osc_tline: trap {} iterations, trbdf2 {}; periods differ by {d:.2e}",
+        trap.residuals.len(),
+        trbdf2.residuals.len()
+    );
+    assert!(d < 1e-4, "{d:e}");
+
+    // An explicit method runs the start-up too, as before.
+    let (c, _, an) = load("osc_colpitts");
+    let opts = Options {
+        method: Some(dune_core::Method::TrBdf2),
+        ..Options::default()
+    };
+    assert!(matches!(c.pss(&opts, &params(&an)), Err(Error::Build(m)) if m.contains("oscillate")));
+}

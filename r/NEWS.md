@@ -17,8 +17,15 @@ First release, aligned with Dune v0.1.0.
   rule: it is closer to the converged answer at the same step on the
   whole test corpus and does not ring. The option `compat = "spice3"`
   (`.options compat=spice3` in a deck) restores the 'SPICE3f5'
-  defaults. `spice_pss()` keeps the trapezoidal rule unless `method`
-  is given.
+  defaults. `spice_pss()` shoots with the same default; only the
+  start-up transient of an autonomous oscillator stays on the
+  trapezoidal rule, which lets the oscillation grow at any step.
+* A switch (`S`, `W`) flips at the instant its control crosses the
+  threshold, located to `reltol` times the maximum step, not at
+  whatever timepoint first sees it crossed (`compat = "spice3"`
+  restores that). The slope breakpoints of 'LTRA' lines are
+  capped at 10 per maximum step (`ltrabkrate = 0` schedules every
+  request, as 'SPICE' does).
 * On Windows every simulation runs on a worker thread, so that a
   threaded `spice_sweep()` agrees bit for bit with the sequential one
   and with `spice_run()`: the 'Rtools' C runtime rounds `exp()` and

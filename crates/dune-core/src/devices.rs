@@ -38,6 +38,22 @@ pub(crate) trait Device: Send {
     }
     /// Timestep limiting from local truncation error (`*trunc.c`).
     fn trunc(&self, _t: &TerrCtx, _time_step: &mut f64) {}
+    /// Dune's event location (D-0047): a device whose behaviour
+    /// changed discontinuously between the state banks `from` (older)
+    /// and `to` reports the fraction of that interval at which it
+    /// did. `back` is the length of the interval before `from` (bank
+    /// `from + 1` to `from`) in units of this one, for a device that
+    /// has to extrapolate. Default: no events (every device but the
+    /// switches).
+    fn event(
+        &self,
+        _states: &crate::state::States,
+        _from: usize,
+        _to: usize,
+        _back: f64,
+    ) -> Option<f64> {
+        None
+    }
     /// AC small-signal stamps (`*acld.c`). Default: no AC presence.
     fn load_ac(&mut self, _ctx: &mut AcCtx) {}
     /// Accepted-timepoint hook; sources plant breakpoints here

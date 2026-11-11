@@ -50,6 +50,7 @@ use num_complex::Complex64;
 use crate::circuit::{Circuit, Spec, VarKind, saved_node};
 use crate::engine::{Engine, MAX_OUTPUT_VALUES, PeriodRun, StepRec, TranParams};
 use crate::error::Error;
+use crate::integ::Method;
 use crate::matrix::PeriodicPast;
 use crate::options::Options;
 use crate::solution::Solution;
@@ -159,6 +160,7 @@ impl Circuit {
     pub fn pss(&self, opts: &Options, p: &PssParams) -> Result<Pss, Error> {
         // The shooting's own default method (`Options::pss_method`),
         // pinned so that every transient below integrates with it.
+        let stab_method = opts.pss_stab_method();
         let opts = &Options {
             method: Some(opts.pss_method()),
             ..opts.clone()
@@ -233,7 +235,7 @@ impl Circuit {
         if sources.is_empty() {
             // No periodic stimulus: a free-running oscillator, its
             // period an unknown of the shooting (see `pss_autonomous`).
-            return self.pss_autonomous(opts, p);
+            return self.pss_autonomous(opts, p, stab_method);
         }
         let freq = match p.freq {
             Some(f) => {
@@ -522,7 +524,12 @@ impl Circuit {
     /// `[I − Φ′, −∂Φ/∂T]` (osc column dropped) is solved by the same
     /// matrix-free GMRES, `∂Φ/∂T` by a replay on the frozen grid
     /// stretched to `T + δT`.
-    fn pss_autonomous(&self, opts: &Options, p: &PssParams) -> Result<Pss, Error> {
+    fn pss_autonomous(
+        &self,
+        opts: &Options,
+        p: &PssParams,
+        stab_method: Method,
+    ) -> Result<Pss, Error> {
         let bad = |m: &str| Err(Error::Build(format!(".pss {m}")));
         let guess = match p.freq {
             Some(f) if !(f.is_finite() && f > 0.0) => return bad("frequency must be positive"),
@@ -567,8 +574,15 @@ impl Circuit {
         {
             return bad("asks for too many points or periods; refusing");
         }
+        // The start-up runs on its own method
+        // (`Options::pss_stab_method`): an oscillation has to grow
+        // out of the kick on a grid that does not know its period.
+        let stab_opts = Options {
+            method: Some(stab_method),
+            ..opts.clone()
+        };
         let rows = engine.tran(
-            opts,
+            &stab_opts,
             &TranParams {
                 tstep,
                 tstop: p.tstab,

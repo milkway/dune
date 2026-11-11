@@ -32,8 +32,11 @@ corpus circuit, simulated · [Known differences](corpus/KNOWN_DIFFS.md)
 - **A more accurate transient by default**: `.tran` integrates with
   TR-BDF2, an L-stable method that does not ring and, on the corpus,
   is closer to the converged answer than the trapezoidal rule at the
-  same step. `.options compat=spice3` restores the SPICE3f5 defaults
-  (the trapezoidal rule), which is what the ngspice oracle checks.
+  same step; a switch flips at the instant its control crosses the
+  threshold, not at the first timepoint past it. `.options
+  compat=spice3` restores the SPICE3f5 defaults (the trapezoidal
+  rule, switches on the grid), which is what the ngspice oracle
+  checks.
 
 ## Install
 

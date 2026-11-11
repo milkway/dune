@@ -137,7 +137,8 @@ def simulate(
             ``temp``/``tnom`` in degrees Celsius as on the card, ``method``
             as ``"trap"``, ``"gear"`` or ``"trbdf2"`` (unset, a ``.tran``
             integrates with ``"trbdf2"``), ``compat`` as ``"dune"`` or
-            ``"spice3"`` (the SPICE3f5 defaults: a trapezoidal ``.tran``),
+            ``"spice3"`` (the SPICE3f5 defaults: a trapezoidal ``.tran``,
+            switches flipping on the time grid, ``ltrabkrate`` 0),
             flags as bools
             (``noopiter``, ``nopage``, ``ltrafit``, ``keepopinfo``, ``trytocompact``,
             ``notrnoise``, ``devnoise``), ``seed`` as a positive int (the

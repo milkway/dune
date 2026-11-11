@@ -200,10 +200,13 @@ dá o teto de quem passa de 0,2; estourar o teto derruba o CI.
 |---|---|---|---|---|
 | trapézio (até D-0046) | 25 de 34 | 10,16 | 3,07 | 1,32 |
 | TR-BDF2 (D-0046) | 31 de 34 | 4,33 | 0,10 | 0,45 |
+| + eventos de chave localizados (D-0047) | 33 de 35 | 1,83 | 0,10 | 0,45 |
 
-Fora de 0,2 ficam `sw_hyst` (2,54: os limiares da chave são cruzados
-dentro de um passo, qualquer que seja o método), `ltrafit` (0,47) e
-`mosamp2`. É o número a bater em qualquer mudança de integração ou
+Na linha da D-0047 o `sw_hyst` vai de 2,54 a 0,000 (antes os
+limiares da chave eram cruzados dentro de um passo, qualquer que
+fosse o método) e o `csw_rly` entra na conta (0,04; antes a
+referência refinada não convergia). Fora de 0,2 ficam `ltrafit`
+(0,33) e `mosamp2` (0,45). É o número a bater em qualquer mudança de integração ou
 de controle de passo. Custo do TR-BDF2 no `dune -b` sobre os 37 decks
 transientes (release, melhor de 3): mediana ×1,12 por deck, pior
 ×1,7 (`ltra_1`, `ltra_3`), total ×0,82 (o `ltra_2`, que domina, fica

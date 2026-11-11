@@ -1268,13 +1268,11 @@ a uma leva própria do motor (o patch experimental está em
 
 > **Desde D-0046 (2026-11-11) o `method=trbdf2` é o default do
 > `.tran`** no perfil `compat=dune`; o trapézio é o default só em
-> `.options compat=spice3` (o perfil do oráculo). O `.pss` segue no
-> trapézio nos dois perfis: com TR-BDF2 o shooting autônomo de
-> `osc_colpitts` (não detecta a oscilação no TSTAB) e de `osc_tline`
-> (não converge em 50 iterações) ainda falha — pendência. O texto
-> abaixo descreve o método; onde diz "opt-in", leia "default do
-> `.tran`". Medidas da troca em `docs/dune-oracle.md` (régua de
-> precisão).
+> `.options compat=spice3` (o perfil do oráculo). Desde D-0047 o
+> shooting do `.pss` segue o mesmo default; só a estabilização do
+> `.pss` autônomo fica no trapézio (§Método do `.pss`, abaixo). O
+> texto abaixo descreve o método; onde diz "opt-in", leia "default".
+> Medidas da troca em `docs/dune-oracle.md` (régua de precisão).
 
 Nenhum dos dois é contrato 3f5 (D-0002 vale só para trap/gear); os
 defaults são fiéis, e com as opções desligadas o binário produz
@@ -1313,7 +1311,20 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   (~N por vão). Sem cascata é bit-idêntico (medido em
   ltra_1/2/3/rc/rg no arm64). Limita o custo; a correção de
   verdade é o trbdf2 (trap+N=10 completa o ltra_3 no linux mas o
-  ring persiste, v(5) erra 0.185 V).
+  ring persiste, v(5) erra 0.185 V). **Desde D-0047 é default no
+  perfil `compat=dune`** com N = 10 (`LTRA_BREAK_RATE`;
+  `Options::ltra_slope_rate()` dá o valor em vigor): `ltrabkrate=0`
+  desliga, `compat=spice3` desliga. Medido: os dez decks de linha do
+  corpus dão rawfile idêntico com a higiene ligada e desligada no
+  passo do deck (e `ltra_1/2/3` também com TMAX/20 e TMAX/40, N = 10
+  e 50). Onde há cascata ela decide se a corrida termina:
+  `ltra_compact` com TMAX/20 e TMAX/40 estoura o orçamento de passos
+  sem ela (500 050 e 1 000 050 passos, parado em 4,5 ns de 100) e
+  termina com N = 10 em 7 s e 16 s (371 mil e 637 mil pontos);
+  `ltra_3` com `method=trap` e TMAX/20 passa de 10 min sem ela e
+  termina com 28 187 pontos. N = 4, 2 e 1 cortam mais pontos (153,
+  75 e 39 mil no `ltra_compact`/20) mas já mudam o resultado no
+  passo do deck (582 pontos contra 1112), por isso N = 10.
 - **`.options ltrafit`** (`Options.ltra_fit`, issue #8): convolução
   recursiva do LTRA. Núcleos sem o atraso viram somas de
   exponenciais reais por quadratura Gauss–Legendre graduada da
@@ -1332,6 +1343,55 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   deliberada do modo: com aux==0 o C descarta o 1º segmento
   atrasado; a recursão o inclui. Sonda corpus/regress/ltrafit.cir
   (oráculo passa a 76).
+- **Localização de eventos de chave** (D-0047; perfil `compat=dune`,
+  sem botão próprio — `compat=spice3` desliga). No 3f5 e no ngspice
+  a chave `S`/`W` troca no primeiro ponto de tempo que vê o controle
+  além do limiar: o instante da troca erra até um passo inteiro, e o
+  erro não cai com `RELTOL`. Com a localização, um passo convergido
+  em que alguma chave trocou de condutância é rejeitado e refeito
+  para parar meia resolução antes do cruzamento (controle tomado
+  como linear no passo — `Device::event` devolve a fração; os
+  retries são uma secante), e o passo seguinte, de uma resolução,
+  contém a troca. Resolução `RELTOL·TMAX`. Toda troca fica entre
+  dois pontos aceitos a uma resolução de distância, e o ponto da
+  troca vira breakpoint (ordem 1, passo curto — é uma quina). Nível
+  que troca: janela positiva, a borda distante no sentido do
+  movimento (`VT+VH` subindo, `VT−VH` descendo); janela ≤ 0, a
+  primeira borda encontrada (a máquina de estados do ngspice). No
+  composto TR-BDF2 o estágio γ é examinado antes do estágio final.
+  O retry restaura a solução do ponto aceito: no 3f5 o iterado
+  rejeitado semeia o estado da chave do retry (`SWload` guarda o
+  state0 dentro da janela). A `W` passou a gravar o valor de
+  controle no estado (o ngspice deixa isso comentado); `CSWtrunc`
+  segue inerte. Medido na régua: `sw_hyst` 2,54 → 0,000, `csw_rly`
+  (antes não mensurável: a referência refinada não convergia) 0,04;
+  custo: 140 → 149 pontos no `sw_hyst`. Testes
+  `tests/robust_tran.rs` (`switch_flips_are_located…`,
+  `located_flips_do_not_move_with_the_step`).
+- **Método do `.pss`** (D-0047): `Options::pss_method()` = o do
+  `.tran` (TR-BDF2 no perfil Dune). A estabilização do autônomo
+  (`Options::pss_stab_method()`) fica no trapézio quando o deck não
+  dá `method=`: ela roda com TMAX = TSTAB/1000, que pode exceder o
+  período (Colpitts: 500 ns contra T = 299 ns), e o trapézio é o
+  único dos métodos cuja região de crescimento é exatamente o
+  semiplano direito — modo que cresce no circuito cresce na corrida
+  em qualquer passo; o TR-BDF2 (L-estável) o amortece e a oscilação
+  nunca parte. O refino de 5,5 períodos e o shooting rodam no método
+  do perfil. Período a 256 pontos contra o shooting de 2048 pontos:
+
+  | Deck | trapézio | TR-BDF2 |
+  |---|---|---|
+  | `osc_phase` | 3,81e-5 | 1,64e-5 |
+  | `osc_ring` | 4,57e-5 | 2,11e-5 |
+  | `osc_vdp` | 4,56e-5 | 2,20e-5 |
+  | `osc_wien` | 3,43e-5 | 2,06e-5 |
+  | `osc_colpitts` | 5,07e-5 | 2,35e-5 |
+
+  `osc_tline` converge em 27 iterações (trapézio: 16), período a
+  4,1e-5 do trapézio. `method=` explícito vale também para a
+  estabilização, como antes (com `method=trbdf2` o Colpitts segue
+  sem partir, erro claro). Teste
+  `tests/pss_osc.rs::the_dune_profile_shoots_with_trbdf2`.
 - **`Options.tmax_divisor`** (issue #16; argumento de API, não
   chave de `.options` — o TMAX é parâmetro do cartão `.tran`, e o
   divisor vale para todo cartão `.tran` do deck): `Some(d)`, d ≥ 1

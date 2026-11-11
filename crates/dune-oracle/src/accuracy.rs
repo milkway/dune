@@ -19,7 +19,7 @@
 //!   run at half the refinement must agree with it within
 //!   [`CONVERGED`] of the ruler. A deck where it has not is not
 //!   measurable this way (trapezoidal ringing that the step does not
-//!   damp, switch events) and must be listed as such in
+//!   damp, a breakpoint cascade) and must be listed as such in
 //!   `corpus/ACCURACY`;
 //! - the **margin** is the comparator's worst ratio with the
 //!   candidate's own grid driving: the error at the points the
