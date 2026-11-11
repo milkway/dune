@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "spice-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dune-core",
  "dune-netlist",

@@ -13,5 +13,10 @@ First release, aligned with Dune v0.1.0.
   and a 'knitr' engine (`spice_knitr()`) round out the workflow.
 * `spice_pic()` and `spice_pic_svg()` extract netlists from 'rpic'
   figures and draw them.
+* On Windows every simulation runs on a worker thread, so that a
+  threaded `spice_sweep()` agrees bit for bit with the sequential one
+  and with `spice_run()`: the 'Rtools' C runtime rounds `exp()` and
+  `pow()` according to the thread's x87 precision mode, which differs
+  between the R thread and new threads.
 * The Rust sources are vendored in `src/rust/vendor.tar.xz` and the
   installation builds offline, with at most two jobs.

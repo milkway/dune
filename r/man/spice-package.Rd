@@ -25,6 +25,15 @@ Quarto holds a deck and leaves its result in a variable for the R
 chunks that follow (see \link{spice_knitr}).
 }
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/milkway/dune}
+  \item \url{https://milkway.github.io/dune/}
+  \item Report bugs at \url{https://github.com/milkway/dune/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: André Leite \email{leite@de.ufpe.br}
 
@@ -36,6 +45,7 @@ Authors:
 Other contributors:
 \itemize{
   \item The Regents of the University of California ('SPICE3f5', from which the simulation engine is derived) [copyright holder]
+  \item The authors of the dependency Rust crates (see inst/AUTHORS for details) [copyright holder]
 }
 
 }
