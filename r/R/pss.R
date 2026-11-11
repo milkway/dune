@@ -13,8 +13,9 @@
 #' The method is Dune's: ngspice-47's `.pss` is a free-running
 #' oscillator search that detunes from a driving source. `points` is the
 #' accuracy knob: the error left is the integrator's phase error,
-#' `(2 * pi / points)^2 / 12` of the amplitude with the default
-#' trapezoidal rule.
+#' `(2 * pi / points)^2 / 12` of the amplitude with the trapezoidal
+#' rule (`method = "trap"`, or `compat = "spice3"`) and about half of
+#' that with the default, TR-BDF2.
 #'
 #' A circuit without a periodic source (`freq = 0` finds none) is an
 #' autonomous oscillator: the period becomes a Newton unknown, with the

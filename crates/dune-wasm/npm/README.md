@@ -81,7 +81,8 @@ await ready(wasmUrl);
   (`{ trtol: 1, method: 'gear', temp: 50 }`, °C; a bad entry is a warning
   in `diagnostics`, not a throw; every key a `.options` card takes,
   including `method` (a `.tran` defaults to Dune's `'trbdf2'`),
-  `compat: 'spice3'` (the SPICE3f5 defaults: a trapezoidal `.tran`),
+  `compat: 'spice3'` (the SPICE3f5 defaults: a trapezoidal `.tran`,
+  switches flipping on the time grid, no cap on LTRA breakpoints),
   `ltrafit`, `ltrabkrate`,
   `keepopinfo`, `seed`, `notrnoise`, `devnoise` and `devnt`) — and
   `tmaxDivisor` — a number ≥ 1 that

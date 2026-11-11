@@ -379,6 +379,9 @@ pub(crate) struct Engine {
     // Breakpoint table (always ≥ 2 entries, sorted).
     breaks: Vec<f64>,
     min_break: f64,
+    /// Event location (D-0047): the time resolution a switch flip is
+    /// located to, `RELTOL·TMAX`; `None` when off (`compat=spice3`).
+    event_tol: Option<f64>,
     /// The opt-in LTRA breakpoint hygiene (`Options::ltra_break_rate`):
     /// the merge radius for slope-rule breakpoints, `TMAX/N`, or
     /// `None` (faithful: every request goes through `CKTsetBreak`).
@@ -474,6 +477,7 @@ impl Engine {
             breaks: vec![0.0, 0.0],
             min_break: 0.0,
             slope_break_radius: None,
+            event_tol: None,
             fault: None,
             warm,
             periodic: None,
@@ -1537,6 +1541,53 @@ impl Engine {
             .is_some_and(|r| within_radius(&self.breaks, t, r))
     }
 
+    /// Event location (D-0047) for the converged step of length `h`
+    /// just solved (`composite`: a TR-BDF2 step, whose banks hold the
+    /// stage point between the accepted point and this one). The
+    /// earliest device event in the step decides: the step stands
+    /// when it is no longer than the resolution; otherwise it is
+    /// retried to stop half a resolution short of the event, or —
+    /// when the event sits right at the start — over one resolution,
+    /// which then stands. Every located flip is thus bracketed by two
+    /// accepted points one resolution apart, whether or not a step
+    /// happened to end on it. The control is taken as linear in time
+    /// across each stage; the retries are a secant iteration on it.
+    fn locate_event(&self, h: f64, composite: bool) -> EventStep {
+        let Some(tol) = self.event_tol else {
+            return EventStep::None;
+        };
+        let g = crate::integ::TRBDF2_GAMMA;
+        let theta = self
+            .devices
+            .iter()
+            .filter_map(|d| {
+                // `delta_old[k]` is the spacing of banks `k` and
+                // `k + 1`.
+                let back = |from: usize| self.delta_old[from] / self.delta_old[from - 1];
+                if composite {
+                    d.event(&self.states, 2, 1, back(2))
+                        .map(|x| g * x)
+                        .or_else(|| {
+                            d.event(&self.states, 1, 0, back(1))
+                                .map(|x| g + (1.0 - g) * x)
+                        })
+                } else {
+                    d.event(&self.states, 1, 0, back(1))
+                }
+            })
+            .fold(None, |a: Option<f64>, x| Some(a.map_or(x, |a| a.min(x))));
+        let Some(theta) = theta else {
+            return EventStep::None;
+        };
+        if h <= tol {
+            EventStep::Located
+        } else if theta * h > tol {
+            EventStep::Cut(theta * h - 0.5 * tol)
+        } else {
+            EventStep::Cut(tol)
+        }
+    }
+
     /// `DCtran`: the transient loop. Returns `(time, solution)` rows
     /// for every accepted timepoint at or after `tstart`.
     pub fn tran(&mut self, opts: &Options, p: &TranParams) -> Result<Vec<(f64, Vec<f64>)>, Error> {
@@ -1565,8 +1616,8 @@ impl Engine {
         self.time = 0.0;
         self.breaks = vec![0.0, p.tstop];
         self.min_break = 5e-5 * max_step;
-        self.slope_break_radius = match opts.ltra_break_rate {
-            Some(n) if n > 0 => Some(f64::max(max_step / n as f64, self.min_break)),
+        self.slope_break_radius = match opts.ltra_slope_rate() {
+            Some(n) => Some(f64::max(max_step / n as f64, self.min_break)),
             _ => None,
         };
         let delmin = 1e-9 * max_step;
@@ -1651,6 +1702,10 @@ impl Engine {
         let max_step = lp.max_step;
         let delmin = lp.delmin;
         let mut delta = lp.delta;
+        self.event_tol = opts
+            .locates_events()
+            .then_some(opts.reltol * max_step)
+            .filter(|t| *t > 0.0);
         // Switch to transient proper (`MODETRAN | MODEINITTRAN`).
         self.set_kind(AnKind::Tran, lp.uic);
         self.compactions = 0;
@@ -1760,6 +1815,9 @@ impl Engine {
                 continue 'next_time;
             }
 
+            // The accepted point, for an event retry: the rejected
+            // iterate must not seed the switch states of the retry.
+            let sol0 = self.event_tol.map(|_| self.sol.clone());
             loop {
                 // Dune's step budget (D-0022): every attempted
                 // timepoint counts, accepted or not. Neither C
@@ -1800,9 +1858,22 @@ impl Engine {
                         firsttime = false;
                         continue 'next_time; // no LTE check on the first point
                     }
+                    let event = self.locate_event(delta, false);
+                    if let EventStep::Cut(h) = event {
+                        self.time -= delta;
+                        if let Some(sol0) = &sol0 {
+                            self.sol.copy_from_slice(sol0);
+                        }
+                        delta = h;
+                        continue;
+                    }
                     let mut new = delta;
                     self.trunc(opts, &mut new);
                     if new > 0.9 * delta {
+                        if event == EventStep::Located {
+                            // The flip is a corner: restart from it.
+                            self.set_break(self.time)?;
+                        }
                         if self.order == 1 {
                             new = delta;
                             self.order = 2;
@@ -1875,8 +1946,8 @@ impl Engine {
         self.time = run.t0;
         self.breaks = vec![run.t0, t1];
         self.min_break = 5e-5 * run.max_step;
-        self.slope_break_radius = match opts.ltra_break_rate {
-            Some(n) if n > 0 => Some(f64::max(run.max_step / n as f64, self.min_break)),
+        self.slope_break_radius = match opts.ltra_slope_rate() {
+            Some(n) => Some(f64::max(run.max_step / n as f64, self.min_break)),
             _ => None,
         };
         let mut corners = Vec::new();
@@ -2134,14 +2205,23 @@ impl Engine {
                     self.order = 2;
                     return Ok(restart);
                 }
-                let mut new = h;
-                self.composite = !restart;
-                self.trunc(opts, &mut new);
-                self.composite = false;
-                *delta = new;
-                if new > 0.9 * h {
-                    self.order = 2;
-                    return Ok(restart);
+                let event = self.locate_event(h, !restart);
+                if let EventStep::Cut(cut) = event {
+                    *delta = cut;
+                } else {
+                    let mut new = h;
+                    self.composite = !restart;
+                    self.trunc(opts, &mut new);
+                    self.composite = false;
+                    *delta = new;
+                    if new > 0.9 * h {
+                        if event == EventStep::Located {
+                            // The flip is a corner: restart from it.
+                            self.set_break(self.time)?;
+                        }
+                        self.order = 2;
+                        return Ok(restart);
+                    }
                 }
             } else if forced {
                 return Err(Error::IterLim);
@@ -3265,6 +3345,18 @@ pub(crate) struct TranLoop {
     /// `CKTsaveDelta`'s initial value.
     pub save_delta: f64,
     pub step_budget: usize,
+}
+
+/// What [`Engine::locate_event`] makes of a converged step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EventStep {
+    /// No device event in the step.
+    None,
+    /// An event, located to the resolution: the step stands.
+    Located,
+    /// An event too far from the end of the step: retry with this
+    /// step.
+    Cut(f64),
 }
 
 /// One accepted step of a logged transient: the point's time, the

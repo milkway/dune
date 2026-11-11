@@ -51,9 +51,10 @@ fn options_parse_the_robust_values() {
 
 /// The defaults profile (D-0046): a `.tran` without `method=`
 /// integrates with TR-BDF2 under Dune's profile and with the
-/// trapezoidal rule under `compat=spice3`; the `.pss` shooting stays
-/// on the trapezoidal rule under both; an explicit method wins
-/// everywhere, wherever it sits on the card.
+/// trapezoidal rule under `compat=spice3`; the `.pss` shooting
+/// follows (D-0047), its autonomous start-up stays on the
+/// trapezoidal rule under both; an explicit method wins everywhere,
+/// wherever it sits on the card.
 #[test]
 fn the_profile_picks_the_default_method() {
     use dune_core::Compat;
@@ -63,12 +64,14 @@ fn the_profile_picks_the_default_method() {
     let d = opts("");
     assert_eq!(d.compat, Compat::Dune);
     assert_eq!(d.tran_method(), Method::TrBdf2);
-    assert_eq!(d.pss_method(), Method::Trapezoidal);
+    assert_eq!(d.pss_method(), Method::TrBdf2);
+    assert_eq!(d.pss_stab_method(), Method::Trapezoidal);
 
     let s = opts(".options compat=spice3");
     assert_eq!((s.compat, s.method), (Compat::Spice3, None));
     assert_eq!(s.tran_method(), Method::Trapezoidal);
     assert_eq!(s.pss_method(), Method::Trapezoidal);
+    assert_eq!(s.pss_stab_method(), Method::Trapezoidal);
     assert_eq!(Options::spice3().tran_method(), Method::Trapezoidal);
 
     for card in [
@@ -78,6 +81,7 @@ fn the_profile_picks_the_default_method() {
         let g = opts(card);
         assert_eq!(g.tran_method(), Method::Gear, "{card}");
         assert_eq!(g.pss_method(), Method::Gear, "{card}");
+        assert_eq!(g.pss_stab_method(), Method::Gear, "{card}");
     }
     assert_eq!(opts(".options compat=dune").tran_method(), Method::TrBdf2);
     // An unknown profile is a warning and changes nothing.
@@ -157,14 +161,149 @@ fn trbdf2_error_does_not_exceed_trap_on_rc() {
 #[test]
 fn ltra_hygiene_is_a_no_op_without_a_cascade() {
     let (ckt, opts, tran) = load("ltra_rc.cir", &corpus("regress/ltra_rc.cir"));
-    let off = run(&ckt, &opts, &tran);
-    let on = run(
-        &ckt,
-        &Options {
-            ltra_break_rate: Some(10),
-            ..opts.clone()
-        },
-        &tran,
-    );
+    // On by default under the Dune profile (D-0047), off with 0.
+    assert_eq!(opts.ltra_slope_rate(), Some(dune_core::LTRA_BREAK_RATE));
+    assert_eq!(Options::spice3().ltra_slope_rate(), None);
+    let with = |rate| Options {
+        ltra_break_rate: Some(rate),
+        ..opts.clone()
+    };
+    assert_eq!(with(0).ltra_slope_rate(), None);
+    assert_eq!(with(4).ltra_slope_rate(), Some(4));
+    let off = run(&ckt, &with(0), &tran);
+    let on = run(&ckt, &opts, &tran);
     assert_eq!(off.data, on.data);
+}
+
+/// A voltage switch (closes at 3.05 V, opens at 2.05 V) and a current
+/// switch (closes at 3.05 mA, opens at 2.05 mA) on a 0 → 5 → 0
+/// triangle of 1 ms: the crossings are at 0.305 ms and 0.795 ms. `.tran 20u`
+/// gives a 20 µs grid that holds neither.
+const SWITCH_DECK: &str = "switch events
+vc 1 0 pwl(0 0 0.5m 5 1m 0)
+rc 1 0 1k
+vs 1 9 0
+rs 9 0 1k
+vdd 2 0 10
+s1 2 3 1 0 smod
+r1 3 0 1k
+w1 2 4 vs wmod
+r2 4 0 1k
+.model smod sw vt=2.55 vh=0.5 ron=1 roff=1e6
+.model wmod csw it=2.55m ih=0.5m ron=1 roff=1e6
+.tran 20u 1m
+.end
+";
+
+/// The times at which column `name` crosses 5 V between two rows, as
+/// `(last row before, first row after)`.
+fn flips(sol: &dune_core::Solution, name: &str) -> Vec<(f64, f64)> {
+    let dune_raw::Data::Real(cols) = &sol.data else {
+        panic!("real data");
+    };
+    let k = sol.variables.iter().position(|(n, _)| n == name).unwrap();
+    (1..cols[0].len())
+        .filter(|&i| (cols[k][i] > 5.0) != (cols[k][i - 1] > 5.0))
+        .map(|i| (cols[0][i - 1], cols[0][i]))
+        .collect()
+}
+
+/// Event location (D-0047): under the Dune profile a switch flip is
+/// bracketed by two accepted points `RELTOL·TMAX` apart that hold the
+/// instant its control crossed the threshold; under `compat=spice3`
+/// it lands on whatever timepoint first sees the control past it.
+#[test]
+fn switch_flips_are_located_under_the_dune_profile() {
+    let (ckt, opts, tran) = load("sw.cir", SWITCH_DECK);
+    let sol = run(&ckt, &opts, &tran);
+    let tol = 1e-3 * 20e-6;
+    for name in ["v(3)", "v(4)"] {
+        let f = flips(&sol, name);
+        assert_eq!(f.len(), 2, "{name}: {f:?}");
+        for ((before, after), at) in f.into_iter().zip([0.305e-3, 0.795e-3]) {
+            assert!(
+                before < at && at < after,
+                "{name}: {before:e} {at:e} {after:e}"
+            );
+            assert!(
+                after - before <= tol * (1.0 + 1e-9),
+                "{name}: {:e}",
+                after - before
+            );
+        }
+    }
+
+    let spice3 = Options::spice3();
+    let sol = run(&ckt, &spice3, &tran);
+    for name in ["v(3)", "v(4)"] {
+        let f = flips(&sol, name);
+        assert_eq!(f.len(), 2, "{name}: {f:?}");
+        assert!(
+            f.iter().all(|(before, after)| after - before > 100.0 * tol),
+            "{name}: {f:?}"
+        );
+    }
+}
+
+/// The located flip does not depend on the grid: the same deck at a
+/// tenth of the step puts its flips within both resolutions of the
+/// same instants, where the unlocated runs differ by a whole step.
+#[test]
+fn located_flips_do_not_move_with_the_step() {
+    let (ckt, opts, tran) = load("sw.cir", SWITCH_DECK);
+    let fine_deck = SWITCH_DECK.replace(".tran 20u 1m", ".tran 20u 1m 0 2u");
+    let (_, _, fine) = load("sw.cir", &fine_deck);
+    let (a, b) = (run(&ckt, &opts, &tran), run(&ckt, &opts, &fine));
+    for name in ["v(3)", "v(4)"] {
+        for (x, y) in flips(&a, name).into_iter().zip(flips(&b, name)) {
+            assert!((x.1 - y.1).abs() <= 1e-3 * 20e-6, "{name}: {x:?} {y:?}");
+        }
+    }
+}
+
+/// A switch that controls itself: a relaxation oscillator (10 V
+/// through 10 kΩ into 100 nF, a 100 Ω switch across the capacitor
+/// closing at 7 V and opening at 3 V). The flip discharges the node
+/// the switch watches, so the step that flips ends with the control
+/// back below the level — the crossing is extrapolated, not
+/// interpolated. Period, closed form: `τc·ln(7/3) + τd·ln((7−v∞)/
+/// (3−v∞))` with the discharge's Thevenin `v∞`, `τd`. Located, the
+/// run is within 5e-4 of it and every cycle is the same; on the grid
+/// (`compat=spice3`) it is off by more than 1 %.
+#[test]
+fn a_self_controlled_switch_is_located() {
+    let deck = "relaxation oscillator
+vdd 1 0 10
+r1 1 2 10k
+c1 2 0 100n ic=0
+s1 2 0 2 0 sdis
+.model sdis sw vt=5 vh=2 ron=100 roff=1e9
+.tran 50u 20m uic
+.end
+";
+    let (ckt, opts, tran) = load("relax.cir", deck);
+    let (rp, c): (f64, f64) = (1e4 * 100.0 / 1.01e4, 100e-9);
+    let vinf: f64 = 10.0 * 100.0 / 1.01e4;
+    let exact = 1e4 * c * (7.0f64 / 3.0).ln() + rp * c * ((7.0 - vinf) / (3.0 - vinf)).ln();
+    let periods = |o: &Options| {
+        let sol = run(&ckt, o, &tran);
+        let dune_raw::Data::Real(cols) = &sol.data else {
+            panic!("real data");
+        };
+        let k = sol.variables.iter().position(|(n, _)| n == "v(2)").unwrap();
+        let (t, v) = (&cols[0], &cols[k]);
+        let peaks: Vec<f64> = (1..t.len() - 1)
+            .filter(|&i| v[i] >= v[i - 1] && v[i] > v[i + 1] && v[i] > 6.0)
+            .map(|i| t[i])
+            .collect();
+        peaks.windows(2).map(|w| w[1] - w[0]).collect::<Vec<f64>>()
+    };
+    let located = periods(&opts);
+    assert!(located.len() >= 20, "{}", located.len());
+    for p in &located {
+        assert!((p - exact).abs() < 5e-4 * exact, "{p:e} vs {exact:e}");
+    }
+    let grid = periods(&Options::spice3());
+    let mean = grid.iter().sum::<f64>() / grid.len() as f64;
+    assert!((mean - exact).abs() > 1e-2 * exact, "{mean:e} vs {exact:e}");
 }

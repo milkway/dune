@@ -1,5 +1,23 @@
 # Changelog — spice3 (Python)
 
+## 0.3.0
+
+- **Switch events are located.** An `S`/`W` switch flips at the
+  instant its control crosses the threshold, to within `reltol` times
+  the maximum step, instead of at whatever timepoint first sees it
+  crossed; `compat="spice3"` restores the SPICE behaviour.
+- **`spice.pss()` shoots with TR-BDF2 by default**, like `.tran`:
+  about half the period error of the trapezoidal rule at the same
+  `points`. Only the start-up transient of an autonomous oscillator
+  stays on the trapezoidal rule, which lets the oscillation grow at
+  any step. `method=` still decides everything when given.
+- **`ltrabkrate` defaults to 10** (the cap on the slope breakpoints
+  of LTRA lines per maximum step): a transient whose line
+  echoes cascade into breakpoints now ends instead of exhausting its
+  step budget, and no result changes where there is no cascade.
+  `ltrabkrate=0`, or `compat="spice3"`, schedules every request as
+  SPICE does.
+
 ## 0.2.0
 
 - **`.tran` integrates with TR-BDF2 by default** instead of the

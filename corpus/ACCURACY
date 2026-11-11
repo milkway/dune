@@ -3,11 +3,9 @@
 ltra_1|unmeasured|the trapezoidal ring on the dioload diode string does not converge with the step (see the XFAIL entry and regress/ltra_1_gear)
 ltra_2|unmeasured|same diode loads as ltra_1/ltra_3; the refined reference is still 0.9 of the ruler from its half-refined run
 ltra_3|unmeasured|as ltra_1, plus the breakpoint cascade (see the XFAIL entry and regress/ltra_3_gear)
+ltra_compact|unmeasured|trytocompact drops history points, and the refined runs do not converge on each other (TMAX/20 vs TMAX/40: 11); without the breakpoint hygiene (ltrabkrate=0) they exceed the transient step budget
 ltra_1_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 ltra_3_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
-ltra_compact|unmeasured|the refined run exceeds the transient step budget (trytocompact probe; the breakpoint density grows with 1/TMAX)
-csw_rly|unmeasured|switch events: the refined reference is still 0.26 of the ruler from its half-refined run
-sw_hyst|3.3|the switch thresholds are crossed inside one default step (measured 2.54)
 ltrafit|0.65|recursive-convolution lines at the default step (measured 0.47)
 mosamp2|0.6|the LTE controller over the Meyer-charge transients (measured 0.45 with the TR-BDF2 default; 1.32 with the trapezoidal rule)
 tra_pulse|0.25|measured 0.18, close to the default cap

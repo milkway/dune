@@ -117,7 +117,8 @@ export interface RenderOptions {}
  * `tnom` (°C), `pivtol`, `pivrel`, `noopiter`, `trtol`, `chgtol`, `method`
  * (`"trap"` | `"gear"` | `"trbdf2"`; unset, a `.tran` uses `"trbdf2"`),
  * `compat` (`"dune"` | `"spice3"`: the SPICE3f5 defaults, i.e. a
- * trapezoidal `.tran`), `maxord`, `ltrabkrate`, `ltrafit`,
+ * trapezoidal `.tran`, switches flipping on the time grid, no cap on
+ * LTRA breakpoints), `maxord`, `ltrabkrate` (unset: 10; 0: no cap), `ltrafit`,
  * `nopage`, `defl`, `defw`, `defad`, `defas`, `trytocompact`, `keepopinfo` (the small-signal
  * analyses emit their operating point first), `seed` (transient-noise seed, an
  * integer ≥ 1; no `"random"`), `notrnoise`, `devnoise` and `devnt` (device

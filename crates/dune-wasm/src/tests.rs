@@ -1075,8 +1075,10 @@ fn pss_entry_of_an_autonomous_oscillator() {
     assert!(p.residuals.last().unwrap().unwrap() <= 1.0);
     // The Newton iterate moved T (an autonomous circuit's unknown).
     assert_ne!(p.periods[0], p.period);
-    // docs/dune-core.md: T = 199.36609 µs (ngspice's long .tran 3.0e-5 off).
-    assert!((p.period / 199.36609e-6 - 1.0).abs() < 1e-6, "{}", p.period);
+    // T = 199.36138 µs with the default TR-BDF2 shooting (D-0047;
+    // 199.36609 µs with the trapezoidal rule, the 2048-point
+    // shooting gives 199.35692 µs — docs/dune-core.md).
+    assert!((p.period / 199.36138e-6 - 1.0).abs() < 1e-6, "{}", p.period);
     let Columns::Real(cols) = &raw.plots[0].columns else {
         panic!("the period is real")
     };

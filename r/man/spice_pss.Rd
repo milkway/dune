@@ -72,7 +72,8 @@ units (temperatures \code{temp}/\code{tnom} in degrees Celsius): \code{reltol},
 \code{srcsteps}, \code{temp}, \code{tnom}, \code{pivtol}, \code{pivrel}, \code{noopiter},
 \code{trtol}, \code{chgtol}, \code{method} (\code{"trap"}, \code{"gear"} or \code{"trbdf2"};
 unset, a \code{.tran} integrates with \code{"trbdf2"}), \code{compat} (\code{"dune"} or
-\code{"spice3"}, the 'SPICE3f5' defaults: a trapezoidal \code{.tran}),
+\code{"spice3"}, the 'SPICE3f5' defaults: a trapezoidal \code{.tran},
+switches flipping on the time grid, \code{ltrabkrate} 0),
 \code{ltrabkrate}, \code{ltrafit}, \code{maxord}, \code{nopage}, \code{defl}, \code{defw},
 \code{defad}, \code{defas}, \code{seed} (the transient-noise seed, a whole number
 \verb{>= 1}; no \code{"random"}), \code{notrnoise}, \code{devnoise}, \code{devnt} (the
@@ -127,8 +128,9 @@ and its \code{.options}; its own analysis cards are not run.
 The method is Dune's: ngspice-47's \code{.pss} is a free-running
 oscillator search that detunes from a driving source. \code{points} is the
 accuracy knob: the error left is the integrator's phase error,
-\code{(2 * pi / points)^2 / 12} of the amplitude with the default
-trapezoidal rule.
+\code{(2 * pi / points)^2 / 12} of the amplitude with the trapezoidal
+rule (\code{method = "trap"}, or \code{compat = "spice3"}) and about half of
+that with the default, TR-BDF2.
 
 A circuit without a periodic source (\code{freq = 0} finds none) is an
 autonomous oscillator: the period becomes a Newton unknown, with the

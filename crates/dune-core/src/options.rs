@@ -20,19 +20,26 @@ pub enum Compat {
     /// references (`dune-oracle --accuracy`, docs/dune-oracle.md), it
     /// is closer to the converged answer than the trapezoidal rule at
     /// the same step on 16 of 29 decks and farther on none, and it
-    /// does not ring.
+    /// does not ring. The `.pss` shooting uses the same method
+    /// ([`Options::pss_method`]), and a transient locates the instant
+    /// an `S`/`W` switch flips to within `RELTOL·TMAX` instead of
+    /// flipping it at the first timepoint past the threshold
+    /// (D-0047). The slope breakpoints of the LTRA lines are capped
+    /// ([`Options::ltra_slope_rate`]).
     #[default]
     Dune,
     /// `spice3`: the SPICE3f5 defaults — a `.tran` without `method=`
-    /// uses the trapezoidal rule. What the ngspice oracle runs under,
-    /// and what reproduces a SPICE3 run.
+    /// uses the trapezoidal rule, and switches flip on the grid. What
+    /// the ngspice oracle runs under, and what reproduces a SPICE3
+    /// run.
     Spice3,
 }
 
 #[derive(Clone, Debug)]
 pub struct Options {
     /// The defaults profile: what an analysis does where the fields
-    /// below leave it the choice (today: [`Options::method`]).
+    /// below leave it the choice ([`Options::method`]), and whether
+    /// a transient locates switch events.
     pub compat: Compat,
     /// `RELTOL`, default 1e-3.
     pub reltol: f64,
@@ -107,15 +114,18 @@ pub struct Options {
     /// deck costs O(n²) in its history length — D-0022). `Some(n)`:
     /// at most `n` (`Some(usize::MAX)` is unlimited).
     pub max_tran_steps: Option<usize>,
-    /// Dune's opt-in LTRA breakpoint hygiene (`.options ltrabkrate=N`;
-    /// not a SPICE option, issue #6). The slope rule of `LTRAaccept`
-    /// plants a breakpoint one delay after every accepted point where
-    /// an incident wave's slope changes; `CKTsetBreak` merges only
+    /// Dune's LTRA breakpoint hygiene (`.options ltrabkrate=N`; not a
+    /// SPICE option, issue #6). The slope rule of `LTRAaccept` plants
+    /// a breakpoint one delay after every accepted point where an
+    /// incident wave's slope changes; `CKTsetBreak` merges only
     /// within `5e-5·TMAX`, so a ringing load can feed it an echo
     /// cascade (D-0022). `Some(n)`, `n > 0`: a slope breakpoint that
     /// falls within `TMAX/n` of one already scheduled is dropped,
-    /// which caps them at about `n` per TMAX span. `None` or
-    /// `Some(0)` (default): faithful, every request scheduled.
+    /// which caps them at about `n` per TMAX span. `Some(0)`:
+    /// faithful, every request scheduled. `None` (default): the
+    /// profile's — [`LTRA_BREAK_RATE`] under [`Compat::Dune`],
+    /// faithful under [`Compat::Spice3`]; see
+    /// [`Options::ltra_slope_rate`].
     pub ltra_break_rate: Option<usize>,
     /// Dune's opt-in recursive convolution for LTRA lines
     /// (`.options ltrafit`; not a SPICE option, issue #8). The 3f5
@@ -246,6 +256,16 @@ pub const TRAN_STEP_FLOOR: usize = 10_000;
 /// 13.0, `ltra_2`).
 pub const TRAN_STEPS_PER_TMAX: usize = 50;
 
+/// The LTRA breakpoint hygiene of the Dune profile
+/// ([`Options::ltra_break_rate`] `= None`): about this many slope
+/// breakpoints per TMAX span (D-0047). Without an echo cascade it
+/// changes nothing — every LTRA deck of the corpus is bit-identical
+/// with it on and off at the deck's step — and with one it decides
+/// whether the run ends: `regress/ltra_compact` refined 20 and 40
+/// times exceeds the step budget without it. A lower rate already
+/// changes that deck at its own step.
+pub const LTRA_BREAK_RATE: usize = 10;
+
 impl Options {
     /// The SPICE3f5 defaults ([`Compat::Spice3`]).
     pub fn spice3() -> Self {
@@ -265,12 +285,45 @@ impl Options {
         })
     }
 
+    /// Whether a transient locates switch events (D-0047): under
+    /// [`Compat::Dune`] a step in which an `S`/`W` switch flips is
+    /// cut so that the flip lands within `RELTOL·TMAX` of the instant
+    /// its control crossed the threshold. Under [`Compat::Spice3`]
+    /// the switch flips at whatever timepoint first sees the control
+    /// past the threshold, as in the 3f5 and ngspice.
+    pub(crate) fn locates_events(&self) -> bool {
+        self.compat == Compat::Dune
+    }
+
+    /// The LTRA breakpoint hygiene in force
+    /// ([`Options::ltra_break_rate`]): the slope breakpoints allowed
+    /// per TMAX span, `None` when every request is scheduled.
+    pub fn ltra_slope_rate(&self) -> Option<usize> {
+        match (self.ltra_break_rate, self.compat) {
+            (Some(0), _) | (None, Compat::Spice3) => None,
+            (Some(n), _) => Some(n),
+            (None, Compat::Dune) => Some(LTRA_BREAK_RATE),
+        }
+    }
+
     /// The integration method of the `.pss` shooting:
-    /// [`Options::method`] when given, else the trapezoidal rule
-    /// under either profile. The shooting of autonomous oscillators
-    /// was built and measured on it (D-0035); under TR-BDF2 some of
-    /// them do not converge yet (`osc_colpitts`, `osc_tline`).
+    /// [`Options::method`] when given, else the profile's, as for
+    /// `.tran` ([`Options::tran_method`]).
     pub fn pss_method(&self) -> Method {
+        self.tran_method()
+    }
+
+    /// The integration method of the stabilization run of an
+    /// autonomous `.pss` (the transient to TSTAB in which the
+    /// oscillation starts and its period is counted):
+    /// [`Options::method`] when given, else the trapezoidal rule
+    /// under either profile. That run steps on a grid that does not
+    /// know the period yet (TMAX = TSTAB/1000, which may exceed it),
+    /// and the trapezoidal rule is the one method whose growth region
+    /// is exactly the right half-plane: a mode that grows in the
+    /// circuit grows in the run at any step. An L-stable method damps
+    /// it instead (`osc_colpitts` never starts under TR-BDF2 there).
+    pub fn pss_stab_method(&self) -> Method {
         self.method.unwrap_or(Method::Trapezoidal)
     }
 

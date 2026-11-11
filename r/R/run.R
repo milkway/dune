@@ -24,7 +24,8 @@
 #'   `srcsteps`, `temp`, `tnom`, `pivtol`, `pivrel`, `noopiter`,
 #'   `trtol`, `chgtol`, `method` (`"trap"`, `"gear"` or `"trbdf2"`;
 #'   unset, a `.tran` integrates with `"trbdf2"`), `compat` (`"dune"` or
-#'   `"spice3"`, the 'SPICE3f5' defaults: a trapezoidal `.tran`),
+#'   `"spice3"`, the 'SPICE3f5' defaults: a trapezoidal `.tran`,
+#'   switches flipping on the time grid, `ltrabkrate` 0),
 #'   `ltrabkrate`, `ltrafit`, `maxord`, `nopage`, `defl`, `defw`,
 #'   `defad`, `defas`, `seed` (the transient-noise seed, a whole number
 #'   `>= 1`; no `"random"`), `notrnoise`, `devnoise`, `devnt` (the

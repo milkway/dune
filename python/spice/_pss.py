@@ -128,8 +128,9 @@ def pss(
     directional differences over a frozen-grid replay of the period
     transient. A linear circuit converges in one step. ``points`` is the
     accuracy knob: the error left is the integrator's phase error,
-    ``(2 pi / points)**2 / 12`` of the amplitude with the default
-    trapezoidal rule.
+    ``(2 pi / points)**2 / 12`` of the amplitude with the trapezoidal
+    rule (``method="trap"``, or ``compat="spice3"``) and about half of
+    that with the default, TR-BDF2.
 
     A circuit without a periodic source (``freq=0`` finds none) is an
     autonomous oscillator: the period becomes a Newton unknown, with the

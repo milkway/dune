@@ -193,6 +193,40 @@ fn tran_state(p: &SwitchParams, c: f64, prev: f64, current_ctrl: bool) -> f64 {
     }
 }
 
+/// Where on the way from control value `c1` to `c0` (as a fraction
+/// of the way) the switch that flipped in between met its flipping
+/// level; `None` when neither edge of the window lies in between.
+fn crossing(p: &SwitchParams, c1: f64, c0: f64) -> Option<f64> {
+    let (lo, hi) = (p.thresh - p.hyst.abs(), p.thresh + p.hyst.abs());
+    let between = |l: f64| (c1 <= l && l <= c0) || (c0 <= l && l <= c1);
+    let rising = c0 > c1;
+    // Far edge for a positive window, near edge otherwise.
+    let order = if (p.hyst > 0.0) == rising {
+        [hi, lo]
+    } else {
+        [lo, hi]
+    };
+    let level = order.into_iter().find(|&l| between(l))?;
+    let theta = (level - c1) / (c0 - c1);
+    (theta.is_finite() && (0.0..=1.0).contains(&theta)).then_some(theta)
+}
+
+/// The control level whose crossing turned a switch at `c1` on
+/// (`on`) or off: the far edge of a positive window, the first edge
+/// ahead of a non-positive one.
+fn flip_level(p: &SwitchParams, c1: f64, on: bool) -> f64 {
+    let (lo, hi) = (p.thresh - p.hyst.abs(), p.thresh + p.hyst.abs());
+    if p.hyst > 0.0 {
+        if on { hi } else { lo }
+    } else if on {
+        if c1 < lo { lo } else { hi }
+    } else if c1 > hi {
+        hi
+    } else {
+        lo
+    }
+}
+
 /// `g_now`: on for `REALLY_ON`/`HYST_ON` in the loads.
 fn is_on(state: f64) -> bool {
     state == REALLY_ON || state == HYST_ON
@@ -284,11 +318,11 @@ impl crate::devices::Device for SwitchInst {
         };
 
         ctx.states.set(0, st, state);
-        if !current {
-            // `CSWload` has this store commented out ("FIXME"), which
-            // leaves `CSWtrunc` without data.
-            ctx.states.set(0, self.st + CTRLVALUE, c);
-        }
+        // `CSWload` has this store commented out ("FIXME"), which
+        // leaves `CSWtrunc` without data; Dune stores it for the
+        // event location ([`Device::event`]) and keeps the current
+        // switch out of `trunc`.
+        ctx.states.set(0, self.st + CTRLVALUE, c);
 
         let g = if is_on(state) {
             self.p.gon
@@ -331,6 +365,48 @@ impl crate::devices::Device for SwitchInst {
                 }
             }
         }
+    }
+
+    /// Dune's event location (D-0047; not in the 3f5 or ngspice,
+    /// where a switch flips at whatever timepoint first sees the
+    /// control past the threshold): when the conductance at bank
+    /// `to` differs from bank `from`, the fraction of that interval
+    /// at which the control, taken as linear in time, crossed the
+    /// level that flipped it. With a positive window the flip is at
+    /// the far edge in the direction of travel (`VT+VH` rising,
+    /// `VT-VH` falling); with a non-positive one the state machine
+    /// flips at the first edge it meets.
+    ///
+    /// A switch that controls itself (a relaxation oscillator: the
+    /// flip discharges the node it watches) ends the step with its
+    /// control back on the near side of the level. The crossing is
+    /// then extrapolated from the control's rate over the interval
+    /// before `from`, and reported no later than mid-interval, so
+    /// that retries at least halve the step.
+    fn event(
+        &self,
+        states: &crate::state::States,
+        from: usize,
+        to: usize,
+        back: f64,
+    ) -> Option<f64> {
+        let st = self.st + SWITCHSTATE;
+        let on = is_on(states.get(to, st));
+        if on == is_on(states.get(from, st)) {
+            return None;
+        }
+        let ctrl = self.st + CTRLVALUE;
+        let c1 = states.get(from, ctrl);
+        if let Some(theta) = crossing(&self.p, c1, states.get(to, ctrl)) {
+            return Some(theta);
+        }
+        let rate = (c1 - states.get(from + 1, ctrl)) / back;
+        let theta = (flip_level(&self.p, c1, on) - c1) / rate;
+        Some(if theta.is_finite() && theta >= 0.0 {
+            theta.min(0.5)
+        } else {
+            0.5
+        })
     }
 
     /// `SWacLoad`/`CSWacLoad`: the state left by the `INITSMSIG`
@@ -449,6 +525,36 @@ mod tests {
         assert_eq!(float_state(&z, 2.6, 0.0, REALLY_OFF), REALLY_ON);
         assert_eq!(float_state(&z, 2.4, 0.0, REALLY_ON), REALLY_OFF);
         assert_eq!(float_state(&z, 2.5, 0.0, REALLY_OFF), HYST_ON);
+    }
+
+    #[test]
+    fn crossing_picks_the_flipping_edge() {
+        // Positive window 1.5..3.5: rising flips at 3.5, falling at
+        // 1.5, even when the step spans both edges.
+        let q = p(1.0);
+        assert_eq!(crossing(&q, 3.0, 4.0), Some(0.5));
+        assert_eq!(crossing(&q, 1.0, 5.0), Some(0.625));
+        assert_eq!(crossing(&q, 5.0, 1.0), Some(0.875));
+        assert_eq!(crossing(&q, 2.0, 3.0), None);
+        // Negative window: the first edge met flips.
+        let n = p(-1.0);
+        assert_eq!(crossing(&n, 1.0, 5.0), Some(0.125));
+        assert_eq!(crossing(&n, 5.0, 1.0), Some(0.375));
+        assert_eq!(crossing(&n, 2.0, 4.0), Some(0.75));
+        // No motion, no crossing.
+        assert_eq!(crossing(&q, 3.5, 3.5), None);
+    }
+
+    #[test]
+    fn flip_level_follows_the_state_machine() {
+        let q = p(1.0);
+        assert_eq!(flip_level(&q, 3.0, true), 3.5);
+        assert_eq!(flip_level(&q, 3.0, false), 1.5);
+        let n = p(-1.0);
+        assert_eq!(flip_level(&n, 1.0, true), 1.5);
+        assert_eq!(flip_level(&n, 2.0, true), 3.5);
+        assert_eq!(flip_level(&n, 4.0, false), 3.5);
+        assert_eq!(flip_level(&n, 2.0, false), 1.5);
     }
 
     #[test]
