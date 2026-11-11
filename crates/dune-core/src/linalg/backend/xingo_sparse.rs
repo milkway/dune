@@ -10,13 +10,20 @@
 //!   forbids stored zeros, and MNA slots are often exactly zero).
 //!   Solves are `ftran` (`A x = b`) and `btran` (`Aᵀ y = c`) in dense
 //!   mode.
-//! * **No symbolic reuse yet.** The crate's pivot-sequence reuse
-//!   (`SymbolicLu` / `refactorize_same_pattern`) is its task L1.3,
-//!   not shipped: every [`LinearSolver::factor`] is a full Markowitz
-//!   factorization. What *is* fixed once in [`LinearSolver::analyze`]
-//!   is our side: the CSC structure, the slot → CSC position map and
-//!   the diagonal positions for gmin, so a Newton iteration only
-//!   scatters values.
+//! * **Pivot-sequence reuse.** The first [`LinearSolver::factor`]
+//!   after [`LinearSolver::analyze`] is a full Markowitz
+//!   factorization; every later one replays its pivot sequence
+//!   (`LuFactor::refactorize_same_pattern`, xingo's Algorithm R: a
+//!   left-looking elimination with no search), keeping the threshold
+//!   test on every pivot. A refused pivot — the values drifted, as
+//!   between the junction-initialized and the converged Newton
+//!   iterates — falls back to a fresh Markowitz factorization inside
+//!   the crate, whose sequence the next calls replay. This is the
+//!   `SMPreorder` once / `SMPluFac` after scheme of `niiter.c`, with
+//!   the reorder triggered by the pivot test instead of by a
+//!   singular `SMPluFac`. On our side [`LinearSolver::analyze`] fixes
+//!   the CSC structure, the slot → CSC position map and the diagonal
+//!   positions for gmin, so a Newton iteration only scatters values.
 //! * **No complex scalar.** `Real` is implemented for `f64` only and
 //!   cannot be implemented for `Complex64` from here (orphan rule,
 //!   and a complex field has no total order for the pivot test). The
@@ -95,7 +102,7 @@ impl Structure {
     }
 }
 
-/// The matrix handed to `Lu::factorize`: our CSC arrays plus the
+/// The matrix handed to the factorization: our CSC arrays plus the
 /// current values; exact zeros are skipped (they carry no pivot and
 /// no fill).
 struct Source<'a> {
@@ -280,12 +287,7 @@ impl LinearSolver for XingoSparse {
         }
         self.cplx = Structure::new(2 * n, &quad);
         self.cval = vec![0.0; self.cplx.nnz()];
-        self.cpos = self
-            .cplx
-            .pos
-            .chunks_exact(4)
-            .map(|q| [q[0], q[1], q[2], q[3]])
-            .collect();
+        self.cpos = self.cplx.pos.as_chunks::<4>().0.to_vec();
 
         self.lu = Lu::new(circuit_options());
         self.clu = Lu::new(circuit_options());
@@ -318,7 +320,7 @@ impl LinearSolver for XingoSparse {
             val: &self.val,
         };
         self.lu
-            .factorize(&src)
+            .refactorize_same_pattern(&src)
             .map_err(|e| map_lu_error(&e, self.n))?;
         self.lu_ok = true;
         Ok(())
@@ -367,7 +369,7 @@ impl LinearSolver for XingoSparse {
             val: &self.cval,
         };
         self.clu
-            .factorize(&src)
+            .refactorize_same_pattern(&src)
             .map_err(|e| map_lu_error(&e, self.n))?;
         self.clu_ok = true;
         Ok(())
@@ -444,6 +446,32 @@ mod tests {
         a
     }
 
+    /// Determinant by cofactor expansion (test helper).
+    fn dense_det(a: &[Vec<f64>]) -> f64 {
+        fn det(a: &[Vec<f64>]) -> f64 {
+            let n = a.len();
+            if n == 1 {
+                return a[0][0];
+            }
+            (0..n)
+                .map(|j| {
+                    let minor: Vec<Vec<f64>> = a[1..]
+                        .iter()
+                        .map(|r| {
+                            r.iter()
+                                .enumerate()
+                                .filter_map(|(c, &x)| (c != j).then_some(x))
+                                .collect()
+                        })
+                        .collect();
+                    let sign = if j % 2 == 0 { 1.0 } else { -1.0 };
+                    sign * a[0][j] * det(&minor)
+                })
+                .sum()
+        }
+        det(a)
+    }
+
     #[test]
     fn real_solve_with_gmin() {
         let p = pattern();
@@ -461,6 +489,58 @@ mod tests {
                 assert!((ax - b[i]).abs() < 1e-12, "row {i}: {ax} vs {}", b[i]);
             }
         }
+    }
+
+    /// A refactorization on drifting values replays the recorded
+    /// pivot sequence; values that break a recorded pivot fall back
+    /// to a fresh Markowitz factorization. Either way the solve is
+    /// that of the new matrix.
+    #[test]
+    fn refactor_replays_the_pivot_sequence_or_falls_back() {
+        let p = pattern();
+        let mut s = XingoSparse::default();
+        s.analyze(&p);
+        let check = |s: &mut XingoSparse, v: &[f64]| {
+            s.factor(v, 0.0).unwrap();
+            let b = [1e-3, 0.0, 2e-3, 5.0];
+            let mut x = b;
+            s.solve_in_place(&mut x).unwrap();
+            let a = dense(&p, v, 0.0);
+            for i in 0..4 {
+                let ax: f64 = (0..4).map(|j| a[i][j] * x[j]).sum();
+                // Componentwise backward error: the shrunk entries
+                // make some of these matrices ill-conditioned.
+                let scale: f64 = b[i].abs() + (0..4).map(|j| (a[i][j] * x[j]).abs()).sum::<f64>();
+                assert!(
+                    (ax - b[i]).abs() <= 1e-12 * scale,
+                    "row {i}: {ax} vs {}",
+                    b[i]
+                );
+            }
+        };
+        let v = values();
+        check(&mut s, &v);
+        assert_eq!(s.lu.stats().symbolic_reuses, 0);
+        // Same pattern, values 10% off: a replay.
+        let drifted: Vec<f64> = v.iter().map(|x| 1.1 * x).collect();
+        check(&mut s, &drifted);
+        assert_eq!(s.lu.stats().symbolic_reuses, 1);
+        // Every recorded pivot is some entry of the matrix; shrinking
+        // each entry in turn far below the threshold of its column
+        // must refuse at least one replay, and every solve stays right.
+        let fallbacks = s.lu.stats().symbolic_fallbacks;
+        for k in 0..v.len() {
+            if v[k] == 0.0 {
+                continue;
+            }
+            let mut w = v.clone();
+            w[k] *= 1e-9;
+            if dense_det(&dense(&p, &w, 0.0)).abs() > 1e-15 {
+                check(&mut s, &w);
+            }
+            check(&mut s, &v);
+        }
+        assert!(s.lu.stats().symbolic_fallbacks > fallbacks);
     }
 
     #[test]
