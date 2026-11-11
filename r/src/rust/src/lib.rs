@@ -466,8 +466,9 @@ impl SpiceSession {
                 includes: &includes,
             }
         };
+        let tmax = divisor(&tmax_divisor);
         Ok(SpiceSession {
-            live: engine::LiveSession::open(source, &user, divisor(&tmax_divisor)),
+            live: engine::compute(|| engine::LiveSession::open(source, &user, tmax)),
         })
     }
 
@@ -495,7 +496,8 @@ impl SpiceSession {
         } else {
             return Err(savvy::Error::new("a scalar value must have length 1"));
         };
-        outcome(self.live_mut()?.alter(refdes, param, v))
+        let live = self.live_mut()?;
+        outcome(engine::compute(|| live.alter(refdes, param, v)))
     }
 
     /// `list(ok, value, is_list)` or a failure list: `value` a double
@@ -527,7 +529,8 @@ impl SpiceSession {
     }
 
     fn set_temp(&mut self, celsius: f64) -> savvy::Result<Sexp> {
-        outcome(self.live_mut()?.set_temp(celsius))
+        let live = self.live_mut()?;
+        outcome(engine::compute(|| live.set_temp(celsius)))
     }
 
     fn temp(&self) -> savvy::Result<Sexp> {
@@ -567,8 +570,8 @@ impl SpiceSession {
     /// Re-run every analysis card; the list `ffi_run_deck` returns
     /// (measurements included).
     fn run(&mut self) -> savvy::Result<Sexp> {
-        let r = self.live_mut()?.run();
-        run_list(r)
+        let live = self.live_mut()?;
+        run_list(engine::compute(|| live.run()))
     }
 }
 
