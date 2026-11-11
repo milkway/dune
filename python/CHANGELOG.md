@@ -1,6 +1,6 @@
 # Changelog — spice3 (Python)
 
-## Unreleased
+## 0.2.0
 
 - **`.tran` integrates with TR-BDF2 by default** instead of the
   trapezoidal rule: closer to the converged answer at the same step
