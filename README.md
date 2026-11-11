@@ -29,9 +29,11 @@ corpus circuit, simulated · [Known differences](corpus/KNOWN_DIFFS.md)
   rpic Studio, all client-side WebAssembly.
 - **Rawfiles** in SPICE3's own binary and ASCII formats, so existing
   viewers read them unchanged.
-- **Opt-in robust transient** (`.options method=trbdf2`): an L-stable
-  TR-BDF2 integrator for decks the classic trapezoidal rule rings on.
-  The faithful behavior stays byte-identical by default.
+- **A more accurate transient by default**: `.tran` integrates with
+  TR-BDF2, an L-stable method that does not ring and, on the corpus,
+  is closer to the converged answer than the trapezoidal rule at the
+  same step. `.options compat=spice3` restores the SPICE3f5 defaults
+  (the trapezoidal rule), which is what the ngspice oracle checks.
 
 ## Install
 

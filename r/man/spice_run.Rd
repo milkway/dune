@@ -28,7 +28,9 @@ override the deck's \code{.options} card, with the card's names and
 units (temperatures \code{temp}/\code{tnom} in degrees Celsius): \code{reltol},
 \code{abstol}, \code{vntol}, \code{gmin}, \code{itl1}, \code{itl2}, \code{itl4}, \code{gminsteps},
 \code{srcsteps}, \code{temp}, \code{tnom}, \code{pivtol}, \code{pivrel}, \code{noopiter},
-\code{trtol}, \code{chgtol}, \code{method} (\code{"trap"}, \code{"gear"} or \code{"trbdf2"}),
+\code{trtol}, \code{chgtol}, \code{method} (\code{"trap"}, \code{"gear"} or \code{"trbdf2"};
+unset, a \code{.tran} integrates with \code{"trbdf2"}), \code{compat} (\code{"dune"} or
+\code{"spice3"}, the 'SPICE3f5' defaults: a trapezoidal \code{.tran}),
 \code{ltrabkrate}, \code{ltrafit}, \code{maxord}, \code{nopage}, \code{defl}, \code{defw},
 \code{defad}, \code{defas}, \code{seed} (the transient-noise seed, a whole number
 \verb{>= 1}; no \code{"random"}), \code{notrnoise}, \code{devnoise}, \code{devnt} (the

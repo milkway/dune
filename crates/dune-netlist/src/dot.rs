@@ -15,7 +15,7 @@ use crate::scan::Scanner;
 use crate::span::Span;
 
 /// `.options` keywords whose value is a word, not a number.
-const STRING_OPTIONS: &[&str] = &["method"];
+const STRING_OPTIONS: &[&str] = &["method", "compat"];
 
 pub(crate) struct DotCtx<'a> {
     pub card: &'a Card,

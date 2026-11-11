@@ -1266,6 +1266,16 @@ a uma leva própria do motor (o patch experimental está em
 
 ## Transiente robusto (opt-in, issue #6)
 
+> **Desde D-0046 (2026-11-11) o `method=trbdf2` é o default do
+> `.tran`** no perfil `compat=dune`; o trapézio é o default só em
+> `.options compat=spice3` (o perfil do oráculo). O `.pss` segue no
+> trapézio nos dois perfis: com TR-BDF2 o shooting autônomo de
+> `osc_colpitts` (não detecta a oscilação no TSTAB) e de `osc_tline`
+> (não converge em 50 iterações) ainda falha — pendência. O texto
+> abaixo descreve o método; onde diz "opt-in", leia "default do
+> `.tran`". Medidas da troca em `docs/dune-oracle.md` (régua de
+> precisão).
+
 Nenhum dos dois é contrato 3f5 (D-0002 vale só para trap/gear); os
 defaults são fiéis, e com as opções desligadas o binário produz
 rawfile e stdout **byte-idênticos** ao HEAD anterior nos 76 decks

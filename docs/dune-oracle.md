@@ -194,10 +194,20 @@ XFAILs). O `dune-oracle --accuracy` mede a outra coisa, sem ngspice:
   dirigindo — o erro nos pontos que o motor calculou.
 
 `corpus/ACCURACY` (`stem|teto|motivo` ou `stem|unmeasured|motivo`)
-dá o teto de quem passa de 0,2; estourar o teto derruba o CI. Hoje:
-34 decks medidos, 25 dentro de 0,2, soma das margens 10,16 (trapézio
-default). É o número a bater em qualquer mudança de integração ou de
-controle de passo.
+dá o teto de quem passa de 0,2; estourar o teto derruba o CI.
+
+| default do `.tran` | decks em ≤ 0,2 | soma das margens | `schmitt` | `mosamp2` |
+|---|---|---|---|---|
+| trapézio (até D-0046) | 25 de 34 | 10,16 | 3,07 | 1,32 |
+| TR-BDF2 (D-0046) | 31 de 34 | 4,33 | 0,10 | 0,45 |
+
+Fora de 0,2 ficam `sw_hyst` (2,54: os limiares da chave são cruzados
+dentro de um passo, qualquer que seja o método), `ltrafit` (0,47) e
+`mosamp2`. É o número a bater em qualquer mudança de integração ou
+de controle de passo. Custo do TR-BDF2 no `dune -b` sobre os 37 decks
+transientes (release, melhor de 3): mediana ×1,12 por deck, pior
+×1,7 (`ltra_1`, `ltra_3`), total ×0,82 (o `ltra_2`, que domina, fica
+mais rápido).
 
 **Levantamento que calibrou a régua** (ngspice-47 como referência,
 `TMAX/40`, trap; 29 decks com referência convergida e Dune-refinado

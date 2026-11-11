@@ -45,7 +45,10 @@ def bits(res: spice.Result) -> list[tuple[str, list[bytes]]]:
             {"DevNoise": True, "devnt": 2e-7, "seed": 5},
             ".options devnoise devnt=0.2u seed=5",
         ),
-        (NOISY, {"method": "trbdf2"}, ".options method=trbdf2"),
+        # TR-BDF2 is the `.tran` default (D-0046): the trapezoidal rule
+        # and the SPICE3 profile are what change the deck now.
+        (NOISY, {"method": "trap"}, ".options method=trap"),
+        (NOISY, {"compat": "spice3"}, ".options compat=spice3"),
     ],
 )
 def test_override_is_the_edited_deck(

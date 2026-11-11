@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "dune-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dune-netlist",
  "dune-raw",
@@ -203,14 +203,14 @@ dependencies = [
 
 [[package]]
 name = "dune-netlist"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "dune-pic"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "rpic-core",
  "thiserror 2.0.21",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "dune-raw"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "num-complex",
  "thiserror 2.0.21",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "spice-py"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "dune-core",
  "dune-netlist",

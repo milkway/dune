@@ -80,7 +80,9 @@ await ready(wasmUrl);
   (0.3.3): `options` — `.options` keys applied after the deck's cards
   (`{ trtol: 1, method: 'gear', temp: 50 }`, °C; a bad entry is a warning
   in `diagnostics`, not a throw; every key a `.options` card takes,
-  including Dune's `method: 'trbdf2'`, `ltrafit`, `ltrabkrate`,
+  including `method` (a `.tran` defaults to Dune's `'trbdf2'`),
+  `compat: 'spice3'` (the SPICE3f5 defaults: a trapezoidal `.tran`),
+  `ltrafit`, `ltrabkrate`,
   `keepopinfo`, `seed`, `notrnoise`, `devnoise` and `devnt`) — and
   `tmaxDivisor` — a number ≥ 1 that
   divides every `.tran`'s maximum step (the card's TMAX, else

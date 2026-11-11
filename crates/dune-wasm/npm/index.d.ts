@@ -115,7 +115,9 @@ export interface RenderOptions {}
  * Engine options by `.options` key (case-insensitive): `reltol`, `abstol`,
  * `vntol`, `gmin`, `itl1`, `itl2`, `itl4`, `gminsteps`, `srcsteps`, `temp` and
  * `tnom` (°C), `pivtol`, `pivrel`, `noopiter`, `trtol`, `chgtol`, `method`
- * (`"trap"` | `"gear"` | `"trbdf2"`), `maxord`, `ltrabkrate`, `ltrafit`,
+ * (`"trap"` | `"gear"` | `"trbdf2"`; unset, a `.tran` uses `"trbdf2"`),
+ * `compat` (`"dune"` | `"spice3"`: the SPICE3f5 defaults, i.e. a
+ * trapezoidal `.tran`), `maxord`, `ltrabkrate`, `ltrafit`,
  * `nopage`, `defl`, `defw`, `defad`, `defas`, `trytocompact`, `keepopinfo` (the small-signal
  * analyses emit their operating point first), `seed` (transient-noise seed, an
  * integer ≥ 1; no `"random"`), `notrnoise`, `devnoise` and `devnt` (device

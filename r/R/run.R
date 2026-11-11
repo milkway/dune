@@ -22,7 +22,9 @@
 #'   units (temperatures `temp`/`tnom` in degrees Celsius): `reltol`,
 #'   `abstol`, `vntol`, `gmin`, `itl1`, `itl2`, `itl4`, `gminsteps`,
 #'   `srcsteps`, `temp`, `tnom`, `pivtol`, `pivrel`, `noopiter`,
-#'   `trtol`, `chgtol`, `method` (`"trap"`, `"gear"` or `"trbdf2"`),
+#'   `trtol`, `chgtol`, `method` (`"trap"`, `"gear"` or `"trbdf2"`;
+#'   unset, a `.tran` integrates with `"trbdf2"`), `compat` (`"dune"` or
+#'   `"spice3"`, the 'SPICE3f5' defaults: a trapezoidal `.tran`),
 #'   `ltrabkrate`, `ltrafit`, `maxord`, `nopage`, `defl`, `defw`,
 #'   `defad`, `defas`, `seed` (the transient-noise seed, a whole number
 #'   `>= 1`; no `"random"`), `notrnoise`, `devnoise`, `devnt` (the

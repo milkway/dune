@@ -13,6 +13,12 @@ First release, aligned with Dune v0.1.0.
   and a 'knitr' engine (`spice_knitr()`) round out the workflow.
 * `spice_pic()` and `spice_pic_svg()` extract netlists from 'rpic'
   figures and draw them.
+* A `.tran` integrates with TR-BDF2 by default, not the trapezoidal
+  rule: it is closer to the converged answer at the same step on the
+  whole test corpus and does not ring. The option `compat = "spice3"`
+  (`.options compat=spice3` in a deck) restores the 'SPICE3f5'
+  defaults. `spice_pss()` keeps the trapezoidal rule unless `method`
+  is given.
 * On Windows every simulation runs on a worker thread, so that a
   threaded `spice_sweep()` agrees bit for bit with the sequential one
   and with `spice_run()`: the 'Rtools' C runtime rounds `exp()` and

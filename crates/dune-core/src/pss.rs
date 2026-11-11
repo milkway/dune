@@ -157,6 +157,12 @@ impl Circuit {
     /// `p.max_iter` shooting iterations do not bring the period
     /// mismatch within tolerance.
     pub fn pss(&self, opts: &Options, p: &PssParams) -> Result<Pss, Error> {
+        // The shooting's own default method (`Options::pss_method`),
+        // pinned so that every transient below integrates with it.
+        let opts = &Options {
+            method: Some(opts.pss_method()),
+            ..opts.clone()
+        };
         let bad = |m: &str| Err(Error::Build(format!(".pss {m}")));
         if !(p.tstab.is_finite() && p.tstab >= 0.0) {
             return bad("stabilization time must be finite and not negative");

@@ -274,7 +274,10 @@ for (const [deck, options, card] of [
   [noisy, { notrnoise: true }, '.options notrnoise'],
   [noisy, { DevNoise: true, devnt: 2e-7, seed: 5 }, '.options devnoise devnt=0.2u seed=5'],
   [noisy, { devnoise: true, devnt: '0.2u', seed: 5 }, '.options devnoise devnt=0.2u seed=5'],
-  [noisy, { method: 'trbdf2' }, '.options method=trbdf2'],
+  // TR-BDF2 is the `.tran` default (D-0046): the trapezoidal rule and
+  // the SPICE3 profile are what change the deck now.
+  [noisy, { method: 'trap' }, '.options method=trap'],
+  [noisy, { compat: 'spice3' }, '.options compat=spice3'],
 ]) {
   const got = simulateTyped(deck(''), { options });
   assert.equal(got.diagnostics.length, 0, JSON.stringify(got.diagnostics));

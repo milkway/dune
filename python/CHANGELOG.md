@@ -1,5 +1,14 @@
 # Changelog — spice3 (Python)
 
+## 0.2.0
+
+- **`.tran` integrates with TR-BDF2 by default** instead of the
+  trapezoidal rule: closer to the converged answer at the same step
+  on the whole test corpus, and it does not ring. The new option
+  `compat="spice3"` (`.options compat=spice3` in a deck) restores the
+  SPICE3f5 defaults; `method="trap"` restores just the method.
+  `spice.pss()` keeps the trapezoidal rule unless `method` is given.
+
 ## 0.1.2
 
 - `spice.pss()` refuses a deck with `devnoise` on (a `SpiceError`),

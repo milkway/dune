@@ -35,7 +35,9 @@ fn deck_text(deck: &str) -> String {
 fn load(deck: &str) -> (Circuit, Options, Vec<Analysis>) {
     let parsed = dune_netlist::parse_file(&root().join(format!("{deck}.cir"))).unwrap();
     let (c, _) = Circuit::from_netlist(&parsed.netlist).unwrap();
-    let mut opts = Options::default();
+    // The references here are ngspice transients and Dune's own on
+    // the same cards: the SPICE3 profile (trapezoidal `.tran`).
+    let mut opts = Options::spice3();
     let mut d = Vec::new();
     opts.apply(&parsed.netlist.options, &mut d);
     (c, opts, parsed.netlist.analyses.clone())
