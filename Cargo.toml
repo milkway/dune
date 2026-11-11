@@ -12,12 +12,17 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 # MSRV: 1.88 — dune-raw uses let-chains (stable 1.88); was declared
 # 1.85 but never true since then (the msrv CI job caught up 2026-11-06).
 rust-version = "1.88"
 license = "BSD-3-Clause"
+repository = "https://github.com/milkway/dune"
+homepage = "https://milkway.github.io/dune/"
+
+keywords = ["spice", "circuit", "simulation", "eda", "electronics"]
+categories = ["science", "simulation"]
 
 [workspace.dependencies]
 thiserror = "2"
@@ -32,10 +37,10 @@ libm = "0.2"
 # features: its own `faer` feature is the KKT/LDL side, unused here.
 xingo-sparse = { version = "0.3", default-features = false }
 
-dune-netlist = { path = "crates/dune-netlist" }
-dune-core = { path = "crates/dune-core" }
-dune-raw = { path = "crates/dune-raw" }
-dune-pic = { path = "crates/dune-pic" }
+dune-netlist = { path = "crates/dune-netlist", version = "0.1.1" }
+dune-core = { path = "crates/dune-core", version = "0.1.1" }
+dune-raw = { path = "crates/dune-raw", version = "0.1.1" }
+dune-pic = { path = "crates/dune-pic", version = "0.1.1" }
 
 # faer's LU is unusably slow unoptimized, and optimizing the faer
 # package alone does not help: its generic entry points monomorphize

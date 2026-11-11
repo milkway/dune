@@ -1,6 +1,6 @@
 # Changelog — spice3 (Python)
 
-## Unreleased
+## 0.1.2
 
 - `spice.pss()` refuses a deck with `devnoise` on (a `SpiceError`),
   as it already did for `TRNOISE`/`TRRANDOM` sources; the option used
