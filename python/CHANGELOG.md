@@ -1,5 +1,17 @@
 # Changelog — spice3 (Python)
 
+## 0.6.0
+
+- **LTRA lines find the corners of the waves they carry.** SPICE's
+  rule for planting a breakpoint where a delayed corner arrives
+  almost never fires with the model's default `rel=1`; the corner
+  then falls between timepoints and is rounded a little more at
+  every reflection. On a lossless line with a known exact answer the
+  error over 60 ns of reflections goes from 1.0 % to 0.16 %.
+- **`trytocompact`** no longer loses accuracy as the step shrinks:
+  a history point is dropped only while the line through the last
+  kept point still passes by every point dropped since.
+
 ## 0.5.0
 
 - **LTRA lines**: the step is also limited by the error of reading

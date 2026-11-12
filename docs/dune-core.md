@@ -1361,6 +1361,21 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   dispara em todos. `ltra_compact` refinado: 10 032 / 20 031 /
   40 030 pontos em TMAX/20, /40, /80 (eram 371 mil, 654 mil e
   1,29 milhão).
+- **Quina e compactação das linhas** (D-0056, perfil Dune; supera o
+  piso do item (2) acima): a regra de inclinação do 3f5 quase nunca
+  planta o breakpoint da chegada de uma quina (com `REL=1` só
+  inversões de inclinação passam, e o espalhamento exigido é 5 % do
+  nível da onda); a quina sem ponto de grade é arredondada pela
+  interpolação a cada reflexão. Teste novo: inclinação muda ≥ 50 % e
+  `Δinclinação·h/8 ≥ RELTOL·pico`. Numa sonda sem perdas com solução
+  exata o erro em 60 ns de reflexões cai de 1,0 % para 0,16 %;
+  `ltra_1` (vetores do `.save`) 0,583 → 0,075 régua com 33 % a mais
+  de pontos; `ltrafit` 0,144 → 0,079. Com `trytocompact`, o ponto do
+  meio só é descartado se a corda do último ponto mantido ao mais
+  novo passar a `COMPACTREL/COMPACTABS` de todos os descartados desde
+  a âncora: as corridas compactadas do `ltra_compact` ficam a 0,012
+  da referência sem compactação em qualquer refinamento (o critério
+  por área do C dava 2,4).
 - **`.options ltrafit`** (`Options.ltra_fit`, issue #8): convolução
   recursiva do LTRA. Núcleos sem o atraso viram somas de
   exponenciais reais por quadratura Gauss–Legendre graduada da

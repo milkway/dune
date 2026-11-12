@@ -1089,6 +1089,12 @@ pub(crate) struct LtraI {
     /// Dune's step limit from the interpolation of the delayed waves
     /// ([`LtraI::interp_error`], D-0055).
     interp_control: bool,
+    /// Dune's compaction (D-0056): the samples dropped since the last
+    /// one kept — `(time, [v1, v2, i1, i2])` —, which the chord from
+    /// that sample to the newest must still pass by.
+    dropped: Vec<(f64, [f64; 4])>,
+    /// Whether the last accepted point ended in a compaction.
+    compacted: bool,
     /// Whether the slope rule fired at the last accepted point: the
     /// point before it is a corner of an incident wave.
     corner: bool,
@@ -1267,6 +1273,8 @@ impl LtraI {
             gmin: 0.0,
             fit_on: false,
             slope_floor: false,
+            dropped: Vec::new(),
+            compacted: false,
             corner: false,
             interp_control: false,
             wave_peak: [0.0; 2],
@@ -2266,6 +2274,11 @@ impl Device for LtraI {
                 return;
             }
         }
+        // The sample before this one was kept: it is the new anchor.
+        if !self.compacted {
+            self.dropped.clear();
+        }
+        self.compacted = false;
         let sol = ctx.sol;
         self.times.push(ctx.time);
         self.v1.push(sol[self.pos1] - sol[self.neg1]);
@@ -2295,6 +2308,10 @@ impl Device for LtraI {
         }
     }
 }
+
+/// The relative change of slope that makes a corner of an incident
+/// wave under the Dune profile ([`LtraI::slope_changed`]).
+const CORNER_REL: f64 = 0.5;
 
 impl LtraI {
     /// The error the delayed waves will carry when this point is
@@ -2352,8 +2369,8 @@ impl LtraI {
         // newest, the corner slides along with every step, and the
         // slope rule fires at each of them (the breakpoint cascade of
         // `regress/ltra_compact` at TMAX/40).
-        if self.slope_floor && self.corner {
-            return Some(false);
+        if self.slope_floor {
+            return Some(!self.corner && self.chord_holds());
         }
         let (t1, t2, t3) = (self.times[n - 3], self.times[n - 2], self.times[n - 1]);
         let (rt, at) = (self.p.st_line_reltol, self.p.st_line_abstol);
@@ -2362,11 +2379,60 @@ impl LtraI {
         Some(straight(&self.v1) && straight(&self.v2) && straight(&self.i1) && straight(&self.i2))
     }
 
+    /// Dune's test for dropping the middle of the last three samples
+    /// (D-0056): the chord from the last sample kept to the newest
+    /// passes within `COMPACTREL`/`COMPACTABS` of the middle one *and
+    /// of every sample dropped since that one was kept*, in all four
+    /// port waveforms. The C's test looks at the last three samples
+    /// of the history as compacted so far, on areas: each drop is
+    /// within tolerance of a history that has already lost the
+    /// samples before it, and the errors add up without bound — on a
+    /// refined run the history of a ramp and its plateau becomes one
+    /// long ramp. Against the anchor, the whole run of dropped
+    /// samples stays within one tolerance of what the line reads.
+    fn chord_holds(&self) -> bool {
+        let n = self.times.len();
+        let (ta, tc) = (self.times[n - 3], self.times[n - 1]);
+        let (rt, at) = (self.p.st_line_reltol, self.p.st_line_abstol);
+        let hist = [&self.v1, &self.v2, &self.i1, &self.i2];
+        let middle = (
+            self.times[n - 2],
+            [
+                self.v1[n - 2],
+                self.v2[n - 2],
+                self.i1[n - 2],
+                self.i2[n - 2],
+            ],
+        );
+        self.dropped
+            .iter()
+            .chain(std::iter::once(&middle))
+            .all(|&(t, y)| {
+                let f = (t - ta) / (tc - ta);
+                (0..4).all(|k| {
+                    let (ya, yc) = (hist[k][n - 3], hist[k][n - 1]);
+                    let chord = ya + f * (yc - ya);
+                    let scale = ya.abs().max(yc.abs()).max(y[k].abs());
+                    (y[k] - chord).abs() <= rt * scale + at
+                })
+            })
+    }
+
     /// The compaction itself (`ltraacct.c:262-285`): the newest sample
     /// overwrites the middle one, which leaves the history.
     fn drop_middle(&mut self) {
         let n = self.times.len();
         debug_assert!(n >= 3);
+        self.dropped.push((
+            self.times[n - 2],
+            [
+                self.v1[n - 2],
+                self.v2[n - 2],
+                self.i1[n - 2],
+                self.i2[n - 2],
+            ],
+        ));
+        self.compacted = true;
         for h in [
             &mut self.times,
             &mut self.v1,
@@ -2404,18 +2470,45 @@ impl LtraI {
             let h2 = self.times[idx - 1] - self.times[idx - 2];
             ((v2 - v3) / h2, (v5 - v6) / h2)
         };
-        // The C's own test of "not a straight line" compares the
-        // spread of the three values with 50·RELTOL of their *mean*:
-        // around zero that is 50·ABSTOL, and the residue of a settled
-        // edge passes it at every point. The floor asks the spread to
-        // be visible at the scale of the line's signals (the larger
-        // of the two waves: the backward wave of a matched line is
-        // all residue).
-        let peak = f64::max(self.wave_peak[0], self.wave_peak[1]);
+        if self.slope_floor {
+            // Dune's corner test (D-0056). The C's (below) has two
+            // conditions that between them miss most corners. With
+            // the model's default `REL = 1` the slope must change by
+            // its own size *plus* `ABS`, so a ramp that starts from a
+            // plateau fails by 1e-12 and only reversals pass; and the
+            // three values must spread by 50·RELTOL of their *mean* —
+            // 5 % of the level a wave sits at, which the first, short
+            // step after a breakpoint never covers (while around
+            // zero the same test is 50·ABSTOL and passes on residue).
+            // A corner that is missed gets no grid point one delay
+            // later, the interpolation rounds it, and the rounding
+            // compounds at every reflection.
+            //
+            // Here a corner is a slope that changes by half its size
+            // by an amount that a straight line across the two steps
+            // would miss by more than RELTOL of the largest the
+            // line's waves have been (`Δslope·h/8`, the same measure
+            // as [`LtraI::interp_error`]). Smooth curvature does not
+            // qualify: its change of slope shrinks with the step,
+            // which that control already keeps short enough.
+            let peak = f64::max(self.wave_peak[0], self.wave_peak[1]);
+            let h = if idx < 2 {
+                h1
+            } else {
+                f64::max(h1, self.times[idx - 1] - self.times[idx - 2])
+            };
+            let corner = |a: f64, b: f64| {
+                let change = (a - b).abs();
+                change >= CORNER_REL * f64::max(a.abs(), b.abs())
+                    && 0.125 * change * h >= reltol * peak + abstol
+            };
+            return corner(d1, d2) || corner(d3, d4);
+        }
+        // `LTRAaccept`: the slope changed by `REL`/`ABS` (the model's),
+        // and the three values are not a straight line.
         let check = |a: f64, b: f64, c: f64| {
-            let spread = f64::max(f64::max(a, b), c) - f64::min(f64::min(a, b), c);
-            spread >= (50.0 * (reltol / 3.0 * (a + b + c) + abstol)).abs()
-                && (!self.slope_floor || spread >= reltol * peak)
+            f64::max(f64::max(a, b), c) - f64::min(f64::min(a, b), c)
+                >= (50.0 * (reltol / 3.0 * (a + b + c) + abstol)).abs()
         };
         let test1 = (d1 - d2).abs() >= p.reltol * f64::max(d1.abs(), d2.abs()) + p.abstol
             && check(v1, v2, v3);
