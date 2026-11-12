@@ -1086,6 +1086,12 @@ pub(crate) struct LtraI {
     /// wave moved by more than `RELTOL` of the largest either wave
     /// has been.
     slope_floor: bool,
+    /// Dune's step limit from the interpolation of the delayed waves
+    /// ([`LtraI::interp_error`], D-0055).
+    interp_control: bool,
+    /// Whether the slope rule fired at the last accepted point: the
+    /// point before it is a corner of an incident wave.
+    corner: bool,
     /// The largest magnitude each incident wave has had (the scale
     /// of [`LtraI::slope_floor`]).
     wave_peak: [f64; 2],
@@ -1261,12 +1267,21 @@ impl LtraI {
             gmin: 0.0,
             fit_on: false,
             slope_floor: false,
+            corner: false,
+            interp_control: false,
             wave_peak: [0.0; 2],
             fit: None,
             fit_skip: None,
             periodic: false,
             periodic_fault: None,
         }
+    }
+
+    /// Let the interpolation error of the delayed waves limit the
+    /// step (the Dune profile).
+    pub fn with_interp_control(mut self, on: bool) -> Self {
+        self.interp_control = on;
+        self
     }
 
     /// Turn on the floor of the slope rule (the Dune profile).
@@ -2130,6 +2145,19 @@ impl Device for LtraI {
         if p.case == LtraCase::Rlc && !p.trunc_dont_cut {
             *time_step = time_step.min(p.max_safe_step);
         }
+        if self.interp_control
+            && matches!(p.case, LtraCase::Rlc | LtraCase::Lc)
+            && let Some(err) = self.interp_error(t)
+        {
+            // The error goes as the square of the step: the step that
+            // meets the tolerance is `h·√(tol/err)`.
+            let peak = f64::max(self.wave_peak[0], self.wave_peak[1]);
+            let tol = t.trtol * (t.reltol * peak + t.abstol);
+            let h = t.time - self.times[self.times.len() - 1];
+            if err > 0.0 && h > 0.0 {
+                *time_step = time_step.min(h * (tol / err).sqrt());
+            }
+        }
     }
 
     /// `LTRAacLoad`: `Y0(s)·V1 − I1 = e^{−λ(s)·l}·(Y0(s)·V2 + I2)` and
@@ -2260,7 +2288,8 @@ impl Device for LtraI {
         if idx == 0 {
             return;
         }
-        if self.slope_changed(idx, ctx.reltol, ctx.abstol) {
+        self.corner = self.slope_changed(idx, ctx.reltol, ctx.abstol);
+        if self.corner {
             let t = self.times[idx - 1] + self.p.td;
             ctx.set_slope_break(t);
         }
@@ -2268,6 +2297,42 @@ impl Device for LtraI {
 }
 
 impl LtraI {
+    /// The error the delayed waves will carry when this point is
+    /// read back one delay later (Dune's, D-0055): `v(t − T)` and
+    /// `i(t − T)` are interpolated between history points, and
+    /// between two points `h` apart a straight line misses a wave of
+    /// second derivative `w″` by `h²·|w″|/8`. `w″` is the second
+    /// divided difference of each incident wave over the last two
+    /// accepted points and the one just solved. Nothing in the 3f5
+    /// bounds this: `LTRAtrunc` only keeps the step under the delay,
+    /// and its `LTRAlteCalculate` (the convolutions' truncation
+    /// error; unreachable from a card) was ported and measured — on
+    /// the corpus it sits six orders below its tolerance and changes
+    /// no deck. `None` before there are two accepted points.
+    fn interp_error(&self, t: &TerrCtx) -> Option<f64> {
+        let p = &self.p;
+        let idx = self.times.len().checked_sub(1)?;
+        if idx < 1 {
+            return None;
+        }
+        let wave = |v: f64, i: f64| (v + i * p.imped) * p.attenuation;
+        let (t2, t1, t0) = (self.times[idx - 1], self.times[idx], t.time);
+        let h = t0 - t1;
+        let second = |a: f64, b: f64, c: f64| ((c - b) / h - (b - a) / (t1 - t2)) / (t0 - t2);
+        let d1 = second(
+            wave(self.v1[idx - 1], self.i1[idx - 1]),
+            wave(self.v1[idx], self.i1[idx]),
+            wave(t.sol[self.pos1] - t.sol[self.neg1], t.sol[self.br1]),
+        );
+        let d2 = second(
+            wave(self.v2[idx - 1], self.i2[idx - 1]),
+            wave(self.v2[idx], self.i2[idx]),
+            wave(t.sol[self.pos2] - t.sol[self.neg2], t.sol[self.br2]),
+        );
+        let err = 0.125 * h * h * f64::max(d1.abs(), d2.abs());
+        err.is_finite().then_some(err)
+    }
+
     /// `trytocompact`'s test in `LTRAaccept` (`ltraacct.c:84-127`):
     /// whether the last three samples of `v1`, `v2`, `i1` and `i2`
     /// each lie on a straight line in time within the model's
@@ -2278,6 +2343,17 @@ impl LtraI {
         let n = self.times.len();
         if n < 3 || self.fit_on || self.periodic {
             return None;
+        }
+        // Dune's guard (D-0055, with the slope floor): the middle
+        // sample is a corner the slope rule has just found. The C's
+        // test is on areas, and one step after a corner — a
+        // picosecond, on a refined run — the corner passes it; the
+        // history then holds a ramp from the last kept point to the
+        // newest, the corner slides along with every step, and the
+        // slope rule fires at each of them (the breakpoint cascade of
+        // `regress/ltra_compact` at TMAX/40).
+        if self.slope_floor && self.corner {
+            return Some(false);
         }
         let (t1, t2, t3) = (self.times[n - 3], self.times[n - 2], self.times[n - 1]);
         let (rt, at) = (self.p.st_line_reltol, self.p.st_line_abstol);

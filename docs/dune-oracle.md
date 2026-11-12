@@ -230,7 +230,9 @@ números no motivo. `ltra_2`: 1,2 ± 0,4.
 
 Com a leitura nova, o deck `bsrc_step` e os defaults da D-0052 a régua
 mede 36 decks, soma **0,96**, 19 378 pontos (os 1,17 de antes eram com
-a leitura antiga, sobre 35 decks). É o número a bater em qualquer mudança de integração ou
+a leitura antiga, sobre 35 decks). Com a D-0055 (controle do erro de
+interpolação das linhas): soma **0,85**, 19 478 pontos, e todos os 36
+decks medidos dentro de 0,2. É o número a bater em qualquer mudança de integração ou
 de controle de passo. Custo do TR-BDF2 no `dune -b` sobre os 37 decks
 transientes (release, melhor de 3): mediana ×1,12 por deck, pior
 ×1,7 (`ltra_1`, `ltra_3`), total ×0,82 (o `ltra_2`, que domina, fica

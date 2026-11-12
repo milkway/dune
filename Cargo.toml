@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 # MSRV: 1.88 — dune-raw uses let-chains (stable 1.88); was declared
 # 1.85 but never true since then (the msrv CI job caught up 2026-11-06).
@@ -37,10 +37,10 @@ libm = "0.2"
 # features: its own `faer` feature is the KKT/LDL side, unused here.
 xingo-sparse = { version = "0.3", default-features = false }
 
-dune-netlist = { path = "crates/dune-netlist", version = "0.4.0" }
-dune-core = { path = "crates/dune-core", version = "0.4.0" }
-dune-raw = { path = "crates/dune-raw", version = "0.4.0" }
-dune-pic = { path = "crates/dune-pic", version = "0.4.0" }
+dune-netlist = { path = "crates/dune-netlist", version = "0.5.0" }
+dune-core = { path = "crates/dune-core", version = "0.5.0" }
+dune-raw = { path = "crates/dune-raw", version = "0.5.0" }
+dune-pic = { path = "crates/dune-pic", version = "0.5.0" }
 
 # faer's LU is unusably slow unoptimized, and optimizing the faer
 # package alone does not help: its generic entry points monomorphize
