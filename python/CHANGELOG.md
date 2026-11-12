@@ -1,5 +1,14 @@
 # Changelog — spice3 (Python)
 
+## 0.6.1
+
+- A `u()`/`sgn()` whose argument crosses zero and comes back inside
+  one timestep is no longer skipped: the pulse is found when the
+  point before the step shows it coming (a comparator on the crest of
+  a sine, 14 µs wide on a 50 µs grid, gives every pulse at its
+  width). A pulse that leaves no trace on its neighbouring timepoints
+  still needs a smaller maximum step.
+
 ## 0.6.0
 
 - **LTRA lines find the corners of the waves they carry.** SPICE's

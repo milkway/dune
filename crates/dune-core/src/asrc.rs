@@ -592,6 +592,31 @@ pub(crate) fn num_states(expr: &Expr) -> usize {
     }
 }
 
+/// The first zero, as a fraction of the interval, of the parabola
+/// through an argument's values `a2`, `a1`, `a0` at the points
+/// `−back`, 0 and 1 — when `a1` and `a0` have the same sign and the
+/// parabola leaves it and comes back inside `(0, 1)`. `None`
+/// otherwise.
+fn double_crossing(a2: f64, a1: f64, a0: f64, back: f64) -> Option<f64> {
+    if back.is_nan() || back <= 0.0 || a1 == 0.0 || (a1 > 0.0) != (a0 > 0.0) {
+        return None;
+    }
+    // a(τ) = a1 + b·τ + c·τ², from the divided differences.
+    let d12 = (a1 - a2) / back;
+    let c = ((a0 - a1) - d12) / (1.0 + back);
+    let b = d12 + c * back;
+    let disc = b * b - 4.0 * c * a1;
+    if c == 0.0 || disc.is_nan() || disc <= 0.0 {
+        return None;
+    }
+    let (r1, r2) = (
+        (-b - disc.sqrt()) / (2.0 * c),
+        (-b + disc.sqrt()) / (2.0 * c),
+    );
+    let (lo, hi) = (r1.min(r2), r1.max(r2));
+    (lo > 0.0 && hi < 1.0).then_some(lo)
+}
+
 /// What counts as a jump of a B source's value across a `u()`/`sgn()`
 /// zero ([`AsrcI::event`]): more than the SPICE default tolerances
 /// (`RELTOL`, and `ABSTOL` — the smaller of the two floors, since
@@ -740,8 +765,12 @@ impl crate::devices::Device for AsrcI {
     /// is not an event.
     ///
     /// A `u()` has no memory, so an accepted point is always
-    /// consistent with the sign of its argument there; what is not
-    /// seen is an argument that crosses zero twice inside one step.
+    /// consistent with the sign of its argument there. An argument
+    /// that crosses zero twice inside one step leaves the same sign
+    /// at both ends; it is caught when the point before the step
+    /// shows it coming ([`double_crossing`]) — a pulse that rises and
+    /// falls between two timepoints without bending its neighbours
+    /// is not, by this or any test that samples.
     fn event(
         &self,
         states: &crate::state::States,
@@ -755,10 +784,19 @@ impl crate::devices::Device for AsrcI {
             let a1 = states.get(from, self.st + n + k);
             let a0 = states.get(to, self.st + n + k);
             let side = |a: f64| a.partial_cmp(&0.0);
-            if side(a1) == side(a0) {
+            let a2 = states.get(from + 1, self.st + n + k);
+            let mut theta = if side(a1) != side(a0) {
+                a1 / (a1 - a0)
+            } else if let Some(first) = double_crossing(a2, a1, a0, back) {
+                // The argument has the same sign at both ends, but the
+                // parabola through them and the point before goes
+                // through zero and back in between: a pulse narrower
+                // than the step. Stopping at its first zero lets the
+                // next steps see the real crossings.
+                first
+            } else {
                 continue;
-            }
-            let mut theta = a1 / (a1 - a0);
+            };
             if !(0.0..=1.0).contains(&theta) {
                 continue;
             }
@@ -770,7 +808,7 @@ impl crate::devices::Device for AsrcI {
             // disagree by more than a factor of two that one is
             // taken, no later than mid-interval (so retries at least
             // halve the step).
-            let rate = (a1 - states.get(from + 1, self.st + n + k)) / back;
+            let rate = (a1 - a2) / back;
             let ahead = -a1 / rate;
             if ahead.is_finite() && ahead > 2.0 * theta {
                 theta = ahead.min(0.5);
