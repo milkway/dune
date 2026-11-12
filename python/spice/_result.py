@@ -22,6 +22,25 @@ Column = npt.NDArray[np.float64] | npt.NDArray[np.complex128]
 """A plot vector: ``float64`` in real plots, ``complex128`` in complex ones."""
 
 
+#: Short names of the analyses, for :meth:`Result.plot`: the rawfile
+#: plotname each stands for (the same table as the R package's
+#: ``spice_tidy()``).
+PLOT_ALIASES: dict[str, str] = {
+    "op": "Operating Point",
+    "dc": "DC transfer characteristic",
+    "tran": "Transient Analysis",
+    "ac": "AC Analysis",
+    "noise": "Noise Spectral Density Curves",
+    "inoise": "Integrated Noise",
+    "tf": "Transfer Function",
+    "pz": "Pole-Zero Analysis",
+    "sens": "Sensitivity Analysis",
+    "sp": "SP Analysis",
+    "pss": "Time Domain Periodic Steady State Analysis",
+    "pss_spectrum": "Frequency Domain Periodic Steady State Analysis",
+}
+
+
 class Variable(NamedTuple):
     """One vector of a plot: its name and its 3f5 type name.
 
@@ -99,6 +118,11 @@ class Plot:
         for i, v in enumerate(self._variables):
             if v.name.lower() == key:
                 return i
+        # A bare node name stands for its voltage: "out" is "v(out)".
+        voltage = f"v({key})"
+        for i, v in enumerate(self._variables):
+            if v.name.lower() == voltage:
+                return i
         raise KeyError(f"no vector {name!r} in plot {self.plotname!r}; vectors: {self.names}")
 
     def __contains__(self, name: object) -> bool:
@@ -126,9 +150,18 @@ class Plot:
         """
         return self._columns[self._index(name)]
 
-    def _frame_columns(self) -> dict[str, npt.NDArray[Any]]:
+    def _frame_columns(
+        self, vars: Sequence[str] | None = None, polar: bool = False
+    ) -> dict[str, npt.NDArray[Any]]:
         out: dict[str, npt.NDArray[Any]] = {}
         order = list(range(len(self._variables)))
+        if vars is not None:
+            if isinstance(vars, str):
+                vars = [vars]
+            wanted = {self._index(v) for v in vars}
+            order = [i for i in order if i in wanted and i != self._scale]
+            if self._scale is not None:
+                order.append(self._scale)
         if self._scale is not None:
             order.remove(self._scale)
             order.insert(0, self._scale)
@@ -142,13 +175,37 @@ class Plot:
             else:
                 out[f"re:{name}"] = col.real
                 out[f"im:{name}"] = col.imag
+                if polar:
+                    mag = np.abs(col)
+                    with np.errstate(divide="ignore"):
+                        out[f"db:{name}"] = 20.0 * np.log10(mag)
+                    out[f"mag:{name}"] = mag
+                    out[f"phase:{name}"] = np.degrees(np.angle(col))
         return out
 
     @overload
-    def df(self, *, pandas: Literal[False] = False) -> pl.DataFrame: ...
+    def df(
+        self,
+        vars: Sequence[str] | str | None = None,
+        *,
+        polar: bool = False,
+        pandas: Literal[False] = False,
+    ) -> pl.DataFrame: ...
     @overload
-    def df(self, *, pandas: Literal[True]) -> pandas.DataFrame: ...
-    def df(self, *, pandas: bool = False) -> pl.DataFrame | pandas.DataFrame:
+    def df(
+        self,
+        vars: Sequence[str] | str | None = None,
+        *,
+        polar: bool = False,
+        pandas: Literal[True],
+    ) -> pandas.DataFrame: ...
+    def df(
+        self,
+        vars: Sequence[str] | str | None = None,
+        *,
+        polar: bool = False,
+        pandas: bool = False,
+    ) -> pl.DataFrame | pandas.DataFrame:
         """The plot as a wide data frame: one row per point.
 
         Column order: the scale first (when the plot has one), then every
@@ -159,14 +216,25 @@ class Plot:
         with its own name. Non-finite values (NaN, inf) are kept as such.
 
         Args:
+            vars: Keep only these vectors (and the scale), in rawfile
+                order. Names are matched case-insensitively, and a bare
+                node name stands for its voltage (``"out"`` is
+                ``"v(out)"``). A single name may be given as a string.
+            polar: For a complex plot, also give each vector's
+                ``db:<name>`` (``20 * log10`` of the modulus),
+                ``mag:<name>`` (the modulus) and ``phase:<name>`` (the
+                argument, in degrees). Ignored for a real plot.
             pandas: Return a :class:`pandas.DataFrame` with the same columns
                 instead of a polars one (needs the ``pandas`` extra).
+
+        Raises:
+            KeyError: ``vars`` names a vector the plot does not have.
 
         The polars frame is built from the read-only NumPy columns; polars
         may or may not copy them (it does for the strided real/imaginary
         parts of complex vectors).
         """
-        cols = self._frame_columns()
+        cols = self._frame_columns(vars, polar)
         if pandas:
             try:
                 import pandas as pd
@@ -272,7 +340,10 @@ class Result(Sequence[Plot]):
 
         A name is matched case-insensitively against :attr:`Plot.plotname`
         (e.g. ``"AC Analysis"``); when several plots share it, the first one
-        is returned.
+        is returned. The short names of the analyses work too: ``"op"``,
+        ``"dc"``, ``"tran"``, ``"ac"``, ``"noise"``, ``"inoise"``,
+        ``"tf"``, ``"pz"``, ``"sens"``, ``"sp"``, ``"pss"`` and
+        ``"pss_spectrum"`` (:data:`PLOT_ALIASES`).
 
         Raises:
             KeyError: no plot has that name.
@@ -284,9 +355,35 @@ class Result(Sequence[Plot]):
         for p in self._plots:
             if p.plotname.lower() == wanted:
                 return p
+        alias = PLOT_ALIASES.get(wanted)
+        if alias is not None:
+            for p in self._plots:
+                if p.plotname == alias:
+                    return p
         raise KeyError(
-            f"no plot named {key!r}; plots: {[p.plotname for p in self._plots]}"
+            f"no plot named {key!r}; plots: {[p.plotname for p in self._plots]}; "
+            f"short names: {list(PLOT_ALIASES)}"
         )
+
+    def op(self, vars: Sequence[str] | str | None = None) -> dict[str, float]:
+        """The operating point as a dict: vector name to value.
+
+        Args:
+            vars: Keep only these vectors, matched as in :meth:`Plot.df`.
+
+        Raises:
+            KeyError: the run has no operating point (add an ``.op`` card),
+                or ``vars`` names a vector it does not have.
+        """
+        plot = self.plot("op")
+        if vars is None:
+            keep = list(range(len(plot._variables)))
+        else:
+            if isinstance(vars, str):
+                vars = [vars]
+            wanted = {plot._index(v) for v in vars}
+            keep = [i for i in range(len(plot._variables)) if i in wanted]
+        return {plot._variables[i].name: float(plot._columns[i][0]) for i in keep}
 
     @overload
     def __getitem__(self, index: int) -> Plot: ...
