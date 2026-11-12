@@ -19,7 +19,9 @@ checked circuit by circuit against ngspice.
   AC, pole-zero, noise, distortion, transfer function and sensitivity,
   plus periodic steady state (`spice_pss()`).
 - **Every SPICE3f5 device**, and BSIM3v3.
-- **Long tibbles** out (`spice_tidy()`), ready for 'ggplot2';
+- **Long tibbles** out (`spice_tidy()`), ready for 'ggplot2', or one
+  column per variable (`spice_wide()`); plots picked by short name
+  (`"tran"`, `"ac"`) and variables by node;
   `autoplot()` for a quick look.
 - **Sessions and sweeps**: alter a part and rerun without rebuilding
   (`spice_session()`), or sweep parameters across threads
@@ -57,7 +59,9 @@ c1 out 0 1u
 .end"
 
 res <- spice_run(deck)
-spice_tidy(res, plots = "Transient Analysis")
+res |> spice_tidy("tran", "out")   # long: one row per point
+res |> spice_tidy("ac", "out")     # complex plots carry mag, db, phase
+res |> spice_wide("tran")          # wide: one column per variable
 ```
 
 `vignette("spice")` walks through this deck end to end.

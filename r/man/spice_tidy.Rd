@@ -4,12 +4,15 @@
 \alias{spice_tidy}
 \title{Results as one long tibble}
 \usage{
-spice_tidy(result, plots = NULL)
+spice_tidy(result, plots = NULL, vars = NULL)
 }
 \arguments{
 \item{result}{A \code{spice_result}, or a \code{spice_sweep}.}
 
-\item{plots}{Optional: labels or indices of the plots to keep.}
+\item{plots}{Optional: labels, short names (see below) or indices of
+the plots to keep.}
+
+\item{vars}{Optional: names of the variables to keep.}
 }
 \value{
 A tibble.
@@ -21,11 +24,41 @@ run, with the sweep's \code{run} index and swept parameters as the first
 columns (one column per parameter, constant within a run): group by
 \code{run} for one curve per run. When the
 result mixes real and complex plots (e.g. a deck with \code{.tran} and
-\code{.ac}), the tibble has all of \code{value}, \code{re} and \code{im}, with \code{NA}
-where a column does not apply; otherwise only the columns of its
-kind. See \link{spice_plot} for the columns.
+\code{.ac}), the tibble has \code{value} and the complex columns (\code{re}, \code{im},
+\code{mag}, \code{db}, \code{phase}), with \code{NA} where a column does not apply;
+otherwise only the columns of its kind. See \link{spice_plot} for the
+columns.
 }
+\section{Selecting plots and variables}{
+
+\code{plots} takes the labels of \code{\link[=spice_plots]{spice_plots()}}, their positions, or a
+short name of the analysis, which selects every plot of that kind:\tabular{ll}{
+   short name \tab plot \cr
+   \code{"op"} \tab Operating Point \cr
+   \code{"dc"} \tab DC transfer characteristic \cr
+   \code{"tran"} \tab Transient Analysis \cr
+   \code{"ac"} \tab AC Analysis \cr
+   \code{"noise"} \tab Noise Spectral Density Curves \cr
+   \code{"inoise"} \tab Integrated Noise \cr
+   \code{"tf"} \tab Transfer Function \cr
+   \code{"pz"} \tab Pole-Zero Analysis \cr
+   \code{"sens"} \tab Sensitivity Analysis \cr
+   \code{"sp"} \tab SP Analysis \cr
+   \code{"pss"} \tab Time Domain Periodic Steady State Analysis \cr
+   \code{"pss_spectrum"} \tab Frequency Domain Periodic Steady State Analysis \cr
+}
+
+
+\code{vars} keeps the named variables, matched without regard to case; a
+bare node name stands for its voltage (\code{"out"} is \code{"v(out)"}).
+}
+
 \examples{
 res <- spice_run("rc\nvin 1 0 pulse(0 1)\nr1 1 2 1k\nc1 2 0 1u\n.tran 0.1m 5m\n.end")
 spice_tidy(res)
+res |> spice_tidy("tran", "v(2)")
+}
+\seealso{
+\code{\link[=spice_wide]{spice_wide()}} for one column per variable, \code{\link[=spice_op]{spice_op()}}
+for the operating point as a named vector.
 }

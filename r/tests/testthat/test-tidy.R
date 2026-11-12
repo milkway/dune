@@ -23,7 +23,7 @@ test_that("a complex .ac plot has re/im and no value column", {
   ac <- spice_plots(res)[["AC Analysis"]]
   expect_true(is.complex(ac$values[["v(2)"]]))
   df <- tibble::as_tibble(ac)
-  expect_named(df, c(long_cols, "re", "im"))
+  expect_named(df, c(long_cols, "re", "im", "mag", "db", "phase"))
   expect_false("value" %in% names(df))
   nvar <- nrow(ac$variables) - 1L
   expect_equal(nrow(df), length(ac$values$frequency) * nvar)
@@ -46,7 +46,7 @@ test_that("plots without a scale get NA scale columns", {
 test_that("a result mixing real and complex plots has value, re and im", {
   res <- spice_run(corpus_path("spice3f5", "examples", "rca3040.cir"))
   df <- spice_tidy(res)
-  expect_named(df, c(long_cols, "value", "re", "im"))
+  expect_named(df, c(long_cols, "value", "re", "im", "mag", "db", "phase"))
   ac <- df[df$plot == "AC Analysis", ]
   expect_true(all(is.na(ac$value)))
   expect_false(anyNA(ac$re))

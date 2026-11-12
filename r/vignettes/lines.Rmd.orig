@@ -44,8 +44,8 @@ rl 3 0 %g
 .end", rs, rl)
 
 far <- function(res, label) {
-  tr <- spice_tidy(res, plots = "Transient Analysis")
-  tr <- tr[tr$variable == "v(3)", c("scale", "value")]
+  tr <- res |> spice_tidy("tran", "v(3)")
+  tr <- tr[, c("scale", "value")]
   tr$case <- label
   tr
 }
@@ -85,9 +85,8 @@ c(z0 = z0, delay_ns = td * 1e9, gamma_source = gs, gamma_load = gl)
 
 ```{r error}
 worst <- function(options = NULL) {
-  tr <- spice_tidy(spice_run(line(10, 1000), options = options),
-                   plots = "Transient Analysis")
-  tr <- tr[tr$variable == "v(3)", ]
+  tr <- spice_run(line(10, 1000), options = options) |>
+    spice_tidy("tran", "v(3)")
   max(abs(tr$value - v3(tr$scale)))
 }
 c(dune = worst(), spice3 = worst(list(compat = "spice3")))

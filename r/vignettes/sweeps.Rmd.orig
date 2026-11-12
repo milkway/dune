@@ -52,8 +52,7 @@ Critical damping is at
 
 ```{r damping}
 sw <- spice_sweep(rlc, r1 = c(10, 30, 63, 150))
-tr <- spice_tidy(sw)
-tr <- tr[tr$variable == "v(out)", ]
+tr <- sw |> spice_tidy(vars = "out")
 
 ggplot(tr, aes(scale * 1e3, value, colour = factor(r1))) +
   geom_line(linewidth = 0.7) +
@@ -76,8 +75,7 @@ mc <- spice_sweep(rlc,
   c1 = rnorm(n, 1e-6, 1e-6 * 0.10 / 3),
   .mode = "zip", .threads = 4
 )
-out <- spice_tidy(mc)
-out <- out[out$variable == "v(out)", ]
+out <- mc |> spice_tidy(vars = "out")
 peak <- tapply(out$value, out$run, max)
 summary((peak - 1) * 100)
 ```

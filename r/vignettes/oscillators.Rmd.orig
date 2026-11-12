@@ -101,8 +101,7 @@ crossings.
 
 ```{r tran}
 long <- spice_run(sub(".end", ".tran 1n 600u 597u\n.end", colpitts, fixed = TRUE))
-v <- spice_tidy(long, plots = "Transient Analysis")
-v <- v[v$variable == "v(3)", ]
+v <- long |> spice_tidy("tran", "v(3)")
 mid <- mean(range(v$value))
 up <- which(v$value[-1] > mid & v$value[-nrow(v)] <= mid)
 t_up <- v$scale[up] + (mid - v$value[up]) / (v$value[up + 1] - v$value[up]) *

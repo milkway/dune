@@ -51,6 +51,8 @@ reference:
     contents:
       - spice_plots
       - spice_tidy
+      - spice_wide
+      - spice_op
       - spice_measure
       - autoplot.spice_plot
       - as_tibble.spice_plot

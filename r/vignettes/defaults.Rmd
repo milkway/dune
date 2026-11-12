@@ -73,8 +73,7 @@ voltage:
 
 ```{r periods}
 periods <- function(res) {
-  tran <- spice_tidy(res, plots = "Transient Analysis")
-  v <- tran[tran$variable == "v(2)", ]
+  v <- res |> spice_tidy("tran", "v(2)")
   i <- seq(2, nrow(v) - 1)
   peak <- i[v$value[i] >= v$value[i - 1] & v$value[i] > v$value[i + 1] &
     v$value[i] > 6]
