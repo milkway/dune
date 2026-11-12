@@ -246,14 +246,23 @@ transiente fica sem medida**:
 | deck | antes | D-0056 |
 |---|---|---|
 | `ltra_1` | não mensurável (0,58 nos vetores salvos) | 0,075 |
-| `ltra_2` | não mensurável | 1,26 (referência em TMAX/80) |
-| `ltra_3` | não mensurável | 3,32 (todos os nós; `slow`) |
+| `ltra_2` | não mensurável | 1,21 (referência em TMAX/80) |
+| `ltra_3` | não mensurável | 0,213 (nós do nível de topo) |
 | `ltra_compact` | não mensurável | 0,000 |
 | `ltrafit` | 0,144 | 0,079 |
 
-Os 1,26 e 3,32 são erro real no passo do deck em nós internos das
-cargas de diodo (`TT` sem `CJO`: a tensão salta quando a carga acaba);
-pesquisa e tentativas na D-0056 (anexo). É o número a bater em qualquer mudança de integração ou
+(4) Deck sem `.save` é medido nos nós do **nível de topo** (D-0057):
+ficam de fora os nós internos de subcircuito (`v(x3.4)`) e de
+dispositivo (`v(o1#i1)`). No corpus só os decks de linha têm
+subcircuitos. Com todos os nós o `ltra_3` media 3,32 — tudo na
+fileira de diodos `x3.*` (`TT` sem `CJO`: a tensão salta quando a
+carga acaba; pesquisa e tentativas na D-0056, anexo). O 1,21 do
+`ltra_2` é outro caso e é do deck: uma escada de 326 nós excitada por
+bordas de 0,1 ns com TMAX = 0,1 ns; a ponta v(3), que fica perto de
+zero, leva um resíduo de 0,12 V dos modos não resolvidos da escada
+(1,3 V com o trapézio; 0,012 V com `trtol=0.3`). `ltra_1` depende da
+plataforma (0,075 no arm64, 0,239 no x86_64), como já dependia no
+oráculo. É o número a bater em qualquer mudança de integração ou
 de controle de passo. Custo do TR-BDF2 no `dune -b` sobre os 37 decks
 transientes (release, melhor de 3): mediana ×1,12 por deck, pior
 ×1,7 (`ltra_1`, `ltra_3`), total ×0,82 (o `ltra_2`, que domina, fica

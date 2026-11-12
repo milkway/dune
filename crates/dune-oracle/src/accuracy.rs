@@ -151,10 +151,12 @@ fn run_tran(path: &Path, refine: Option<f64>) -> Result<Rawfile, String> {
                 .map(|s| s.to_plot(&parsed.netlist.title, "")),
         );
     }
-    if let Some(saved) = saved_vectors(&parsed.netlist) {
-        for plot in &mut plots {
-            keep_vectors(plot, &saved);
-        }
+    let saved = saved_vectors(&parsed.netlist);
+    for plot in &mut plots {
+        keep_vectors(plot, |name| match &saved {
+            Some(saved) => saved.iter().any(|s| s == name),
+            None => top_level(name),
+        });
     }
     Ok(Rawfile {
         plots,
@@ -165,7 +167,8 @@ fn run_tran(path: &Path, refine: Option<f64>) -> Result<Rawfile, String> {
 /// The vectors a deck asks for with `.save` (lower case, `v(n)` and
 /// `i(vsrc)`); `None` when it has no `.save` or one of them is not a
 /// plain node voltage or source current (`all`, a differential
-/// `v(a,b)`): the deck is then measured on everything, as before.
+/// `v(a,b)`): the deck is then measured on its top level
+/// ([`top_level`]).
 ///
 /// A deck that names its outputs is measured on them. Dune writes
 /// every node whatever `.save` says, and the internal nodes of
@@ -196,13 +199,30 @@ fn saved_vectors(netlist: &dune_netlist::ir::Netlist) -> Option<Vec<String>> {
     (!names.is_empty()).then_some(names)
 }
 
-/// Drop every vector of `plot` but its scale and the ones in `keep`.
-fn keep_vectors(plot: &mut dune_raw::Plot, keep: &[String]) {
+/// Whether a vector belongs to the deck's top level: not a node
+/// inside a subcircuit instance (`v(x3.4)`) nor a device's internal
+/// node (`v(o1#i1)`).
+///
+/// A deck that saves nothing in particular is measured on these. A
+/// subcircuit's internal nodes are how the block is built, not what
+/// the deck is about, and they are where a model is least well
+/// behaved: the diode loads of `ltra_2`/`ltra_3` (`TT`, no `CJO`)
+/// jump tens of millivolts in under a picosecond inside `x3`, which
+/// no run places twice at the same femtosecond — on every node, the
+/// decks measured 1.26 and 3.32 rulers, all of it there. A flat deck
+/// has no such nodes and is measured as before.
+fn top_level(name: &str) -> bool {
+    !name.contains(['.', '#'])
+}
+
+/// Drop every vector of `plot` but its scale and the ones `keep`
+/// accepts (by lower-case name).
+fn keep_vectors(plot: &mut dune_raw::Plot, keep: impl Fn(&str) -> bool) {
     let wanted: Vec<bool> = plot
         .variables
         .iter()
         .enumerate()
-        .map(|(i, v)| i == 0 || keep.contains(&v.name.to_ascii_lowercase()))
+        .map(|(i, v)| i == 0 || keep(&v.name.to_ascii_lowercase()))
         .collect();
     let mut it = wanted.iter();
     plot.variables.retain(|_| *it.next().unwrap());

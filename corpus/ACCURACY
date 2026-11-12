@@ -1,7 +1,8 @@
 # The accuracy ruler (dune-oracle --accuracy; docs/dune-oracle.md).
 # Format: stem|<cap>|reason, stem|slow <cap>|reason (measured only when named) or stem|unmeasured|reason
-ltra_2|1.6|326 lumped nodes behind diode loads; needs the reference at TMAX/80 (measured 1.26)
-ltra_3|slow 4.2|the x3.* diode string (tt, no cjo) snaps off in under a picosecond, and the deck saves no vectors of its own, so every node is measured (measured 3.32)
+ltra_1|0.35|measured on its .save vectors; platform-dependent like its XFAIL entry (arm64 0.075, x86_64 0.239)
+ltra_2|1.8|a 326-node lumped ladder driven by 0.1 ns edges at TMAX = 0.1 ns: the far end v(3), which stays near zero, carries a 0.12 V blip of unresolved ladder modes (1.3 V with the trapezoidal rule; 0.012 V at trtol=0.3). Reference at TMAX/80; measured 1.21
+ltra_3|0.4|measured on its top-level nodes (measured 0.213 on arm64; the x3.* diode string snaps off in under a picosecond and held the deck at 3.3 when every node counted)
 ltra_1_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 ltra_3_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 tra_pulse|0.25|measured 0.18, close to the default cap
