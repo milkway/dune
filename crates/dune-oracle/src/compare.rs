@@ -169,13 +169,81 @@ pub fn compare_rawfiles(oracle: &Rawfile, candidate: &Rawfile, tol: &Tolerances)
     report
 }
 
+/// How the accuracy ruler reads a transient (`--accuracy`), as
+/// opposed to the fidelity check against ngspice.
+///
+/// Both of its comparisons give an event its relative accuracy in
+/// time: the time tube of a point at `t` is at least `RELTOL·t` wide,
+/// and the pointwise guard reads the error through that tube instead
+/// of raw. A jump (a diode running out of stored charge: tens of
+/// millivolts in under a picosecond; a located switch flip) that two
+/// runs place a picosecond apart after sixteen nanoseconds is the
+/// same answer, where the fidelity check — two engines, one grid —
+/// rightly calls a slipped edge a failure.
+pub struct Ruler<'a> {
+    /// The convergence check only: a third run whose local step also
+    /// widens the tube (are two refined runs the same answer at the
+    /// resolution the deck's own run is judged at?), and no guard.
+    pub lens: Option<&'a Rawfile>,
+}
+
+/// [`compare_rawfiles`] for transients, read as [`Ruler`] says.
+pub fn compare_transients(
+    oracle: &Rawfile,
+    candidate: &Rawfile,
+    ruler: &Ruler,
+    tol: &Tolerances,
+) -> Report {
+    let mut report = Report {
+        plots: Vec::new(),
+        problems: Vec::new(),
+    };
+    let lens_plots = ruler.lens.map(|l| &l.plots);
+    if oracle.plots.len() != candidate.plots.len()
+        || lens_plots.is_some_and(|l| l.len() != oracle.plots.len())
+    {
+        report.problems.push("plot count differs".into());
+    }
+    for (k, (a, b)) in oracle.plots.iter().zip(&candidate.plots).enumerate() {
+        let grid = match lens_plots.and_then(|l| l.get(k)) {
+            None => None,
+            Some(l) => match (&l.data, l.variable_index("time")) {
+                (Data::Real(cols), Some(t)) => Some(cols[t].as_slice()),
+                _ => {
+                    report.problems.push("the lens is not a transient".into());
+                    continue;
+                }
+            },
+        };
+        let mode = TranMode::Ruler { lens: grid };
+        report.plots.push(compare_tran(a, b, tol, mode));
+    }
+    report
+}
+
+/// The two readings of a transient comparison.
+#[derive(Clone, Copy)]
+enum TranMode<'a> {
+    /// Against ngspice: the tube is one oracle step, the guard raw.
+    Fidelity,
+    /// [`Ruler`], with the lens's time grid.
+    Ruler { lens: Option<&'a [f64]> },
+}
+
+/// The local step of `grid` around `t`: the longer of the two
+/// intervals that meet at the grid point nearest below it.
+fn grid_tau(grid: &[f64], t: f64) -> f64 {
+    let k = grid.partition_point(|x| *x <= t).saturating_sub(1);
+    oracle_tau(grid, k.min(grid.len().saturating_sub(1)))
+}
+
 fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport {
     let is_tran = oracle
         .variables
         .first()
         .is_some_and(|v| v.name.eq_ignore_ascii_case("time"));
     if is_tran {
-        return compare_tran(oracle, candidate, tol);
+        return compare_tran(oracle, candidate, tol, TranMode::Fidelity);
     }
     let mut r = PlotReport {
         name: oracle.name.clone(),
@@ -331,7 +399,7 @@ fn compare_column(
 
 /// Transient comparison: interpolate the candidate onto the oracle
 /// grid, judge against the LTE budget (module docs).
-fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport {
+fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances, mode: TranMode) -> PlotReport {
     let mut r = PlotReport {
         name: oracle.name.clone(),
         nvars: oracle.variables.len(),
@@ -406,6 +474,8 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
             let floor = tol.floor(&oracle.variables[i].vtype);
             let allow = 2.0 * (TRTOL * tol.reltol * scale + floor);
             let mut max_tube = 0.0f64;
+            // The error through the event tube alone (ruler modes).
+            let mut max_event = 0.0f64;
             let mut max_point = 0.0f64;
             let mut sum_sq = 0.0f64;
             for (k, t) in ot.iter().enumerate() {
@@ -429,7 +499,15 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
                 // Time tube: within the oracle's own local sampling
                 // interval an edge cannot be located better than one
                 // oracle step.
-                let tau = oracle_tau(ot, k);
+                let mut tau = oracle_tau(ot, k);
+                if let TranMode::Ruler { lens } = mode {
+                    let event = tol.reltol * t.abs();
+                    tau = tau.max(event);
+                    if let Some(grid) = lens {
+                        tau = tau.max(grid_tau(grid, *t));
+                    }
+                    max_event = max_event.max(tube_err(ct, b, ts, a[k], event));
+                }
                 max_tube = max_tube.max(tube_err(ct, b, ts, a[k], tau));
             }
             let tube_ratio = if max_tube == 0.0 {
@@ -441,7 +519,11 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotReport
             // anywhere within one oracle step, which also forgives a
             // whole-step slip of a deterministic edge; bound the raw
             // pointwise error at POINTWISE_K rulers.
-            let ratio = tube_ratio.max(max_point / allow / POINTWISE_K);
+            let ratio = match mode {
+                TranMode::Fidelity => tube_ratio.max(max_point / allow / POINTWISE_K),
+                TranMode::Ruler { lens: None } => tube_ratio.max(max_event / allow / POINTWISE_K),
+                TranMode::Ruler { lens: Some(_) } => tube_ratio,
+            };
             let gating = matches!(oracle.variables[i].vtype, VarType::Voltage);
             if gating && ratio > worst.0 {
                 worst.0 = ratio;

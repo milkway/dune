@@ -1325,6 +1325,27 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   termina com 28 187 pontos. N = 4, 2 e 1 cortam mais pontos (153,
   75 e 39 mil no `ltra_compact`/20) mas já mudam o resultado no
   passo do deck (582 pontos contra 1112), por isso N = 10.
+- **Linhas no perfil Dune** (D-0052; `compat=spice3` restaura):
+  (1) *interpolação linear* quando o modelo não dá flag
+  (`lininterp`/`quadinterp`/`mixedinterp` no cartão vencem): na quina,
+  sobre a grade desigual que o controle de passo deixa ali, a parábola
+  do 3f5 ultrapassa a onda atrasada. No passo do deck, contra a corrida
+  refinada: `ltra_1` 5,1 → 2,4 réguas, `ltra_3` 7,3 → 2,9; `ltrafit`
+  0,253 → 0,249; `mixedinterp` não ajuda o `ltra_1` (5,1). Trocando a
+  linha com perdas do `ltra_1` por um atraso ideal o erro de v(3) cai
+  13× — o erro que sobra é da convolução da linha, que não tem
+  controle de erro local (o `LTRAlteCalculate` do 3f5 existe mas só
+  roda em modos que nenhum cartão liga; portá-lo é o próximo passo).
+  (2) *piso da regra de inclinação* (junto com a higiene, sai com
+  `ltrabkrate=0`): o teste de "não é reta" do `ltraacct.c` compara o
+  espalhamento de três valores com 50·RELTOL da *média* deles — em
+  torno de zero (a onda de volta de uma linha casada) isso é
+  50·ABSTOL e qualquer resíduo planta breakpoint. O piso exige
+  espalhamento ≥ RELTOL × o maior valor que as ondas da linha já
+  tiveram. `ltra_compact`: 1112 → 574 pontos no passo do deck com o
+  mesmo erro (0,013 contra a referência sem `trytocompact`); em
+  TMAX/20 a cascata some (371 mil → 10 043 pontos); em TMAX/40 ainda
+  cascateia (654 mil) — outro mecanismo, não diagnosticado.
 - **`.options ltrafit`** (`Options.ltra_fit`, issue #8): convolução
   recursiva do LTRA. Núcleos sem o atraso viram somas de
   exponenciais reais por quadratura Gauss–Legendre graduada da
@@ -1368,6 +1389,13 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   custo: 140 → 149 pontos no `sw_hyst`. Testes
   `tests/robust_tran.rs` (`switch_flips_are_located…`,
   `located_flips_do_not_move_with_the_step`).
+- **Eventos da fonte B** (D-0051): o mesmo mecanismo para
+  `u()`/`sgn()` — cruzamento por zero do argumento é evento quando a
+  expressão salta ali (avaliada com o argumento lido como −1 e +1 nos
+  valores de controle interpolados); `sgn()` vezes fator que zera
+  junto não é evento. Deck `corpus/regress/bsrc_step.cir`, teste
+  `b_source_jumps_are_located`. Não detecta a fonte B que controla a
+  si mesma e volta ao mesmo lado dentro do passo.
 - **Método do `.pss`** (D-0047): `Options::pss_method()` = o do
   `.tran` (TR-BDF2 no perfil Dune). A estabilização do autônomo
   (`Options::pss_stab_method()`) fica sempre no trapézio, mesmo com

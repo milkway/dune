@@ -395,6 +395,19 @@ impl LtraParams {
         Ok(p)
     }
 
+    /// The Dune profile's interpolation (D-0052): a model without an
+    /// interpolation flag takes linear interpolation instead of the
+    /// 3f5's quadratic. Through a corner on the uneven grid the step
+    /// control leaves there, the parabola overshoots the delayed
+    /// wave; measured against refined runs at the decks' own step,
+    /// `ltra_1` is 5.1 rulers off with it and 2.4 with the linear
+    /// rule, `ltra_3` 7.3 and 2.9. A flag on the model card wins.
+    pub fn default_linear(&mut self) {
+        if !self.interp_given {
+            self.interp = LtraInterp::Linear;
+        }
+    }
+
     /// `.options trytocompact` in `LTRAsetup` (`ltraset.c:55-72`, the
     /// same in the 3f5): a model without an interpolation flag takes
     /// linear interpolation instead of quadratic, with the C's warning.
@@ -1068,6 +1081,14 @@ pub(crate) struct LtraI {
     /// Dune's opt-in recursive convolution (`Options::ltra_fit`,
     /// issue #8); off = the C's coefficient walk, untouched.
     fit_on: bool,
+    /// Dune's floor on the slope rule (D-0052; with the breakpoint
+    /// hygiene): a slope change plants a breakpoint only when the
+    /// wave moved by more than `RELTOL` of the largest either wave
+    /// has been.
+    slope_floor: bool,
+    /// The largest magnitude each incident wave has had (the scale
+    /// of [`LtraI::slope_floor`]).
+    wave_peak: [f64; 2],
     /// The recursive-mode model and states of the current run (built
     /// at the operating-point accept, when TSTOP is known).
     fit: Option<FitState>,
@@ -1239,11 +1260,19 @@ impl LtraI {
             co: Coeffs::default(),
             gmin: 0.0,
             fit_on: false,
+            slope_floor: false,
+            wave_peak: [0.0; 2],
             fit: None,
             fit_skip: None,
             periodic: false,
             periodic_fault: None,
         }
+    }
+
+    /// Turn on the floor of the slope rule (the Dune profile).
+    pub fn with_slope_floor(mut self, on: bool) -> Self {
+        self.slope_floor = on;
+        self
     }
 
     /// Opt into the recursive convolution (`Options::ltra_fit`).
@@ -2196,6 +2225,7 @@ impl Device for LtraI {
     fn accept(&mut self, ctx: &mut AcceptCtx) {
         if ctx.first {
             // MODEINITTRAN: the operating point starts the history.
+            self.wave_peak = [0.0; 2];
             self.times.clear();
             self.v1.clear();
             self.i1.clear();
@@ -2223,6 +2253,10 @@ impl Device for LtraI {
                 self.fit_accept();
             }
         }
+        let p = &self.p;
+        let wave = |v: f64, i: f64| ((v + i * p.imped) * p.attenuation).abs();
+        self.wave_peak[0] = self.wave_peak[0].max(wave(self.v1[idx], self.i1[idx]));
+        self.wave_peak[1] = self.wave_peak[1].max(wave(self.v2[idx], self.i2[idx]));
         if idx == 0 {
             return;
         }
@@ -2294,9 +2328,18 @@ impl LtraI {
             let h2 = self.times[idx - 1] - self.times[idx - 2];
             ((v2 - v3) / h2, (v5 - v6) / h2)
         };
+        // The C's own test of "not a straight line" compares the
+        // spread of the three values with 50·RELTOL of their *mean*:
+        // around zero that is 50·ABSTOL, and the residue of a settled
+        // edge passes it at every point. The floor asks the spread to
+        // be visible at the scale of the line's signals (the larger
+        // of the two waves: the backward wave of a matched line is
+        // all residue).
+        let peak = f64::max(self.wave_peak[0], self.wave_peak[1]);
         let check = |a: f64, b: f64, c: f64| {
-            f64::max(f64::max(a, b), c) - f64::min(f64::min(a, b), c)
-                >= (50.0 * (reltol / 3.0 * (a + b + c) + abstol)).abs()
+            let spread = f64::max(f64::max(a, b), c) - f64::min(f64::min(a, b), c);
+            spread >= (50.0 * (reltol / 3.0 * (a + b + c) + abstol)).abs()
+                && (!self.slope_floor || spread >= reltol * peak)
         };
         let test1 = (d1 - d2).abs() >= p.reltol * f64::max(d1.abs(), d2.abs()) + p.abstol
             && check(v1, v2, v3);

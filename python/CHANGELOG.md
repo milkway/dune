@@ -1,5 +1,16 @@
 # Changelog — spice3 (Python)
 
+## 0.4.0
+
+- **B-source jumps are located.** A `u()` or `sgn()` whose argument
+  crosses zero flips at that instant (to `reltol` times the maximum
+  step) when the expression jumps there, like the switches.
+- **LTRA lines**: a model without an interpolation flag interpolates
+  linearly (the quadratic rule overshoots at corners; on the two
+  line decks of the SPICE3 examples the error at the deck's step
+  falls by more than half), and a settled line no longer plants
+  breakpoints on numerical residue. `compat="spice3"` restores both.
+
 ## 0.3.0
 
 - **Switch events are located.** An `S`/`W` switch flips at the

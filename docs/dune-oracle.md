@@ -208,13 +208,29 @@ limiares da chave eram cruzados dentro de um passo, qualquer que
 fosse o método) e o `csw_rly` entra na conta (0,04; antes a
 referência refinada não convergia). Na linha da D-0049 só o
 `ltrafit` (0,25) fica fora de 0,2, e a régua passa a mostrar os pontos
-de tempo de cada deck (18 728 → 19 302 no total, +3 %). `ltra_1/2/3`
-seguem sem medida: os diodos da carga cortam em menos de 1 ps quando a
-carga armazenada acaba, e mesmo com dois refinamentos concordando no
-instante a 2 fs o salto estoura a régua num vetor cuja excursão
-inteira é o salto. No passo do deck o `ltra_1` fica a até 0,4 V da
-corrida refinada nas tensões da linha e a 0,3 ns nas bordas internas
-do driver, e apertar a tolerância não muda isso (é o TMAX do deck). É o número a bater em qualquer mudança de integração ou
+de tempo de cada deck.
+
+**Leitura da régua (D-0053).** Três regras próprias, distintas do
+cheque de fidelidade contra o ngspice:
+- *tempo de evento*: o tubo de tempo de um ponto em `t` tem pelo
+  menos `RELTOL·t`, e a guarda pontual lê o erro por esse tubo — um
+  salto (corte de diodo, troca de chave) que duas corridas põem a 1 ps
+  uma da outra depois de 16 ns é a mesma resposta;
+- *convergência na resolução do candidato*: TMAX/20 e TMAX/40 são
+  comparados com o tubo alargado ao passo local do candidato;
+- *margem estável*: se ainda assim diferem em mais de 0,2, a
+  referência vale quando a margem muda menos de 10 % trocando uma
+  pela outra.
+Com isso os `ltra_*` têm número: no passo do deck, com a interpolação
+quadrática do 3f5, `ltra_1` fica a 5,1 réguas e `ltra_3` a 7,3 (margem
+estável); com a linear do perfil Dune (D-0052), 2,4 e 2,9 — aí a
+margem oscila mais de 10 % entre as referências (o corte dos diodos
+deixa um pico numa ou noutra) e os decks seguem `unmeasured`, com os
+números no motivo. `ltra_2`: 1,2 ± 0,4.
+
+Com a leitura nova, o deck `bsrc_step` e os defaults da D-0052 a régua
+mede 36 decks, soma **0,96**, 19 378 pontos (os 1,17 de antes eram com
+a leitura antiga, sobre 35 decks). É o número a bater em qualquer mudança de integração ou
 de controle de passo. Custo do TR-BDF2 no `dune -b` sobre os 37 decks
 transientes (release, melhor de 3): mediana ×1,12 por deck, pior
 ×1,7 (`ltra_1`, `ltra_3`), total ×0,82 (o `ltra_2`, que domina, fica

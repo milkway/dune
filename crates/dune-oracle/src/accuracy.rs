@@ -17,7 +17,12 @@
 //!   measured it on the whole corpus (docs/dune-oracle.md);
 //! - the reference is trusted only if it has itself converged: the
 //!   run at half the refinement must agree with it within
-//!   [`CONVERGED`] of the ruler. A deck where it has not is not
+//!   [`CONVERGED`] of the ruler, the two compared at the candidate's
+//!   time resolution — or, failing that, the margin must be the
+//!   same within [`STABLE`] against either of them;
+//! - both comparisons give an event its relative accuracy in time:
+//!   a jump two runs place within `RELTOL·t` of each other is the
+//!   same answer ([`Ruler`]). A deck where it has not is not
 //!   measurable this way (trapezoidal ringing that the step does not
 //!   damp, a breakpoint cascade) and must be listed as such in
 //!   `corpus/ACCURACY`;
@@ -40,7 +45,7 @@ use dune_netlist::Severity;
 use dune_netlist::ir::Analysis;
 use dune_raw::Rawfile;
 
-use crate::compare::{Tolerances, compare_rawfiles};
+use crate::compare::{Report, Ruler, Tolerances, compare_transients};
 use crate::corpus::Corpus;
 use crate::dune_run;
 
@@ -49,6 +54,9 @@ const REFINE: f64 = 40.0;
 /// The reference counts as converged when the run at `REFINE / 2`
 /// is within this fraction of the ruler of it.
 const CONVERGED: f64 = 0.2;
+/// ...or when the margin moves by no more than this fraction of
+/// itself between the two refinements as reference.
+const STABLE: f64 = 0.1;
 /// Cap of a deck `corpus/ACCURACY` does not list.
 const DEFAULT_CAP: f64 = 0.2;
 
@@ -139,7 +147,26 @@ fn run_tran(path: &Path, refine: Option<f64>) -> Result<Rawfile, String> {
 /// The comparator's worst ratio over the plots, `driver`'s grid
 /// driving; `Err` on a structural mismatch.
 fn margin(driver: &Rawfile, other: &Rawfile) -> Result<f64, String> {
-    let report = compare_rawfiles(driver, other, &Tolerances::default());
+    worst(compare_transients(
+        driver,
+        other,
+        &Ruler { lens: None },
+        &Tolerances::default(),
+    ))
+}
+
+/// How far the half-refined run is from the reference at the
+/// candidate's resolution (`compare_transients_through`).
+fn convergence(half: &Rawfile, reference: &Rawfile, cand: &Rawfile) -> Result<f64, String> {
+    worst(compare_transients(
+        half,
+        reference,
+        &Ruler { lens: Some(cand) },
+        &Tolerances::default(),
+    ))
+}
+
+fn worst(report: Report) -> Result<f64, String> {
     if let Some(p) = report.problems.first() {
         return Err(p.clone());
     }
@@ -157,8 +184,9 @@ fn margin(driver: &Rawfile, other: &Rawfile) -> Result<f64, String> {
 enum Measured {
     /// The margin, and the candidate's timepoints (what it cost).
     Margin(f64, usize),
-    /// The reference disagrees with the half-refined run by this much.
-    Unconverged(f64),
+    /// The reference disagrees with the half-refined run by this
+    /// much, against a margin of that much.
+    Unconverged(f64, f64),
     Failed(String),
 }
 
@@ -168,14 +196,24 @@ fn measure(path: &Path) -> Measured {
         (Ok(c), Ok(h), Ok(r)) => (c, h, r),
         (Err(e), ..) | (_, Err(e), _) | (.., Err(e)) => return Measured::Failed(e),
     };
-    match margin(&half, &reference) {
+    let conv = match convergence(&half, &reference, &cand) {
         Err(e) => return Measured::Failed(e),
-        Ok(conv) if conv > CONVERGED => return Measured::Unconverged(conv),
-        Ok(_) => {}
-    }
+        Ok(conv) => conv,
+    };
     let points = cand.plots.iter().map(|p| p.num_points()).sum();
-    match margin(&cand, &reference) {
-        Ok(m) => Measured::Margin(m, points),
+    let m = match margin(&cand, &reference) {
+        Ok(m) => m,
+        Err(e) => return Measured::Failed(e),
+    };
+    if conv <= CONVERGED {
+        return Measured::Margin(m, points);
+    }
+    // The two refinements differ somewhere (a snap leaves a spike in
+    // one of them), but the measurement may still not depend on which
+    // of them is the reference.
+    match margin(&cand, &half) {
+        Ok(mh) if (mh - m).abs() <= STABLE * m => Measured::Margin(m, points),
+        Ok(_) => Measured::Unconverged(conv, m),
         Err(e) => Measured::Failed(e),
     }
 }
@@ -227,11 +265,11 @@ pub fn run(args: &[String]) -> Result<bool> {
                 };
                 println!("{:<14} {m:>8.3} {cap:>6.2} {points:>7}  {verdict}", c.stem);
             }
-            Measured::Unconverged(conv) => {
+            Measured::Unconverged(conv, m) => {
                 ok = false;
                 println!(
                     "{:<14} {:>8} {cap:>6.2}  FAIL: the reference has not converged \
-                     (TMAX/{} vs TMAX/{REFINE}: {conv:.3}); list the deck as \
+                     (TMAX/{} vs TMAX/{REFINE}: {conv:.3}, against a margin of {m:.3}); list the deck as \
                      `unmeasured` in corpus/ACCURACY",
                     c.stem,
                     "-",

@@ -54,6 +54,9 @@ pub(crate) struct Tree {
     root: u32,
     derivs: Vec<u32>,
     pub vars: Vec<VarRef>,
+    /// The `u()` and `sgn()` nodes of the expression: where its
+    /// value can jump (Dune's event location, D-0051).
+    jumps: Vec<u32>,
 }
 
 /// `HUGE` (`HUGE_VAL`): the out-of-range return of `ptfuncs.c`.
@@ -69,8 +72,19 @@ impl Tree {
             root: 0,
             derivs: Vec::new(),
             vars: Vec::new(),
+            jumps: Vec::new(),
         };
         t.root = t.build(expr);
+        // Every node so far belongs to the expression itself (the
+        // derivative trees come next).
+        t.jumps = (0..t.nodes.len() as u32)
+            .filter(|&i| {
+                matches!(
+                    t.nodes[i as usize],
+                    Node::Func(ExprFunc::U | ExprFunc::Sgn, _)
+                )
+            })
+            .collect();
         for v in 0..t.vars.len() {
             let d = t.differentiate(t.root, v);
             t.derivs.push(d);
@@ -372,15 +386,50 @@ impl Tree {
         Ok(f)
     }
 
+    /// How many `u()`/`sgn()` nodes the expression has.
+    pub fn num_jumps(&self) -> usize {
+        self.jumps.len()
+    }
+
+    /// The argument of jump `k` at `vals`.
+    pub fn jump_arg(&self, k: usize, gmin: f64, vals: &[f64]) -> Result<f64, ()> {
+        let Node::Func(_, a) = self.nodes[self.jumps[k] as usize] else {
+            unreachable!("jumps are function nodes");
+        };
+        self.pteval(a, gmin, vals)
+    }
+
+    /// The expression at `vals` with the argument of jump `k` taken
+    /// as `side` (±1): its value just before and just after that
+    /// argument crosses zero.
+    pub fn eval_at_jump(&self, k: usize, side: f64, gmin: f64, vals: &[f64]) -> Result<f64, ()> {
+        self.pteval_forced(self.root, gmin, vals, Some((self.jumps[k], side)))
+    }
+
     /// `PTeval` (`PTfudge_factor = gmin` for the divide).
     fn pteval(&self, p: u32, gmin: f64, vals: &[f64]) -> Result<f64, ()> {
+        self.pteval_forced(p, gmin, vals, None)
+    }
+
+    /// [`Tree::pteval`], one function node optionally reading a given
+    /// argument instead of its own.
+    fn pteval_forced(
+        &self,
+        p: u32,
+        gmin: f64,
+        vals: &[f64],
+        forced: Option<(u32, f64)>,
+    ) -> Result<f64, ()> {
         let r = match self.nodes[p as usize] {
             Node::Const(c) => return Ok(c),
             Node::Var(i) => return Ok(vals.get(i).copied().unwrap_or(0.0)),
-            Node::Func(f, a) => func(f, self.pteval(a, gmin, vals)?),
+            Node::Func(f, a) => match forced {
+                Some((node, side)) if node == p => func(f, side),
+                _ => func(f, self.pteval_forced(a, gmin, vals, forced)?),
+            },
             Node::Bin(op, l, r) => {
-                let a = self.pteval(l, gmin, vals)?;
-                let b = self.pteval(r, gmin, vals)?;
+                let a = self.pteval_forced(l, gmin, vals, forced)?;
+                let b = self.pteval_forced(r, gmin, vals, forced)?;
                 match op {
                     ExprOp::Plus => a + b,
                     ExprOp::Minus => a - b,
@@ -526,10 +575,41 @@ pub(crate) struct AsrcI {
     /// `ASRCacValues`: the derivatives stored by the
     /// `MODEINITSMSIG` load.
     ac_derivs: Vec<f64>,
+    /// State base (Dune's; the C's ASRC has no states): the
+    /// controlling values, then the argument of each `u()`/`sgn()`,
+    /// for the event location.
+    st: usize,
+    /// `GMIN` of the last load (the divide's fudge), for `event`.
+    gmin: f64,
 }
 
+/// The state slots a B source with this expression takes.
+pub(crate) fn num_states(expr: &Expr) -> usize {
+    let tree = Tree::new(expr);
+    match tree.num_jumps() {
+        0 => 0,
+        n => tree.vars.len() + n,
+    }
+}
+
+/// What counts as a jump of a B source's value across a `u()`/`sgn()`
+/// zero ([`AsrcI::event`]): more than the SPICE default tolerances
+/// (`RELTOL`, and `ABSTOL` — the smaller of the two floors, since
+/// the value may be a current).
+const JUMP_RELTOL: f64 = 1e-3;
+const JUMP_ABSTOL: f64 = 1e-12;
+
 impl AsrcI {
-    pub fn new(kind: SourceKind, pos: Var, neg: Var, br: Var, tree: Tree, cols: Vec<Var>) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        kind: SourceKind,
+        pos: Var,
+        neg: Var,
+        br: Var,
+        tree: Tree,
+        cols: Vec<Var>,
+        st: usize,
+    ) -> Self {
         let n = cols.len();
         AsrcI {
             kind,
@@ -543,6 +623,8 @@ impl AsrcI {
             derivs: vec![0.0; n],
             prev_value: 0.0,
             ac_derivs: vec![0.0; n],
+            st,
+            gmin: 0.0,
         }
     }
 
@@ -605,6 +687,17 @@ impl crate::devices::Device for AsrcI {
             return;
         }
         self.prev_value = rhs;
+        self.gmin = ctx.gmin;
+        if self.tree.num_jumps() > 0 {
+            let n = self.vals.len();
+            for (i, v) in self.vals.iter().enumerate() {
+                ctx.states.set(0, self.st + i, *v);
+            }
+            for k in 0..self.tree.num_jumps() {
+                let arg = self.tree.jump_arg(k, ctx.gmin, &self.vals).unwrap_or(0.0);
+                ctx.states.set(0, self.st + n + k, arg);
+            }
+        }
         if ctx.mode == InitMode::Smsig {
             self.ac_derivs.clone_from(&self.derivs);
         }
@@ -634,6 +727,53 @@ impl crate::devices::Device for AsrcI {
             ctx.add_rhs(self.pos, -(factor * rhs));
             ctx.add_rhs(self.neg, factor * rhs);
         }
+    }
+
+    /// Dune's event location (D-0051; the 3f5 and ngspice let a
+    /// `u()`/`sgn()` flip at whatever timepoint first sees its
+    /// argument past zero): the earliest fraction of the interval at
+    /// which the argument of a `u()` or `sgn()` crossed zero — taken
+    /// as linear in time — *and* the expression jumped there. The
+    /// jump is the expression at the interpolated controlling values
+    /// with that argument read as −1 and as +1; a `sgn()` multiplied
+    /// by something that vanishes with its argument does not jump and
+    /// is not an event.
+    fn event(
+        &self,
+        states: &crate::state::States,
+        from: usize,
+        to: usize,
+        _back: f64,
+    ) -> Option<f64> {
+        let n = self.vals.len();
+        let mut first: Option<f64> = None;
+        for k in 0..self.tree.num_jumps() {
+            let a1 = states.get(from, self.st + n + k);
+            let a0 = states.get(to, self.st + n + k);
+            let side = |a: f64| a.partial_cmp(&0.0);
+            if side(a1) == side(a0) {
+                continue;
+            }
+            let theta = a1 / (a1 - a0);
+            if !(0.0..=1.0).contains(&theta) || first.is_some_and(|f| f <= theta) {
+                continue;
+            }
+            let vals: Vec<f64> = (0..n)
+                .map(|i| {
+                    let (v1, v0) = (states.get(from, self.st + i), states.get(to, self.st + i));
+                    v1 + theta * (v0 - v1)
+                })
+                .collect();
+            let at = |s: f64| self.tree.eval_at_jump(k, s, self.gmin, &vals);
+            let (Ok(before), Ok(after)) = (at(-1.0), at(1.0)) else {
+                continue;
+            };
+            let scale = before.abs().max(after.abs());
+            if (after - before).abs() > JUMP_RELTOL * scale + JUMP_ABSTOL {
+                first = Some(theta);
+            }
+        }
+        first
     }
 
     /// `ASRCconvTest` in its ngspice-47 form: the value at the new

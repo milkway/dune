@@ -1,0 +1,19 @@
+B source comparator: u() and sgn() jump inside a timestep
+* Coverage: no corpus deck made a B source jump (bsrc_tran multiplies
+* its sgn() by a factor that vanishes with the argument). A 0 -> 5 -> 0
+* triangle of 1 ms crosses b1's reference (3.05 V, at 0.305 ms and
+* 0.695 ms) and b2's (2.05 V, at 0.205 ms and 0.795 ms) between the
+* 20 us points of the .tran grid; b3 has the same sgn() times a
+* factor that is zero there, and does not jump.
+v1 1 0 pwl(0 0 0.5m 5 1m 0)
+r1 1 0 1k
+vref 3 0 3.05
+r3 3 0 1k
+b1 2 0 v=5*u(v(1)-v(3))
+r2 2 0 1k
+b2 0 4 i=1m*sgn(v(1)-2.05)
+r4 4 0 1k
+b3 5 0 v=(v(1)-2.05)*sgn(v(1)-2.05)
+r5 5 0 1k
+.tran 20u 1m
+.end
