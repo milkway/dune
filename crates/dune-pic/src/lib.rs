@@ -1603,8 +1603,8 @@ impl<'a> Extractor<'a> {
     /// by spaces, trimmed.
     fn value_text(&self, b: usize) -> String {
         let (lo, hi) = self.d.blocks[b].shapes;
-        for i in lo..hi.min(self.d.shapes.len()) {
-            if let Shape::Text { text, .. } = &self.d.shapes[i] {
+        for shape in self.d.shapes.iter().take(hi).skip(lo) {
+            if let Shape::Text { text, .. } = shape {
                 let joined: Vec<&str> = text.iter().map(|t| t.s.trim()).collect();
                 return joined.join(" ").trim().to_string();
             }
