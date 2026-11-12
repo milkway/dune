@@ -34,6 +34,7 @@ articles:
       - defaults
   - title: Worked examples
     desc: Circuits run end to end, with their results.
+    navbar: Worked examples
     contents:
       - amplifier
       - oscillators
