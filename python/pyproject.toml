@@ -12,8 +12,8 @@ dynamic = ["version"]
 description = "SPICE3f5-faithful circuit simulation (the Dune engine) for Python"
 readme = "README.md"
 license = "BSD-3-Clause"
-authors = [{ name = "André Leite", email = "leite@de.ufpe.br" }]
-maintainers = [{ name = "André Leite", email = "leite@de.ufpe.br" }]
+authors = [{ name = "André Leite", email = "leite@castlab.org" }]
+maintainers = [{ name = "André Leite", email = "leite@castlab.org" }]
 keywords = [
     "spice",
     "circuit-simulation",

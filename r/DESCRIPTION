@@ -2,7 +2,7 @@ Package: spice
 Title: Circuit Simulation with a 'SPICE3f5'-Derived Engine
 Version: 0.1.0
 Authors@R: c(
-    person("André", "Leite", email = "leite@de.ufpe.br", role = c("aut", "cre")),
+    person("André", "Leite", email = "leite@castlab.org", role = c("aut", "cre")),
     person("The Regents of the University of California", role = "cph",
            comment = "'SPICE3f5', from which the simulation engine is derived"),
     person("The authors of the dependency Rust crates", role = "cph",

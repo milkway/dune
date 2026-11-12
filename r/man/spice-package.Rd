@@ -35,11 +35,11 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: André Leite \email{leite@de.ufpe.br}
+\strong{Maintainer}: André Leite \email{leite@castlab.org}
 
 Authors:
 \itemize{
-  \item André Leite \email{leite@de.ufpe.br}
+  \item André Leite \email{leite@castlab.org}
 }
 
 Other contributors:
