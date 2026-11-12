@@ -1,0 +1,41 @@
+.PS
+# The common-emitter stage of vignette("amplifier").
+spice = 1
+Q1: npn((3,1.5), QN)
+In:  (0,1.5)
+B1:  (1.1,1.5)
+B:   (2.2,1.5)
+C:   (3.16,2.4)
+E:   (3.16,1.0)
+Out: (4.9,2.4)
+Vcc: (2.2,3.5)
+
+Vin: acsource(In, (0,0), AC 1 SIN(0 10m 1k), "Vin")
+Rs: resistor(In, B1, 1k, "Rs")
+Cin: capacitor(B1, B, 10u, "Cin")
+R1: resistor(Vcc, B, 47k, "R1")
+R2: resistor(B, (2.2,0), 10k, "R2")
+Rc: resistor((3.16,3.5), C, 4.7k, "Rc")
+Re: resistor(E, (3.16,0), 1k, "Re")
+Ce: capacitor((4.0,1.0), (4.0,0), 100u, "Ce")
+Cout: capacitor(C, Out, 10u, "Cout")
+Rl: resistor(Out, (4.9,0), 10k, "Rl")
+V1: vsource((6,3.5), (6,0), DC 12, "V1")
+
+line from B to Q1.B
+line from C to Q1.C
+line from Q1.E to E
+line from E to Ce.P
+line from Vcc to V1.P
+line from Vin.N to V1.N
+dot at B; dot at C; dot at E; dot at Rc.P
+dot at R2.N; dot at Re.N; dot at Ce.N; dot at Rl.N
+"in" above at In + (0,0.05)
+"b" above at B + (-0.12,0.05)
+"c" rjust at C + (-0.08,0)
+"e" rjust at E + (-0.08,0)
+"out" above at Out + (0,0.05)
+"vcc" above at (6,3.5) + (0,0.05)
+ground((1.1,0))
+.model QN NPN(IS=1e-14 BF=200 VAF=100 CJE=4p CJC=2p TF=0.3n RB=50)
+.PE

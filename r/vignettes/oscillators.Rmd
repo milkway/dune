@@ -28,6 +28,8 @@ source to set the frequency, the period is one of the unknowns.
 An LC tank with a capacitive divider around one transistor. The supply
 ramp of `vee` kicks it off.
 
+<img src="figures/circuit-colpitts.svg" alt="Schematic of the Colpitts oscillator: transistor Q1 with the tank L1, C1 and C2 between collector, emitter and the supply, emitter resistor Re to the negative supply Vee." />
+
 
 ``` r
 colpitts <- "colpitts oscillator

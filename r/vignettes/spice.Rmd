@@ -27,6 +27,8 @@ A deck is ordinary SPICE3 input. The first line is the title; the
 analysis cards (`.tran`, `.ac`, ...) say what to compute. Here it is
 given as text; `spice_run()` equally accepts the path of a `.cir` file.
 
+<img src="figures/circuit-rlc.svg" alt="Schematic of the RLC low-pass: source Vin, series R1 and L1, capacitor C1 across the output." />
+
 ```{r deck}
 deck <- "RLC low-pass
 vin in 0 pulse(0 1 0 1u) ac 1

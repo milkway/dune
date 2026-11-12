@@ -31,6 +31,8 @@ a signal that is too large.
 
 ## The circuit
 
+<img src="figures/circuit-amplifier.svg" alt="Schematic of the common-emitter amplifier: divider bias R1 and R2, collector resistor Rc, emitter resistor Re bypassed by Ce, input through Rs and Cin, output through Cout into Rl." />
+
 ```{r deck}
 amp <- "common-emitter amplifier
 vcc vcc 0 12

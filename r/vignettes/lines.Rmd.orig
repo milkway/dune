@@ -33,6 +33,8 @@ terminated with, and a mismatch sends part of the wave back.
 A 50 ohm line, 4.38 ns long, driven through 10 ohm into a 1 kOhm load:
 mismatched at both ends, so the 1 ns edge bounces back and forth.
 
+<img src="figures/circuit-line.svg" alt="Schematic of the line: source V1 through Rs into the lossy line LL, ending in the load Rl." />
+
 ```{r deck}
 line <- function(rs, rl) sprintf("line
 v1 1 0 pwl(0 0 1n 0 2n 1 100n 1)

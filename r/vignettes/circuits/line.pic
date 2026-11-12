@@ -1,0 +1,21 @@
+.PS
+# The lossy line of vignette("lines"): a 1 V edge through Rs into 24
+# units of line ending in Rl.
+N1: (0,1.5)
+N2: (1.4,1.5)
+N3: (3.8,1.5)
+
+V1: vsource(N1, (0,0), PWL(0 0 1n 0 2n 1), "V1")
+Rs: resistor(N1, N2, R_S, "Rs")
+O1: ltraline(N2, N3, LL)
+Rl: resistor(N3, (3.8,0), R_L, "Rl")
+
+line from O1.N1 to (O1.N1.x,0)
+line from O1.N2 to (O1.N2.x,0)
+line from V1.N to Rl.N
+dot at (O1.N1.x,0); dot at (O1.N2.x,0); dot at N2; dot at N3
+"1" above at N1 + (0,0.05)
+"2" above at N2 + (0,0.05)
+"3" above at N3 + (0,0.05)
+ground((1.2,0))
+.PE

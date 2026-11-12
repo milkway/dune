@@ -1,0 +1,36 @@
+.PS
+# The Colpitts oscillator of vignette("oscillators").
+spice = 1
+Q1: npn((2,1.5), QNL)
+N1: (1.2,1.5)
+N2: (2.16,2.4)
+N3: (2.16,0.9)
+N4: (2.16,3.6)
+N6: (2.16,-0.3)
+
+R1: resistor(N1, (1.2,0.3), 1, "R1")
+Rl: resistor(N4, N2, 750, "Rl")
+L1: inductor((3.2,3.6), (3.2,2.4), 5u, "L1")
+C1: capacitor((3.2,2.4), (3.2,0.9), 500p, "C1")
+C2: capacitor((4.3,3.6), (4.3,0.9), 4500p, "C2")
+Re: resistor(N3, N6, 4.65k, "Re")
+Vee: vsource(N6, (2.16,-1.5), DC -10 PWL(0 0 1n -10), "Vee")
+Vcc: vsource((5.4,3.6), (5.4,-1.5), DC 5, "Vcc")
+
+line from N1 to Q1.B
+line from N2 to Q1.C
+line from Q1.E to N3
+line from N2 to C1.P
+line from N3 to C2.N
+line from N4 to Vcc.P
+line from Vee.N to Vcc.N
+ground(R1.N)
+dot at N2; dot at N3; dot at L1.P; dot at C2.P; dot at C1.P; dot at C1.N; dot at (3.8,-1.5)
+"1" above at N1 + (0,0.05)
+"2" rjust at N2 + (-0.08,0)
+"3" rjust at N3 + (-0.08,0)
+"4" above at N4 + (0,0.05)
+"6" rjust at N6 + (-0.08,0)
+ground((3.8,-1.5))
+.model QNL NPN(BF=80 RB=100 CCS=2p TF=0.3n TR=6n CJE=3p CJC=2p VA=50)
+.PE

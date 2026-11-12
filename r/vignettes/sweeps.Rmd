@@ -27,6 +27,8 @@ asked, and returns everything as one tidy table.
 A second-order RLC low-pass. The resistor sets the damping: too little
 and the step rings, too much and it crawls.
 
+<img src="figures/circuit-rlc.svg" alt="Schematic of the RLC low-pass: source Vin, series R1 and L1, capacitor C1 across the output." />
+
 
 ``` r
 rlc <- "rlc low-pass
