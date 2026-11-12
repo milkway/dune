@@ -1,0 +1,30 @@
+# Dune's architecture: one engine (dune-core) between the crates that
+# read circuits and write results, and the five interfaces built on it.
+# Render: rpic --prelude theme=<rpic skill>/assets/editorial-light.pic --svg -o architecture.svg architecture.pic
+margin = 0.05
+box wid 9.7 ht 4.2 at (4.2, -1.6) outlined paper shaded paper rad 0.1       # the sheet
+group("RUST CRATES", wid 9.3 ht 1.3 at (4.2, -1.2))
+group("INTERFACES", wid 9.3 ht 1.15 at (4.2, -2.925))
+
+# inputs
+Fig:  ext("pic figure" "schematic as text" mono small, at (0.9, 0))
+Deck: ext("SPICE deck" ".cir netlist" mono small, at (3.1, 0))
+
+# the crates
+Pic:  node("dune-pic" "netlist from a figure" mono small, wid 1.8 at (0.9, -1.3))
+Net:  node("dune-netlist" "SPICE3f5 parser" mono small, wid 1.7 at (3.1, -1.3))
+Core: focal("dune-core" "devices · analyses · solver" mono small, wid 2.1 at (5.7, -1.3))
+Raw:  node("dune-raw" "rawfiles" mono small, wid 1.3 at (8.05, -1.3))
+flow(Fig.s, Pic.n)
+flow(Deck.s, Net.n)
+flow(Pic.e, Net.w, "deck")
+flowhot(Net.e, Core.w, "circuit")
+flow(Core.e, Raw.w, "plots")
+
+# the interfaces
+Cli: node("dune" "command line" mono small, wid 1.5 at (0.6, -3.0))
+Py:  node("spice3" "Python" mono small, wid 1.5 at (2.4, -3.0))
+R:   node("spice" "R" mono small, wid 1.5 at (4.2, -3.0))
+Js:  node("dune-sim" "JavaScript · WebAssembly" mono small, wid 1.9 at (6.2, -3.0))
+C:   node("dune-ffi" "C" mono small, wid 1.1 at (8.0, -3.0))
+flow((5.7, -2.35), Core.s, "one engine under every interface", 0.3)

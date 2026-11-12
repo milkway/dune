@@ -149,6 +149,9 @@
      themes, so the hairline strokes keep their contrast on the dark page. */
   .canvas .fig { flex: 1; display: flex; align-items: center; justify-content: center; padding: 18px 14px; background: #f7f1e3; color: #241c0e; }
   .canvas .fig svg { width: 100%; max-width: 320px; height: auto; }
+  .diagram { margin: 18px 0 0; }
+  .diagram img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  .diagram figcaption { color: var(--muted); font-size: 14px; margin-top: 8px; max-width: 76ch; }
   .panel {
     background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden;
@@ -249,6 +252,21 @@ C1 out 0 1n
           <span><span class="sw" style="background:var(--trace-2)"></span>v(in)</span>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <h2>One engine, every interface</h2>
+      <p class="sub">A circuit arrives as a SPICE deck or as a schematic written in pic; one engine simulates it, whichever package you call it from — the same deck gives the same numbers in all of them.</p>
+      <figure class="diagram">
+        <img src="diagrams/architecture.svg" alt="Architecture of Dune: a pic figure goes through dune-pic and a SPICE deck through dune-netlist into dune-core, the engine with the devices, analyses and solver; dune-raw writes rawfiles. The command line, the Python package spice3, the R package spice, the JavaScript package dune-sim and the C library dune-ffi all sit on that one engine.">
+        <figcaption>The crates and the packages built on them. <code>dune-core</code> is the only place where circuits are solved.</figcaption>
+      </figure>
+      <figure class="diagram">
+        <img src="diagrams/simulation.svg" alt="How a simulation runs: the deck is parsed and built into a circuit; for every point of an analysis the devices are linearized, the linear system is solved by LU factorization and convergence is tested against reltol, abstol and vntol, iterating until it holds; an accepted point goes to the results and the loop moves to the next timepoint, frequency or sweep value.">
+        <figcaption>What happens to a deck. Every point of every analysis is a Newton–Raphson loop: linearize the devices, solve, test convergence at SPICE's tolerances.</figcaption>
+      </figure>
     </div>
   </section>
 

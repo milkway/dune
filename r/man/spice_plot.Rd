@@ -45,8 +45,9 @@ of the scale for complex plots, whose scale is real by
 construction);
 \item \code{variable} (chr) and \code{type} (chr): the vector's name and type;
 \item for real plots, \code{value} (dbl);
-\item for complex plots, \code{re} and \code{im} (dbl) instead of \code{value}. No
-magnitude or phase is derived for you: use \code{Mod(complex(real = re, imaginary = im))}, \code{Arg()}, or \code{20 * log10()} of the modulus.
+\item for complex plots, instead of \code{value}: \code{re} and \code{im} (dbl), and
+derived from them \code{mag} (the modulus), \code{db} (\code{20 * log10(mag)})
+and \code{phase} (the argument, in degrees).
 }
 
 This is the long ("tidy") layout \code{ggplot2} expects:

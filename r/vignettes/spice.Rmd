@@ -27,6 +27,8 @@ A deck is ordinary SPICE3 input. The first line is the title; the
 analysis cards (`.tran`, `.ac`, ...) say what to compute. Here it is
 given as text; `spice_run()` equally accepts the path of a `.cir` file.
 
+<img src="figures/circuit-rlc.svg" alt="Schematic of the RLC low-pass: source Vin, series R1 and L1, capacitor C1 across the output." />
+
 ```{r deck}
 deck <- "RLC low-pass
 vin in 0 pulse(0 1 0 1u) ac 1
@@ -57,27 +59,38 @@ tight <- spice_run(deck, options = list(reltol = 1e-5, method = "gear"))
 
 `spice_tidy()` (or `tibble::as_tibble()` of one plot) returns the long
 format: one row per point and variable, with the plot's scale repeated
-on every row.
+on every row. Its second argument picks plots, by label or by a short
+name of the analysis (`"op"`, `"dc"`, `"tran"`, `"ac"`, ...).
 
 ```{r tidy}
-tran <- spice_tidy(res, plots = "Transient Analysis")
+tran <- spice_tidy(res, "tran")
 tran
 ```
 
-The AC plot is complex, so it has `re` and `im` columns instead of
-`value`; derive whatever you need from them.
+The third argument picks variables; a bare node name stands for its
+voltage. The AC plot is complex, so instead of `value` it has `re` and
+`im`, and with them `mag`, `db` and `phase` (in degrees).
 
 ```{r ac}
-ac <- spice_tidy(res, plots = "AC Analysis")
-ac$db <- 20 * log10(Mod(complex(real = ac$re, imaginary = ac$im)))
-ac[ac$variable == "v(out)", c("scale", "db")]
+ac <- res |> spice_tidy("ac", "out")
+ac[, c("scale", "db", "phase")]
+```
+
+`spice_wide()` is the other layout, for arithmetic between signals:
+one row per point, the scale first and one column per variable.
+
+```{r wide}
+w <- res |> spice_wide("tran")
+w
+# The largest voltage across the inductor
+max(abs(w$`v(mid)` - w$`v(out)`))
 ```
 
 ## Plotting the transient
 
 ```{r plot, eval = has_ggplot2, fig.width = 6.5, fig.height = 3.5}
 library(ggplot2)
-volts <- tran[tran$type == "voltage", ]
+volts <- res |> spice_tidy("tran", c("in", "out"))
 ggplot(volts, aes(scale * 1e3, value, colour = variable)) +
   geom_line() +
   labs(x = "time (ms)", y = "voltage (V)", colour = NULL,
@@ -142,7 +155,7 @@ line from R2.N to V1.N; ground(V1.N)
 .PE"
 p <- spice_pic(fig)
 cat(p$netlist)
-spice_plots(spice_run(p))[[1]]$values[["v(out)"]]
+spice_run(p) |> spice_op("out")
 p$map$pins
 ```
 

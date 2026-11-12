@@ -25,9 +25,9 @@
 #'   construction);
 #' * `variable` (chr) and `type` (chr): the vector's name and type;
 #' * for real plots, `value` (dbl);
-#' * for complex plots, `re` and `im` (dbl) instead of `value`. No
-#'   magnitude or phase is derived for you: use `Mod(complex(real = re,
-#'   imaginary = im))`, `Arg()`, or `20 * log10()` of the modulus.
+#' * for complex plots, instead of `value`: `re` and `im` (dbl), and
+#'   derived from them `mag` (the modulus), `db` (`20 * log10(mag)`)
+#'   and `phase` (the argument, in degrees).
 #'
 #' This is the long ("tidy") layout `ggplot2` expects:
 #' `ggplot(df, aes(scale, value, colour = variable)) + geom_line()`.
@@ -108,6 +108,9 @@ as_tibble.spice_plot <- function(x, ...) {
   if (is_complex_plot(x)) {
     out$re <- Re(vals)
     out$im <- Im(vals)
+    out$mag <- Mod(vals)
+    out$db <- 20 * log10(out$mag)
+    out$phase <- Arg(vals) * 180 / pi
   } else {
     out$value <- as.double(vals)
   }
@@ -122,41 +125,54 @@ as_tibble.spice_plot <- function(x, ...) {
 #' columns (one column per parameter, constant within a run): group by
 #' `run` for one curve per run. When the
 #' result mixes real and complex plots (e.g. a deck with `.tran` and
-#' `.ac`), the tibble has all of `value`, `re` and `im`, with `NA`
-#' where a column does not apply; otherwise only the columns of its
-#' kind. See [spice_plot] for the columns.
+#' `.ac`), the tibble has `value` and the complex columns (`re`, `im`,
+#' `mag`, `db`, `phase`), with `NA` where a column does not apply;
+#' otherwise only the columns of its kind. See [spice_plot] for the
+#' columns.
+#'
+#' @section Selecting plots and variables:
+#' `plots` takes the labels of [spice_plots()], their positions, or a
+#' short name of the analysis, which selects every plot of that kind:
+#'
+#' | short name | plot |
+#' |---|---|
+#' | `"op"` | Operating Point |
+#' | `"dc"` | DC transfer characteristic |
+#' | `"tran"` | Transient Analysis |
+#' | `"ac"` | AC Analysis |
+#' | `"noise"` | Noise Spectral Density Curves |
+#' | `"inoise"` | Integrated Noise |
+#' | `"tf"` | Transfer Function |
+#' | `"pz"` | Pole-Zero Analysis |
+#' | `"sens"` | Sensitivity Analysis |
+#' | `"sp"` | SP Analysis |
+#' | `"pss"` | Time Domain Periodic Steady State Analysis |
+#' | `"pss_spectrum"` | Frequency Domain Periodic Steady State Analysis |
+#'
+#' `vars` keeps the named variables, matched without regard to case; a
+#' bare node name stands for its voltage (`"out"` is `"v(out)"`).
 #'
 #' @param result A `spice_result`, or a `spice_sweep`.
-#' @param plots Optional: labels or indices of the plots to keep.
+#' @param plots Optional: labels, short names (see below) or indices of
+#'   the plots to keep.
+#' @param vars Optional: names of the variables to keep.
 #' @return A tibble.
+#' @seealso [spice_wide()] for one column per variable, [spice_op()]
+#'   for the operating point as a named vector.
 #' @export
 #' @examples
 #' res <- spice_run("rc\nvin 1 0 pulse(0 1)\nr1 1 2 1k\nc1 2 0 1u\n.tran 0.1m 5m\n.end")
 #' spice_tidy(res)
-spice_tidy <- function(result, plots = NULL) {
+#' res |> spice_tidy("tran", "v(2)")
+spice_tidy <- function(result, plots = NULL, vars = NULL) {
+  call <- rlang::current_env()
   if (inherits(result, "spice_sweep")) {
-    return(sweep_tidy(result, plots))
+    return(sweep_tidy(result, plots, vars))
   }
   check_result(result)
-  ps <- result$plots
-  if (!is.null(plots)) {
-    bad <- if (is.character(plots)) {
-      setdiff(plots, names(ps))
-    } else if (is.numeric(plots)) {
-      plots[plots < 1 | plots > length(ps) | plots != round(plots)]
-    } else {
-      plots
-    }
-    if (length(bad) > 0L) {
-      cli::cli_abort(
-        c(
-          "{.arg plots} must name or index plots of {.arg result}.",
-          "i" = "Plots: {.val {names(ps)}}."
-        ),
-        class = c("spice_error_input", "spice_error")
-      )
-    }
-    ps <- ps[plots]
+  ps <- select_plots(result$plots, plots, call = call)
+  if (!is.null(vars)) {
+    ps <- select_vars(ps, vars, call = call)
   }
   if (length(ps) == 0L) {
     return(tibble::tibble(
@@ -168,15 +184,197 @@ spice_tidy <- function(result, plots = NULL) {
   parts <- lapply(ps, as_tibble.spice_plot)
   cx <- vapply(ps, is_complex_plot, logical(1))
   if (any(cx) && !all(cx)) {
+    cols <- c("value", "re", "im", "mag", "db", "phase")
     parts <- lapply(parts, function(t) {
-      for (col in c("value", "re", "im")) {
+      for (col in cols) {
         if (is.null(t[[col]])) t[[col]] <- rep(NA_real_, nrow(t))
       }
-      t[c("plot", "point", "scale_name", "scale", "variable", "type", "value", "re", "im")]
+      t[c("plot", "point", "scale_name", "scale", "variable", "type", cols)]
     })
   }
   out <- do.call(rbind, unname(parts))
   tibble::as_tibble(out)
+}
+
+# The short names of `spice_tidy()`'s `plots`: the rawfile plotname of
+# each analysis.
+plot_aliases <- c(
+  op = "Operating Point",
+  dc = "DC transfer characteristic",
+  tran = "Transient Analysis",
+  ac = "AC Analysis",
+  noise = "Noise Spectral Density Curves",
+  inoise = "Integrated Noise",
+  tf = "Transfer Function",
+  pz = "Pole-Zero Analysis",
+  sens = "Sensitivity Analysis",
+  sp = "SP Analysis",
+  pss = "Time Domain Periodic Steady State Analysis",
+  pss_spectrum = "Frequency Domain Periodic Steady State Analysis"
+)
+
+# The plots of `ps` (a named list of `spice_plot`) that `plots` selects:
+# labels, short names (every plot of that analysis) or positions.
+select_plots <- function(ps, plots, call = rlang::caller_env()) {
+  if (is.null(plots)) {
+    return(ps)
+  }
+  bad <- function() {
+    cli::cli_abort(
+      c(
+        "{.arg plots} must name or index plots of {.arg result}.",
+        "i" = "Plots: {.val {names(ps)}}.",
+        "i" = "Short names: {.val {names(plot_aliases)}}."
+      ),
+      class = c("spice_error_input", "spice_error"),
+      call = call
+    )
+  }
+  if (is.numeric(plots)) {
+    if (any(plots < 1 | plots > length(ps) | plots != round(plots))) bad()
+    return(ps[plots])
+  }
+  if (!is.character(plots) || anyNA(plots)) bad()
+  plotnames <- vapply(ps, function(p) p$plotname, character(1))
+  idx <- integer()
+  for (key in plots) {
+    hit <- which(names(ps) == key)
+    if (length(hit) == 0L && tolower(key) %in% names(plot_aliases)) {
+      hit <- which(plotnames == plot_aliases[[tolower(key)]])
+    }
+    if (length(hit) == 0L) bad()
+    idx <- c(idx, hit)
+  }
+  ps[unique(idx)]
+}
+
+# The positions in `names` (a plot's vectors) that `vars` selects:
+# case-insensitive, a bare node name standing for its voltage.
+match_vars <- function(names, vars) {
+  low <- tolower(names)
+  key <- tolower(vars)
+  which(low %in% key | low %in% paste0("v(", key, ")"))
+}
+
+# `ps` with only the vectors `vars` selects (and each plot's scale).
+# Every entry of `vars` must select something in at least one plot.
+select_vars <- function(ps, vars, call = rlang::caller_env()) {
+  if (!is.character(vars) || anyNA(vars)) {
+    cli::cli_abort(
+      "{.arg vars} must be a character vector of variable names.",
+      class = c("spice_error_input", "spice_error"),
+      call = call
+    )
+  }
+  all_names <- unique(unlist(lapply(ps, function(p) p$variables$name)))
+  missing <- vars[vapply(vars, function(v) length(match_vars(all_names, v)) == 0L, logical(1))]
+  if (length(missing) > 0L) {
+    cli::cli_abort(
+      c(
+        "{.arg vars} names {cli::qty(length(missing))}variable{?s} the selected plot{?s} do{?es/} not have: {.val {missing}}.",
+        "i" = "Variables: {.val {all_names}}."
+      ),
+      class = c("spice_error_input", "spice_error"),
+      call = call
+    )
+  }
+  lapply(ps, function(p) {
+    keep <- match_vars(p$variables$name, vars)
+    if (!is.na(p$scale)) keep <- union(which(p$variables$name == p$scale), keep)
+    keep <- sort(keep)
+    p$variables <- p$variables[keep, ]
+    p$values <- p$values[keep]
+    p
+  })
+}
+
+#' One plot with a column per variable
+#'
+#' The wide layout: one row per point, the plot's scale first (`time`,
+#' `frequency`, the swept source, ...) and then one column per
+#' variable, named as the variable. Columns of a complex plot (`.ac`)
+#' are complex vectors, so `Mod()`, `Arg()` and arithmetic between
+#' signals work directly. Use it when the computation is across
+#' variables (`` `v(out)` - `v(in)` ``); [spice_tidy()] is the layout
+#' 'ggplot2' wants.
+#'
+#' @param result A `spice_result`, or a `spice_plot`.
+#' @param plot The plot: a label, short name (see [spice_tidy()]) or
+#'   position. Optional when the result has a single plot.
+#' @param vars Optional: names of the variables to keep, as in
+#'   [spice_tidy()].
+#' @return A tibble with `nrow` = the plot's points.
+#' @export
+#' @examples
+#' res <- spice_run("rc\nvin 1 0 pulse(0 1)\nr1 1 2 1k\nc1 2 0 1u\n.tran 0.1m 5m\n.end")
+#' w <- res |> spice_wide("tran")
+#' w
+#' # The voltage across r1
+#' w$`v(1)` - w$`v(2)`
+spice_wide <- function(result, plot = NULL, vars = NULL) {
+  call <- rlang::current_env()
+  if (inherits(result, "spice_plot")) {
+    ps <- list(result)
+  } else {
+    check_result(result)
+    ps <- select_plots(result$plots, plot, call = call)
+    if (length(ps) != 1L) {
+      cli::cli_abort(
+        c(
+          "{.fn spice_wide} takes one plot, and {.arg plot} selects {length(ps)}.",
+          "i" = "Plots: {.val {names(result$plots)}}."
+        ),
+        class = c("spice_error_input", "spice_error"),
+        call = call
+      )
+    }
+  }
+  if (!is.null(vars)) {
+    ps <- select_vars(ps, vars, call = call)
+  }
+  p <- ps[[1L]]
+  values <- p$values
+  if (!is.na(p$scale)) {
+    values[[p$scale]] <- as.double(Re(values[[p$scale]]))
+    values <- values[c(p$scale, setdiff(names(values), p$scale))]
+  }
+  tibble::as_tibble(values, .name_repair = "minimal")
+}
+
+#' The operating point as a named vector
+#'
+#' The values of a result's operating-point plot (`.op`), named by
+#' variable: node voltages and source currents.
+#'
+#' @param result A `spice_result` with an operating point.
+#' @param vars Optional: names of the variables to keep, as in
+#'   [spice_tidy()], in the order of the plot.
+#' @return A named double vector.
+#' @export
+#' @examples
+#' res <- spice_run("divider\nv1 1 0 dc 10\nr1 1 2 1k\nr2 2 0 3k\n.op\n.end")
+#' spice_op(res)
+#' res |> spice_op("v(2)")
+spice_op <- function(result, vars = NULL) {
+  call <- rlang::current_env()
+  check_result(result)
+  plotnames <- vapply(result$plots, function(p) p$plotname, character(1))
+  hit <- which(plotnames == plot_aliases[["op"]])
+  if (length(hit) == 0L) {
+    cli::cli_abort(
+      c(
+        "{.arg result} has no operating point.",
+        "i" = "Add a {.code .op} card to the deck. Plots: {.val {names(result$plots)}}."
+      ),
+      class = c("spice_error_input", "spice_error"),
+      call = call
+    )
+  }
+  ps <- result$plots[hit[1L]]
+  if (!is.null(vars)) {
+    ps <- select_vars(ps, vars, call = call)
+  }
+  vapply(ps[[1L]]$values, function(v) as.double(v[[1L]]), double(1))
 }
 
 plot_summary <- function(x) {

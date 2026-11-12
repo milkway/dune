@@ -24,6 +24,8 @@ a signal that is too large.
 
 ## The circuit
 
+<img src="figures/circuit-amplifier.svg" alt="Schematic of the common-emitter amplifier: divider bias R1 and R2, collector resistor Rc, emitter resistor Re bypassed by Ce, input through Rs and Cin, output through Cout into Rl." />
+
 
 ``` r
 amp <- "common-emitter amplifier
@@ -58,18 +60,13 @@ res
 
 ## Bias
 
-The operating point is one row per node voltage and source current.
+`spice_op()` gives the operating point as a named vector.
 
 
 ``` r
-op <- spice_tidy(res, plots = "Operating Point")
-op[op$variable %in% c("v(b)", "v(e)", "v(c)"), c("variable", "value")]
-#> # A tibble: 3 × 2
-#>   variable value
-#>   <chr>    <dbl>
-#> 1 v(b)      2.05
-#> 2 v(c)      5.51
-#> 3 v(e)      1.39
+res |> spice_op(c("b", "e", "c"))
+#>     v(b)     v(c)     v(e) 
+#> 2.050245 5.510875 1.387337
 ```
 
 The collector sits near mid-supply, with about 1.4 mA through the
@@ -77,14 +74,13 @@ transistor (`v(e)` across the 1 kOhm emitter resistor).
 
 ## Gain and bandwidth
 
-The AC plot is complex; magnitude in dB is one line of R. `.measure`
+The AC plot is complex; its tidy table carries the magnitude, the gain
+in dB and the phase in degrees. `.measure`
 expressions work on a finished plot too, through `spice_measure()`.
 
 
 ``` r
-ac <- spice_tidy(res, plots = "AC Analysis")
-out <- ac[ac$variable == "v(out)", ]
-out$db <- 20 * log10(Mod(complex(real = out$re, imaginary = out$im)))
+out <- res |> spice_tidy("ac", "out")
 
 ggplot(out, aes(scale, db)) +
   geom_line(colour = "#b8741a", linewidth = 0.8) +
@@ -125,7 +121,7 @@ input, and their integrals over the sweep.
 
 
 ``` r
-nz <- spice_tidy(res, plots = "Noise Spectral Density Curves")
+nz <- spice_tidy(res, "noise")
 ggplot(nz, aes(scale, value * 1e9, colour = variable)) +
   geom_line(linewidth = 0.8) +
   scale_x_log10() + scale_y_log10() +
@@ -139,7 +135,7 @@ ggplot(nz, aes(scale, value * 1e9, colour = variable)) +
 
 ``` r
 
-spice_tidy(res, plots = "Integrated Noise")[, c("variable", "value")]
+spice_tidy(res, "inoise")[, c("variable", "value")]
 #> # A tibble: 2 × 2
 #>   variable             value
 #>   <chr>                <dbl>
@@ -158,8 +154,8 @@ lets one alter a source and run again.
 s <- spice_session(amp)
 run_at <- function(amplitude) {
   spice_alter(s, "vin", sin = c(0, amplitude, 1e3))
-  tr <- spice_tidy(spice_rerun(s), plots = "Transient Analysis")
-  tr <- tr[tr$variable == "v(out)", c("scale", "value")]
+  tr <- spice_rerun(s) |> spice_tidy("tran", "out")
+  tr <- tr[, c("scale", "value")]
   tr$drive <- sprintf("%g mV", amplitude * 1e3)
   tr
 }

@@ -24,7 +24,12 @@ home:
 navbar:
   structure:
     left: [intro, reference, articles, news]
-    right: [search, github]
+    right: [search, dune, github]
+  components:
+    dune:
+      text: Dune
+      href: https://milkway.github.io/dune/
+      aria-label: Dune, the engine
 
 articles:
   - title: Guides
@@ -51,6 +56,8 @@ reference:
     contents:
       - spice_plots
       - spice_tidy
+      - spice_wide
+      - spice_op
       - spice_measure
       - autoplot.spice_plot
       - as_tibble.spice_plot

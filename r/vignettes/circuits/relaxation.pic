@@ -1,0 +1,23 @@
+.PS
+linethick = 1.4
+# The relaxation oscillator of vignette("defaults"): the switch across
+# the capacitor is controlled by the capacitor's own voltage.
+spice = 1
+N1: (0.3,1.5)
+N2: (1.8,1.5)
+
+Vdd: vsource(N1, (0.3,0), DC 10, "Vdd")
+R1: resistor(N1, N2, 10k, "R1")
+C1: capacitor(N2, (1.8,0), 100n IC=0, "C1")
+S1: switch((3,1.5), (3,0), SDIS)
+
+line from N2 to S1.P
+line from S1.Cp to (S1.Cp.x,1.5) then to S1.P
+line from S1.Cn to (S1.Cn.x,0) then to S1.N
+line from Vdd.N to S1.N
+dot at N2; dot at C1.N; dot at S1.P; dot at S1.N
+"1" above at N1 + (0,0.05)
+"2" above at N2 + (0,0.05)
+ground((1.0,0))
+.model SDIS SW VT=5 VH=2 RON=100 ROFF=1e9
+.PE

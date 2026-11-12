@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="817.917857" height="360.632143" viewBox="0 0 817.917857 360.632143" font-family="sans-serif" font-size="14.666667" fill="none">
+<g id="s0">
+<rect x="5.196429" y="4.676786" width="806.485715" height="349.2" rx="8.314286" fill="#f5f5f5" stroke="#f5f5f5" stroke-width="1.2"/>
+</g>
+<g id="s1">
+<rect x="21.825" y="91.976786" width="773.228572" height="108.085714" rx="8.314286" fill="#ececec" stroke="#d9dadf" stroke-width="1.2"/>
+</g>
+<g id="s2">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="35.24115" y="108.986234" text-anchor="start">RUST CRATES</text>
+</g>
+<g id="s3">
+<rect x="21.825" y="241.633929" width="773.228572" height="95.614286" rx="8.314286" fill="#ececec" stroke="#d9dadf" stroke-width="1.2"/>
+</g>
+<g id="s4">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="35.24115" y="258.643377" text-anchor="start">INTERFACES</text>
+</g>
+<g id="s5">
+<rect x="71.710714" y="23.383929" width="124.714286" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="4.85,3.464286"/>
+</g>
+<g id="s6">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#5a6580" x="134.067857" y="45.994167" text-anchor="middle">pic figure</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="134.067857" y="58.696548" text-anchor="middle">schematic as text</text>
+</g>
+<g id="s7">
+<rect x="254.625" y="23.383929" width="124.714286" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="4.85,3.464286"/>
+</g>
+<g id="s8">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#5a6580" x="316.982143" y="45.994167" text-anchor="middle">SPICE deck</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="316.982143" y="58.696548" text-anchor="middle">.cir netlist</text>
+</g>
+<g id="s9">
+<rect x="59.239286" y="131.469643" width="149.657143" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s10">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="134.067857" y="154.079881" text-anchor="middle">dune-pic</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="134.067857" y="166.782262" text-anchor="middle">netlist from a figure</text>
+</g>
+<g id="s11">
+<rect x="246.310714" y="131.469643" width="141.342857" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s12">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="316.982143" y="154.079881" text-anchor="middle">dune-netlist</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="316.982143" y="166.782262" text-anchor="middle">SPICE3f5 parser</text>
+</g>
+<g id="s13">
+<rect x="445.853572" y="131.469643" width="174.6" height="45.728571" rx="4.988571" fill="#f1e7e4" stroke="#bf4520" stroke-width="1.866667"/>
+</g>
+<g id="s14">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="533.153572" y="154.079881" text-anchor="middle">dune-core</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="533.153572" y="166.782262" text-anchor="middle">devices · analyses · solver</text>
+</g>
+<g id="s15">
+<rect x="674.496429" y="131.469643" width="108.085714" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s16">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="728.539286" y="154.079881" text-anchor="middle">dune-raw</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="728.539286" y="166.782262" text-anchor="middle">rawfiles</text>
+</g>
+<g id="s17">
+<line x1="134.067857" y1="69.1125" x2="134.067857" y2="129.65339" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="136.977857,123.155357 134.067857,131.469643 131.157857,123.155357" fill="#4f5d75"/>
+</g>
+<g id="s18">
+<line x1="316.982143" y1="69.1125" x2="316.982143" y2="129.65339" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="319.892143,123.155357 316.982143,131.469643 314.072143,123.155357" fill="#4f5d75"/>
+</g>
+<g id="s19">
+<line x1="208.896429" y1="154.333929" x2="244.494461" y2="154.333929" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="237.996429,151.423929 246.310714,154.333929 237.996429,157.243929" fill="#4f5d75"/>
+</g>
+<g id="s20">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="227.603572" y="150.420119" text-anchor="middle">deck</text>
+</g>
+<g id="s21">
+<line x1="387.653572" y1="154.333929" x2="443.028289" y2="154.333929" stroke="#bf4520" stroke-width="1.866667"/>
+<polygon stroke-width="0" points="437.539286,151.423929 445.853572,154.333929 437.539286,157.243929" fill="#bf4520"/>
+</g>
+<g id="s22">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="416.753572" y="150.420119" text-anchor="middle">circuit</text>
+</g>
+<g id="s23">
+<line x1="620.453572" y1="154.333929" x2="672.680176" y2="154.333929" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="666.182143,151.423929 674.496429,154.333929 666.182143,157.243929" fill="#4f5d75"/>
+</g>
+<g id="s24">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="647.475" y="150.420119" text-anchor="middle">plots</text>
+</g>
+<g id="s25">
+<rect x="46.767857" y="272.8125" width="124.714286" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s26">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="109.125" y="295.422738" text-anchor="middle">dune</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="109.125" y="308.125119" text-anchor="middle">command line</text>
+</g>
+<g id="s27">
+<rect x="196.425" y="272.8125" width="124.714286" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s28">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="258.782143" y="295.422738" text-anchor="middle">spice3</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="258.782143" y="308.125119" text-anchor="middle">Python</text>
+</g>
+<g id="s29">
+<rect x="346.082143" y="272.8125" width="124.714286" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s30">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="408.439286" y="295.422738" text-anchor="middle">spice</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="408.439286" y="308.125119" text-anchor="middle">R</text>
+</g>
+<g id="s31">
+<rect x="495.739286" y="272.8125" width="157.971429" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s32">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="574.725" y="295.422738" text-anchor="middle">dune-sim</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="574.725" y="308.125119" text-anchor="middle">JavaScript · WebAssembly</text>
+</g>
+<g id="s33">
+<rect x="678.653572" y="272.8125" width="91.457143" height="45.728571" rx="4.988571" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s34">
+<text font-size="9.526786pt" stroke-width="0.266667" fill="#2d3142" x="724.382143" y="295.422738" text-anchor="middle">dune-ffi</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="724.382143" y="308.125119" text-anchor="middle">C</text>
+</g>
+<g id="s35">
+<line x1="533.153572" y1="241.633929" x2="533.153572" y2="179.014468" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="530.243572,185.5125 533.153572,177.198214 536.063572,185.5125" fill="#4f5d75"/>
+</g>
+<g id="s36">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="539.977381" y="225.237464" text-anchor="start">one engine under every interface</text>
+</g>
+</svg>

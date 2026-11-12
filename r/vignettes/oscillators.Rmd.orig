@@ -35,6 +35,8 @@ source to set the frequency, the period is one of the unknowns.
 An LC tank with a capacitive divider around one transistor. The supply
 ramp of `vee` kicks it off.
 
+<img src="figures/circuit-colpitts.svg" alt="Schematic of the Colpitts oscillator: transistor Q1 with the tank L1, C1 and C2 between collector, emitter and the supply, emitter resistor Re to the negative supply Vee." />
+
 ```{r deck}
 colpitts <- "colpitts oscillator
 .model qnl npn(bf=80 rb=100 ccs=2pf tf=0.3ns tr=6ns cje=3pf cjc=2pf va=50)
@@ -101,8 +103,7 @@ crossings.
 
 ```{r tran}
 long <- spice_run(sub(".end", ".tran 1n 600u 597u\n.end", colpitts, fixed = TRUE))
-v <- spice_tidy(long, plots = "Transient Analysis")
-v <- v[v$variable == "v(3)", ]
+v <- long |> spice_tidy("tran", "v(3)")
 mid <- mean(range(v$value))
 up <- which(v$value[-1] > mid & v$value[-nrow(v)] <= mid)
 t_up <- v$scale[up] + (mid - v$value[up]) / (v$value[up + 1] - v$value[up]) *

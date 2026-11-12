@@ -15,9 +15,10 @@ from pathlib import Path
 import spice
 
 result = spice.simulate(Path("rc.cir"))
-plot = result.plot("Transient Analysis")
-df = plot.df()          # polars DataFrame, scale column first
-v2 = plot.column("v(2)")  # zero-copy, read-only numpy array
+plot = result.plot("tran")   # or "Transient Analysis"
+df = plot.df()               # polars DataFrame, scale column first
+df = plot.df("2")            # only v(2): a bare node is its voltage
+v2 = plot.column("v(2)")     # zero-copy, read-only numpy array
 ```
 
 - Every SPICE3f5 analysis: `.op`, `.dc`, `.tran`, `.ac`, `.pz`,
@@ -35,6 +36,14 @@ v2 = plot.column("v(2)")  # zero-copy, read-only numpy array
 - Faithful netlist semantics: decks that run under `spice3 -b` or
   `ngspice -b` run here, with structured, span-carrying errors.
 
-The engine, corpus and oracle harness live in the
+![How a simulation runs: the deck is parsed and built into a circuit; for every point of an analysis the devices are linearized, the linear system is solved and convergence is tested, iterating until it holds; an accepted point goes to the results.](https://milkway.github.io/dune/diagrams/simulation.svg)
+
+The same engine sits under the R package, the JavaScript package, the
+C library and the command line; a deck gives the same numbers in all
+of them.
+
+![Architecture of Dune: a pic figure goes through dune-pic and a SPICE deck through dune-netlist into dune-core, the engine; dune-raw writes rawfiles; the command line and the Python, R, JavaScript and C interfaces all sit on that one engine.](https://milkway.github.io/dune/diagrams/architecture.svg)
+
+Site: [milkway.github.io/dune](https://milkway.github.io/dune/). 
 [Dune repository](https://github.com/milkway/dune). BSD-3-Clause,
 © André Leite and The Regents of the University of California.

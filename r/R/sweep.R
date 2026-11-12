@@ -230,10 +230,10 @@ print.spice_sweep <- function(x, ...) {
   invisible(x)
 }
 
-sweep_tidy <- function(sweep, plots) {
+sweep_tidy <- function(sweep, plots, vars = NULL) {
   params <- sweep$params
   parts <- lapply(seq_along(sweep$runs), function(i) {
-    t <- spice_tidy(sweep$runs[[i]], plots = plots)
+    t <- spice_tidy(sweep$runs[[i]], plots = plots, vars = vars)
     lead <- params[rep(i, nrow(t)), , drop = FALSE]
     tibble::as_tibble(c(as.list(lead), as.list(t)))
   })

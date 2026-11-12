@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="817.552703" height="263.341892" viewBox="0 0 817.552703 263.341892" font-family="sans-serif" font-size="14.666667" fill="none">
+<g id="s0">
+<rect x="4.587838" y="4.129054" width="807.45946" height="253.248649" rx="7.340541" fill="#f5f5f5" stroke="#f5f5f5" stroke-width="1.2"/>
+</g>
+<g id="s1">
+<rect x="26.609459" y="108.731757" width="638.627028" height="128.45946" rx="7.340541" fill="#ececec" stroke="#d9dadf" stroke-width="1.2"/>
+</g>
+<g id="s2">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="653.079285" y="123.749107" text-anchor="end">EVERY POINT OF AN ANALYSIS</text>
+</g>
+<g id="s3">
+<rect x="44.960811" y="18.810135" width="124.789189" height="40.372973" rx="4.404324" fill="#f5f5f5" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="4.281982,3.058559"/>
+</g>
+<g id="s4">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#5a6580" x="107.355405" y="38.772327" text-anchor="middle">Deck</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="107.355405" y="49.987042" text-anchor="middle">cards and models</text>
+</g>
+<g id="s5">
+<rect x="206.452703" y="18.810135" width="124.789189" height="40.372973" rx="4.404324" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s6">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#2d3142" x="268.847297" y="38.772327" text-anchor="middle">Parse</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="268.847297" y="49.987042" text-anchor="middle">syntax of SPICE3f5</text>
+</g>
+<g id="s7">
+<rect x="364.274325" y="18.810135" width="132.12973" height="40.372973" rx="4.404324" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s8">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#2d3142" x="430.33919" y="38.772327" text-anchor="middle">Build the circuit</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="430.33919" y="49.987042" text-anchor="middle">devices and matrix</text>
+</g>
+<g id="s9">
+<line x1="169.75" y1="38.996622" x2="204.63645" y2="38.996622" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="199.112162,36.427432 206.452703,38.996622 199.112162,41.565811" fill="#4f5d75"/>
+</g>
+<g id="s10">
+<line x1="331.241892" y1="38.996622" x2="362.458071" y2="38.996622" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="356.933784,36.427432 364.274325,38.996622 356.933784,41.565811" fill="#4f5d75"/>
+</g>
+<g id="s11">
+<rect x="44.960811" y="136.258784" width="124.789189" height="40.372973" rx="4.404324" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s12">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#2d3142" x="107.355405" y="156.220976" text-anchor="middle">Load</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="107.355405" y="167.435691" text-anchor="middle">linearize devices</text>
+</g>
+<g id="s13">
+<rect x="191.771622" y="136.258784" width="110.108108" height="40.372973" rx="4.404324" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s14">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#2d3142" x="246.825676" y="156.220976" text-anchor="middle">Solve</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="246.825676" y="167.435691" text-anchor="middle">LU factorization</text>
+</g>
+<g id="s15">
+<rect x="323.901352" y="136.258784" width="154.151351" height="40.372973" rx="4.404324" fill="#f1e7e4" stroke="#bf4520" stroke-width="1.866667"/>
+</g>
+<g id="s16">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#2d3142" x="400.977027" y="156.220976" text-anchor="middle">Converged?</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="400.977027" y="167.435691" text-anchor="middle">reltol · abstol · vntol</text>
+</g>
+<g id="s17">
+<rect x="522.095946" y="136.258784" width="124.789189" height="40.372973" rx="4.404324" fill="#f5f5f5" stroke="#2d3142" stroke-width="1.2"/>
+</g>
+<g id="s18">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#2d3142" x="584.490541" y="156.220976" text-anchor="middle">Accept the point</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="584.490541" y="167.435691" text-anchor="middle">error control</text>
+</g>
+<g id="s19">
+<rect x="690.928379" y="136.258784" width="110.108108" height="40.372973" rx="4.404324" fill="#ececec" stroke="#4f5d75" stroke-width="1.2"/>
+</g>
+<g id="s20">
+<text font-size="8.411036pt" stroke-width="0.266667" fill="#2d3142" x="745.982433" y="156.220976" text-anchor="middle">Results</text>
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#2d3142" x="745.982433" y="167.435691" text-anchor="middle">rawfile · tables</text>
+</g>
+<g id="s21">
+<polyline points="430.33919,59.183108 430.33919,84.507973 430.33919,84.507973 107.355405,84.507973 107.355405,84.507973 107.355405,134.442531" fill="none" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="109.924595,128.918243 107.355405,136.258784 104.786216,128.918243" fill="#4f5d75"/>
+</g>
+<g id="s22">
+<line x1="169.75" y1="156.44527" x2="189.955369" y2="156.44527" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="184.431081,153.876081 191.771622,156.44527 184.431081,159.01446" fill="#4f5d75"/>
+</g>
+<g id="s23">
+<line x1="301.87973" y1="156.44527" x2="322.085098" y2="156.44527" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="316.560811,153.876081 323.901352,156.44527 316.560811,159.01446" fill="#4f5d75"/>
+</g>
+<g id="s24">
+<line x1="478.052703" y1="156.44527" x2="519.270664" y2="156.44527" stroke="#bf4520" stroke-width="1.866667"/>
+<polygon stroke-width="0" points="514.755406,153.876081 522.095946,156.44527 514.755406,159.01446" fill="#bf4520"/>
+</g>
+<g id="s25">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="500.074325" y="152.677523" text-anchor="middle">yes</text>
+</g>
+<g id="s26">
+<polyline points="400.977027,176.631757 400.977027,200.488514 400.977027,200.488514 125.706757,200.488514 125.706757,200.488514 125.706757,178.44801" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="4.281982,3.058559"/>
+<polygon stroke-width="0" points="123.137568,183.972297 125.706757,176.631757 128.275946,183.972297" fill="#4f5d75"/>
+</g>
+<g id="s27">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="254.166216" y="197.20668" text-anchor="middle">no: iterate</text>
+</g>
+<g id="s28">
+<polyline points="584.490541,176.631757 584.490541,218.839865 584.490541,218.839865 89.004054,218.839865 89.004054,218.839865 89.004054,178.44801" fill="none" stroke="#4f5d75" stroke-width="1.2" stroke-dasharray="4.281982,3.058559"/>
+<polygon stroke-width="0" points="86.434865,183.972297 89.004054,176.631757 91.573243,183.972297" fill="#4f5d75"/>
+</g>
+<g id="s29">
+<text font-size="7.7pt" font-family="monospace" stroke-width="0.266667" fill="#5a6580" x="371.614865" y="215.558032" text-anchor="middle">next timepoint, frequency or sweep value</text>
+</g>
+<g id="s30">
+<line x1="646.885136" y1="156.44527" x2="689.112126" y2="156.44527" stroke="#4f5d75" stroke-width="1.2"/>
+<polygon stroke-width="0" points="683.587838,153.876081 690.928379,156.44527 683.587838,159.01446" fill="#4f5d75"/>
+</g>
+</svg>

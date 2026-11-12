@@ -34,6 +34,8 @@ asked, and returns everything as one tidy table.
 A second-order RLC low-pass. The resistor sets the damping: too little
 and the step rings, too much and it crawls.
 
+<img src="figures/circuit-rlc.svg" alt="Schematic of the RLC low-pass: source Vin, series R1 and L1, capacitor C1 across the output." />
+
 ```{r deck}
 rlc <- "rlc low-pass
 vin in 0 pulse(0 1 0 1u) ac 1
@@ -52,8 +54,7 @@ Critical damping is at
 
 ```{r damping}
 sw <- spice_sweep(rlc, r1 = c(10, 30, 63, 150))
-tr <- spice_tidy(sw)
-tr <- tr[tr$variable == "v(out)", ]
+tr <- sw |> spice_tidy(vars = "out")
 
 ggplot(tr, aes(scale * 1e3, value, colour = factor(r1))) +
   geom_line(linewidth = 0.7) +
@@ -76,8 +77,7 @@ mc <- spice_sweep(rlc,
   c1 = rnorm(n, 1e-6, 1e-6 * 0.10 / 3),
   .mode = "zip", .threads = 4
 )
-out <- spice_tidy(mc)
-out <- out[out$variable == "v(out)", ]
+out <- mc |> spice_tidy(vars = "out")
 peak <- tapply(out$value, out$run, max)
 summary((peak - 1) * 100)
 ```

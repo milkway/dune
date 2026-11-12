@@ -1,0 +1,21 @@
+.PS
+linethick = 1.4
+# The RLC low-pass of vignette("spice") and vignette("sweeps").
+spice = 1
+In:  (0.3,1.5)
+Mid: (1.6,1.5)
+Out: (2.9,1.5)
+
+Vin: vsource(In, (0.3,0), PULSE(0 1 0 1u) AC 1, "Vin")
+R1: resistor(In, Mid, 50, "R1")
+L1: inductor(Mid, Out, 1m, "L1")
+C1: capacitor(Out, (2.9,0), 1u, "C1")
+
+line from Vin.N to C1.N
+line from Out to (3.4,1.5); circle rad 0.04 at (3.44,1.5)
+dot at Out
+"in" above at In + (0,0.05)
+"mid" above at Mid + (0,0.05)
+"out" ljust at (3.5,1.5)
+ground((1.6,0))
+.PE

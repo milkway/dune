@@ -51,6 +51,8 @@ A relaxation oscillator: 10 V charges 100 nF through 10 kOhm, and a
 switch across the capacitor closes at 7 V and opens again at 3 V. Its
 period has a closed form.
 
+<img src="figures/circuit-relaxation.svg" alt="Schematic of the relaxation oscillator: Vdd charges C1 through R1, and a switch across C1 is controlled by the voltage of C1 itself." />
+
 ```{r deck}
 deck <- "relaxation oscillator
 vdd 1 0 10
@@ -73,8 +75,7 @@ voltage:
 
 ```{r periods}
 periods <- function(res) {
-  tran <- spice_tidy(res, plots = "Transient Analysis")
-  v <- tran[tran$variable == "v(2)", ]
+  v <- res |> spice_tidy("tran", "v(2)")
   i <- seq(2, nrow(v) - 1)
   peak <- i[v$value[i] >= v$value[i - 1] & v$value[i] > v$value[i + 1] &
     v$value[i] > 6]

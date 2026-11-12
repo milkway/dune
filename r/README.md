@@ -11,7 +11,7 @@
 <!-- badges: end -->
 
 spice runs SPICE3 circuit netlists from R and hands the results back
-as tidy data. The engine is [Dune](https://github.com/milkway/dune), a
+as tidy data. The engine is [Dune](https://milkway.github.io/dune/), a
 circuit simulator written in Rust and derived from Berkeley SPICE3f5,
 checked circuit by circuit against ngspice.
 
@@ -19,7 +19,9 @@ checked circuit by circuit against ngspice.
   AC, pole-zero, noise, distortion, transfer function and sensitivity,
   plus periodic steady state (`spice_pss()`).
 - **Every SPICE3f5 device**, and BSIM3v3.
-- **Long tibbles** out (`spice_tidy()`), ready for 'ggplot2';
+- **Long tibbles** out (`spice_tidy()`), ready for 'ggplot2', or one
+  column per variable (`spice_wide()`); plots picked by short name
+  (`"tran"`, `"ac"`) and variables by node;
   `autoplot()` for a quick look.
 - **Sessions and sweeps**: alter a part and rerun without rebuilding
   (`spice_session()`), or sweep parameters across threads
@@ -57,7 +59,9 @@ c1 out 0 1u
 .end"
 
 res <- spice_run(deck)
-spice_tidy(res, plots = "Transient Analysis")
+res |> spice_tidy("tran", "out")   # long: one row per point
+res |> spice_tidy("ac", "out")     # complex plots carry mag, db, phase
+res |> spice_wide("tran")          # wide: one column per variable
 ```
 
 `vignette("spice")` walks through this deck end to end.
@@ -78,7 +82,19 @@ spice_run(deck, options = list(compat = "spice3"))
 
 `vignette("defaults")` shows the difference on a small circuit.
 
+## How it works
+
+<img src="man/figures/simulation.svg" alt="How a simulation runs: the deck is parsed and built into a circuit; for every point of an analysis the devices are linearized, the linear system is solved and convergence is tested, iterating until it holds; an accepted point goes to the results." width="100%" />
+
+`spice_run()` hands the deck to the engine. It is parsed and built
+into a circuit, and every point of every analysis is a Newton-Raphson
+loop: linearize the devices, solve the linear system, test convergence
+at SPICE's tolerances. The accepted points come back as the plots that
+`spice_tidy()` and `spice_wide()` turn into tibbles.
+
 ## The same engine elsewhere
+
+<img src="man/figures/architecture.svg" alt="Architecture of Dune: a pic figure goes through dune-pic and a SPICE deck through dune-netlist into dune-core, the engine; dune-raw writes rawfiles; the command line and the Python, R, JavaScript and C interfaces all sit on that one engine." width="100%" />
 
 spice is one of several front ends to Dune; a deck gives the same
 numbers in all of them.
@@ -88,7 +104,7 @@ numbers in all of them.
 | Python | [`spice3`](https://pypi.org/project/spice3/) | `pip install spice3` |
 | JavaScript / WebAssembly | [`@strategicprojects/dune-sim`](https://www.npmjs.com/package/@strategicprojects/dune-sim) | `npm install @strategicprojects/dune-sim` |
 | Rust | [`dune-core`](https://crates.io/crates/dune-core), with [`dune-netlist`](https://crates.io/crates/dune-netlist), [`dune-raw`](https://crates.io/crates/dune-raw) and [`dune-pic`](https://crates.io/crates/dune-pic) | `cargo add dune-core` |
-| Command line | [`dune`](https://github.com/milkway/dune) | built from the repository |
+| Command line | [`dune`](https://milkway.github.io/dune/) | built from the repository |
 
 The [circuit gallery](https://milkway.github.io/dune/examples/) shows
 every circuit of the engine's test corpus with its results, and

@@ -26,6 +26,8 @@ terminated with, and a mismatch sends part of the wave back.
 A 50 ohm line, 4.38 ns long, driven through 10 ohm into a 1 kOhm load:
 mismatched at both ends, so the 1 ns edge bounces back and forth.
 
+<img src="figures/circuit-line.svg" alt="Schematic of the line: source V1 through Rs into the lossy line LL, ending in the load Rl." />
+
 
 ``` r
 line <- function(rs, rl) sprintf("line
@@ -38,8 +40,8 @@ rl 3 0 %g
 .end", rs, rl)
 
 far <- function(res, label) {
-  tr <- spice_tidy(res, plots = "Transient Analysis")
-  tr <- tr[tr$variable == "v(3)", c("scale", "value")]
+  tr <- res |> spice_tidy("tran", "v(3)")
+  tr <- tr[, c("scale", "value")]
   tr$case <- label
   tr
 }
@@ -88,9 +90,8 @@ c(z0 = z0, delay_ns = td * 1e9, gamma_source = gs, gamma_load = gl)
 
 ``` r
 worst <- function(options = NULL) {
-  tr <- spice_tidy(spice_run(line(10, 1000), options = options),
-                   plots = "Transient Analysis")
-  tr <- tr[tr$variable == "v(3)", ]
+  tr <- spice_run(line(10, 1000), options = options) |>
+    spice_tidy("tran", "v(3)")
   max(abs(tr$value - v3(tr$scale)))
 }
 c(dune = worst(), spice3 = worst(list(compat = "spice3")))

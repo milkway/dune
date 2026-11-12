@@ -1,0 +1,30 @@
+# How a simulation runs: the deck is parsed and built into a circuit;
+# every point of an analysis is a Newton-Raphson loop around a linear
+# solve; an accepted point goes to the results.
+# Render: rpic --prelude theme=<rpic skill>/assets/editorial-light.pic --svg -o simulation.svg simulation.pic
+margin = 0.05
+box wid 11.0 ht 3.45 at (4.7, -1.25) outlined paper shaded paper rad 0.1    # the sheet
+G: box wid 8.7 ht 1.75 at (3.85, -1.825) outlined rule shaded paper2 rad 0.1
+"EVERY POINT OF AN ANALYSIS" mono small shaded soft rjust at G.ne + (-0.1, -0.14)
+
+Deck:  ext("Deck" "cards and models" mono small, wid 1.7 at (0.6, 0))
+Parse: node("Parse" "syntax of SPICE3f5" mono small, wid 1.7 at (2.8, 0))
+Build: node("Build the circuit" "devices and matrix" mono small, wid 1.8 at (5.0, 0))
+flow(Deck.e, Parse.w)
+flow(Parse.e, Build.w)
+
+Load:  node("Load" "linearize devices" mono small, wid 1.7 at (0.6, -1.6))
+Solve: node("Solve" "LU factorization" mono small, wid 1.5 at (2.5, -1.6))
+Check: focal("Converged?" "reltol · abstol · vntol" mono small, wid 2.1 at (4.6, -1.6))
+Acc:   node("Accept the point" "error control" mono small, wid 1.7 at (7.1, -1.6))
+Out:   store("Results" "rawfile · tables" mono small, wid 1.5 at (9.3, -1.6))
+
+flow(Build.s, (Build.x, -0.62) then to (Load.x, -0.62) then to Load.n)
+flow(Load.e, Solve.w)
+flow(Solve.e, Check.w)
+flowhot(Check.e, Acc.w, "yes")
+flowopt(Check.s, (Check.x, -2.2) then to (Load.x + 0.25, -2.2) then to (Load.x + 0.25, Load.s.y))
+alabel("no: iterate", (2.6, -2.12))
+flowopt(Acc.s, (Acc.x, -2.45) then to (Load.x - 0.25, -2.45) then to (Load.x - 0.25, Load.s.y))
+alabel("next timepoint, frequency or sweep value", (4.2, -2.37))
+flow(Acc.e, Out.w)

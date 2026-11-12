@@ -28,8 +28,8 @@ chunks that follow (see \link{spice_knitr}).
 \seealso{
 Useful links:
 \itemize{
+  \item \url{https://milkway.github.io/dune/r/}
   \item \url{https://github.com/milkway/dune}
-  \item \url{https://milkway.github.io/dune/}
   \item Report bugs at \url{https://github.com/milkway/dune/issues}
 }
 

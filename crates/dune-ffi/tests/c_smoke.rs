@@ -7,14 +7,30 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The directory holding this test binary, where cargo also puts the
-/// crate's cdylib when it builds the library for the tests.
-fn deps_dir() -> PathBuf {
-    std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
+/// The crate's cdylib, which cargo builds for the tests. Up to cargo
+/// 1.99 it sits next to this test binary (`target/<profile>/deps`);
+/// from 1.100 each build unit has its own directory
+/// (`build/dune-ffi/<hash>/out`), so the library is in a sibling of
+/// the test's. With several candidates (stale units), the newest wins.
+fn cdylib() -> Option<PathBuf> {
+    let name = if cfg!(target_os = "macos") {
+        "libdune_ffi.dylib"
+    } else {
+        "libdune_ffi.so"
+    };
+    let exe = std::env::current_exe().unwrap();
+    let here = exe.parent().unwrap();
+    let beside = here.join(name);
+    if beside.exists() {
+        return Some(beside);
+    }
+    let units = here.parent()?.parent()?;
+    std::fs::read_dir(units)
+        .ok()?
+        .flatten()
+        .map(|unit| unit.path().join("out").join(name))
+        .filter(|lib| lib.exists())
+        .max_by_key(|lib| lib.metadata().and_then(|m| m.modified()).ok())
 }
 
 #[test]
@@ -24,13 +40,9 @@ fn c_program_runs_rc_cir() {
         return;
     }
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let deps = deps_dir();
-    let lib = deps.join(if cfg!(target_os = "macos") {
-        "libdune_ffi.dylib"
-    } else {
-        "libdune_ffi.so"
-    });
-    assert!(lib.exists(), "cdylib not found at {}", lib.display());
+    let lib =
+        cdylib().expect("cdylib not found next to the test binary or in a sibling build unit");
+    let deps = lib.parent().unwrap().to_path_buf();
 
     let out_dir = tempfile::tempdir().unwrap();
     let exe = out_dir.path().join("smoke");

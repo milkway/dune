@@ -8,6 +8,15 @@ First release, aligned with Dune v0.1.0.
   sensitivity and periodic steady state (`spice_pss()`), with the full
   'SPICE3f5' device set plus BSIM3v3. Results are long tibbles
   (`spice_tidy()`, `autoplot()`).
+* Selecting from a result reads as a pipeline:
+  `res |> spice_tidy("tran", "out")`. `plots` takes a short name of
+  the analysis (`"op"`, `"dc"`, `"tran"`, `"ac"`, `"noise"`, ...)
+  besides labels and positions; `vars` keeps the named variables,
+  without regard to case, a bare node name standing for its voltage.
+  The tidy table of a complex plot (`.ac`) has `mag`, `db` and `phase`
+  (degrees) next to `re` and `im`. `spice_wide()` gives one plot with
+  a column per variable, and `spice_op()` the operating point as a
+  named vector.
 * `spice_read_raw()` reads 'SPICE3' rawfiles; `spice_measure()`,
   `spice_session()` (`spice_alter()`, `spice_rerun()`), `spice_sweep()`
   and a 'knitr' engine (`spice_knitr()`) round out the workflow.

@@ -1,5 +1,20 @@
 # Changelog — spice3 (Python)
 
+## 0.7.0
+
+- **Short names for plots**: `result.plot("tran")`, `"ac"`, `"op"`,
+  `"dc"`, `"noise"`, `"inoise"`, `"tf"`, `"pz"`, `"sens"`, `"sp"`,
+  `"pss"` and `"pss_spectrum"` stand for the rawfile plot names
+  (`"Transient Analysis"`, ...), which keep working.
+- **`Plot.df(vars)`** keeps the named vectors and the scale. Names
+  are matched without regard to case, and a bare node name stands for
+  its voltage: `plot.df("out")` is `plot.df(["v(out)"])`. The same
+  rule applies to `Plot.column()` and `name in plot`.
+- **`Plot.df(polar=True)`** adds `db:<name>`, `mag:<name>` and
+  `phase:<name>` (degrees) for each vector of a complex plot.
+- **`Result.op()`** gives the operating point as a dict, optionally
+  restricted to some vectors: `result.op("out")`.
+
 ## 0.6.1
 
 - A `u()`/`sgn()` whose argument crosses zero and comes back inside
