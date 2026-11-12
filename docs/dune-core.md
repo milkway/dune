@@ -1345,7 +1345,22 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   tiveram. `ltra_compact`: 1112 → 574 pontos no passo do deck com o
   mesmo erro (0,013 contra a referência sem `trytocompact`); em
   TMAX/20 a cascata some (371 mil → 10 043 pontos); em TMAX/40 ainda
-  cascateia (654 mil) — outro mecanismo, não diagnosticado.
+  cascateava (654 mil) por outro mecanismo, resolvido na D-0055
+  (abaixo).
+  (3) *controle do erro de interpolação* (D-0055): o passo é limitado
+  por `h²·|w″|/8` da onda incidente contra `TRTOL·(RELTOL·pico +
+  ABSTOL)` — o erro de ler `v(t−T)` entre dois pontos da história.
+  `ltrafit` 0,249 → 0,144 com 2 % a mais de pontos. O
+  `LTRAlteCalculate` do 3f5 (erro das convoluções) foi portado e
+  medido: seis ordens abaixo da tolerância, não muda nenhum deck, não
+  entrou.
+  (4) *quina fora da compactação* (D-0055, com `trytocompact`): o
+  ponto em que a regra de inclinação acabou de achar quina não é
+  descartado. O critério de reta do C é por área; um passo fino
+  depois da quina ela passa, a quina desliza a cada passo e a regra
+  dispara em todos. `ltra_compact` refinado: 10 032 / 20 031 /
+  40 030 pontos em TMAX/20, /40, /80 (eram 371 mil, 654 mil e
+  1,29 milhão).
 - **`.options ltrafit`** (`Options.ltra_fit`, issue #8): convolução
   recursiva do LTRA. Núcleos sem o atraso viram somas de
   exponenciais reais por quadratura Gauss–Legendre graduada da
@@ -1395,7 +1410,11 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   valores de controle interpolados); `sgn()` vezes fator que zera
   junto não é evento. Deck `corpus/regress/bsrc_step.cir`, teste
   `b_source_jumps_are_located`. Não detecta a fonte B que controla a
-  si mesma e volta ao mesmo lado dentro do passo.
+  si mesma e volta ao mesmo lado dentro do passo (dois cruzamentos
+  num passo). Comparador com realimentação positiva (o salto empurra
+  o próprio argumento): o cruzamento é extrapolado da taxa anterior
+  ao passo (D-0055) — oscilador Schmitt de teste a 1,2e-4 da forma
+  fechada, `a_b_source_with_feedback_is_located`.
 - **Método do `.pss`** (D-0047): `Options::pss_method()` = o do
   `.tran` (TR-BDF2 no perfil Dune). A estabilização do autônomo
   (`Options::pss_stab_method()`) fica sempre no trapézio, mesmo com

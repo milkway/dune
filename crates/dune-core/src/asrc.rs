@@ -738,12 +738,16 @@ impl crate::devices::Device for AsrcI {
     /// with that argument read as −1 and as +1; a `sgn()` multiplied
     /// by something that vanishes with its argument does not jump and
     /// is not an event.
+    ///
+    /// A `u()` has no memory, so an accepted point is always
+    /// consistent with the sign of its argument there; what is not
+    /// seen is an argument that crosses zero twice inside one step.
     fn event(
         &self,
         states: &crate::state::States,
         from: usize,
         to: usize,
-        _back: f64,
+        back: f64,
     ) -> Option<f64> {
         let n = self.vals.len();
         let mut first: Option<f64> = None;
@@ -754,8 +758,24 @@ impl crate::devices::Device for AsrcI {
             if side(a1) == side(a0) {
                 continue;
             }
-            let theta = a1 / (a1 - a0);
-            if !(0.0..=1.0).contains(&theta) || first.is_some_and(|f| f <= theta) {
+            let mut theta = a1 / (a1 - a0);
+            if !(0.0..=1.0).contains(&theta) {
+                continue;
+            }
+            // A source that feeds its own argument (a comparator with
+            // positive feedback) ends the step with the argument
+            // pushed further by its own jump, and the straight line
+            // puts the crossing far too early. The argument's rate
+            // before the step says where it was heading; when the two
+            // disagree by more than a factor of two that one is
+            // taken, no later than mid-interval (so retries at least
+            // halve the step).
+            let rate = (a1 - states.get(from + 1, self.st + n + k)) / back;
+            let ahead = -a1 / rate;
+            if ahead.is_finite() && ahead > 2.0 * theta {
+                theta = ahead.min(0.5);
+            }
+            if first.is_some_and(|f| f <= theta) {
                 continue;
             }
             let vals: Vec<f64> = (0..n)

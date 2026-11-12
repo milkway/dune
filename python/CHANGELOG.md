@@ -1,5 +1,15 @@
 # Changelog — spice3 (Python)
 
+## 0.5.0
+
+- **LTRA lines**: the step is also limited by the error of reading
+  the delayed wave between history points (the lossy-line test deck
+  is 40 % closer to the converged answer for 2 % more timepoints),
+  and with `trytocompact` a corner of the wave is never compacted
+  away, which ends the breakpoint cascade of refined runs.
+- A B source that feeds its own argument (a comparator with positive
+  feedback) is located in about a third fewer timepoints.
+
 ## 0.4.0
 
 - **B-source jumps are located.** A `u()` or `sgn()` whose argument

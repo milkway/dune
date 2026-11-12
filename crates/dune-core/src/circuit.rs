@@ -1761,7 +1761,8 @@ impl Circuit {
                     devices.push(Box::new(
                         crate::ltra::LtraI::new(p, n, br)
                             .with_fit(opts.ltra_fit)
-                            .with_slope_floor(opts.ltra_slope_rate().is_some()),
+                            .with_slope_floor(opts.ltra_slope_rate().is_some())
+                            .with_interp_control(opts.compat == crate::options::Compat::Dune),
                     ));
                 }
                 Spec::Tra(s) => {

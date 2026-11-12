@@ -374,3 +374,47 @@ fn b_source_jumps_are_located() {
     );
     assert_eq!(on.data, off.data);
 }
+
+/// A B source that feeds its own argument: a Schmitt trigger made of
+/// one `u()` with positive feedback (trips up at 3.5 V, down at
+/// 2.5 V) around an RC of 1 ms — a relaxation oscillator of period
+/// `τ·(ln(2.5/1.5) + ln(3.5/2.5))`. The jump pushes the argument
+/// further, so the crossing is extrapolated from its rate before the
+/// step. Located, every period is within 5e-4 of the closed form; on
+/// the grid (`compat=spice3`) the mean period is off by more than
+/// 1 %.
+#[test]
+fn a_b_source_with_feedback_is_located() {
+    let deck = "b-source schmitt oscillator
+b1 3 0 v=5*u(v(2)-3.5+0.2*v(3))
+r3 3 0 1k
+b2 4 0 v=5-v(3)
+r1 4 2 10k
+c1 2 0 100n ic=0
+.tran 50u 20m uic
+.end
+";
+    let (ckt, opts, tran) = load("bschmitt.cir", deck);
+    let exact = 1e-3 * ((2.5f64 / 1.5).ln() + (3.5f64 / 2.5).ln());
+    let periods = |o: &Options| {
+        let sol = run(&ckt, o, &tran);
+        let dune_raw::Data::Real(cols) = &sol.data else {
+            panic!("real data");
+        };
+        let k = sol.variables.iter().position(|(n, _)| n == "v(3)").unwrap();
+        let (t, v) = (&cols[0], &cols[k]);
+        let ups: Vec<f64> = (1..t.len())
+            .filter(|&i| v[i] > 2.5 && v[i - 1] <= 2.5)
+            .map(|i| t[i])
+            .collect();
+        ups.windows(2).map(|w| w[1] - w[0]).collect::<Vec<f64>>()
+    };
+    let located = periods(&opts);
+    assert!(located.len() >= 20, "{}", located.len());
+    for p in &located {
+        assert!((p - exact).abs() < 5e-4 * exact, "{p:e} vs {exact:e}");
+    }
+    let grid = periods(&Options::spice3());
+    let mean = grid.iter().sum::<f64>() / grid.len() as f64;
+    assert!((mean - exact).abs() > 1e-2 * exact, "{mean:e} vs {exact:e}");
+}
