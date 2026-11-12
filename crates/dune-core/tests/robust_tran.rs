@@ -307,3 +307,70 @@ s1 2 0 2 0 sdis
     let mean = grid.iter().sum::<f64>() / grid.len() as f64;
     assert!((mean - exact).abs() > 1e-2 * exact, "{mean:e} vs {exact:e}");
 }
+
+/// Event location for the B source (D-0051): `corpus/regress/
+/// bsrc_step.cir`. Under the Dune profile each jump of a `u()` or
+/// `sgn()` is bracketed by two accepted points `RELTOL·TMAX` apart
+/// around the instant its argument crossed zero; a `sgn()` times a
+/// factor that vanishes there (b3) is not an event and costs no
+/// points; under `compat=spice3` the jumps land on the grid.
+#[test]
+fn b_source_jumps_are_located() {
+    let (ckt, opts, tran) = load("bsrc_step.cir", &corpus("regress/bsrc_step.cir"));
+    let tol = 1e-3 * 20e-6;
+    let crossings = |sol: &dune_core::Solution, name: &str, level: f64| {
+        let dune_raw::Data::Real(cols) = &sol.data else {
+            panic!("real data");
+        };
+        let k = sol.variables.iter().position(|(n, _)| n == name).unwrap();
+        (1..cols[0].len())
+            .filter(|&i| (cols[k][i] > level) != (cols[k][i - 1] > level))
+            .map(|i| (cols[0][i - 1], cols[0][i]))
+            .collect::<Vec<_>>()
+    };
+    let sol = run(&ckt, &opts, &tran);
+    for (name, level, at) in [
+        ("v(2)", 2.5, [0.305e-3, 0.695e-3]),
+        ("v(4)", 0.0, [0.205e-3, 0.795e-3]),
+    ] {
+        let f = crossings(&sol, name, level);
+        assert_eq!(f.len(), 2, "{name}: {f:?}");
+        for ((before, after), at) in f.into_iter().zip(at) {
+            assert!(
+                before < at && at < after,
+                "{name}: {before:e} {at:e} {after:e}"
+            );
+            assert!(
+                after - before <= tol * (1.0 + 1e-9),
+                "{name}: {:e}",
+                after - before
+            );
+        }
+    }
+    let grid = run(&ckt, &Options::spice3(), &tran);
+    for (name, level) in [("v(2)", 2.5), ("v(4)", 0.0)] {
+        let f = crossings(&grid, name, level);
+        assert!(f.iter().all(|(b, a)| a - b > 100.0 * tol), "{name}: {f:?}");
+    }
+
+    // Without b1 and b2 nothing jumps: the same grid with the event
+    // location on and off.
+    let quiet = corpus("regress/bsrc_step.cir")
+        .lines()
+        .filter(|l| !l.starts_with("b1") && !l.starts_with("b2"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (ckt, opts, tran) = load("quiet.cir", &quiet);
+    let on = run(&ckt, &opts, &tran);
+    let off = run(
+        &ckt,
+        &Options {
+            compat: dune_core::Compat::Spice3,
+            method: Some(Method::TrBdf2),
+            trtol: opts.trtol / dune_core::SPICE_TRTOL,
+            ..opts.clone()
+        },
+        &tran,
+    );
+    assert_eq!(on.data, off.data);
+}

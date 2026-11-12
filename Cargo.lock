@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "dune-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "dune-core",
@@ -337,12 +337,13 @@ dependencies = [
  "dune-raw",
  "rpic-core",
  "rpic-render",
+ "rust-embed",
  "tempfile",
 ]
 
 [[package]]
 name = "dune-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "criterion",
  "dune-netlist",
@@ -357,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "dune-ffi"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "cbindgen",
  "dune-core",
@@ -368,14 +369,14 @@ dependencies = [
 
 [[package]]
 name = "dune-netlist"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "dune-oracle"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "dune-core",
@@ -387,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "dune-pic"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dune-core",
  "dune-netlist",
@@ -398,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "dune-raw"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "num-complex",
  "thiserror 2.0.21",
@@ -406,7 +407,7 @@ dependencies = [
 
 [[package]]
 name = "dune-wasm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "console_error_panic_hook",
  "dune-core",

@@ -988,6 +988,7 @@ impl Circuit {
                 Spec::Jfet(_) => st.alloc(crate::jfet::FET3_NUM_STATES),
                 Spec::Mes(_) => st.alloc(crate::mes::MES_NUM_STATES),
                 Spec::SwitchV(_) | Spec::SwitchI(_) => st.alloc(crate::switch::SW_NUM_STATES),
+                Spec::Asrc(s) => st.alloc(crate::asrc::num_states(&s.expr)),
                 _ => 0,
             });
             state_ranges.push((first, st.total()));
@@ -1667,7 +1668,7 @@ impl Circuit {
                     }
                     let br = if voltage { branches[&s.name] } else { 0 };
                     devices.push(Box::new(crate::asrc::AsrcI::new(
-                        s.kind, pos, neg, br, tree, cols,
+                        s.kind, pos, neg, br, tree, cols, base,
                     )));
                 }
                 Spec::Ccvs(s) => {
@@ -1753,9 +1754,14 @@ impl Circuit {
                     if opts.trytocompact {
                         p.try_to_compact();
                     }
+                    if opts.compat == crate::options::Compat::Dune {
+                        p.default_linear();
+                    }
                     notes.extend(p.notes.iter().cloned());
                     devices.push(Box::new(
-                        crate::ltra::LtraI::new(p, n, br).with_fit(opts.ltra_fit),
+                        crate::ltra::LtraI::new(p, n, br)
+                            .with_fit(opts.ltra_fit)
+                            .with_slope_floor(opts.ltra_slope_rate().is_some()),
                     ));
                 }
                 Spec::Tra(s) => {

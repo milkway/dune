@@ -27,11 +27,19 @@ dune-pic.workspace = true
 # dependency-free (issue #7; docs/dune-pic.md "Rótulos $...$").
 rpic-core = { version = "=0.16.1", optional = true }
 rpic-render = { version = "=0.16.1", default-features = false, features = ["math"], optional = true }
+# RaTeX carries its KaTeX fonts through `rust-embed`, which in a debug
+# build does not embed anything: it reads the files at run time from
+# the crate's source in `~/.cargo/registry`. A debug `dune` then
+# typesets math as long as that directory is there, and silently
+# falls back to literal text when it is cleaned (the one failure of
+# `tests/texlabels.rs` on 2026-11-11, during a registry cleanup).
+# `debug-embed` makes every profile embed them.
+rust-embed = { version = "8.11", features = ["debug-embed"], optional = true }
 
 [features]
 default = ["texlabels"]
 # Typeset `$...$` figure labels (rpic `texlabels`) with RaTeX.
-texlabels = ["dep:rpic-core", "dep:rpic-render"]
+texlabels = ["dep:rpic-core", "dep:rpic-render", "dep:rust-embed"]
 
 [dev-dependencies]
 tempfile.workspace = true

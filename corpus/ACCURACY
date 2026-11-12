@@ -1,9 +1,9 @@
 # The accuracy ruler (dune-oracle --accuracy; docs/dune-oracle.md).
 # Format: stem|<cap>|reason   or   stem|unmeasured|reason
-ltra_1|unmeasured|the dioload diodes (tt, no cjo) snap off when their stored charge runs out: v(4) falls 30 mV in under 1 ps, and although TMAX/40 and TMAX/80 place the snap within 2 fs of each other, on a vector whose whole swing is the snap that is still over the ruler (TMAX/20 vs TMAX/40: 6.4; TMAX/40 vs TMAX/80: 1.1). At the deck step the line voltages are within 0.4 V and the driver-internal edges within 0.3 ns of the refined run
-ltra_2|unmeasured|same diode loads as ltra_1/ltra_3: the snap-off instants keep the refined runs 0.4 of the ruler apart
-ltra_3|unmeasured|as ltra_1 (snap-off of the x3.* diode string; TMAX/20 vs TMAX/40: 1.6, TMAX/40 vs TMAX/80: 4.8)
-ltra_compact|unmeasured|trytocompact drops history points, and the refined runs do not converge on each other (TMAX/20 vs TMAX/40: 11); without the breakpoint hygiene (ltrabkrate=0) they exceed the transient step budget
+ltra_1|unmeasured|the dioload diodes (tt, no cjo) snap off when their stored charge runs out and leave a spike in one refinement or the other: TMAX/20 vs TMAX/40 is 1.9 at the deck's resolution, and the margin (2.4 against TMAX/40; 5.1 with the 3f5's quadratic interpolation) moves by more than a tenth between the two as reference
+ltra_2|unmeasured|same diode loads: TMAX/20 vs TMAX/40 is 0.39 against a margin of 1.2
+ltra_3|unmeasured|as ltra_1 (TMAX/20 vs TMAX/40: 2.5; margin 2.9 against TMAX/40, 7.3 with quadratic interpolation)
+ltra_compact|unmeasured|trytocompact drops history points and its refined runs do not converge on each other (9.3); against the refined run WITHOUT trytocompact the deck is at 0.013
 ltra_1_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 ltra_3_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 ltrafit|0.35|recursive-convolution lines at the default step (measured 0.25)
