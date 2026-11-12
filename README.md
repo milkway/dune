@@ -28,7 +28,7 @@ One engine, the same numbers from every one of them.
 | JavaScript / WebAssembly | [`@strategicprojects/dune-sim`](https://www.npmjs.com/package/@strategicprojects/dune-sim) | `npm install @strategicprojects/dune-sim` | [npm](https://www.npmjs.com/package/@strategicprojects/dune-sim) |
 | Rust | [`dune-core`](https://crates.io/crates/dune-core), [`dune-netlist`](https://crates.io/crates/dune-netlist), [`dune-raw`](https://crates.io/crates/dune-raw), [`dune-pic`](https://crates.io/crates/dune-pic) | `cargo add dune-core dune-netlist` | [docs.rs](https://docs.rs/dune-core) |
 | C | `dune-ffi` (C ABI, `include/dune.h`) | built from this repository | [`crates/dune-ffi`](crates/dune-ffi) |
-| Command line | `dune` | built from this repository | [`crates/dune-cli`](crates/dune-cli) |
+| Command line | `dune` | `brew install milkway/tap/dune` (macOS, Linux), or the binaries of the [latest release](https://github.com/milkway/dune/releases/latest) | [`crates/dune-cli`](crates/dune-cli) |
 
 ## How it fits together
 
@@ -86,6 +86,10 @@ Rscript -e 'remotes::install_github("milkway/dune", subdir = "r")'
 
 # Rust library — crates.io (dune-netlist, dune-raw, dune-core, dune-pic)
 cargo add dune-core dune-netlist
+
+# CLI — Homebrew (macOS, Linux). homebrew-core's own `dune` is the
+# OCaml build system, so the tap is part of the name
+brew install milkway/tap/dune
 
 # CLI — from source (Rust 1.88+)
 git clone https://github.com/milkway/dune && cd dune && cargo build --release

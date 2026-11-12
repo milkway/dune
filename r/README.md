@@ -104,7 +104,7 @@ numbers in all of them.
 | Python | [`spice3`](https://pypi.org/project/spice3/) | `pip install spice3` |
 | JavaScript / WebAssembly | [`@strategicprojects/dune-sim`](https://www.npmjs.com/package/@strategicprojects/dune-sim) | `npm install @strategicprojects/dune-sim` |
 | Rust | [`dune-core`](https://docs.rs/dune-core), with [`dune-netlist`](https://docs.rs/dune-netlist), [`dune-raw`](https://docs.rs/dune-raw) and [`dune-pic`](https://docs.rs/dune-pic) | `cargo add dune-core` |
-| Command line | [`dune`](https://milkway.github.io/dune/) | built from the repository |
+| Command line | [`dune`](https://milkway.github.io/dune/) | `brew install milkway/tap/dune` |
 
 The [circuit gallery](https://milkway.github.io/dune/examples/) shows
 every circuit of the engine's test corpus with its results, and
