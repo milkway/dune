@@ -35,7 +35,7 @@ jobs:
           - os: macos-15-intel # x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Third-party actions pinned by SHA: this workflow holds the
       # PyPI OIDC credential, so a hijacked tag must not reach it.
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
@@ -52,7 +52,7 @@ jobs:
       - name: The Linux wheel is manylinux2014
         if: runner.os == 'Linux'
         run: ls python/dist && ls python/dist/*manylinux_2_17_x86_64*.whl
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}
           path: python/dist/*.whl
@@ -66,7 +66,7 @@ jobs:
     timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: python
@@ -79,7 +79,7 @@ jobs:
           python -m venv /tmp/sdist-venv
           /tmp/sdist-venv/bin/pip install python/dist/*.tar.gz
           cd /tmp && /tmp/sdist-venv/bin/python -I -c "import spice; print(spice.__version__)"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-sdist
           path: python/dist/*.tar.gz
@@ -92,7 +92,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           merge-multiple: true

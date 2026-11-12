@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.88"
@@ -79,14 +79,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: python
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Lint the crate
@@ -126,7 +126,7 @@ jobs:
       DUNE_ROOT: ${{ github.workspace }}
       _R_CHECK_CRAN_INCOMING_REMOTE_: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -165,7 +165,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: r-lib/actions/setup-pandoc@v2
       - uses: r-lib/actions/setup-r@v2
@@ -183,7 +183,7 @@ jobs:
           git diff --exit-code r/inst/AUTHORS
       - name: Build the source tarball
         run: R CMD build r
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: r-tarball
           path: spice_*.tar.gz
@@ -203,7 +203,7 @@ jobs:
     steps:
       # Only for r/DESCRIPTION (the dependency list); the check runs
       # on the tarball, in a directory outside the checkout.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ runner.os == 'Windows' && 'x86_64-pc-windows-gnu' || '' }}
@@ -216,7 +216,7 @@ jobs:
           working-directory: r
           extra-packages: any::rcmdcheck
           cache: always
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: r-tarball
           path: ${{ runner.temp }}/tarball
