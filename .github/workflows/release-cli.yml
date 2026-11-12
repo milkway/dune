@@ -1,0 +1,78 @@
+name: release-cli
+
+# Builds the `dune` command-line simulator for macOS (arm64, x86_64)
+# and Linux (x86_64, static musl) and attaches the archives to the
+# GitHub release of a tag. The Homebrew formula (milkway/homebrew-tap,
+# Formula/dune.rb) downloads these.
+#
+#   push of a tag v*    build, create the release if it is not there,
+#                       upload dune-<target>.tar.gz
+#   workflow_dispatch   build only: proves the matrix compiles without
+#                       cutting a tag
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  binaries:
+    name: dune (${{ matrix.target }})
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl: fully static, independent of the runner's glibc.
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: macos-15, target: aarch64-apple-darwin }
+          - { os: macos-15, target: x86_64-apple-darwin }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install the musl toolchain
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --release --locked -p dune-cli --target ${{ matrix.target }}
+      - name: Smoke test
+        # The x86_64 macOS binary is cross-compiled on an arm64 runner
+        # and runs there under Rosetta.
+        run: |
+          "target/${{ matrix.target }}/release/dune" -b corpus/basic/acrc.cir -r "$RUNNER_TEMP/rc.raw"
+          test -s "$RUNNER_TEMP/rc.raw"
+      - name: Archive
+        run: |
+          tar -czf "dune-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" dune
+          shasum -a 256 "dune-${{ matrix.target }}.tar.gz" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dune-${{ matrix.target }}
+          path: dune-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: attach to the release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Dune ${TAG#v}" --generate-notes
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber dune-*.tar.gz
+          shasum -a 256 dune-*.tar.gz | tee -a "$GITHUB_STEP_SUMMARY"
