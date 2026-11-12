@@ -10,7 +10,8 @@
 //!
 //! - the **candidate** is the deck as written;
 //! - the **reference** is the same deck with `TMAX` divided by
-//!   [`REFINE`], run by Dune itself. That a refined Dune run is the
+//!   [`REFINE`] (and by twice that, up to [`REFINE_MAX`], while it
+//!   has not converged), run by Dune itself. That a refined Dune run is the
 //!   refined ngspice run is what the golden check establishes, and
 //!   the converged companions of the XFAIL decks gate it directly
 //!   (`regress/*_fine`, `*_gear`); the survey behind this ruler
@@ -49,8 +50,11 @@ use crate::compare::{Report, Ruler, Tolerances, compare_transients};
 use crate::corpus::Corpus;
 use crate::dune_run;
 
-/// `TMAX` divisor of the reference run.
+/// `TMAX` divisor of the first reference run.
 const REFINE: f64 = 40.0;
+/// The reference is refined by twos up to this divisor while it has
+/// not converged (`ltra_2`'s 326 lumped nodes need 80).
+const REFINE_MAX: f64 = 160.0;
 /// The reference counts as converged when the run at `REFINE / 2`
 /// is within this fraction of the ruler of it.
 const CONVERGED: f64 = 0.2;
@@ -66,6 +70,10 @@ enum Entry {
     Cap(f64),
     /// `stem|unmeasured|reason`: no converged reference; not run.
     Unmeasured,
+    /// `stem|slow <cap>|reason`: measured, and held to `cap`, only
+    /// when the deck is named on the command line — its reference
+    /// takes minutes (`ltra_3` at TMAX/80: 7).
+    Slow(f64),
 }
 
 fn read_registry(root: &Path) -> Result<HashMap<String, Entry>> {
@@ -79,17 +87,22 @@ fn read_registry(root: &Path) -> Result<HashMap<String, Entry>> {
         }
         let mut f = line.splitn(3, '|');
         let (Some(stem), Some(what), Some(_reason)) = (f.next(), f.next(), f.next()) else {
-            bail!("corpus/ACCURACY: bad line `{line}` (want stem|cap-or-unmeasured|reason)");
+            bail!(
+                "corpus/ACCURACY: bad line `{line}` (want stem|cap, `slow cap` or unmeasured|reason)"
+            );
+        };
+        let cap = |text: &str| {
+            text.parse()
+                .ok()
+                .filter(|c: &f64| c.is_finite() && *c > 0.0)
+                .with_context(|| format!("corpus/ACCURACY: bad cap in `{line}`"))
         };
         let entry = if what == "unmeasured" {
             Entry::Unmeasured
+        } else if let Some(text) = what.strip_prefix("slow ") {
+            Entry::Slow(cap(text)?)
         } else {
-            Entry::Cap(
-                what.parse()
-                    .ok()
-                    .filter(|c: &f64| c.is_finite() && *c > 0.0)
-                    .with_context(|| format!("corpus/ACCURACY: bad cap in `{line}`"))?,
-            )
+            Entry::Cap(cap(what)?)
         };
         if map.insert(stem.to_string(), entry).is_some() {
             bail!("corpus/ACCURACY: `{stem}` listed twice");
@@ -138,10 +151,65 @@ fn run_tran(path: &Path, refine: Option<f64>) -> Result<Rawfile, String> {
                 .map(|s| s.to_plot(&parsed.netlist.title, "")),
         );
     }
+    if let Some(saved) = saved_vectors(&parsed.netlist) {
+        for plot in &mut plots {
+            keep_vectors(plot, &saved);
+        }
+    }
     Ok(Rawfile {
         plots,
         warnings: Vec::new(),
     })
+}
+
+/// The vectors a deck asks for with `.save` (lower case, `v(n)` and
+/// `i(vsrc)`); `None` when it has no `.save` or one of them is not a
+/// plain node voltage or source current (`all`, a differential
+/// `v(a,b)`): the deck is then measured on everything, as before.
+///
+/// A deck that names its outputs is measured on them. Dune writes
+/// every node whatever `.save` says, and the internal nodes of
+/// `ltra_1`'s diode loads snap in under a picosecond: two refinements
+/// never agree there, and the deck could not be measured at all.
+fn saved_vectors(netlist: &dune_netlist::ir::Netlist) -> Option<Vec<String>> {
+    use dune_netlist::ir::{OutVar, OutputKind};
+    let mut names = Vec::new();
+    for out in netlist
+        .outputs
+        .iter()
+        .filter(|o| o.kind == OutputKind::Save)
+    {
+        for var in &out.vars {
+            names.push(match var {
+                OutVar::Voltage {
+                    node,
+                    reference: None,
+                    suffix: None,
+                } => format!("v({})", node.to_ascii_lowercase()),
+                OutVar::Current { vsrc, suffix: None } => {
+                    format!("i({})", vsrc.to_ascii_lowercase())
+                }
+                _ => return None,
+            });
+        }
+    }
+    (!names.is_empty()).then_some(names)
+}
+
+/// Drop every vector of `plot` but its scale and the ones in `keep`.
+fn keep_vectors(plot: &mut dune_raw::Plot, keep: &[String]) {
+    let wanted: Vec<bool> = plot
+        .variables
+        .iter()
+        .enumerate()
+        .map(|(i, v)| i == 0 || keep.contains(&v.name.to_ascii_lowercase()))
+        .collect();
+    let mut it = wanted.iter();
+    plot.variables.retain(|_| *it.next().unwrap());
+    if let dune_raw::Data::Real(cols) = &mut plot.data {
+        let mut it = wanted.iter();
+        cols.retain(|_| *it.next().unwrap());
+    }
 }
 
 /// The comparator's worst ratio over the plots, `driver`'s grid
@@ -185,36 +253,50 @@ enum Measured {
     /// The margin, and the candidate's timepoints (what it cost).
     Margin(f64, usize),
     /// The reference disagrees with the half-refined run by this
-    /// much, against a margin of that much.
-    Unconverged(f64, f64),
+    /// much, against a margin of that much, at this `TMAX` divisor.
+    Unconverged(f64, f64, f64),
     Failed(String),
 }
 
 fn measure(path: &Path) -> Measured {
     let run = |refine| run_tran(path, refine);
-    let (cand, half, reference) = match (run(None), run(Some(REFINE / 2.0)), run(Some(REFINE))) {
-        (Ok(c), Ok(h), Ok(r)) => (c, h, r),
-        (Err(e), ..) | (_, Err(e), _) | (.., Err(e)) => return Measured::Failed(e),
-    };
-    let conv = match convergence(&half, &reference, &cand) {
-        Err(e) => return Measured::Failed(e),
-        Ok(conv) => conv,
+    let (cand, mut half) = match (run(None), run(Some(REFINE / 2.0))) {
+        (Ok(c), Ok(h)) => (c, h),
+        (Err(e), _) | (_, Err(e)) => return Measured::Failed(e),
     };
     let points = cand.plots.iter().map(|p| p.num_points()).sum();
-    let m = match margin(&cand, &reference) {
-        Ok(m) => m,
-        Err(e) => return Measured::Failed(e),
-    };
-    if conv <= CONVERGED {
-        return Measured::Margin(m, points);
-    }
-    // The two refinements differ somewhere (a snap leaves a spike in
-    // one of them), but the measurement may still not depend on which
-    // of them is the reference.
-    match margin(&cand, &half) {
-        Ok(mh) if (mh - m).abs() <= STABLE * m => Measured::Margin(m, points),
-        Ok(_) => Measured::Unconverged(conv, m),
-        Err(e) => Measured::Failed(e),
+    // Refine until two successive references agree, or the margin
+    // does not depend on which of them it is taken against.
+    let mut refine = REFINE;
+    loop {
+        let reference = match run(Some(refine)) {
+            Ok(r) => r,
+            Err(e) => return Measured::Failed(e),
+        };
+        let conv = match convergence(&half, &reference, &cand) {
+            Err(e) => return Measured::Failed(e),
+            Ok(conv) => conv,
+        };
+        let m = match margin(&cand, &reference) {
+            Ok(m) => m,
+            Err(e) => return Measured::Failed(e),
+        };
+        if conv <= CONVERGED {
+            return Measured::Margin(m, points);
+        }
+        // The two refinements differ somewhere (a snap leaves a spike
+        // in one of them), but the measurement may still not depend
+        // on which of them is the reference.
+        match margin(&cand, &half) {
+            Ok(mh) if (mh - m).abs() <= STABLE * m => return Measured::Margin(m, points),
+            Ok(_) => {}
+            Err(e) => return Measured::Failed(e),
+        }
+        if refine >= REFINE_MAX {
+            return Measured::Unconverged(conv, m, refine);
+        }
+        half = reference;
+        refine *= 2.0;
     }
 }
 
@@ -244,8 +326,15 @@ pub fn run(args: &[String]) -> Result<bool> {
             );
             continue;
         }
+        if matches!(entry, Some(Entry::Slow(_))) && args.is_empty() {
+            println!(
+                "{:<14} {:>8} {:>6} {:>7}  SLOW (corpus/ACCURACY; run it by name)",
+                c.stem, "-", "-", "-"
+            );
+            continue;
+        }
         let cap = match entry {
-            Some(Entry::Cap(cap)) => *cap,
+            Some(Entry::Cap(cap) | Entry::Slow(cap)) => *cap,
             _ => DEFAULT_CAP,
         };
         match measure(&c.path) {
@@ -265,15 +354,15 @@ pub fn run(args: &[String]) -> Result<bool> {
                 };
                 println!("{:<14} {m:>8.3} {cap:>6.2} {points:>7}  {verdict}", c.stem);
             }
-            Measured::Unconverged(conv, m) => {
+            Measured::Unconverged(conv, m, refine) => {
                 ok = false;
                 println!(
                     "{:<14} {:>8} {cap:>6.2}  FAIL: the reference has not converged \
-                     (TMAX/{} vs TMAX/{REFINE}: {conv:.3}, against a margin of {m:.3}); list the deck as \
+                     (TMAX/{} vs TMAX/{refine}: {conv:.3}, against a margin of {m:.3}); list the deck as \
                      `unmeasured` in corpus/ACCURACY",
                     c.stem,
                     "-",
-                    REFINE / 2.0
+                    refine / 2.0
                 );
             }
             Measured::Failed(e) => {

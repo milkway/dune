@@ -27,7 +27,9 @@ First release, aligned with Dune v0.1.0.
   instant its argument crosses zero, too. 'LTRA' lines without an
   interpolation flag interpolate linearly. Their step is also
   limited by the error of reading the delayed wave between
-  history points. Under TR-BDF2 the step control is held to `trtol / 7`
+  history points. A corner of a wave gets a timepoint where it
+  arrives one delay later (the 'SPICE' rule almost never plants
+  it), so reflections no longer round it. Under TR-BDF2 the step control is held to `trtol / 7`
   (its error estimate does not overestimate as the one `trtol`
   was made for), about 3% more timepoints for a third less error.
   The slope breakpoints of 'LTRA' lines are

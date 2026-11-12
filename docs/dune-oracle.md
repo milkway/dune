@@ -232,7 +232,28 @@ Com a leitura nova, o deck `bsrc_step` e os defaults da D-0052 a régua
 mede 36 decks, soma **0,96**, 19 378 pontos (os 1,17 de antes eram com
 a leitura antiga, sobre 35 decks). Com a D-0055 (controle do erro de
 interpolação das linhas): soma **0,85**, 19 478 pontos, e todos os 36
-decks medidos dentro de 0,2. É o número a bater em qualquer mudança de integração ou
+decks medidos dentro de 0,2.
+
+**D-0056.** A régua ganhou três coisas: (1) deck que declara saídas
+com `.save` é medido nelas (`ltra_1`: v(1), v(2), v(3) — os nós
+internos da carga de diodos saltam em menos de 1 ps e impediam
+qualquer medida); (2) a referência é refinada por dobras (TMAX/40,
+/80, /160) enquanto não converge; (3) entrada `stem|slow <teto>|motivo`
+no `corpus/ACCURACY`: medida e cobrada só quando o deck é nomeado na
+linha de comando (o `ltra_3` leva 7 min). Com isso **nenhum deck
+transiente fica sem medida**:
+
+| deck | antes | D-0056 |
+|---|---|---|
+| `ltra_1` | não mensurável (0,58 nos vetores salvos) | 0,075 |
+| `ltra_2` | não mensurável | 1,26 (referência em TMAX/80) |
+| `ltra_3` | não mensurável | 3,32 (todos os nós; `slow`) |
+| `ltra_compact` | não mensurável | 0,000 |
+| `ltrafit` | 0,144 | 0,079 |
+
+Os 1,26 e 3,32 são erro real no passo do deck em nós internos das
+cargas de diodo (`TT` sem `CJO`: a tensão salta quando a carga acaba);
+pesquisa e tentativas na D-0056 (anexo). É o número a bater em qualquer mudança de integração ou
 de controle de passo. Custo do TR-BDF2 no `dune -b` sobre os 37 decks
 transientes (release, melhor de 3): mediana ×1,12 por deck, pior
 ×1,7 (`ltra_1`, `ltra_3`), total ×0,82 (o `ltra_2`, que domina, fica

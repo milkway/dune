@@ -1,9 +1,7 @@
 # The accuracy ruler (dune-oracle --accuracy; docs/dune-oracle.md).
-# Format: stem|<cap>|reason   or   stem|unmeasured|reason
-ltra_1|unmeasured|the dioload diodes (tt, no cjo) snap off when their stored charge runs out and leave a spike in one refinement or the other: TMAX/20 vs TMAX/40 is 1.9 at the deck's resolution, and the margin (3.5 against TMAX/40) moves by more than a tenth between the two as reference
-ltra_2|unmeasured|same diode loads: TMAX/20 vs TMAX/40 is 0.39 against a margin of 1.2
-ltra_3|unmeasured|as ltra_1 (TMAX/20 vs TMAX/40: 2.5; margin 2.7 against TMAX/40)
-ltra_compact|unmeasured|trytocompact drops history points on an area criterion, which loses accuracy as the step shrinks: its refined runs are 2.4 from the refined run WITHOUT trytocompact, against which the deck itself is at 0.14
+# Format: stem|<cap>|reason, stem|slow <cap>|reason (measured only when named) or stem|unmeasured|reason
+ltra_2|1.6|326 lumped nodes behind diode loads; needs the reference at TMAX/80 (measured 1.26)
+ltra_3|slow 4.2|the x3.* diode string (tt, no cjo) snaps off in under a picosecond, and the deck saves no vectors of its own, so every node is measured (measured 3.32)
 ltra_1_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 ltra_3_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 tra_pulse|0.25|measured 0.18, close to the default cap

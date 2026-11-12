@@ -418,3 +418,78 @@ c1 2 0 100n ic=0
     let mean = grid.iter().sum::<f64>() / grid.len() as f64;
     assert!((mean - exact).abs() > 1e-2 * exact, "{mean:e} vs {exact:e}");
 }
+
+/// A lossless LTRA line (Z0 = 50 Ω, T = 4.38 ns) between a 10 Ω
+/// source and a 1 kΩ load: the 1 ns ramp of the source bounces for
+/// 60 ns, and every waveform is a sum of delayed copies of it —
+/// `v(3) = Σ (1+Γl)(ΓlΓs)^k·V⁺(t − (2k+1)T)`.
+///
+/// The 3f5's slope rule almost never plants the breakpoint where a
+/// corner arrives (D-0056): the corner falls between timepoints, the
+/// interpolation rounds it, and the rounding compounds at every
+/// reflection. Measured: 1.0 % of the swing under `compat=spice3`,
+/// 0.16 % under the Dune profile.
+#[test]
+fn ltra_reflections_keep_their_corners() {
+    let (l, c, len, rs, rl) = (9.13e-9f64, 3.65e-12f64, 24.0f64, 10.0f64, 1000.0f64);
+    let deck = format!(
+        "reflections\nv1 1 0 pwl(0 0 1n 0 2n 1 100n 1)\nrs 1 2 {rs}\no1 2 0 3 0 ll\n\
+         rl 3 0 {rl}\n.model ll ltra l={l} c={c} len={len}\n.tran 0.1n 60n\n.end\n"
+    );
+    let (z0, td) = ((l / c).sqrt(), len * (l * c).sqrt());
+    let (gs, gl) = ((rs - z0) / (rs + z0), (rl - z0) / (rl + z0));
+    let vplus = |t: f64| (t - 1e-9).clamp(0.0, 1e-9) / 1e-9 * z0 / (z0 + rs);
+    let v3 = |t: f64| -> f64 {
+        (0..12)
+            .map(|k| (1.0 + gl) * (gl * gs).powi(k) * vplus(t - (2 * k + 1) as f64 * td))
+            .sum()
+    };
+    let (ckt, opts, tran) = load("refl.cir", &deck);
+    let worst = |o: &Options| {
+        let sol = run(&ckt, o, &tran);
+        let (t, v) = (sol.column("time").unwrap(), sol.column("v(3)").unwrap());
+        t.iter()
+            .zip(v)
+            .map(|(t, v)| (v - v3(*t)).abs())
+            .fold(0.0f64, f64::max)
+    };
+    let (dune, spice3) = (worst(&opts), worst(&Options::spice3()));
+    assert!(dune < 3e-3, "{dune:e}");
+    assert!(spice3 > 8e-3, "{spice3:e}");
+}
+
+/// `trytocompact` under the Dune profile (D-0056): a sample leaves
+/// the history only while the chord from the last one kept passes by
+/// every sample dropped since. The compacted run of
+/// `regress/ltra_compact` refined 20 times stays within 2e-3 V of the
+/// same run without the option (`COMPACTREL` = 1e-3 of a 1 V swing,
+/// at the line and again at the load; measured 1.0e-3); the 3f5's
+/// area test drifts (measured 1.7e-2 V, with a breakpoint cascade).
+#[test]
+fn compaction_does_not_drift_on_a_fine_step() {
+    let text = corpus("regress/ltra_compact.cir")
+        .replace(".tran 0.2ns 100ns", ".tran 0.2ns 100ns 0 1e-11");
+    let (ckt, opts, tran) = load("ltra_compact.cir", &text);
+    assert!(opts.trytocompact);
+    let plain = Options {
+        trytocompact: false,
+        ..opts.clone()
+    };
+    let (on, off) = (run(&ckt, &opts, &tran), run(&ckt, &plain, &tran));
+    for node in ["v(2)", "v(3)"] {
+        let (ta, ya) = (on.column("time").unwrap(), on.column(node).unwrap());
+        let (tb, yb) = (off.column("time").unwrap(), off.column(node).unwrap());
+        let mut k = 0;
+        let mut w = 0.0f64;
+        for (t, y) in ta.iter().zip(ya) {
+            while k + 2 < tb.len() && tb[k + 1] < *t {
+                k += 1;
+            }
+            let f = ((t - tb[k]) / (tb[k + 1] - tb[k])).clamp(0.0, 1.0);
+            w = w.max((y - (yb[k] + f * (yb[k + 1] - yb[k]))).abs());
+        }
+        assert!(w < 2e-3, "{node}: {w:e}");
+    }
+    // No cascade: about one point per maximum step.
+    assert!(on.column("time").unwrap().len() < 12_000);
+}
