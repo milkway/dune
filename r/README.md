@@ -37,7 +37,7 @@ checked circuit by circuit against ngspice.
 
 spice is not on CRAN yet. Install the development version from GitHub;
 it compiles Rust code, so it needs `cargo` and `rustc` (>= 1.88),
-from <https://www.rust-lang.org/tools/install>.
+from <https://rust-lang.org/tools/install/>.
 
 ```r
 # install.packages("remotes")
