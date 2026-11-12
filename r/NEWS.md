@@ -24,7 +24,8 @@ First release, aligned with Dune v0.1.0.
   threshold, located to `reltol` times the maximum step, not at
   whatever timepoint first sees it crossed (`compat = "spice3"`
   restores that). A `u()` or `sgn()` in a 'B' source flips at the
-  instant its argument crosses zero, too. 'LTRA' lines without an
+  instant its argument crosses zero, too. A pulse narrower than the
+  timestep is found when the point before the step shows it coming. 'LTRA' lines without an
   interpolation flag interpolate linearly. Their step is also
   limited by the error of reading the delayed wave between
   history points. A corner of a wave gets a timepoint where it

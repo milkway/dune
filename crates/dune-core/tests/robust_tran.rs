@@ -493,3 +493,48 @@ fn compaction_does_not_drift_on_a_fine_step() {
     // No cascade: about one point per maximum step.
     assert!(on.column("time").unwrap().len() < 12_000);
 }
+
+/// A pulse narrower than the step (D-0058): a comparator on the crest
+/// of a 1.03 kHz sine, above 0.999 for 13.8 µs a cycle, on a 50 µs
+/// grid the crests drift across. The argument of the `u()` is
+/// negative at both ends of the step that holds a crest; the parabola
+/// through those and the point before shows it going through zero
+/// and back. Located, every one of the 20 or 21 pulses of 20 ms is
+/// there at its width; on the grid (`compat=spice3`) most are missing
+/// and those seen last a whole step.
+#[test]
+fn a_pulse_narrower_than_the_step_is_seen() {
+    let deck = "narrow pulses
+v1 1 0 sin(0 1 1.03k)
+r1 1 0 1k
+b1 2 0 v=5*u(v(1)-0.999)
+r2 2 0 1k
+.tran 50u 20m
+.end
+";
+    let (ckt, opts, tran) = load("narrow.cir", deck);
+    let width = 2.0 * 0.999f64.acos() / (2.0 * std::f64::consts::PI) / 1.03e3;
+    let pulses = |o: &Options| {
+        let sol = run(&ckt, o, &tran);
+        let (t, v) = (sol.column("time").unwrap(), sol.column("v(2)").unwrap());
+        let edge = |up: bool| -> Vec<f64> {
+            (1..t.len())
+                .filter(|&i| (v[i] > 2.5) != (v[i - 1] > 2.5) && (v[i] > 2.5) == up)
+                .map(|i| t[i])
+                .collect()
+        };
+        let (ups, downs) = (edge(true), edge(false));
+        ups.into_iter()
+            .zip(downs)
+            .map(|(u, d)| d - u)
+            .collect::<Vec<f64>>()
+    };
+    let located = pulses(&opts);
+    assert!((20..=21).contains(&located.len()), "{}", located.len());
+    for w in &located {
+        assert!((w - width).abs() < 0.02 * width, "{w:e} vs {width:e}");
+    }
+    let grid = pulses(&Options::spice3());
+    assert!(grid.len() < 10, "{}", grid.len());
+    assert!(grid.iter().all(|w| *w > 3.0 * width), "{grid:?}");
+}

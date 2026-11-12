@@ -1430,6 +1430,14 @@ do corpus (verificado via `git archive`). Decisão D-0027.
   o próprio argumento): o cruzamento é extrapolado da taxa anterior
   ao passo (D-0055) — oscilador Schmitt de teste a 1,2e-4 da forma
   fechada, `a_b_source_with_feedback_is_located`.
+  Pulso mais estreito que o passo (D-0058): quando o argumento tem
+  o mesmo sinal nas duas pontas, a parábola pelos dois valores e
+  pelo ponto anterior é examinada; se ela cruza zero e volta dentro
+  do passo, o passo é cortado no primeiro zero e a localização
+  normal assume. Comparador na crista de uma senoide (13,8 µs por
+  ciclo, grade de 50 µs): os 21 pulsos de 20 ms com a largura exata;
+  na grade, 6 pulsos de 50 µs. Não vê o pulso que nasce e morre entre
+  dois pontos sem curvar os vizinhos — nenhum teste por amostragem vê.
 - **Método do `.pss`** (D-0047): `Options::pss_method()` = o do
   `.tran` (TR-BDF2 no perfil Dune). A estabilização do autônomo
   (`Options::pss_stab_method()`) fica sempre no trapézio, mesmo com
