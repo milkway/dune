@@ -2,6 +2,12 @@
 
 <!-- badges: start -->
 [![CI](https://github.com/milkway/dune/actions/workflows/ci.yml/badge.svg)](https://github.com/milkway/dune/actions/workflows/ci.yml)
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://github.com/milkway/dune/blob/main/LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24052213.svg)](https://doi.org/10.5281/zenodo.24052213)
+[![PyPI spice3](https://img.shields.io/pypi/v/spice3.svg?label=pypi%20spice3)](https://pypi.org/project/spice3/)
+[![npm dune-sim](https://img.shields.io/npm/v/%40strategicprojects%2Fdune-sim.svg?label=npm%20dune-sim)](https://www.npmjs.com/package/@strategicprojects/dune-sim)
+[![crates.io dune-core](https://img.shields.io/crates/v/dune-core.svg?label=crates.io%20dune-core)](https://crates.io/crates/dune-core)
 <!-- badges: end -->
 
 spice runs SPICE3 circuit netlists from R and hands the results back
@@ -71,3 +77,25 @@ spice_run(deck, options = list(compat = "spice3"))
 ```
 
 `vignette("defaults")` shows the difference on a small circuit.
+
+## The same engine elsewhere
+
+spice is one of several front ends to Dune; a deck gives the same
+numbers in all of them.
+
+| | package | install |
+|---|---|---|
+| Python | [`spice3`](https://pypi.org/project/spice3/) | `pip install spice3` |
+| JavaScript / WebAssembly | [`@strategicprojects/dune-sim`](https://www.npmjs.com/package/@strategicprojects/dune-sim) | `npm install @strategicprojects/dune-sim` |
+| Rust | [`dune-core`](https://crates.io/crates/dune-core), with [`dune-netlist`](https://crates.io/crates/dune-netlist), [`dune-raw`](https://crates.io/crates/dune-raw) and [`dune-pic`](https://crates.io/crates/dune-pic) | `cargo add dune-core` |
+| Command line | [`dune`](https://github.com/milkway/dune) | built from the repository |
+
+The [circuit gallery](https://milkway.github.io/dune/examples/) shows
+every circuit of the engine's test corpus with its results, and
+[rpic](https://github.com/milkway/rpic-lang) is the pic-language
+implementation behind `spice_pic()`.
+
+## Citing
+
+Dune has a DOI: [10.5281/zenodo.24052213](https://doi.org/10.5281/zenodo.24052213).
+`citation("spice")` gives the entry for the package.

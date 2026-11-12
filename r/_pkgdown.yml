@@ -14,6 +14,12 @@ home:
       href: https://milkway.github.io/dune/
     - text: Circuit gallery
       href: https://milkway.github.io/dune/examples/
+    - text: Python package (spice3)
+      href: https://pypi.org/project/spice3/
+    - text: JavaScript package (dune-sim)
+      href: https://www.npmjs.com/package/@strategicprojects/dune-sim
+    - text: Rust crate (dune-core)
+      href: https://crates.io/crates/dune-core
 
 navbar:
   structure:
@@ -26,6 +32,13 @@ articles:
     contents:
       - spice
       - defaults
+  - title: Worked examples
+    desc: Circuits run end to end, with their results.
+    contents:
+      - amplifier
+      - oscillators
+      - sweeps
+      - lines
 
 reference:
   - title: Running circuits

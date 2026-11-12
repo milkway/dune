@@ -1,0 +1,114 @@
+---
+title: "Oscillators and periodic steady state"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Oscillators and periodic steady state}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE, comment = "#>",
+  fig.path = "figures/oscillators-", fig.width = 6.5, fig.height = 3.6, dpi = 110,
+  fig.alt = "Plot of the simulation result described in the text."
+)
+library(ggplot2)
+theme_set(theme_minimal(base_size = 11))
+```
+
+*The results on this page were computed when the vignette was written
+(see `vignettes/precompile.R`); the code is what produced them.*
+
+```{r setup}
+library(spice)
+```
+
+A transient shows an oscillator starting. What one usually wants is
+the oscillation itself — its period, amplitude and harmonics — without
+waiting for the start-up to die out. `spice_pss()` computes one period
+of the steady state directly, by shooting; for an oscillator, with no
+source to set the frequency, the period is one of the unknowns.
+
+## A Colpitts oscillator
+
+An LC tank with a capacitive divider around one transistor. The supply
+ramp of `vee` kicks it off.
+
+```{r deck}
+colpitts <- "colpitts oscillator
+.model qnl npn(bf=80 rb=100 ccs=2pf tf=0.3ns tr=6ns cje=3pf cjc=2pf va=50)
+r1 1 0 1
+q1 2 1 3 qnl
+vcc 4 0 5
+rl 4 2 750
+c1 2 3 500p
+c2 4 3 4500p
+l1 4 2 5uH
+re 3 6 4.65k
+vee 6 0 dc -10 pwl 0 0 1e-9 -10
+.end"
+```
+
+The tank alone would resonate at
+
+```{r tank}
+f_tank <- 1 / (2 * pi * sqrt(5e-6 * (500e-12 * 4500e-12) / (500e-12 + 4500e-12)))
+f_tank
+```
+
+## The steady state
+
+`osc_node` names the node that oscillates; `tstab` is how long to let
+it start before shooting.
+
+```{r pss}
+pss <- spice_pss(colpitts, tstab = 500e-6, osc_node = "3", points = 256)
+pss
+1 / pss$period
+```
+
+The transistor's own capacitances add to the tank's and pull the
+frequency a little below the bare resonance. One period, straight from the result:
+
+```{r wave}
+w <- pss$time[pss$time$variable %in% c("v(2)", "v(3)"), ]
+ggplot(w, aes((time - min(time)) * 1e9, value, colour = variable)) +
+  geom_line(linewidth = 0.8) +
+  labs(x = "time within the period (ns)", y = "voltage (V)", colour = NULL)
+```
+
+## Harmonics
+
+The spectrum comes with the result: harmonic 0 is the mean, 1 the
+fundamental.
+
+```{r spectrum}
+sp <- pss$spectrum[pss$spectrum$variable == "v(3)" & pss$spectrum$harmonic > 0, ]
+sp$mag <- Mod(complex(real = sp$re, imaginary = sp$im))
+sp$dbc <- 20 * log10(sp$mag / sp$mag[1])
+
+ggplot(sp, aes(harmonic, dbc)) +
+  geom_col(fill = "#b8741a", width = 0.6) +
+  scale_x_continuous(breaks = sp$harmonic) +
+  labs(x = "harmonic", y = "level (dBc)", title = "Harmonics of v(3)")
+```
+
+## Against the long transient
+
+The same number the slow way: run past the start-up and time the
+crossings.
+
+```{r tran}
+long <- spice_run(sub(".end", ".tran 1n 600u 597u\n.end", colpitts, fixed = TRUE))
+v <- spice_tidy(long, plots = "Transient Analysis")
+v <- v[v$variable == "v(3)", ]
+mid <- mean(range(v$value))
+up <- which(v$value[-1] > mid & v$value[-nrow(v)] <= mid)
+t_up <- v$scale[up] + (mid - v$value[up]) / (v$value[up + 1] - v$value[up]) *
+  (v$scale[up + 1] - v$scale[up])
+c(transient = mean(diff(t_up)), pss = pss$period)
+```
+
+Six hundred microseconds of transient for what the shooting gets from
+a handful of periods, and the two agree to about one part in 1e5.

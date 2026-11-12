@@ -1,0 +1,136 @@
+---
+title: "A transistor amplifier: bias, gain, noise and clipping"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{A transistor amplifier: bias, gain, noise and clipping}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE, comment = "#>",
+  fig.path = "figures/amplifier-", fig.width = 6.5, fig.height = 3.6, dpi = 110,
+  fig.alt = "Plot of the simulation result described in the text."
+)
+library(ggplot2)
+theme_set(theme_minimal(base_size = 11))
+```
+
+*The results on this page were computed when the vignette was written
+(see `vignettes/precompile.R`); the code is what produced them.*
+
+```{r setup}
+library(spice)
+```
+
+One deck, four analyses: a common-emitter stage with an emitter bypass,
+looked at the way a designer would — where it sits, how much it
+amplifies and up to where, how much noise it adds, and what it does to
+a signal that is too large.
+
+## The circuit
+
+```{r deck}
+amp <- "common-emitter amplifier
+vcc vcc 0 12
+vin in 0 dc 0 ac 1 sin(0 10m 1k)
+rs in b1 1k
+cin b1 b 10u
+r1 vcc b 47k
+r2 b 0 10k
+q1 c b e qn
+rc vcc c 4.7k
+re e 0 1k
+ce e 0 100u
+cout c out 10u
+rl out 0 10k
+.model qn npn(is=1e-14 bf=200 vaf=100 cje=4p cjc=2p tf=0.3n rb=50)
+.op
+.ac dec 20 1 100meg
+.noise v(out) vin dec 10 10 1meg
+.tran 10u 4m
+.end"
+res <- spice_run(amp)
+res
+```
+
+## Bias
+
+The operating point is one row per node voltage and source current.
+
+```{r op}
+op <- spice_tidy(res, plots = "Operating Point")
+op[op$variable %in% c("v(b)", "v(e)", "v(c)"), c("variable", "value")]
+```
+
+The collector sits near mid-supply, with about 1.4 mA through the
+transistor (`v(e)` across the 1 kOhm emitter resistor).
+
+## Gain and bandwidth
+
+The AC plot is complex; magnitude in dB is one line of R. `.measure`
+expressions work on a finished plot too, through `spice_measure()`.
+
+```{r ac}
+ac <- spice_tidy(res, plots = "AC Analysis")
+out <- ac[ac$variable == "v(out)", ]
+out$db <- 20 * log10(Mod(complex(real = out$re, imaginary = out$im)))
+
+ggplot(out, aes(scale, db)) +
+  geom_line(colour = "#b8741a", linewidth = 0.8) +
+  scale_x_log10() +
+  labs(x = "frequency (Hz)", y = "gain (dB)", title = "Voltage gain, v(out)/vin")
+```
+
+```{r band}
+acp <- spice_plots(res)[["AC Analysis"]]
+m <- spice_measure(acp, c(
+  peak = "max vdb(out)",
+  f_lo = "when vdb(out)=38.4 rise=1",
+  f_hi = "when vdb(out)=38.4 fall=1"
+))
+m[, c("name", "value")]
+```
+
+About 41 dB in the passband; the lower corner is set by the emitter
+bypass capacitor, the upper one by the transistor's capacitances
+against the source resistance.
+
+## Noise
+
+`.noise` gives the output noise density and the same referred to the
+input, and their integrals over the sweep.
+
+```{r noise}
+nz <- spice_tidy(res, plots = "Noise Spectral Density Curves")
+ggplot(nz, aes(scale, value * 1e9, colour = variable)) +
+  geom_line(linewidth = 0.8) +
+  scale_x_log10() + scale_y_log10() +
+  labs(x = "frequency (Hz)", y = "noise density (nV/sqrt(Hz))", colour = NULL)
+
+spice_tidy(res, plots = "Integrated Noise")[, c("variable", "value")]
+```
+
+## A signal that is too large
+
+The deck's transient drives 10 mV; the stage is linear there. Sixty
+millivolts is another matter. A session keeps the circuit built and
+lets one alter a source and run again.
+
+```{r clip}
+s <- spice_session(amp)
+run_at <- function(amplitude) {
+  spice_alter(s, "vin", sin = c(0, amplitude, 1e3))
+  tr <- spice_tidy(spice_rerun(s), plots = "Transient Analysis")
+  tr <- tr[tr$variable == "v(out)", c("scale", "value")]
+  tr$drive <- sprintf("%g mV", amplitude * 1e3)
+  tr
+}
+both <- rbind(run_at(10e-3), run_at(60e-3))
+
+ggplot(both, aes(scale * 1e3, value, colour = drive)) +
+  geom_line(linewidth = 0.7) +
+  labs(x = "time (ms)", y = "v(out) (V)", colour = "input",
+       title = "The stage clips on the way down")
+```

@@ -11,9 +11,13 @@ First release, aligned with Dune v0.1.0.
 * `spice_read_raw()` reads 'SPICE3' rawfiles; `spice_measure()`,
   `spice_session()` (`spice_alter()`, `spice_rerun()`), `spice_sweep()`
   and a 'knitr' engine (`spice_knitr()`) round out the workflow.
-* Two vignettes: `vignette("spice")` runs a deck end to end, and
+* Vignettes: `vignette("spice")` runs a deck end to end, and
   `vignette("defaults")` shows where the engine departs from 'SPICE3'
-  by default and how `compat = "spice3"` turns it back.
+  by default and how `compat = "spice3"` turns it back. Four worked
+  examples with their results computed in advance: an amplifier
+  (`"amplifier"`), oscillators and periodic steady state
+  (`"oscillators"`), sweeps and tolerances (`"sweeps"`) and
+  transmission lines (`"lines"`).
 * `spice_pic()` and `spice_pic_svg()` extract netlists from 'rpic'
   figures and draw them.
 * A `.tran` integrates with TR-BDF2 by default, not the trapezoidal
