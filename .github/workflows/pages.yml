@@ -30,6 +30,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      # pak installs the package from a tarball it builds of r/, which
+      # carries no engine sources; r/configure finds them through this.
+      DUNE_ROOT: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v7
       # The R package's documentation (pkgdown) is built here and
