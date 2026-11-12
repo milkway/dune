@@ -10,3 +10,6 @@
 ^cran-comments\.md$
 ^spice_[0-9].*\.tar\.gz$
 ^spice\.Rcheck$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$

@@ -16,7 +16,7 @@ Description: Runs 'SPICE3' circuit netlists (operating point, DC sweep,
     plotting, and plots can be read from and written to 'SPICE3'
     rawfiles for exchange with other simulators.
 License: BSD_3_clause + file LICENSE
-URL: https://github.com/milkway/dune, https://milkway.github.io/dune/
+URL: https://milkway.github.io/dune/r/, https://github.com/milkway/dune
 BugReports: https://github.com/milkway/dune/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

@@ -1,0 +1,111 @@
+---
+title: "Dune's defaults and SPICE compatibility"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Dune's defaults and SPICE compatibility}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+spice reads SPICE3 netlists and runs SPICE3f5's device models and
+analyses. In a few places its engine, Dune, does something else by
+default than SPICE3 does — only where the result is measurably closer
+to the converged answer at the same timestep. This vignette shows what
+changes, and the one option that turns it all back.
+
+```{r setup}
+library(spice)
+```
+
+## The option
+
+`compat` selects the profile of defaults: `"dune"` (the default) or
+`"spice3"`. It can be given from R or on a `.options` card of the deck.
+
+```{r, eval = FALSE}
+spice_run(deck, options = list(compat = "spice3"))
+```
+
+Under `compat = "spice3"`:
+
+* a transient integrates with the trapezoidal rule (Dune: TR-BDF2,
+  which does not ring), and its step control uses SPICE's `trtol`
+  allowance as is;
+* a switch, or a `u()`/`sgn()` in a B source, flips at whatever
+  timepoint first sees its control past the threshold (Dune: at the
+  instant it crosses, located to `reltol` times the maximum step);
+* LTRA lines interpolate quadratically, plant breakpoints by SPICE's
+  rule and are not limited by their interpolation error.
+
+Single options still win over the profile: `method = "trap"` under the
+Dune profile integrates with the trapezoidal rule and keeps everything
+else.
+
+## A switch that is late
+
+A relaxation oscillator: 10 V charges 100 nF through 10 kOhm, and a
+switch across the capacitor closes at 7 V and opens again at 3 V. Its
+period has a closed form.
+
+```{r deck}
+deck <- "relaxation oscillator
+vdd 1 0 10
+r1 1 2 10k
+c1 2 0 100n ic=0
+s1 2 0 2 0 sdis
+.model sdis sw vt=5 vh=2 ron=100 roff=1e9
+.tran 50u 20m uic
+.end"
+
+rp <- 1e4 * 100 / 1.01e4
+vinf <- 10 * 100 / 1.01e4
+exact <- 1e4 * 100e-9 * log(7 / 3) +
+  rp * 100e-9 * log((7 - vinf) / (3 - vinf))
+exact
+```
+
+The periods of a run are the spacings of the peaks of the capacitor
+voltage:
+
+```{r periods}
+periods <- function(res) {
+  tran <- spice_tidy(res, plots = "Transient Analysis")
+  v <- tran[tran$variable == "v(2)", ]
+  i <- seq(2, nrow(v) - 1)
+  peak <- i[v$value[i] >= v$value[i - 1] & v$value[i] > v$value[i + 1] &
+    v$value[i] > 6]
+  diff(v$scale[peak])
+}
+
+dune <- periods(spice_run(deck))
+spice3 <- periods(spice_run(deck, options = list(compat = "spice3")))
+```
+
+With the flip located, every cycle is the same and matches the closed
+form:
+
+```{r dune}
+range(dune / exact - 1)
+```
+
+On the 50 us grid of the deck the switch flips up to a step late, and
+by a different amount every cycle:
+
+```{r spice3}
+range(spice3 / exact - 1)
+```
+
+## When to ask for SPICE3
+
+* To reproduce a run of SPICE3 or ngspice, or to compare against one:
+  `compat = "spice3"` is the profile Dune's own test suite uses
+  against ngspice.
+* When a deck was tuned around the trapezoidal rule's behaviour.
+
+Otherwise the defaults are the better answer at the same cost: over
+the engine's corpus of transient decks, the error at the deck's own
+step is several times smaller for a few percent more timepoints.

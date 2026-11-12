@@ -1,42 +1,74 @@
 name: pages
 
-# Publishes the static landing page in site/ to GitHub Pages whenever
-# site/ changes on main. Pages must be set to "GitHub Actions" as its
-# source (Settings → Pages), and the repo must be public for Pages on
-# the free plan. The job is ~30 s of ubuntu, so the push trigger stays
-# even while the heavy CI is dispatch/PR-only.
+# Publishes site/ (the landing page and the circuit gallery) to GitHub
+# Pages, with the R package's pkgdown site built into /r/, whenever
+# site/ or r/ changes on main. Pages must be set to "GitHub Actions"
+# as its source (Settings → Pages), and the repo must be public for
+# Pages on the free plan. The pkgdown build installs the package (a
+# Rust build, cached), about ten minutes.
 
 on:
   push:
     branches: [main]
     paths:
       - "site/**"
+      - "r/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
+# Least privilege: the build job (third-party actions, package code)
+# only reads the repository; the token that can write to Pages exists
+# only in the deploy job, which runs first-party actions alone.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      # The R package's documentation (pkgdown) is built here and
+      # served under /r/, next to the hand-written site. Third-party
+      # actions are pinned to a commit.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          prefix-key: pages
+          workspaces: r/src/rust
+      - uses: r-lib/actions/setup-pandoc@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+      - uses: r-lib/actions/setup-r@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          use-public-rspm: true
+      - uses: r-lib/actions/setup-r-dependencies@f9a764fea8d5c63df6ef9a5c7795bf7deb5d7e05 # v2
+        with:
+          working-directory: r
+          extra-packages: any::pkgdown, local::.
+          needs: website
+      - name: Build the pkgdown site into site/r
+        working-directory: r
+        run: Rscript -e 'pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE, dest_dir = "../site/r")'
+      - name: Disable Jekyll
+        run: touch site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
   deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Disable Jekyll
-        run: touch site/.nojekyll
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
       - id: deployment
         uses: actions/deploy-pages@v4
