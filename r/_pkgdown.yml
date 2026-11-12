@@ -24,7 +24,12 @@ home:
 navbar:
   structure:
     left: [intro, reference, articles, news]
-    right: [search, github]
+    right: [search, dune, github]
+  components:
+    dune:
+      text: Dune
+      href: https://milkway.github.io/dune/
+      aria-label: Dune, the engine
 
 articles:
   - title: Guides
