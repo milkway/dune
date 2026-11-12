@@ -1,0 +1,67 @@
+url: https://milkway.github.io/dune/r/
+
+template:
+  bootstrap: 5
+  bslib:
+    primary: "#b8741a"
+    base_font: {google: "Inter"}
+    code_font: {google: "JetBrains Mono"}
+
+home:
+  title: "spice: circuit simulation with a SPICE3f5-derived engine"
+  links:
+    - text: Dune, the engine
+      href: https://milkway.github.io/dune/
+    - text: Circuit gallery
+      href: https://milkway.github.io/dune/examples/
+
+navbar:
+  structure:
+    left: [intro, reference, articles, news]
+    right: [search, github]
+
+articles:
+  - title: Guides
+    navbar: ~
+    contents:
+      - spice
+      - defaults
+
+reference:
+  - title: Running circuits
+    contents:
+      - spice_run
+      - spice_pss
+      - spice_sweep
+  - title: Results
+    contents:
+      - spice_plots
+      - spice_tidy
+      - spice_measure
+      - autoplot.spice_plot
+      - as_tibble.spice_plot
+  - title: Sessions
+    desc: Alter a circuit and rerun it without rebuilding.
+    contents:
+      - spice_session
+      - spice_alter
+      - spice_alterable
+      - spice_param
+      - spice_rerun
+      - spice_set_temp
+      - spice_temp
+      - spice_set_tmax_divisor
+      - spice_tmax_divisor
+  - title: Circuits from figures
+    contents:
+      - spice_pic
+      - spice_pic_svg
+      - spice_pic_texlabels
+  - title: Rawfiles and knitr
+    contents:
+      - spice_read_raw
+      - spice_write_raw
+      - spice_knitr
+  - title: Package
+    contents:
+      - spice-package

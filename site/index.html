@@ -190,6 +190,7 @@
       <a href="#coverage">Coverage</a>
       <a href="#figures">Figures</a>
       <a href="examples/">Examples</a>
+      <a href="r/">R package</a>
       <a href="#install">Install</a>
       <a href="https://github.com/milkway/dune">GitHub</a>
     </nav>
@@ -202,7 +203,7 @@
       <div>
         <span class="eyebrow">circuit simulation · Rust · Berkeley lineage</span>
         <h1>SPICE, reborn in Rust.</h1>
-        <p class="lead">Dune is a faithful rewrite of Berkeley's SPICE3f5: the same netlists, the same defaults, the same numbers — validated circuit by circuit against ngspice — with a clean engine you can call from Python, R, JavaScript or C.</p>
+        <p class="lead">Dune is a faithful rewrite of Berkeley's SPICE3f5: the same netlists, devices and analyses — validated circuit by circuit against ngspice — with a clean engine you can call from Python, R, JavaScript or C. Where it departs from SPICE by default, it is measured to be closer to the converged answer, and one option (<code>compat=spice3</code>) restores SPICE's numbers.</p>
         <div class="badges">
           <a href="https://github.com/milkway/dune/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/milkway/dune/actions/workflows/ci.yml/badge.svg"></a>
           <a href="https://pypi.org/project/spice3/"><img alt="PyPI" src="https://img.shields.io/pypi/v/spice3.svg?label=pypi%20spice3"></a>
@@ -257,10 +258,10 @@ C1 out 0 1n
       <p class="sub">SPICE3f5 is the contract; ngspice is the oracle. Nothing ships until the oracle agrees — at SPICE's own tolerances, not numbers invented to pass.</p>
       <div class="grid f3">
         <div class="card"><div class="ic">📜</div><h3>Byte-faithful netlists</h3><p>The lexer and number parser mirror <code>INPgetTok</code>/<code>INPevaluate</code> token for token: 22 element letters, dot cards, hierarchical <code>.subckt</code> expansion with ngspice's names (<code>r.x1.r1</code>, <code>x1.n1</code>).</p></div>
-        <div class="card"><div class="ic">⚖️</div><h3>Oracle-tested, circuit by circuit</h3><p>75 circuits — Berkeley's own decks included — run through Dune and compared point-by-point against pinned ngspice-47 goldens on every analysis, within <code>reltol</code>/<code>abstol</code>/<code>vntol</code>.</p></div>
+        <div class="card"><div class="ic">⚖️</div><h3>Oracle-tested, circuit by circuit</h3><p>119 circuits — Berkeley's own decks included — run through Dune under <code>compat=spice3</code> and compared point-by-point against pinned ngspice-47 goldens on every analysis, within <code>reltol</code>/<code>abstol</code>/<code>vntol</code>.</p></div>
         <div class="card"><div class="ic">🧭</div><h3>Divergence is documented</h3><p>Where SPICE3f5 and ngspice disagree, Dune picks deliberately and writes it down: every entry in <code>KNOWN_DIFFS</code> has a measured gate that fails if the choice is reverted.</p></div>
         <div class="card"><div class="ic">🛡️</div><h3>Hostile input never crashes</h3><p>Malformed decks produce structured diagnostics with spans — never a panic, never an infinite loop. The parser is fuzzed in CI.</p></div>
-        <div class="card"><div class="ic">🧮</div><h3>The real algorithms</h3><p>Newton–Raphson with <code>pnjlim</code> junction limiting, gmin and source stepping, trapezoidal and Gear 1–6 integration with LTE control and breakpoints — ported from the C, not approximated.</p></div>
+        <div class="card"><div class="ic">🧮</div><h3>The real algorithms</h3><p>Newton–Raphson with <code>pnjlim</code> junction limiting, gmin and source stepping, trapezoidal and Gear 1–6 integration with LTE control and breakpoints — ported from the C, not approximated. On top of them, by default: TR-BDF2 integration, switch and comparator events located in time, and transmission lines that keep the corners of their waves.</p></div>
         <div class="card"><div class="ic">🦀</div><h3>A clean engine inside</h3><p>No global state, no <code>unsafe</code> outside the FFI crate, one type per device, a swappable linear-solver backend. The C's <code>GENmodel</code> maze stayed in 1993.</p></div>
       </div>
     </div>
