@@ -116,8 +116,8 @@ regex-automata               0.4.18     MIT OR Apache-2.0                  The R
 regex-lite                   0.1.9      MIT OR Apache-2.0                  The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>
 regex-syntax                 0.8.11     MIT OR Apache-2.0                  The Rust Project Developers; Andrew Gallant <jamslam@gmail.com>
 roxmltree                    0.20.0     MIT OR Apache-2.0                  Yevhenii Reizner <razrfalcon@gmail.com>
-rpic-core                    0.16.1     BSD-2-Clause                       André Leite <leite@de.ufpe.br>
-rpic-render                  0.16.1     BSD-2-Clause                       André Leite <leite@de.ufpe.br>
+rpic-core                    0.19.0     BSD-2-Clause                       André Leite <leite@de.ufpe.br>
+rpic-render                  0.19.0     BSD-2-Clause                       André Leite <leite@de.ufpe.br>
 rust-embed                   8.13.0     MIT                                pyrossh
 rust-embed-impl              8.13.0     MIT                                pyrossh
 rust-embed-utils             8.13.0     MIT                                pyrossh

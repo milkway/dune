@@ -12,7 +12,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-rpic-core = "=0.16.1"
+rpic-core = "=0.19.0"
 thiserror.workspace = true
 
 [dev-dependencies]

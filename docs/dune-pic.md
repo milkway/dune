@@ -1,7 +1,7 @@
 # dune-pic — extrator de netlist de figuras rpic
 
 Fase 5 (PLAN §2.5; D-0003/D-0004/D-0019/D-0020/D-0021). Depende de
-`rpic-core = "=0.16.1"` (crates.io, zero deps, wasm-friendly) — só
+`rpic-core = "=0.19.0"` (crates.io, zero deps, wasm-friendly) — só
 API pública, como o D-0003 manda. Os três interinos do D-0020
 foram aposentados na 0.13.0 (PRs #414/#415/#416), e os shims de
 compat na 0.16.0 (rpic-lang #425 E1/E2): continuações `+` vêm
@@ -327,7 +327,7 @@ display compara o texto, que não muda).
 | `dune-sim` (wasm: `renderPic`, galeria, painel do Studio) | literal | nada registrado; custo medido abaixo |
 | pacotes Python/R | — | ainda não têm caminho de figura (`spice_pic`/`spice.pic` não existem); quando ganharem, é uma linha de registro + a mesma feature |
 
-`dune-cli` fixa `rpic-core = "=0.16.1"` igual ao do dune-pic: o
+`dune-cli` fixa `rpic-core = "=0.19.0"` igual ao do dune-pic: o
 gancho é um `static` do crate, e um segundo `rpic-core` no grafo
 teria o seu próprio, que ninguém leria. Testes em
 `crates/dune-cli/tests/texlabels.rs`: o SVG da CLI tem um `<svg x=`
