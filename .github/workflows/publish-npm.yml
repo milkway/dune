@@ -65,10 +65,14 @@ jobs:
           path: npm-package
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # Node 24 bundles npm >= 11.5.1, which OIDC publishing
+          # needs. No in-place `npm install -g npm@latest`: it fails
+          # with EACCES on newer runner images and a self-upgraded npm
+          # can lose the bundled sigstore module provenance uses.
+          node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: npm >= 11.5.1 (required for OIDC publishing)
-        run: npm install -g npm@latest && npm --version
+      - name: npm version (>= 11.5.1 required for OIDC publishing)
+        run: npm --version
       # A GitHub release may be cut without bumping the package (e.g.
       # a repo release that mints a Zenodo DOI): publishing an
       # already-published version would fail the run, so skip it.
