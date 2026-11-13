@@ -1,5 +1,17 @@
 # Changelog — spice3 (Python)
 
+## 0.7.1
+
+Metadata only; the code is that of 0.7.0.
+
+- The package carries a `NOTICE` file crediting SPICE3f5, ngspice and
+  BSIM3v3, with their copyright and licence notices, and the `LICENSE`
+  file; both ship in the sdist and in the wheels. The description and
+  the README say that Dune derives from Berkeley SPICE3f5 and, in
+  parts, ngspice, and that it is an independent project.
+- Author and maintainer e-mail: leite@castlab.org.
+- Figures are compiled with rpic 0.19.0 (0.7.0 was built with 0.16.1).
+
 ## 0.7.0
 
 - **Short names for plots**: `result.plot("tran")`, `"ac"`, `"op"`,

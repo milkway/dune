@@ -26,6 +26,17 @@ git -C "$root" archive HEAD | tar -x -C "$stage"
 cd "$stage"
 rustup update stable --no-self-update >/dev/null 2>&1 || true
 echo "== toolchain: $(rustc +stable --version)"
+# Every published package carries its own copy of NOTICE (the R
+# package as inst/COPYRIGHTS) and of LICENSE: cargo, maturin and npm
+# only pack files under the package directory. The copies must not
+# drift from the ones at the root.
+echo "== notices"
+for f in crates/dune-netlist crates/dune-raw crates/dune-core crates/dune-pic \
+    python crates/dune-wasm/npm; do
+    cmp NOTICE "$f/NOTICE"
+    cmp LICENSE "$f/LICENSE"
+done
+cmp NOTICE r/inst/COPYRIGHTS
 echo "== fmt" && cargo +stable fmt --check
 echo "== clippy" && cargo +stable clippy --all-targets -- -D warnings
 echo "== clippy (parallel)" && cargo +stable clippy -p dune-core --features parallel --all-targets -- -D warnings

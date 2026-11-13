@@ -2,7 +2,7 @@
 name = "dune-wasm"
 description = "WebAssembly build of the Dune simulator: simulate SPICE3 netlists and rpic figures, render figures to SVG"
 # Own version: the npm package (dune-sim) follows it (npm/build.sh).
-version = "0.10.0"
+version = "0.10.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
