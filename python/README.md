@@ -3,8 +3,9 @@
 `pip install spice3` → `import spice`.
 
 Circuit simulation for Python, powered by **Dune** — a Rust engine
-derived from Berkeley **SPICE3f5** and validated circuit-by-circuit
-against **ngspice** as numerical oracle.
+derived from Berkeley **SPICE3f5** (with BSIM3v3.3, `.sp`, `.measure`
+and several revised routines derived from **ngspice-47**) and validated
+circuit-by-circuit against **ngspice** as numerical oracle.
 
 > **Status: pre-alpha.** This release reserves the package name while
 > the engine's first public version is being finished. The API below
@@ -45,5 +46,25 @@ of them.
 ![Architecture of Dune: a pic figure goes through dune-pic and a SPICE deck through dune-netlist into dune-core, the engine; dune-raw writes rawfiles; the command line and the Python, R, JavaScript and C interfaces all sit on that one engine.](https://milkway.github.io/dune/diagrams/architecture.svg)
 
 Site: [milkway.github.io/dune](https://milkway.github.io/dune/). 
-[Dune repository](https://github.com/milkway/dune). BSD-3-Clause,
-© André Leite and The Regents of the University of California.
+[Dune repository](https://github.com/milkway/dune).
+
+## Credits and license
+
+The engine is a derived work: it is translated from **SPICE3f5**
+(© 1985–1991 The Regents of the University of California; Thomas L.
+Quarles and many others at UC Berkeley) and, for BSIM3v3.3, the `.sp`
+analysis, the operating-point fallback chain, `.measure`, the transient
+noise sources and the revisions of several device routines, from
+**ngspice-47** (the ngspice team and contributors; BSIM3v3.3.0 by the
+UC Berkeley BSIM Research Group). The `NOTICE` file shipped with this
+package ([online](https://github.com/milkway/dune/blob/main/NOTICE)) lists the upstream files and
+reproduces their copyright and licence notices.
+
+Dune is an independent project: it is not affiliated with, sponsored by or
+endorsed by the University of California, Berkeley, the UC Berkeley BSIM
+Research Group or the ngspice project. The names "SPICE", "SPICE3" and
+"ngspice" are used only descriptively, to identify the programs whose
+netlist language and behaviour Dune implements.
+
+BSD-3-Clause, © André Leite; portions © The Regents of the University
+of California and the ngspice contributors.

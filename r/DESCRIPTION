@@ -4,18 +4,31 @@ Version: 0.1.0
 Authors@R: c(
     person("André", "Leite", email = "leite@castlab.org", role = c("aut", "cre")),
     person("The Regents of the University of California", role = "cph",
-           comment = "'SPICE3f5', from which the simulation engine is derived"),
+           comment = "'SPICE3f5', from which the simulation engine is derived, and 'BSIM3v3.3.0' (UC Berkeley BSIM Research Group), translated in src/rust dune-core/src/bsim3"),
+    person("The ngspice team and contributors", role = "cph",
+           comment = "'ngspice' 47: translated or followed in dune-core (cktop.c, com_measure2.c, the switch, source, noise and other device routines revised by 'ngspice'); see inst/COPYRIGHTS"),
+    person("Holger", "Vogt", role = "cph",
+           comment = "'ngspice' files optran.c, 1-f-code.c and randnumb.c, followed in dune-core engine.rs and trnoise.rs"),
+    person("Alessio", "Cacciatori", role = "cph",
+           comment = "'ngspice' file span.c and RF ports, translated in dune-core sp.rs"),
+    person("Paolo", "Nenzi", role = "cph",
+           comment = "'ngspice' files b1noi.c and b2noi.c, translated in dune-core bsim1.rs and bsim2.rs"),
     person("The authors of the dependency Rust crates", role = "cph",
            comment = "see inst/AUTHORS for details")
   )
 Description: Runs 'SPICE3' circuit netlists (operating point, DC sweep,
     transient, small-signal AC, pole-zero, noise, distortion, transfer
     function and sensitivity analyses) on 'Dune', a circuit simulator
-    written in 'Rust' and derived from Berkeley 'SPICE3f5', validated
-    against 'ngspice'. Results come back as long tibbles ready for
-    plotting, and plots can be read from and written to 'SPICE3'
-    rawfiles for exchange with other simulators.
+    written in 'Rust' and derived from Berkeley 'SPICE3f5' and, in
+    parts, from 'ngspice', against which it is validated. Results come
+    back as long tibbles ready for plotting, and plots can be read from
+    and written to 'SPICE3' rawfiles for exchange with other simulators.
+    This is an independent project, not affiliated with or endorsed by
+    the University of California, Berkeley or the 'ngspice' project.
 License: BSD_3_clause + file LICENSE
+Copyright: See the file inst/COPYRIGHTS for the copyright and licence
+    notices of 'SPICE3f5', 'ngspice' and 'BSIM3', and inst/AUTHORS for
+    the vendored 'Rust' crates.
 URL: https://milkway.github.io/dune/r/, https://github.com/milkway/dune
 BugReports: https://github.com/milkway/dune/issues
 Encoding: UTF-8

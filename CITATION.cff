@@ -26,3 +26,16 @@ references:
     authors:
       - name: "The Regents of the University of California (T. Quarles et al.)"
     year: 1993
+  - type: software
+    title: "ngspice"
+    version: "47"
+    authors:
+      - name: "The ngspice team"
+    url: "https://ngspice.sourceforge.io/"
+    notes: "Numerical reference of Dune and source of the modules listed in the NOTICE file (BSIM3v3.3, .sp, the operating-point fallback chain, .measure, transient noise sources)."
+  - type: software
+    title: "BSIM3v3.3.0"
+    authors:
+      - name: "The Regents of the University of California (UC Berkeley BSIM Research Group)"
+    year: 2005
+    notes: "MOSFET model, translated from the code distributed with ngspice-47."

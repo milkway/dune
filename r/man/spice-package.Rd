@@ -44,7 +44,11 @@ Authors:
 
 Other contributors:
 \itemize{
-  \item The Regents of the University of California ('SPICE3f5', from which the simulation engine is derived) [copyright holder]
+  \item The Regents of the University of California ('SPICE3f5', from which the simulation engine is derived, and 'BSIM3v3.3.0' (UC Berkeley BSIM Research Group), translated in src/rust dune-core/src/bsim3) [copyright holder]
+  \item The ngspice team and contributors ('ngspice' 47: translated or followed in dune-core (cktop.c, com_measure2.c, the switch, source, noise and other device routines revised by 'ngspice'); see inst/COPYRIGHTS) [copyright holder]
+  \item Holger Vogt ('ngspice' files optran.c, 1-f-code.c and randnumb.c, followed in dune-core engine.rs and trnoise.rs) [copyright holder]
+  \item Alessio Cacciatori ('ngspice' file span.c and RF ports, translated in dune-core sp.rs) [copyright holder]
+  \item Paolo Nenzi ('ngspice' files b1noi.c and b2noi.c, translated in dune-core bsim1.rs and bsim2.rs) [copyright holder]
   \item The authors of the dependency Rust crates (see inst/AUTHORS for details) [copyright holder]
 }
 

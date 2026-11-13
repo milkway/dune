@@ -1,7 +1,7 @@
 {
   "name": "@strategicprojects/dune-sim",
   "version": "0.10.0",
-  "description": "The Dune SPICE3 circuit simulator in WebAssembly: run a netlist, or extract and simulate an rpic (pic) schematic figure. Browser + Node.",
+  "description": "The Dune circuit simulator (derived from Berkeley SPICE3f5 and ngspice; independent project) in WebAssembly: run a SPICE3 netlist, or extract and simulate an rpic (pic) schematic figure. Browser + Node.",
   "type": "module",
   "main": "./index.js",
   "module": "./index.js",
@@ -21,7 +21,8 @@
     "pkg/dune_wasm.d.ts",
     "pkg/dune_wasm_bg.wasm",
     "pkg/dune_wasm_bg.wasm.d.ts",
-    "README.md"
+    "README.md",
+    "NOTICE"
   ],
   "scripts": {
     "build": "./build.sh",

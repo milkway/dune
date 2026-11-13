@@ -78,3 +78,35 @@ são raízes do oráculo (`--ci`): `crates/dune-core/tests/measure_ngspice.rs`
 mede o rawfile do ngspice com a camada do Dune e compara com a
 saída dele — código de medida contra código de medida, nos mesmos
 dados.
+
+## Proveniência e licenças
+
+Resumo de onde vem cada parte do corpus (os avisos de copyright e de
+licença completos estão no `NOTICE` da raiz do repositório):
+
+- `spice3f5/`: distribuição original de Berkeley, sem alterações —
+  © 1985–1991 The Regents of the University of California, licença em
+  `spice3f5/COPYRIGHT`.
+- `golden/*.raw`, `measure/golden/*.raw`, `measure/golden/*.meas` e
+  `pss/golden/*.raw`: **saídas do ngspice-47** (versão em `ORACLE`)
+  rodando os decks deste corpus; não são resultados do Dune. O ngspice
+  é do time ngspice e colaboradores (licença "Modified BSD",
+  <https://ngspice.sourceforge.io/>). As referências escritas pelo
+  próprio Dune são `regress/golden/*.dune.raw` (recursos sem
+  equivalente no ngspice) e `pic/golden/*.cir` (netlists extraídas das
+  figuras).
+- `regress/bsim3_*.cir`: usam os cartões de modelo BSIM3v3.3.0 de
+  0,35 µm distribuídos com o ngspice-47 (`examples/mos/modelcard.nmos`
+  e `modelcard.pmos`; BSIM3 é do BSIM Research Group da UC Berkeley,
+  © Regents of the University of California).
+- `pss/osc_colpitts.cir`: circuito e cartão `.pss` do exemplo
+  `examples/pss/colpitt_osc_pss.cir` do ngspice-47 (anotado no deck).
+- `regress/ltra_*_gear.cir`, `mosamp2_fine.cir`, `schmitt_fine.cir`,
+  `mixdisto_*.cir`: variantes dos exemplos de `spice3f5/examples/`
+  (mesmo circuito, passo ou análise diferentes).
+- Demais decks de `basic/`, `regress/`, `measure/`, `pss/` e `pic/`:
+  escritos para o Dune. Nem todo deck de `regress/` traz linha de
+  proveniência; na falta dela, vale esta lista.
+
+O Dune é um projeto independente, sem vínculo com a University of
+California, Berkeley nem com o projeto ngspice, e sem endosso deles.

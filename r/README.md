@@ -12,8 +12,9 @@
 
 spice runs SPICE3 circuit netlists from R and hands the results back
 as tidy data. The engine is [Dune](https://milkway.github.io/dune/), a
-circuit simulator written in Rust and derived from Berkeley SPICE3f5,
-checked circuit by circuit against ngspice.
+circuit simulator written in Rust and derived from Berkeley SPICE3f5
+(with BSIM3v3.3, `.sp`, `.measure` and several revised routines derived
+from ngspice-47), checked circuit by circuit against ngspice.
 
 - **Every SPICE3f5 analysis**: operating point, DC sweep, transient,
   AC, pole-zero, noise, distortion, transfer function and sensitivity,
@@ -110,6 +111,24 @@ The [circuit gallery](https://milkway.github.io/dune/examples/) shows
 every circuit of the engine's test corpus with its results, and
 [rpic](https://github.com/milkway/rpic-lang) is the pic-language
 implementation behind `spice_pic()`.
+
+## Credits
+
+The engine is a derived work: it is translated from SPICE3f5
+(© 1985–1991 The Regents of the University of California; Thomas L.
+Quarles and many others at UC Berkeley) and, for BSIM3v3.3, the `.sp`
+analysis, the operating-point fallback chain, `.measure`, the transient
+noise sources and the revisions of several device routines, from
+ngspice-47 (the ngspice team and contributors; BSIM3v3.3.0 by the UC
+Berkeley BSIM Research Group). The file `inst/COPYRIGHTS` of the package
+([NOTICE](https://github.com/milkway/dune/blob/main/NOTICE) in the repository) lists the upstream files
+and reproduces their copyright and licence notices.
+
+Dune is an independent project: it is not affiliated with, sponsored by or
+endorsed by the University of California, Berkeley, the UC Berkeley BSIM
+Research Group or the ngspice project. The names "SPICE", "SPICE3" and
+"ngspice" are used only descriptively, to identify the programs whose
+netlist language and behaviour Dune implements.
 
 ## Citing
 

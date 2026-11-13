@@ -5,6 +5,14 @@ SPICE3f5 circuit simulator: the same netlists, the same defaults, the
 same numbers — validated circuit by circuit against ngspice — with a
 clean engine you can call from Python, R, JavaScript or C.
 
+Dune is a derived work: the engine is a translation of the SPICE3f5
+sources of the University of California, Berkeley, and some parts
+(BSIM3v3.3, the `.sp` analysis, the operating-point fallback chain,
+`.measure`, the transient noise sources and the revisions of several
+device routines) are derived from [ngspice](https://ngspice.sourceforge.io/)
+release 47. See [Credits and lineage](#credits-and-lineage) and
+[NOTICE](NOTICE).
+
 **Site: [milkway.github.io/dune](https://milkway.github.io/dune/)** ·
 [Examples gallery](https://milkway.github.io/dune/examples/) — every
 corpus circuit, simulated · [Known differences](corpus/KNOWN_DIFFS.md)
@@ -50,8 +58,9 @@ tolerances. The sources of both diagrams are pic figures in
 - **Every SPICE3f5 device and analysis**: R C L K, V/I sources, E F G H,
   diode, BJT (Gummel–Poon), MOS levels 1–6, BSIM1/2, JFET, MESFET,
   switches, ideal and lossy (LTRA) transmission lines, `.subckt` — and
-  `.OP .DC .AC .TRAN .PZ .NOISE .DISTO .TF .SENS`. Plus BSIM3v3 and
-  S-parameter analysis (`.sp`) from modern ngspice.
+  `.OP .DC .AC .TRAN .PZ .NOISE .DISTO .TF .SENS`. Plus BSIM3v3.3 and
+  S-parameter analysis (`.sp`), both translated from the ngspice-47
+  sources.
 - **Oracle-tested**: nothing ships until every corpus circuit matches
   pinned ngspice-47 goldens point by point, at SPICE's own tolerances
   (`reltol`/`abstol`/`vntol`). Deliberate divergences are documented in
@@ -128,8 +137,47 @@ run.plots[0].df()   # polars DataFrame: time, v(in), v(out)…
 | `corpus/` | SPICE3f5 sources (the reference), test decks, ngspice goldens |
 | `site/` | The website and examples gallery |
 
+## Credits and lineage
+
+Dune exists because of the work of others, and is derived from it:
+
+- **SPICE3f5** — © 1985–1991 The Regents of the University of
+  California; written at the EECS Department of UC Berkeley by Thomas
+  L. Quarles and many others, whose names are in the headers of the
+  original files. The netlist language, the device models, the
+  numerical methods and the analyses of Dune are translated from it.
+  The unmodified sources are in [`corpus/spice3f5`](corpus/spice3f5).
+- **ngspice** — the maintained successor of SPICE3f5, by the ngspice
+  team and contributors (Modified BSD licence). Dune is validated
+  against ngspice-47, and the following are derived from its sources:
+  BSIM3v3.3 (`spicelib/devices/bsim3`), the S-parameter analysis `.sp`
+  (`span.c`, Alessio Cacciatori), the operating-point fallback chain
+  (`cktop.c`, with Alan Gillespie's gmin and source stepping, and
+  `optran.c`, Holger Vogt), BSIM1/BSIM2 noise (`b1noi.c`, `b2noi.c`,
+  Paolo Nenzi), the `TRNOISE`/`TRRANDOM` sources, `.measure`
+  (`com_measure2.c`), the switches as ngspice runs them, and every
+  SPICE3f5 routine where Dune follows ngspice's revision (each one is
+  named in the module comments and in
+  [`corpus/KNOWN_DIFFS.md`](corpus/KNOWN_DIFFS.md)).
+- **BSIM3v3.3.0** — © 2004 The Regents of the University of
+  California; developed by the UC Berkeley BSIM Research Group
+  (JianHui Huang, Min-Chie Jeng, Mansun Chan, Gary W. Ng, Weidong Liu,
+  Xuemei Xi).
+
+[NOTICE](NOTICE) lists the upstream files module by module and
+reproduces their copyright and licence notices; it ships with every
+package.
+
+Dune is an independent project: it is not affiliated with, sponsored by or
+endorsed by the University of California, Berkeley, the UC Berkeley BSIM
+Research Group or the ngspice project. The names "SPICE", "SPICE3" and
+"ngspice" are used only descriptively, to identify the programs whose
+netlist language and behaviour Dune implements.
+The translation was done with the assistance of AI coding tools.
+
 ## License
 
 BSD-3-Clause — © 2026 André Leite; portions derived from SPICE3f5,
-© 1985–1991 The Regents of the University of California. See
-[LICENSE](LICENSE).
+© 1985–1991 The Regents of the University of California, and from
+ngspice, © 1985–2018 The Regents of the University of California and
+others. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

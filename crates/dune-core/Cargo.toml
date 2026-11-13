@@ -1,6 +1,6 @@
 [package]
 name = "dune-core"
-description = "Circuit simulation engine: MNA, devices, Newton-Raphson, integration, analyses"
+description = "Circuit simulation engine derived from Berkeley SPICE3f5 and, in parts, ngspice: MNA, devices, Newton-Raphson, integration, analyses"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -3,7 +3,8 @@
 > Package name is provisional.
 
 The [Dune](https://github.com/milkway/dune) circuit simulator — a Rust port of
-Berkeley SPICE3f5 — compiled to WebAssembly. Run a SPICE3 netlist, or extract
+Berkeley SPICE3f5, with parts derived from ngspice-47 (BSIM3v3.3, `.sp`,
+`.measure`) — compiled to WebAssembly. Run a SPICE3 netlist, or extract
 the netlist of an [rpic](https://github.com/milkway/rpic-lang) schematic figure
 (`spice = 1`) and simulate it. Browser and Node.
 
@@ -134,7 +135,25 @@ crates/dune-wasm/npm/build.sh   # from the dune repository
 cd crates/dune-wasm/npm && npm test
 ```
 
-License: BSD-3-Clause.
+## Credits and license
+
+The engine is a derived work: it is translated from SPICE3f5 (© 1985–1991
+The Regents of the University of California; Thomas L. Quarles and many
+others at UC Berkeley) and, for BSIM3v3.3, the `.sp` analysis, the
+operating-point fallback chain, `.measure`, the transient noise sources and
+the revisions of several device routines, from ngspice-47 (the ngspice team
+and contributors; BSIM3v3.3.0 by the UC Berkeley BSIM Research Group). The
+`NOTICE` file of this package lists the upstream files and reproduces their
+copyright and licence notices.
+
+Dune is an independent project: it is not affiliated with, sponsored by or
+endorsed by the University of California, Berkeley, the UC Berkeley BSIM
+Research Group or the ngspice project. The names "SPICE", "SPICE3" and
+"ngspice" are used only descriptively, to identify the programs whose
+netlist language and behaviour Dune implements.
+
+License: BSD-3-Clause (© André Leite; portions © The Regents of the
+University of California and the ngspice contributors).
 
 ## rpic version note
 
