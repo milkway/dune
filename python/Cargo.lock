@@ -1186,15 +1186,15 @@ checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rpic-core"
-version = "0.19.0"
+version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f200b54d764be7cf070fe6e97f6aeb2e4ef4798d865151f3d9b06a73c3dd77e7"
+checksum = "e048208a7daf2f998a27051f7261c7559f2052c897b0a71a940120af3771547b"
 
 [[package]]
 name = "rpic-render"
-version = "0.19.0"
+version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f21e1477bdd2aee6f7ddbb147a3c819e8c5e0ffc0cc59cff5de3b0d30b28a3ba"
+checksum = "98a641576141327519d511f129b49763b4bf04c296fd67a7a59e8b6b9af95a67"
 dependencies = [
  "ratex-layout",
  "ratex-parser",

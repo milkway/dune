@@ -25,8 +25,8 @@ dune-pic.workspace = true
 # second rpic-core in the graph would carry its own, unread, hook.
 # Kept out of dune-pic/dune-core: those stay wasm-friendly and
 # dependency-free (issue #7; docs/dune-pic.md "Rótulos $...$").
-rpic-core = { version = "=0.19.0", optional = true }
-rpic-render = { version = "=0.19.0", default-features = false, features = ["math"], optional = true }
+rpic-core = { version = "=0.19.1", optional = true }
+rpic-render = { version = "=0.19.1", default-features = false, features = ["math"], optional = true }
 # RaTeX carries its KaTeX fonts through `rust-embed`, which in a debug
 # build does not embed anything: it reads the files at run time from
 # the crate's source in `~/.cargo/registry`. A debug `dune` then
