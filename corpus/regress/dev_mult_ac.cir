@@ -1,0 +1,21 @@
+A device's own m= on capacitors, inductors, diodes and AC sources
+* written for Dune: C*m by value and by model geometry, L/m (the K
+* coupling keeps the undivided L, as ngspice's muttemp.c reads
+* INDinduct), the diode junction capacitance CJO*AREA*M and the AC
+* value of a current source times m (probes m*.cases in
+* .claude/scratch/fix-probes)
+.model cm c cj=1e-3 cjsw=1e-9
+.model dm d is=1e-14 cjo=10p
+i1 0 1 dc 0 ac 1 m=2
+r1 1 0 1k
+c1 1 0 1n m=3
+c2 1 0 cm l=10u w=10u m=2
+v7 7 0 2
+d1 1 7 dm m=3
+l1 1 2 1m m=2
+r2 2 0 100
+l2 3 0 1m
+r3 3 0 50
+k1 l1 l2 0.5
+.ac dec 5 1k 10meg
+.end

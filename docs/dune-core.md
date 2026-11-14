@@ -1192,6 +1192,41 @@ porque o consumidor é outro crate (`dune-wasm`).
 - **Ruído do R** e **`.sens` do R**: ver as seções de ruído e de
   `.sens` acima (contratos com arquivo/linha; sondas
   `regress/rnoisetemp`, `regress/sens_rtemp`).
+- **Cartão `.temp`** (2026-11-14): o parser o entrega como a opção
+  `temp` no fim de `Netlist::options` (detalhes e sondas em
+  `docs/dune-netlist.md`); o núcleo não muda — `Options::temp` vem
+  dele como de um `.options temp=` que viesse por último. Decks
+  `regress/temp_card_{op,dc,list}`.
+
+## Multiplicador `m` de R, C, L e D (2026-11-14)
+
+O `m=` do cartão (ou o da linha `X` de um subcircuito multiplicado,
+que o substitui) chega ao elaborador como o parâmetro `m` desses
+quatro dispositivos, e `elaborate.rs::set_mult` o grava em
+`Circuit::mult` (nome → m), um canal crate-privado como o
+`Circuit::dtemp` (D-0038): os specs públicos `Resistor`, `Capacitor`,
+`Inductor` e `Diode` não mudam. Na montagem:
+
+- `ResistorI::with_mult`: `G = m/(R·fator·scale)` (`RESupdate_conduct`
+  do ngspice-47), o que cobre também o R por geometria de modelo — que
+  a dobra `R/m` na IR não alcançava.
+- `CapacitorI::with_mult`: `C·m`; `InductorI::with_mult`: `L/m`. O `K`
+  continua lendo o `L` sem dividir, como o `muttemp.c` (que lê
+  `INDinduct`, sem o `m`; sonda `l_m_k`).
+- Diodo: o `mult` que o `DiodeTemp::new` já tinha para o `.sens`
+  passa a vir do cartão — `csat` e `gspr` ·m, joelho da ruptura casado
+  como `IS·AREA·M` contra `M·IBV` (o `m` cancela; um `area`·m errava o
+  joelho em `vt·ln m`, 18 mV em `fix-probes d_m_bv`), 1/f com `|I/m|`,
+  e a capacitância de junção `CJO·AREA·M` com o `m` da montagem
+  (`DiodeI::cap_mult`; uma perturbação `.sens` de `m` não a move, como
+  no `diosetup.c`). O `gmin` do diodo não escala nos dois.
+
+`J`, `Z` e `Q` Gummel–Poon seguem pelo `area`·m na IR: o ngspice
+multiplica as estampas inteiras e com elas o `gmin` das junções, que a
+área não carrega. Medido: só pesa com o `gmin` dominando a junção; um
+porte fiel sem API pública é possível (o mesmo canal, multiplicando as
+estampas de carga/AC/pz/ruído/disto desses três) e ficou de fora.
+Decks `regress/dev_mult_{op,dc,ac,tran}`.
 
 ## Ruptura do diodo (2026-11-08)
 

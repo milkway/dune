@@ -177,3 +177,43 @@ fn keepopinfo_dumps_the_operating_point_first() {
     assert_eq!(names, ["AC Operating Point", "AC Analysis"]);
     assert!(close(real(&p[0], "v(2)")[0], 0.5));
 }
+
+#[test]
+fn own_multiplier_scales_resistors_by_value_and_geometry() {
+    // ngspice-47 `G = m/R` (fix-probes r_m, r_m_geom): 1k/2 ∥ 1k/4,
+    // then RSH·L/W = 1k by geometry over m=4; no "ignored" note.
+    let (p, notes) = run("m\nv1 1 0 1\nr1 1 0 1k m=2\nr2 1 0 rm l=10u w=1u m=4\n\
+                          .model rm r rsh=100\n.op\n.end\n");
+    assert!(close(real(&p[0], "i(v1)")[0], -(2e-3 + 4e-3)));
+    assert!(notes.iter().all(|n| !n.contains("ignored")), "{notes:?}");
+}
+
+#[test]
+fn own_multiplier_keeps_the_diode_breakdown_knee() {
+    // m parallel diodes in breakdown carry m·IBV at -BV: 2 mA through
+    // m=2 sits where 1 mA sits in one diode (fix-probes d_m_bv: an
+    // area of 2 would sit vt·ln 2 lower).
+    let deck = |card: &str, i: &str| {
+        format!("bv\ni1 1 0 {i}\n{card}\n.model dm d is=1e-14 bv=5 ibv=1e-6\n.op\n.end\n")
+    };
+    let v = |card: &str, i: &str| real(&run(&deck(card, i)).0[0], "v(1)")[0];
+    let one = v("d1 1 0 dm", "1m");
+    let m2 = v("d1 1 0 dm m=2", "2m");
+    let area2 = v("d1 1 0 dm area=2", "2m");
+    // Equal within the Newton tolerance (RELTOL·|v| ≈ 5 mV here; the
+    // two land 0.3 mV apart), 18 mV away from the area reading.
+    assert!((one - m2).abs() < 1e-3, "{one} {m2}");
+    assert!((m2 - area2 - 0.0179).abs() < 1e-3, "{area2} {m2}");
+}
+
+#[test]
+fn temp_card_sets_the_circuit_temperature() {
+    // `.temp` wins over `.options temp` wherever it stands
+    // (fix-probes t_opt_card, t_card_opt): factor 1 + 0.01·100.
+    for order in [".options temp=77\n.temp 127", ".temp 127\n.options temp=77"] {
+        let (p, _) = run(&format!(
+            "t\nv1 1 0 1\nr1 1 0 rm 1k\n.model rm r tc1=0.01\n{order}\n.op\n.end\n"
+        ));
+        assert!(close(real(&p[0], "i(v1)")[0], -1.0 / 2000.0), "{order}");
+    }
+}

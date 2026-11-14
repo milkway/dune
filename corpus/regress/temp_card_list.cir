@@ -1,0 +1,16 @@
+.temp card with a list of temperatures
+* written for Dune: ngspice-47 reads one plain number after `.temp`; a
+* list (or a value with a scale suffix) makes it warn "Could not set
+* temperature" and run at 27 C, overriding `.options temp` - no sweep
+* (probes t_multi, t_multi_opt in .claude/scratch/fix-probes). Dune
+* reproduces it with a spanned warning
+.options temp=77
+.model rm r tc1=1e-3
+.model dm d is=1e-14
+i1 0 1 1m
+r1 1 0 rm 1k
+i2 0 2 1m
+d1 2 0 dm
+.temp 0 50 100
+.op
+.end

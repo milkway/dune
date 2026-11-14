@@ -32,8 +32,9 @@ produz diagnóstico com span, nunca pânico, nunca loop infinito.
   de coleta de nomes de `.model`, como `inppas1.c`).
 - **Cartões ponto** (`dot.rs` ← `inp2dot.c`): despacho por igualdade
   exata do keyword; `.ic`/`.nodeset` leem `v(n)=val` como os tokens
-  `v n val`; `.noise` idem para `v(out,ref)`; `.temp` e `.width`
-  recebem os mesmos avisos de obsoleto do C; `.print/.plot/.save/
+  `v n val`; `.noise` idem para `v(out,ref)`; `.width` recebe o
+  mesmo aviso de obsoleto do C; `.temp` segue o ngspice-47 (seção
+  abaixo); `.print/.plot/.save/
   .four` são parseados para a IR (no 3f5 viviam no frontend,
   `fte/dotcards.c`); o `.four` exige frequência positiva e finita
   (erro com span) e é executado pela camada `four` do `dune-core`
@@ -95,6 +96,36 @@ Registradas também em `corpus/KNOWN_DIFFS.md` quando observáveis:
    subcircuito" abaixo).
 7. **Fonte `B`**: ver a seção própria abaixo (expressões com as
    extensões mínimas do ngspice onde o 3f5 rejeita ou mutila).
+
+## Cartão `.temp` (`dot.rs::dot_temp` ← `inp_spsource` do ngspice-47)
+
+O 3f5 ignorava o cartão ("Warning: .TEMP card obsolete - use .options
+TEMP and TNOM", `inp2dot.c`; o `spice.txt` nem o lista). O ngspice-47
+o aplica (`frontend/inp.c`, Modified BSD), e o Dune segue o observado
+(sondas `temp*.cases` em `.claude/scratch/fix-probes/`):
+
+- `.temp T`, `.temp=T` e `.temp = T` são o mesmo cartão; o valor vira a
+  opção `temp` (°C) **depois** de todos os `.options`, então ganha de
+  `.options temp=` em qualquer posição (`t_opt_card`, `t_card_opt`), e o
+  último `.temp` vence (`t_last`). Na IR: um `Param` `temp` no fim de
+  `Netlist::options`, com o span do cartão.
+- Expressões `{…}`/`'…'` valem (`t_expr`, `t_quote`); nome solto não
+  (`t_param_bare`).
+- O resto da linha precisa ser **um** número de `strtod`: sem sufixo de
+  escala (`0.127k`), sem lista (`77 127`, `77, 127`). Fora disso o
+  ngspice avisa "Could not set temperature to …" e roda a 27 °C,
+  passando por cima de `.options temp` (`t_multi`, `t_multi_opt`,
+  `t_text`); o Dune faz o mesmo com aviso com span que diz que lista
+  não é varrida (nem o ngspice reroda por temperatura).
+- `TNOM`, `TEMP=`/`DTEMP=` de instância e `.dc temp` mantêm o sentido
+  (`t_tnom`, `t_itemp`, `t_dtemp`, `t_dc`: a varredura manda durante o
+  `.dc` e o `.temp` volta depois).
+- Recusados (o ngspice segue): cartão vazio (`strtod("")` dá 0 °C,
+  `t_empty`), valor não finito (`inf` faz o op falhar em todos os
+  degraus, `t_inf`) e `.temp` dentro de `.subckt` (o ngspice o aplica ao
+  circuito inteiro quando o subcircuito é instanciado e o ignora quando
+  não é, `t_subckt`, `t_sub_unused`): erro com span pedindo o nível de
+  topo.
 
 ## Bibliotecas `.lib` (`deck.rs` ← `expand_section_ref` do ngspice-47)
 
@@ -440,7 +471,7 @@ escolhido (`nch.2`, `x1.nch.71`) — o elaborador não sabe de binning.
 Os coeficientes `l*/w*/p*` do BSIM3 já eram aplicados pelo porte
 (`bsim3/temp.rs`, com `binunit`).
 
-### `m` na linha `X` (G6)
+### `m` na linha `X` (G6) e o `m` do próprio dispositivo
 
 Semântica do `inp_fix_subckt_multiplier` (modo normal, sem `hs`;
 sondas P13 e `s4`): todo subcircuito chamado com `m=` em **alguma**
@@ -452,31 +483,49 @@ dá R/3; `m_r_own_otherinst`: outra instância sem `m` leva m=1 e perde
 o `m=2`); um `X` aninhado recebe o `m` de quem chama, substituindo o
 seu (`m_nested_both`). `m` é visível nas expressões do corpo. Com
 `m` declarado é parâmetro comum, sem multiplicar. As letras `V E H A K
-N O P S T U W Y` e a fonte `B` de tensão ficam como estão. Por tipo no
-Dune:
+N O P S T U W Y` e a fonte `B` de tensão ficam como estão.
 
-| Dispositivo | Como o `m` chega |
-|---|---|
-| BSIM3/BSIM4/VDMOS (`M`), VBIC (`Q` nível 4/9) | parâmetro `m` nativo |
-| `R`, `L` com valor | valor/m |
-| `C` com valor | valor·m |
-| `D`, `J`, `Z`, `Q` Gummel–Poon | `area`·m (ngspice multiplica também o `gmin` da junção: diferença de ~1e-5 relativo no `regress/xmult_semi`) |
-| `G`, `F` | ganho·m |
-| `I` DC/AC | valor·m |
-| `B` de corrente | `m·(expr)` |
-| `X` aninhado | atual `m` |
-| MOS 1–3/6, BSIM1/2; `R`/`C` só por geometria de modelo; `I` com forma transiente/distorção | erro "not supported yet" com o span do dispositivo (salvo m=1) |
+O `m=` do **próprio cartão** — no nível de topo ou num subcircuito que
+nenhuma linha `X` multiplica — age pelo mesmo caminho
+(`subckt.rs::apply_multiplier`; sondas `m*.cases` em
+`.claude/scratch/fix-probes/`); o último `m=` do cartão vence
+(`m_last`). Por tipo no Dune:
 
-Diferenças: m ≤ 0 é erro (o ngspice simula: m=0 abre, m<0 inverte); o
-marcador é fechado sobre o grafo de chamadas em qualquer ordem — o
-ngspice marca numa passada em ordem de deck e um subcircuito aninhado
-definido **antes** de quem o chama falha com "Mismatch"
-(`m_nested_def_before`); subcircuitos aninhados (definidos dentro de
-outro) seguem a própria marcação — o ngspice só acrescenta `m={m}` até
-o primeiro `.ends`. Fora da G6: `m` no próprio cartão de `R/C/L/D/Q/J`
-fora de subcircuito multiplicado continua sem efeito no núcleo (nota
-"not in the 3f5"; o cartão `r1 a b 1k m=2` agora é lido como
-parâmetro, não como modelo `m`).
+| Dispositivo | ngspice-47 | Como o `m` chega no Dune |
+|---|---|---|
+| BSIM3/BSIM4/VDMOS (`M`), VBIC (`Q` nível 4/9) | nativo | parâmetro `m` nativo |
+| `R` (valor, `resistance=` ou geometria de modelo) | `G = m/R` | parâmetro `m`, lido pelo elaborador (`ResistorI`, como o `RESm`) |
+| `C` (valor ou geometria) | `C·m` | parâmetro `m` (`CapacitorI`) |
+| `L` | `L/m`; o `K` lê o `L` sem dividir (`muttemp.c`) | parâmetro `m` (`InductorI`; sonda `l_m_k`) |
+| `D` | correntes, condutâncias e cargas ·m; joelho da ruptura casado como `IS·AREA·M` contra `M·IBV`; 1/f com `|I/m|` | parâmetro `m` (`DiodeTemp`; o `area`·m de antes errava a ruptura em `vt·ln m` — 18 mV em `d_m_bv`) |
+| `J`, `Z`, `Q` Gummel–Poon | estampas ·m, inclusive o `gmin` da junção | `area`·m (posicional, senão `area=`, senão m) |
+| `G`, `F` | ganho·m | ganho·m |
+| `I` DC/AC | valor·m | valor·m |
+| `B` de corrente | valor·m | `m·(expr)` |
+| `B` de tensão | valor·m (só o `m` próprio; a linha `X` não chega nele) | `m·(expr)` (sonda `bv_m`, `bv_sub_own`) |
+| `X` aninhado | atual `m` | atual `m` |
+| `V`, `E`, `H` | "unknown parameter (m)" | erro com span (o `E`/`H` aceitava qualquer palavra-chave calado) |
+| MOS 1–3/6, BSIM1/2; `I` com forma transiente/distorção | multiplica | erro "not supported yet" com o span (salvo m=1) |
+
+Diferenças: m ≤ 0 é erro (o ngspice simula: m=0 abre, m<0 inverte;
+sondas `r_m_zero`, `r_m_neg`); o marcador é fechado sobre o grafo de
+chamadas em qualquer ordem — o ngspice marca numa passada em ordem de
+deck e um subcircuito aninhado definido **antes** de quem o chama falha
+com "Mismatch" (`m_nested_def_before`); subcircuitos aninhados
+(definidos dentro de outro) seguem a própria marcação — o ngspice só
+acrescenta `m={m}` até o primeiro `.ends`. O `gmin` de `J`/`Q` não
+escala com o `area`·m: só pesa quando o `gmin` domina a junção
+(`q_m_gmin`, junção cortada com `IS=1e-20`: −0,25 V no ngspice, −0,5 V
+no Dune); com polarização normal a diferença fica dentro da tolerância
+do Newton (`q_m` contra `q_area` no próprio ngspice: 2,8e-6 relativo).
+
+`area=` como palavra-chave vale no `D` (antes "unknown parameter") e
+no `Q` Gummel–Poon (antes ignorado calado); o valor posicional vence o
+`area=` em `D`, `Q`, `J` e `Z`, como no `INP2D`/`INP2Q`/`INP2J` (que
+o fixam depois das palavras-chave; sondas `q_pos_kw`, `j_pos_kw`) — o
+`J`/`Z` faziam o contrário. O ngspice-47 recusa o `area` posicional no
+`D` ("could not find a valid modelname", `d_area2_pos`); o Dune segue o
+3f5.
 
 ### `.option scale` (G5)
 
@@ -598,8 +647,9 @@ mutila; linhas no `KNOWN_DIFFS.md`):
 Ficou de fora (extensões do ngspice além do 3f5): `time`, `temper`,
 `hertz`; operadores relacionais/lógicos e o ternário `?:`; `**`;
 as funções `log10 ceil floor nint u2 pwl pow pwr min max ddt eq0 ne0
-gt0 lt0 ge0 le0`; os parâmetros de instância `tc1 tc2 temp dtemp m
-reciproctc reciprocm`; `{}`/`.param` dentro da expressão.
+gt0 lt0 ge0 le0`; os parâmetros de instância `tc1 tc2 temp dtemp
+reciproctc reciprocm` (o `m` entra: `m·(expr)` nos dois tipos, como o
+`asrcload.c`); `{}`/`.param` dentro da expressão.
 
 Erros: toda expressão malformada vira diagnóstico com o span do
 trecho (`syntax error`, `no such function`, `badly formed node

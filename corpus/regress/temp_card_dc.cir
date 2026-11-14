@@ -1,0 +1,16 @@
+.temp card with the equal sign, under a DC sweep
+* written for Dune: `.temp=T` is the same card (ngspice-47 skips an
+* `=` after the keyword); the last `.temp` wins (probes t_eq, t_last
+* in .claude/scratch/fix-probes)
+.model dm d is=1e-14 rs=5 n=1.2
+.model rm r tc1=2e-3
+.temp 80
+vin in 0 0
+r1 in 1 rm 1k
+d1 1 0 dm
+r2 in 2 1k
+d2 2 0 dm
+d3 2 0 dm
+.temp=-20
+.dc vin 0 2 0.1
+.end

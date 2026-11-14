@@ -1,0 +1,21 @@
+Diode breakdown under m: the own m, the X-line m and area=
+* written for Dune: ngspice matches the breakdown knee as IS*AREA*M
+* against M*IBV, so m parallel diodes keep the knee voltage while an
+* area does not (vt*ln(area) lower); Dune once folded m into the area
+* and missed it by 18 mV (probes d_m_bv, d_x_bv, d_area_bv in
+* .claude/scratch/fix-probes)
+.model dm d is=1e-14 bv=5 ibv=1e-6
+.subckt z a
+d1 0 a dm
+.ends
+vin in 0 0
+r1 in 1 1k
+d1 0 1 dm m=2
+r2 in 2 1k
+x1 2 z m=2
+r3 in 3 1k
+d3 0 3 dm area=2
+r4 in 4 1k
+d4 0 4 dm
+.dc vin 0 10 0.25
+.end

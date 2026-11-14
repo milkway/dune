@@ -1,0 +1,15 @@
+A device's own m= on R, C, L and a diode in a transient
+* written for Dune: R/m, C*m, L/m and a diode whose currents and
+* charges scale by m, driven by a pulse (probes m*.cases in
+* .claude/scratch/fix-probes)
+.options compat=spice3
+.model dm d is=1e-14 rs=10 cjo=5p tt=10n
+v1 1 0 pulse(0 2 0 1u 1u 20u 50u)
+r1 1 2 1k m=2
+c1 2 0 10n m=3
+r2 1 3 100
+l1 3 0 1m m=2
+r4 1 4 2k
+d1 4 0 dm m=4
+.tran 0.5u 60u
+.end

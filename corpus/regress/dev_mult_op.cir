@@ -1,0 +1,55 @@
+A device's own m= outside multiplied subcircuits (operating point)
+* written for Dune: an instance's own multiplier acts like m devices
+* in parallel - R (by value and by model geometry), D (forward and in
+* breakdown, where ngspice matches M*IBV), Gummel-Poon Q and J and Z
+* (area= combined with m), G, F, a DC current source and both B
+* source types; in a subcircuit an X line multiplies, the instance's
+* m replaces the device's own (probes m*.cases in
+* .claude/scratch/fix-probes)
+.model rm r rsh=100 tc1=1e-3
+.model dm d is=1e-14 rs=5 bv=5 ibv=1e-6
+.model qm npn is=1e-15 bf=100 rb=50 re=2 rc=10
+.model jm njf vto=-2 beta=1e-4 lambda=0.01 rd=10 rs=10
+.model zm nmf vto=-2 beta=1e-3 rd=10 rs=10
+v1 1 0 2
+r1 1 2 1k m=2
+r2 2 0 rm l=20u w=1u m=4
+i1 0 3 1m m=2
+d1 3 0 dm m=3
+i2 4 0 1m
+d2 4 0 dm m=2
+i3 5 0 1m
+d3 5 0 dm area=2
+vc 6 0 2
+ib 0 7 5u
+q1 6 7 0 qm area=2 m=3
+j1 6 0 8 jm m=2
+rj 8 0 100
+z1 6 0 9 zm area=2 m=1.5
+rz 9 0 100
+g1 0 10 1 0 1m m=2
+r10 10 0 1k
+vs 1 11 0
+r11 11 0 1k
+f1 0 12 vs 2 m=3
+r12 12 0 100
+b1 0 13 i=v(1)*1m m=2
+r13 13 0 1k
+b2 14 0 v=v(1)*0.5 m=2
+r14 14 0 1k
+.subckt cell a
+r1 a 0 2k m=2
+d1 a 0 dm m=4
+i1 0 a 1m m=3
+.ends
+.subckt cell2 a
+r1 a 0 2k m=2
+d1 a 0 dm m=4
+i1 0 a 1m m=3
+g1 0 a a 0 -0.1m m=2
+.ends
+x1 15 cell
+x2 16 cell m=3
+x3 17 cell2
+.op
+.end
