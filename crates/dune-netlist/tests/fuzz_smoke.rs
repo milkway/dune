@@ -269,6 +269,19 @@ fn pathological_shapes_terminate() {
         let _ = dune_netlist::parse_expr(&expr);
     }
     parse("t\n.subckt s a b\nb1 a b i=v(a,b)*i(vx)+v(n)\nvx b 0 0\n.ends\nx1 1 2 s\n.end\n".into());
+    // Behavioural R cards made of `name=value` pairs up to and past
+    // the length cap (the expression search must stay linear).
+    for (pair, n) in [
+        ("a=1 ", 16_000),
+        ("a=b ", 16_000),
+        ("x=true ", 9_000),
+        ("a=1 ", 20_000),
+    ] {
+        parse(format!(
+            "t\nr1 1 0 {} r='1k*(1+v(1))'\n.end\n",
+            pair.repeat(n)
+        ));
+    }
     // Many nested subcircuit scopes never closed.
     parse(format!("t\n{}.end\n", ".subckt s a b\n".repeat(200)));
 }

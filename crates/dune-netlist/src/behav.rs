@@ -116,6 +116,17 @@ pub(crate) struct Equation {
 /// vector/complex value (`[…]`, `<…>`) before it.
 pub(crate) fn equation(text: &str, at: usize) -> Result<Option<Equation>, BError> {
     let b = text.as_bytes();
+    // Checked before anything is scanned (principle 4).
+    if b.len().saturating_sub(at) > crate::pexpr::MAX_LEN {
+        return Err(berr(
+            format!(
+                "behavioural R/C/L card too long (more than {} bytes after the nodes)",
+                crate::pexpr::MAX_LEN
+            ),
+            0,
+            b.len().saturating_sub(at),
+        ));
+    }
     let blank = |c: u8| c == b' ' || c == b'\t';
     // The identifier right before a `=` at `q` (blanks skipped).
     let keyword_before = |q: usize| -> Option<String> {
@@ -177,14 +188,19 @@ pub(crate) fn equation(text: &str, at: usize) -> Result<Option<Equation>, BError
                 let c = b.get(v).copied().unwrap_or(b' ');
                 let c1 = b.get(v + 1).copied().unwrap_or(b' ');
                 let c2 = b.get(v + 2).copied().unwrap_or(b' ');
-                let lower = text[v..].to_ascii_lowercase();
+                // A bounded prefix: a card with many `=` stays linear.
+                let starts = |w: &[u8]| {
+                    b[v..]
+                        .get(..w.len())
+                        .is_some_and(|s| s.eq_ignore_ascii_case(w))
+                };
                 let left_alone = v >= b.len()
                     || c.is_ascii_digit()
                     || matches!(c, b'{' | b'\'' | b'.')
                     || (matches!(c, b'+' | b'-')
                         && (c1.is_ascii_digit() || (c1 == b'.' && c2.is_ascii_digit())))
-                    || lower.starts_with("true")
-                    || lower.starts_with("false");
+                    || starts(b"true")
+                    || starts(b"false");
                 if left_alone {
                     p += 1;
                     continue;

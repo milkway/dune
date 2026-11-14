@@ -566,3 +566,43 @@ fn behavioural_value_is_the_first_brace_as_in_ngspice() {
     let i = eval(bexpr(&nl, "br1"), &|n| if n == "1" { 1.0 } else { 0.0 });
     assert!((i - 1.0 / 1e3 / 1.58).abs() < 1e-18, "{i}");
 }
+
+/// Hostile behavioural cards (principle 4): a card of the maximum
+/// length made of `name=value` pairs is scanned in linear time (each
+/// `=` used to lowercase the rest of the line), and a longer one is
+/// refused with a span before any scan.
+#[test]
+fn long_behavioural_cards_are_linear() {
+    let max = 64 * 1024;
+    let tail = " r='1k*(1+0*v(1))'";
+    for pair in ["a=1 ", "a=b ", "tc1=0 "] {
+        let n = (max - tail.len() - 8) / pair.len();
+        let card = format!("r1 1 0 {}{tail}", pair.repeat(n));
+        let t = std::time::Instant::now();
+        let out = parse(&card);
+        assert!(t.elapsed().as_millis() < 1000, "{pair}: {:?}", t.elapsed());
+        // `a=b`: `b` is the expression (an unknown parameter, spanned);
+        // the others parse, the pairs dropped or read.
+        if pair == "a=b " {
+            let d = out.diags.iter().find(|d| d.severity == Severity::Error);
+            assert!(d.is_some_and(|d| d.span.is_some()), "{pair}");
+        } else {
+            let e = errors(&out);
+            assert!(e.is_empty(), "{pair}: {:?}", e.first());
+        }
+    }
+    let card = format!("r1 1 0 {}{tail}", "a=1 ".repeat(max / 4 + 1));
+    let t = std::time::Instant::now();
+    let out = parse(&card);
+    assert!(t.elapsed().as_millis() < 1000);
+    let d = out
+        .diags
+        .iter()
+        .find(|d| d.severity == Severity::Error)
+        .expect("refused");
+    assert!(
+        d.message.contains("too long") && d.span.is_some(),
+        "{}",
+        d.message
+    );
+}
