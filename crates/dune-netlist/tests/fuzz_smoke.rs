@@ -345,3 +345,78 @@ fn fuzz_timeout_lib_fan_out_is_fast() {
     let _ = parse_with_loader(Path::new("fuzz.lib"), text.clone(), &mut FuzzFs(text));
     assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
 }
+
+/// The two libFuzzer timeouts of 2026-11-14 in `subckt::Expander::emit`
+/// (`tests/fixtures/fuzz/emit-timeout-{1,2}.bin`, 13 s and >10 s under
+/// the sanitizers; 0.25 s and 0.8 s in release): mangled corpus decks
+/// whose subcircuits call themselves through a fan-out, so the
+/// expansion ran to the 2²⁰ budget — 190 000 and 660 000 elements
+/// with names up to 64 levels deep, and one diagnostic per path
+/// (665 000). Recursion is now refused at the first repeated
+/// definition, the budget charges the bytes of emitted names, and the
+/// expansion reports each distinct problem once.
+fn emit_timeout(fixture: &str) {
+    struct FuzzFs(String);
+    impl dune_netlist::IncludeLoader for FuzzFs {
+        fn load(&mut self, path: &Path, limit: u64) -> Result<String, String> {
+            if path.components().count() > 4 || self.0.len() as u64 > limit {
+                return Err("refused under fuzzing".into());
+            }
+            Ok(self.0.clone())
+        }
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fuzz")
+        .join(fixture);
+    let text = String::from_utf8_lossy(&std::fs::read(path).unwrap()).into_owned();
+    let t = std::time::Instant::now();
+    let a = parse_with_loader(Path::new("fuzz.cir"), text.clone(), &mut NoFs);
+    let b = parse_with_loader(Path::new("fuzz.lib"), text.clone(), &mut FuzzFs(text));
+    assert!(t.elapsed().as_secs() < 2, "{:?}", t.elapsed());
+    for out in [a, b] {
+        assert!(
+            out.netlist.elements.len() < 10_000,
+            "{}",
+            out.netlist.elements.len()
+        );
+        assert!(out.diags.len() < 2_000, "{}", out.diags.len());
+    }
+}
+
+#[test]
+fn fuzz_timeout_recursive_fan_out_1() {
+    emit_timeout("emit-timeout-1.bin");
+}
+
+#[test]
+fn fuzz_timeout_recursive_fan_out_2() {
+    emit_timeout("emit-timeout-2.bin");
+}
+
+/// A non-recursive subcircuit bomb: 40 distinct levels, each calling
+/// the next twice through long instance names, plus a parameter and
+/// a local model at every level. The work budget (which charges name
+/// bytes, cards parsed per instance and models evaluated) stops it.
+#[test]
+fn deep_parameterised_bomb_is_bounded() {
+    let mut deck = String::from("bomb\n");
+    let long = "x".repeat(200);
+    for i in 0..40 {
+        deck.push_str(&format!(
+            ".subckt s{i} a w=1\n.param q={{w*2}}\n.model rm{i} r rsh={{q}}\n\
+             {long}a a s{n} w={{q}}\n{long}b b s{n} w={{q+1}}\nr1 a b rm{i} l=1 w=1\n.ends\n",
+            n = i + 1
+        ));
+    }
+    deck.push_str(".subckt s40 a w=1\nr1 a 0 {w}\n.ends\nx1 1 s0\n.end\n");
+    let t = std::time::Instant::now();
+    let out = parse_with_loader(Path::new("bomb.cir"), deck, &mut NoFs);
+    assert!(t.elapsed().as_secs() < 10, "{:?}", t.elapsed());
+    assert!(
+        out.diags
+            .iter()
+            .any(|d| d.message.contains("subcircuit expansion exceeds")),
+        "{:?}",
+        &out.diags[..out.diags.len().min(5)]
+    );
+}
