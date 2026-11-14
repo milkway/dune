@@ -41,6 +41,7 @@ echo "== fmt" && cargo +stable fmt --check
 echo "== clippy" && cargo +stable clippy --all-targets -- -D warnings
 echo "== clippy (parallel)" && cargo +stable clippy -p dune-core --features parallel --all-targets -- -D warnings
 echo "== test" && cargo +stable test --workspace
+echo "== without bsim" && cargo +stable clippy -p dune-core --no-default-features --features solver-faer --all-targets -- -D warnings && cargo +stable test -q -p dune-core --no-default-features --features solver-faer --lib --test no_bsim
 echo "== parallel bit-identity" && cargo +stable test -p dune-core --features parallel --release --lib --test parload
 echo "== oracle" && cargo +stable run -q -p dune-oracle -- --ci
 echo "== accuracy" && cargo +stable run -q -p dune-oracle --release -- --accuracy

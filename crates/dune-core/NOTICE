@@ -126,6 +126,24 @@ upstream file headers.
       Author: 1985 Gordon Jacobs. Modified: 2001 Jon Engelbert"),
       spicelib/devices/sw/swtrunc.c.
 
+  crates/dune-core/src/vdmos/ (mod.rs, load.rs, model.rs)
+      VDMOS power MOSFET model - spicelib/devices/vdmos/: vdmosload.c,
+      vdmostemp.c, vdmosset.c, vdmosmpar.c, vdmospar.c, vdmosacld.c,
+      vdmospzld.c, vdmosnoi.c, vdmosdset.c, vdmosdist.c, vdmosconv.c,
+      vdmostrun.c, vdmosic.c ("Copyright 1990 Regents of the University
+      of California. Author: 1985 Thomas L. Quarles. Modified: 2000
+      AlansFixes. VDMOS: 2018 Holger Vogt, 2020 Dietmar Warning";
+      distortion setup "1988 Jaijeet S Roychowdhury"); the instance
+      and model card handling follows spicelib/parser/inp2m.c and
+      frontend/inpcom.c.
+
+  crates/dune-core/src/four.rs, crates/dune-cli/src/four.rs (`.four`)
+      frontend/fourier.c ("Copyright 1990 Regents of the University of
+      California. Author: 1985 Wayne A. Christopher, U. C. Berkeley
+      CAD Group") and maths/poly/interpolate.c, polyfit.c, polyeval.c
+      (no header of their own; covered by the ngspice licence
+      statement below); the batch wiring follows frontend/dotcards.c.
+
   Other modules of crates/dune-core and crates/dune-netlist
       Wherever ngspice-47 corrected or extended a SPICE3f5 routine and
       Dune follows ngspice, the module comment names the ngspice file:
