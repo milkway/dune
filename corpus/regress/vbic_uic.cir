@@ -3,7 +3,9 @@ VBIC transient from initial conditions: IC=, ICVBE/ICVCE, .ic and OFF
 * MODEUIC branch of vbicload.c): q1 starts from IC=VBE,VCE on its card,
 * q2 from ICVBE= plus a VCE taken from the .ic node voltages
 * (VBICgetic reads the external nodes), q3 is OFF with no initial
-* condition; all relax through their charges into resistive loads.
+* condition; all relax through their charges into resistive loads. The
+* accuracy ruler caps it in corpus/ACCURACY (the UIC start leaves the
+* internal nodes at 0 V).
 * Spice3 profile: the golden is ngspice's trapezoidal run. Written for
 * the Dune port of ngspice-47's vbic model.
 .options compat=spice3
@@ -19,7 +21,7 @@ rb3 vcc b3 250k
 q3 c3 b3 0 0 nu off
 rc3 vcc c3 2k
 .model nu npn (level=4 is=1e-16 ibei=1e-18 iben=1e-15 ibci=2e-17 ibcn=5e-15
-+ vef=50 ver=5 ikf=5e-3 rcx=10 rci=50 rbx=20 rbi=80 re=2 cje=500f cjc=300f
-+ cjcp=500f cbeo=50f cbco=30f tf=100p tr=5n)
-.tran 1n 300n uic
++ vef=50 ver=5 ikf=5e-3 rci=300 rbi=300 cje=2p cjc=1p
++ cjcp=2p cbeo=200f cbco=100f tf=1n tr=20n)
+.tran 0.5n 300n uic
 .end
