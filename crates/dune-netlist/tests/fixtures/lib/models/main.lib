@@ -1,0 +1,14 @@
+* A library in the ngspice style: only section bodies are ever read.
+.param outside=1
+this line is outside every section ( (
+.lib typ
+.param vsup=2
+  .lib 'corners.lib' tt
+  .include "../sub/shared.inc"
+.endl typ
+.LIB ff
+.param vsup=3
+.ENDL ff
+.lib broken
+r_short 1
+.endl broken

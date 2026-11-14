@@ -1,0 +1,6 @@
+.lib tt
+.param rload=1k
+.endl tt
+.lib ss
+.param rload=2k
+.endl ss

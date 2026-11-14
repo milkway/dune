@@ -110,7 +110,6 @@ pub(crate) fn parse_dot(
             }
         }
         ".temp" => ctx.warn(span, ".temp card obsolete - use .options temp and tnom"),
-        ".lib" => ctx.err(span, ".lib is not supported yet (use .include)"),
         _ => return false,
     }
     true

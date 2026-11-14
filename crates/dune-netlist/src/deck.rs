@@ -2,34 +2,53 @@
 //!
 //! Mirrors `inp_readall` in `corpus/spice3f5/src/lib/fte/inpcom.c`:
 //! the first non-blank line of the root file is the title; `.include`
-//! at column 1 splices another file in before anything else happens;
-//! then whole-line comments are dropped and `+` continuation lines are
+//! splices another file in before anything else happens; then
+//! whole-line comments are dropped and `+` continuation lines are
 //! joined (with a single space) onto the previous card — comments in
 //! between do not break a continuation chain, and the title line can
 //! never be continued.
 //!
+//! ngspice's library sections (`.lib FILE SECTION`, with the library
+//! holding `.lib SECTION` … `.endl` blocks — `expand_section_ref` in
+//! ngspice-47's `frontend/inpcom.c`) are resolved here too, on
+//! physical lines: only the body of the requested section is spliced,
+//! nested `.lib`/`.include` inside it resolve against the library
+//! file, and each file is read once however many of its sections are
+//! requested.
+//!
 //! Deliberate differences from the C, all documented in
 //! `docs/dune-netlist.md`:
-//! - relative `.include` paths resolve against the including file's
-//!   directory (the C uses the process working directory);
+//! - relative `.include`/`.lib` paths resolve against the including
+//!   file's directory (the 3f5 uses the process working directory;
+//!   ngspice tries the working directory and the deck's directory
+//!   first);
 //! - `$` and `;` preceded by whitespace start an end-of-line comment
 //!   (ngspice superset; the C only knows whole-line comments);
 //! - trailing `\r` is stripped (DOS decks);
-//! - include depth and total size are bounded so hostile decks cannot
-//!   hang or exhaust memory (principle 4 of `CLAUDE.md`).
+//! - `.include`/`.lib` nesting, cycles, bytes read and bytes spliced
+//!   are bounded so hostile decks cannot hang or exhaust memory
+//!   (principle 4 of `CLAUDE.md`); ngspice-47 segfaults on an
+//!   `.include` cycle.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::diag::Diagnostic;
-use crate::span::{SourceMap, Span};
+use crate::span::{FileId, SourceMap, Span};
 
-/// Maximum `.include` nesting; also what bounds include cycles.
-const MAX_INCLUDE_DEPTH: usize = 16;
-/// Cap on the total bytes loaded across all files of one deck.
-const MAX_TOTAL_BYTES: usize = 256 << 20;
+/// Maximum `.include`/`.lib` nesting (one count for both).
+const MAX_NESTING: usize = 16;
+/// Cap on the bytes the loader hands over for one deck (each file is
+/// read once, so this bounds distinct source text).
+const MAX_READ_BYTES: usize = 256 << 20;
+/// Cap on the bytes spliced into the deck: a section requested over
+/// and over is read once but spliced each time, and nesting can
+/// multiply that.
+const MAX_SPLICED_BYTES: usize = 256 << 20;
 
-/// Loads the text of an `.include`d file. The default implementation
-/// reads the file system; a WASM host can supply its own.
+/// Loads the text of a file named by `.include` or `.lib`. The default
+/// implementation reads the file system; a WASM host can supply its
+/// own. The reader asks for each file at most once per deck.
 ///
 /// `limit` is the byte budget left for this deck: an implementation
 /// must not return more than `limit` bytes, and must refuse sources
@@ -145,7 +164,7 @@ pub struct Deck {
 /// Read a deck from the file system (root file + includes).
 pub fn read_file(path: &Path) -> Result<Deck, crate::Error> {
     let text = FsLoader
-        .load(path, MAX_TOTAL_BYTES as u64)
+        .load(path, MAX_READ_BYTES as u64)
         .map_err(|message| crate::Error::Io {
             path: path.to_path_buf(),
             message,
@@ -153,17 +172,33 @@ pub fn read_file(path: &Path) -> Result<Deck, crate::Error> {
     Ok(read_with_loader(path, text, &mut FsLoader))
 }
 
-/// Read a deck from a string, resolving `.include` with `loader`
-/// (relative to `name`'s directory).
+/// Read a deck from a string, resolving `.include` and `.lib` with
+/// `loader` (relative to the including file's directory).
 pub fn read_with_loader(name: &Path, text: String, loader: &mut dyn IncludeLoader) -> Deck {
     let mut r = Reader {
         sources: SourceMap::new(),
         physical: Vec::new(),
         diags: Vec::new(),
-        loaded_bytes: 0,
+        read_bytes: 0,
+        spliced_bytes: 0,
+        aborted: false,
         loader,
+        files: HashMap::new(),
+        sections: HashMap::new(),
+        stack: Vec::new(),
     };
-    r.load(name.to_path_buf(), text, 0);
+    r.read_bytes = text.len();
+    match r.sources.add(name.to_path_buf(), text) {
+        Some(file) => {
+            r.files.insert(normalize(name), file);
+            r.stack.push((normalize(name), None));
+            let lines = line_ranges(&r.sources.file(file).text);
+            r.splice(file, name, &lines, 0, false);
+        }
+        None => r
+            .diags
+            .push(Diagnostic::global_error("source file too large")),
+    }
     r.finish()
 }
 
@@ -173,117 +208,326 @@ struct Physical {
     src: Span,
 }
 
+/// One `.lib NAME` … `.endl` block of a library file.
+struct Section {
+    /// Lowercased (ngspice compares section names case-insensitively).
+    name: String,
+    /// The `.lib NAME` line.
+    head: Span,
+    /// Body lines (byte ranges into the library file).
+    body: Vec<(usize, usize)>,
+    /// The closing `.endl` line and the name it carries, if any.
+    end: Option<(Span, Option<String>)>,
+}
+
+/// What the include stack remembers: a file, and the section of it
+/// being spliced (`None` for a whole file).
+type StackKey = (PathBuf, Option<String>);
+
 struct Reader<'a> {
     sources: SourceMap,
     physical: Vec<Physical>,
     diags: Vec<Diagnostic>,
-    loaded_bytes: usize,
+    /// Bytes handed over by the loader (each file is read once).
+    read_bytes: usize,
+    /// Bytes of physical lines spliced into the deck.
+    spliced_bytes: usize,
+    /// Set once a budget is exhausted: reading stops everywhere.
+    aborted: bool,
     loader: &'a mut dyn IncludeLoader,
+    /// Every file read so far, by lexically normalized path.
+    files: HashMap<PathBuf, FileId>,
+    /// Section index of each library file, built on first use.
+    sections: HashMap<FileId, Vec<Section>>,
+    /// Files and sections being spliced right now (cycle detection).
+    stack: Vec<StackKey>,
+}
+
+/// A directive the reader acts on before any card exists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Directive {
+    Include,
+    Lib,
+    Endl,
+}
+
+/// One argument of a reader directive, quotes stripped; `start..end`
+/// covers the token in the line (quotes included).
+struct Arg {
+    text: String,
+    start: usize,
+    end: usize,
 }
 
 impl Reader<'_> {
-    /// Register `text` as a file and splice its lines (and includes)
-    /// into `physical`.
-    fn load(&mut self, name: PathBuf, text: String, depth: usize) {
-        self.loaded_bytes = self.loaded_bytes.saturating_add(text.len());
-        if self.loaded_bytes > MAX_TOTAL_BYTES {
-            self.diags.push(Diagnostic::global_error(format!(
-                "deck exceeds {} MiB of source text; giving up",
-                MAX_TOTAL_BYTES >> 20
-            )));
-            return;
-        }
-        let Some(file) = self.sources.add(name.clone(), text) else {
-            self.diags
-                .push(Diagnostic::global_error("source file too large"));
-            return;
-        };
-        // Walk the file's lines by byte offset so spans are exact.
-        let text = &self.sources.file(file).text;
-        let mut line_ranges = Vec::new();
-        let mut start = 0usize;
-        for (i, b) in text.bytes().enumerate() {
-            if b == b'\n' {
-                line_ranges.push((start, i));
-                start = i + 1;
+    /// Splice `lines` (byte ranges of `file`, read from `path`) into
+    /// `physical`, acting on `.include`/`.lib`/`.endl` on the way.
+    /// `in_section` tells a library section body from a plain file.
+    fn splice(
+        &mut self,
+        file: FileId,
+        path: &Path,
+        lines: &[(usize, usize)],
+        depth: usize,
+        in_section: bool,
+    ) {
+        // After a misplaced `.lib NAME` (a section definition outside
+        // a library file) the block it opens is skipped up to its
+        // `.endl`, so one mistake gives one diagnostic.
+        let mut skipping = false;
+        for &(s, e) in lines {
+            if self.aborted {
+                return;
             }
-        }
-        if start < text.len() {
-            line_ranges.push((start, text.len()));
-        }
-
-        for (s, mut e) in line_ranges {
-            let text = &self.sources.file(file).text;
-            // Strip trailing '\r' (DOS decks) and trailing blanks.
-            while e > s && matches!(text.as_bytes()[e - 1], b'\r' | b' ' | b'\t') {
-                e -= 1;
-            }
-            // Blank lines never become cards (the C's readline folds
-            // them away).
-            if text[s..e].trim().is_empty() {
-                continue;
-            }
-            // `.include` is only recognized at column 1, like the C.
-            if starts_with_ignore_case(&text[s..e], ".include") {
-                let line = text[s..e].to_string();
-                let src = Span::new(file, s, e);
-                self.handle_include(&line, src, &name, depth);
-                continue;
-            }
-            // End-of-line comments: `$` or `;` at the start of a
-            // field (ngspice superset). The title line is printed
-            // verbatim, so it is never stripped.
-            let is_title = depth == 0 && self.physical.is_empty();
-            if !is_title {
-                let cut = inline_comment_start(&text[s..e]);
-                e = s + cut;
-                while e > s && matches!(text.as_bytes()[e - 1], b' ' | b'\t') {
-                    e -= 1;
-                }
-            }
-            if text[s..e].trim().is_empty() {
-                continue;
-            }
-            // Re-borrow immutably for the push below.
             let line = self.sources.file(file).text[s..e].to_string();
-            self.physical.push(Physical {
-                text: line,
-                src: Span::new(file, s, e),
-            });
+            let directive = directive_of(&line);
+            if skipping {
+                skipping = directive.map(|(d, _)| d) != Some(Directive::Endl);
+                continue;
+            }
+            if let Some((d, kw_end)) = directive {
+                let src = Span::new(file, s, e);
+                let args = match directive_args(&line, kw_end) {
+                    Ok(args) => args,
+                    Err((msg, a, b)) => {
+                        self.diags
+                            .push(Diagnostic::error(msg, Span::new(file, s + a, s + b)));
+                        continue;
+                    }
+                };
+                let arg_span = |a: &Arg| Span::new(file, s + a.start, s + a.end);
+                match d {
+                    Directive::Include => match args.first() {
+                        None => self
+                            .diags
+                            .push(Diagnostic::error(".include filename missing", src)),
+                        Some(a) => {
+                            let target = resolve(path, &a.text);
+                            self.include(&target, arg_span(a), src, depth);
+                        }
+                    },
+                    Directive::Lib => match args.as_slice() {
+                        [] => self.diags.push(Diagnostic::error(
+                            ".lib needs a library file and a section name",
+                            src,
+                        )),
+                        [_] if in_section => self.diags.push(Diagnostic::error(
+                            "`.lib NAME` inside a library section: sections do not nest \
+                             (this one ends at the first `.endl`, as in ngspice)",
+                            src,
+                        )),
+                        [a] => {
+                            self.diags.push(Diagnostic::error(
+                                format!(
+                                    "`.lib {}` opens a library section, which only a file \
+                                     read with `.lib FILE SECTION` may define; to read a \
+                                     library give both the file and the section",
+                                    a.text
+                                ),
+                                src,
+                            ));
+                            skipping = true;
+                        }
+                        [f, sec, rest @ ..] => {
+                            if let Some(extra) = rest.first() {
+                                self.diags.push(Diagnostic::warning(
+                                    "text after the .lib section name ignored",
+                                    arg_span(extra),
+                                ));
+                            }
+                            let target = resolve(path, &f.text);
+                            self.lib(&target, arg_span(f), &sec.text, arg_span(sec), src, depth);
+                        }
+                    },
+                    Directive::Endl => self
+                        .diags
+                        .push(Diagnostic::error(".endl without .lib", src)),
+                }
+                continue;
+            }
+            self.push_line(file, s, e, depth);
         }
     }
 
-    fn handle_include(&mut self, line: &str, src: Span, includer: &Path, depth: usize) {
-        if depth >= MAX_INCLUDE_DEPTH {
+    /// An ordinary physical line: strip end-of-line comments and keep
+    /// it for the logical pass.
+    fn push_line(&mut self, file: FileId, s: usize, mut e: usize, depth: usize) {
+        let text = &self.sources.file(file).text;
+        // End-of-line comments: `$` or `;` at the start of a field
+        // (ngspice superset). The title line is printed verbatim, so
+        // it is never stripped.
+        let is_title = depth == 0 && self.physical.is_empty();
+        if !is_title {
+            let cut = inline_comment_start(&text[s..e]);
+            e = s + cut;
+            while e > s && matches!(text.as_bytes()[e - 1], b' ' | b'\t') {
+                e -= 1;
+            }
+        }
+        if text[s..e].trim().is_empty() {
+            return;
+        }
+        self.spliced_bytes = self.spliced_bytes.saturating_add(e - s + 1);
+        if self.spliced_bytes > MAX_SPLICED_BYTES {
+            self.abort(
+                format!(
+                    "deck grows past {} MiB of spliced source text \
+                     (.include/.lib repeated too often?); giving up",
+                    MAX_SPLICED_BYTES >> 20
+                ),
+                Span::new(file, s, e),
+            );
+            return;
+        }
+        let line = text[s..e].to_string();
+        self.physical.push(Physical {
+            text: line,
+            src: Span::new(file, s, e),
+        });
+    }
+
+    fn abort(&mut self, msg: String, span: Span) {
+        if !self.aborted {
+            self.aborted = true;
+            self.diags.push(Diagnostic::error(msg, span));
+        }
+    }
+
+    /// Nesting and cycle checks shared by `.include` and `.lib`.
+    fn may_enter(&mut self, key: &StackKey, what: &str, src: Span, depth: usize) -> bool {
+        if self.stack.contains(key) {
+            let target = match &key.1 {
+                Some(sec) => format!("section `{sec}` of {}", key.0.display()),
+                None => key.0.display().to_string(),
+            };
             self.diags.push(Diagnostic::error(
-                format!(".include nested deeper than {MAX_INCLUDE_DEPTH} levels (cycle?)"),
+                format!("{what} cycle: {target} is already being read"),
                 src,
             ));
-            return;
+            return false;
         }
-        let mut fields = line.split_whitespace();
-        fields.next(); // `.include`
-        let Some(fname) = fields.next() else {
-            self.diags
-                .push(Diagnostic::error(".include filename missing", src));
-            return;
-        };
-        let path = {
-            let p = Path::new(fname);
-            if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                includer.parent().unwrap_or(Path::new(".")).join(p)
+        if depth >= MAX_NESTING {
+            self.diags.push(Diagnostic::error(
+                format!(".include/.lib nested deeper than {MAX_NESTING} levels"),
+                src,
+            ));
+            return false;
+        }
+        true
+    }
+
+    /// Load `path` (once per deck) through the loader, charging its
+    /// size to the read budget.
+    fn open(&mut self, path: &Path, what: &str, at: Span) -> Option<FileId> {
+        let key = normalize(path);
+        if let Some(&id) = self.files.get(&key) {
+            return Some(id);
+        }
+        let budget = MAX_READ_BYTES.saturating_sub(self.read_bytes);
+        let text = match self.loader.load(path, budget as u64) {
+            Ok(text) => text,
+            Err(e) => {
+                self.diags.push(Diagnostic::error(
+                    format!("cannot open {what} file {}: {e}", path.display()),
+                    at,
+                ));
+                return None;
             }
         };
-        let budget = (MAX_TOTAL_BYTES.saturating_sub(self.loaded_bytes)) as u64;
-        match self.loader.load(&path, budget) {
-            Ok(text) => self.load(path, text, depth + 1),
-            Err(e) => self.diags.push(Diagnostic::error(
-                format!("cannot open .include file {}: {e}", path.display()),
-                src,
-            )),
+        if text.len() > budget {
+            // A loader that ignores its limit still cannot blow the cap.
+            self.abort(
+                format!(
+                    "deck exceeds {} MiB of source text; giving up",
+                    MAX_READ_BYTES >> 20
+                ),
+                at,
+            );
+            return None;
         }
+        self.read_bytes += text.len();
+        let Some(id) = self.sources.add(path.to_path_buf(), text) else {
+            self.diags
+                .push(Diagnostic::error("source file too large", at));
+            return None;
+        };
+        self.files.insert(key, id);
+        Some(id)
+    }
+
+    /// `.include FILE`: splice the whole file.
+    fn include(&mut self, path: &Path, at: Span, src: Span, depth: usize) {
+        let key = (normalize(path), None);
+        if !self.may_enter(&key, ".include", src, depth) {
+            return;
+        }
+        let Some(file) = self.open(path, ".include", at) else {
+            return;
+        };
+        let lines = line_ranges(&self.sources.file(file).text);
+        self.stack.push(key);
+        self.splice(file, path, &lines, depth + 1, false);
+        self.stack.pop();
+    }
+
+    /// `.lib FILE SECTION`: splice the body of one section of a
+    /// library file.
+    fn lib(
+        &mut self,
+        path: &Path,
+        at: Span,
+        section: &str,
+        sec_span: Span,
+        src: Span,
+        depth: usize,
+    ) {
+        let name = section.to_ascii_lowercase();
+        let key = (normalize(path), Some(name.clone()));
+        if !self.may_enter(&key, ".lib", src, depth) {
+            return;
+        }
+        let Some(file) = self.open(path, "library", at) else {
+            return;
+        };
+        let index = self
+            .sections
+            .entry(file)
+            .or_insert_with(|| index_sections(file, &self.sources.file(file).text));
+        // ngspice takes the first definition of a name.
+        let Some(sec) = index.iter().find(|s| s.name == name) else {
+            self.diags.push(Diagnostic::error(
+                format!(
+                    "section `{section}` not found in library file {}",
+                    path.display()
+                ),
+                sec_span,
+            ));
+            return;
+        };
+        let head = sec.head;
+        let body = sec.body.clone();
+        let end = sec.end.clone();
+        match end {
+            None => {
+                self.diags.push(Diagnostic::error(
+                    format!("library section `{section}` is never closed by `.endl`"),
+                    head,
+                ));
+                return;
+            }
+            Some((end_span, Some(closing))) if closing != name => {
+                // ngspice accepts any name on `.endl` (and so do
+                // upstream `.ends`); worth a warning, not an error.
+                self.diags.push(Diagnostic::warning(
+                    format!(".endl {closing} closes .lib section {name}"),
+                    end_span,
+                ));
+            }
+            Some(_) => {}
+        }
+        self.stack.push(key);
+        self.splice(file, path, &body, depth + 1, true);
+        self.stack.pop();
     }
 
     /// Logical pass: title, comments, continuations.
@@ -335,12 +579,185 @@ impl Reader<'_> {
     }
 }
 
-fn starts_with_ignore_case(s: &str, prefix: &str) -> bool {
-    // Byte-wise: slicing `s[..prefix.len()]` would panic when the
-    // boundary lands inside a multi-byte character.
-    s.as_bytes()
-        .get(..prefix.len())
-        .is_some_and(|p| p.eq_ignore_ascii_case(prefix.as_bytes()))
+/// Byte ranges of the non-blank lines of `text`, trailing `\r` and
+/// blanks stripped. Blank lines never become cards (the C's readline
+/// folds them away).
+fn line_ranges(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut push = |s: usize, mut e: usize| {
+        while e > s && matches!(bytes[e - 1], b'\r' | b' ' | b'\t') {
+            e -= 1;
+        }
+        if !text[s..e].trim().is_empty() {
+            out.push((s, e));
+        }
+    };
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' {
+            push(start, i);
+            start = i + 1;
+        }
+    }
+    if start < bytes.len() {
+        push(start, bytes.len());
+    }
+    out
+}
+
+/// Index the `.lib NAME` … `.endl` sections of a library file in one
+/// linear pass. Lines outside sections are ignored, as in ngspice
+/// (only section bodies are ever spliced); inside a section the first
+/// `.endl` closes it.
+fn index_sections(file: FileId, text: &str) -> Vec<Section> {
+    let mut out: Vec<Section> = Vec::new();
+    let mut open = false;
+    for (s, e) in line_ranges(text) {
+        let line = &text[s..e];
+        let directive = directive_of(line);
+        if !open {
+            if let Some((Directive::Lib, kw_end)) = directive
+                && let Ok(args) = directive_args(line, kw_end)
+                && let [name] = args.as_slice()
+            {
+                out.push(Section {
+                    name: name.text.to_ascii_lowercase(),
+                    head: Span::new(file, s, e),
+                    body: Vec::new(),
+                    end: None,
+                });
+                open = true;
+            }
+            continue;
+        }
+        let Some(sec) = out.last_mut() else {
+            continue;
+        };
+        if let Some((Directive::Endl, kw_end)) = directive {
+            let closing = directive_args(line, kw_end)
+                .ok()
+                .and_then(|a| a.into_iter().next())
+                .map(|a| a.text.to_ascii_lowercase());
+            sec.end = Some((Span::new(file, s, e), closing));
+            open = false;
+        } else {
+            sec.body.push((s, e));
+        }
+    }
+    out
+}
+
+/// The reader directive a line starts with (leading blanks allowed,
+/// keyword case-insensitive) and the byte offset where the keyword
+/// ends. `.inc` is ngspice's alias of `.include`.
+fn directive_of(line: &str) -> Option<(Directive, usize)> {
+    let lead = line.len() - line.trim_start().len();
+    let rest = &line[lead..];
+    if !rest.starts_with('.') {
+        return None;
+    }
+    let kw_len = rest
+        .find(|c: char| c.is_ascii_whitespace() || c == '"' || c == '\'')
+        .unwrap_or(rest.len());
+    let kw = &rest[..kw_len];
+    let d = if kw.eq_ignore_ascii_case(".include") || kw.eq_ignore_ascii_case(".inc") {
+        Directive::Include
+    } else if kw.eq_ignore_ascii_case(".lib") {
+        Directive::Lib
+    } else if kw.eq_ignore_ascii_case(".endl") {
+        Directive::Endl
+    } else {
+        return None;
+    };
+    Some((d, lead + kw_len))
+}
+
+/// The arguments of a reader directive from byte `from` on: blank
+/// separated, each optionally in `"…"` or `'…'` (ngspice accepts both;
+/// the quotes are not part of the name). A `;` field or a lone `$`
+/// starts an end-of-line comment. An unclosed quote is an error with
+/// the byte range of the offending token.
+fn directive_args(line: &str, from: usize) -> Result<Vec<Arg>, (String, usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut out = Vec::new();
+    let mut i = from;
+    loop {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let start = i;
+        let q = bytes[i];
+        if q == b'"' || q == b'\'' {
+            let Some(len) = line[i + 1..].find(q as char) else {
+                return Err(("missing closing quote".into(), start, bytes.len()));
+            };
+            let text = &line[i + 1..i + 1 + len];
+            i += len + 2;
+            if text.is_empty() {
+                return Err(("empty quoted name".into(), start, i));
+            }
+            out.push(Arg {
+                text: text.to_string(),
+                start,
+                end: i,
+            });
+            continue;
+        }
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let text = &line[start..i];
+        if text.starts_with(';') || text == "$" {
+            break;
+        }
+        out.push(Arg {
+            text: text.to_string(),
+            start,
+            end: i,
+        });
+    }
+    Ok(out)
+}
+
+/// A directive's file name relative to the including file's directory
+/// (absolute names stay as they are).
+fn resolve(includer: &Path, name: &str) -> PathBuf {
+    let p = Path::new(name);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        includer.parent().unwrap_or(Path::new(".")).join(p)
+    }
+}
+
+/// Lexical normalization (`.` dropped, `dir/..` folded) so that one
+/// file reached by two spellings is read once and a cycle through
+/// `sub/../x.inc` is still seen as a cycle. No file system access:
+/// symbolic links are not resolved (the nesting limit covers them).
+fn normalize(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else if !matches!(
+                    out.components().next_back(),
+                    Some(Component::RootDir | Component::Prefix(_))
+                ) {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Byte offset where an end-of-line comment begins (`$` or `;` at the
@@ -418,20 +835,211 @@ mod tests {
         assert!(d.diags[0].message.contains("nope.cir"));
     }
 
+    /// Serves files from memory; counts loads per path.
+    struct MapLoader {
+        files: Vec<(&'static str, String)>,
+        loads: Vec<String>,
+    }
+
+    impl MapLoader {
+        fn new(files: &[(&'static str, &str)]) -> Self {
+            MapLoader {
+                files: files.iter().map(|(p, t)| (*p, t.to_string())).collect(),
+                loads: Vec::new(),
+            }
+        }
+    }
+
+    impl IncludeLoader for MapLoader {
+        fn load(&mut self, path: &Path, limit: u64) -> Result<String, String> {
+            let key = path.to_string_lossy().into_owned();
+            self.loads.push(key.clone());
+            let text = self
+                .files
+                .iter()
+                .find(|(p, _)| *p == key)
+                .map(|(_, t)| t.clone())
+                .ok_or_else(|| "no such file".to_string())?;
+            if text.len() as u64 > limit {
+                return Err("over budget".into());
+            }
+            Ok(text)
+        }
+    }
+
+    fn read_map(deck: &str, loader: &mut MapLoader) -> Deck {
+        read_with_loader(Path::new("top.cir"), deck.into(), loader)
+    }
+
+    fn texts(d: &Deck) -> Vec<&str> {
+        d.cards.iter().map(|c| c.text.as_str()).collect()
+    }
+
+    fn errors(d: &Deck) -> Vec<&str> {
+        d.diags
+            .iter()
+            .filter(|g| g.severity == Severity::Error)
+            .map(|g| g.message.as_str())
+            .collect()
+    }
+
     #[test]
     fn include_depth_is_bounded() {
-        struct SelfLoader;
-        impl IncludeLoader for SelfLoader {
+        // Every file includes a new, deeper one: no cycle, only depth.
+        struct DeepLoader;
+        impl IncludeLoader for DeepLoader {
             fn load(&mut self, _: &Path, _: u64) -> Result<String, String> {
-                Ok(".include self.cir\n".into())
+                Ok(".include d/x.cir\n".into())
             }
         }
         let d = read_with_loader(
             Path::new("test.cir"),
-            "t\n.include self.cir\n".into(),
-            &mut SelfLoader,
+            "t\n.include d/x.cir\n".into(),
+            &mut DeepLoader,
         );
         assert!(d.diags.iter().any(|g| g.message.contains("nested deeper")));
+    }
+
+    #[test]
+    fn include_cycle_is_a_spanned_error() {
+        let mut l = MapLoader::new(&[
+            ("a.inc", ".include sub/../b.inc\n"),
+            ("sub/../b.inc", ".inc 'a.inc'\n"),
+        ]);
+        let d = read_map("t\n.include a.inc\nr1 1 0 1\n", &mut l);
+        let e = errors(&d);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains(".include cycle"), "{e:?}");
+        let span = d.diags[0].span.unwrap();
+        assert_eq!(d.sources.file(span.file).name, Path::new("sub/../b.inc"));
+        assert_eq!(texts(&d), ["r1 1 0 1"]);
+    }
+
+    #[test]
+    fn lib_section_is_selected() {
+        let lib = "* header\nrout 1 0 1\n.lib s1\nr1 1 0 1k\n.endl s1\n.LIB S2\nr2 1 0 2k\n.ENDL\n";
+        let mut l = MapLoader::new(&[("m.lib", lib)]);
+        let d = read_map("t\n.lib m.lib s2\nv1 1 0 1\n", &mut l);
+        assert!(d.diags.is_empty(), "{:?}", d.diags);
+        assert_eq!(texts(&d), ["r2 1 0 2k", "v1 1 0 1"]);
+    }
+
+    #[test]
+    fn lib_file_is_read_once_for_many_sections() {
+        let lib = ".lib a\nra 1 0 1\n.endl\n.lib b\nrb 1 0 1\n.lib m.lib a\n.endl\n";
+        let mut l = MapLoader::new(&[("m.lib", lib)]);
+        let d = read_map(
+            "t\n.lib m.lib b\n.lib 'm.lib' a\n.lib \"m.lib\" B\n",
+            &mut l,
+        );
+        assert!(d.diags.is_empty(), "{:?}", d.diags);
+        assert_eq!(
+            texts(&d),
+            ["rb 1 0 1", "ra 1 0 1", "ra 1 0 1", "rb 1 0 1", "ra 1 0 1"]
+        );
+        assert_eq!(l.loads, ["m.lib"]);
+    }
+
+    #[test]
+    fn nested_lib_and_include_resolve_against_the_library() {
+        let lib = ".lib s\n  .lib 'other.lib' t\n  .include \"../inc/x.inc\"\n.endl\n";
+        let mut l = MapLoader::new(&[
+            ("pdk/m.lib", lib),
+            ("pdk/other.lib", ".lib t\nrt 1 0 1\n.endl t\n"),
+            ("pdk/../inc/x.inc", "rx 1 0 1\n"),
+        ]);
+        let d = read_map("t\n   .LIB pdk/m.lib S ; comment\n", &mut l);
+        assert!(d.diags.is_empty(), "{:?}", d.diags);
+        assert_eq!(texts(&d), ["rt 1 0 1", "rx 1 0 1"]);
+    }
+
+    #[test]
+    fn lib_cycle_and_same_section_twice() {
+        let lib = ".lib s\n.lib m.lib s\nr1 1 0 1\n.endl\n";
+        let mut l = MapLoader::new(&[("m.lib", lib)]);
+        let d = read_map("t\n.lib m.lib s\n", &mut l);
+        let e = errors(&d);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains(".lib cycle"), "{e:?}");
+        // The same section twice in a row is not a cycle (ngspice P24).
+        let lib = ".lib s\nr1 1 0 1\n.endl\n";
+        let mut l = MapLoader::new(&[("m.lib", lib)]);
+        let d = read_map("t\n.lib m.lib s\n.lib m.lib s\n", &mut l);
+        assert!(d.diags.is_empty(), "{:?}", d.diags);
+        assert_eq!(d.cards.len(), 2);
+    }
+
+    #[test]
+    fn lib_errors_are_spanned_diagnostics() {
+        let mut l = MapLoader::new(&[(
+            "m.lib",
+            ".lib ok\nr1 1 0 1\n.endl wrong\n.lib open\nr2 1 0 1\n",
+        )]);
+        let cases: &[(&str, &str)] = &[
+            (".lib m.lib nosuch", "section `nosuch` not found"),
+            (".lib m.lib open", "never closed by `.endl`"),
+            (".lib nofile.lib s", "cannot open library file"),
+            (".lib", "needs a library file and a section name"),
+            (".lib 'm.lib s", "missing closing quote"),
+            (".lib \"\" s", "empty quoted name"),
+            (".endl", ".endl without .lib"),
+            (".lib sec\nr9 1 0 1\n.endl", "opens a library section"),
+            (".include", ".include filename missing"),
+        ];
+        for (line, want) in cases {
+            let d = read_map(&format!("t\n{line}\nv1 1 0 1\n"), &mut l);
+            let e = errors(&d);
+            assert_eq!(e.len(), 1, "{line}: {e:?}");
+            assert!(e[0].contains(want), "{line}: {e:?}");
+            assert!(d.diags.iter().all(|g| g.span.is_some()), "{line}");
+            // A misplaced definition's body is skipped with it.
+            assert_eq!(texts(&d), ["v1 1 0 1"], "{line}");
+        }
+        // A mismatched `.endl` name is accepted with a warning.
+        let d = read_map("t\n.lib m.lib ok\n", &mut l);
+        assert!(errors(&d).is_empty());
+        assert!(d.diags[0].message.contains(".endl wrong closes"));
+        assert_eq!(d.sources.snippet(d.diags[0].span.unwrap()), ".endl wrong");
+    }
+
+    #[test]
+    fn nested_section_definition_ends_at_first_endl() {
+        let lib = ".lib s\nr1 1 0 1\n.lib inner\nr2 1 0 1\n.endl\nr3 1 0 1\n.endl\n";
+        let mut l = MapLoader::new(&[("m.lib", lib)]);
+        let d = read_map("t\n.lib m.lib s\n", &mut l);
+        let e = errors(&d);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains("sections do not nest"));
+        assert_eq!(texts(&d), ["r1 1 0 1", "r2 1 0 1"]);
+    }
+
+    #[test]
+    fn spliced_bytes_are_bounded() {
+        // A 256 KiB section requested 2000 times is read once, but
+        // splicing it every time would build a 500 MiB deck.
+        let big = format!("r1 1 0 1 {}\n", "x".repeat(64 << 10));
+        let lib = format!(".lib t\n{big}{big}{big}{big}.endl\n");
+        let deck = format!("t\n{}", ".lib m.lib t\n".repeat(2000));
+        let mut l = MapLoader {
+            files: vec![("m.lib", lib)],
+            loads: Vec::new(),
+        };
+        let d = read_map(&deck, &mut l);
+        let e = errors(&d);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains("spliced source text"), "{e:?}");
+        assert_eq!(l.loads.len(), 1);
+    }
+
+    #[test]
+    fn indented_and_quoted_include() {
+        let mut l = MapLoader::new(&[("dir/a b.inc", "ra 1 0 1\n")]);
+        let d = read_map(
+            "t\n   .INCLUDE \"dir/a b.inc\"\n\t.inc 'dir/a b.inc'\n",
+            &mut l,
+        );
+        assert!(d.diags.is_empty(), "{:?}", d.diags);
+        assert_eq!(texts(&d), ["ra 1 0 1", "ra 1 0 1"]);
     }
 
     #[test]
