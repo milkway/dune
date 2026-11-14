@@ -177,8 +177,8 @@ resultados espelhando o rawfile).
 - **`.pz`** (`pz.rs`, `engine.rs::pz_setup/pz_det` ← `ckt/pzan.c`,
   `cktpzset.c`, `cktpzld.c`, `cktpzstr.c`, `ni/nipzmeth.c`): polos e
   zeros como raízes do determinante da MNA complexa após a cirurgia
-  de colunas do `CKTpzSetup` (coluna-solução zerada, coluna-balanço
-  somada, entradas de excitação ±1). A busca é o "zeroin" do 3f5
+  de colunas do `CKTpzSetup` (coluna-solução somada **na**
+  coluna-balanço e depois zerada, entradas de excitação ±1). A busca é o "zeroin" do 3f5
   intacto: estratégias SHIFT/SKIP/SPLIT/GUESS no eixo real, SYM2
   (série quadrática em aritmética bloco-normalizada mantissa ×
   2^expoente — `zaddeq`/`R_NORM`/`C_NORM` literais), Muller para
@@ -232,6 +232,48 @@ resultados espelhando o rawfile).
   abaixo dela vira raiz real (repete uma raiz existente, ou substitui o
   trial-mínimo, que o `verify` descarta). Sonda `regress/pz_decoupled`
   (dois estágios emissor comum independentes; antes, dois polos NaN).
+  Dois erros de transcrição corrigidos em 2026-11-14, ambos com o 3f5
+  e o ngspice-47 idênticos entre si: (1) o `VSRCpzLoad` tem dois
+  ramos — fonte **sem** `AC` é curto (incidência do ramo), fonte
+  **com** `AC` (dado de qualquer forma, até `AC 0`) é o estímulo que a
+  excitação do `.pz` substitui e abre (`VSRCibrIbrptr += 1`, linha do
+  ramo vira `ibr = 0`; o elemento só existe na matriz do `.pz`, alocado
+  pelo `vsrcpzs.c` — `Device::alloc_pz`). O Dune curto-circuitava toda
+  fonte, então um `.pz` com a entrada sobre a fonte AC parava com "the
+  input signal is shorted on the way to the output" (a mensagem vem
+  de `cktpzstr.c:207`, quando todo trial é raiz: `NZeros >= Seq_Num −
+  1`, o determinante é identicamente nulo) e uma fonte AC fora da
+  entrada mudava os polos de uma transferência `CUR`. Com fonte sem
+  `AC` na entrada o C também recusa, e o Dune segue recusando. (2) o
+  `SMPcAddCol(matrix, balance_col, solution_col)` do `cktpzld.c` soma a
+  coluna-solução **na** coluna-balanço (`Accum_Col` é a de balanço:
+  com `x = v(+) − v(−)` como incógnita, `v(−)` fica com os próprios
+  coeficientes mais os de `v(+)`); o Dune somava ao contrário, na
+  coluna-solução que em seguida zerava, e jogava fora o nó negativo de
+  toda porta diferencial (entrada `VOL` flutuante nos polos, saída
+  com nó negativo ≠ 0 nos zeros). Sondas com resposta derivada à mão
+  no comentário: `regress/pz_vsrc_input` (RLC série, entrada na fonte
+  AC, saída `3 1`: polos −5000 ± j31225, zeros 0 e −1e4; antes recusava;
+  só com (1) corrigido o Dune não achava zero algum),
+  `regress/pz_vsrc_open` (fonte AC longe da entrada `CUR`: −381.97 e
+  −2618.03; antes −1000 e −3000), `regress/pz_float_input` (porta de
+  entrada flutuante: −500.2499; antes −1000). Saída diferencial cujo
+  numerador é constante (`H = 1/(1 + s·τ)` entre dois nós internos):
+  o 3f5, o ngspice-47 e agora o Dune reportam os mesmos quatro "zeros"
+  espúrios (±1e16…1e22) — a busca vagando numa função plana até o
+  limite de iterações; o ngspice avisa "Pole-zero iteration limit
+  reached", o Dune ainda não emite essa nota.
+  **Diferença de ~1e-4 nos polos de BJT** (`regress/pz_bjt` margem
+  0.068, `pz_decoupled` 0.049): vem inteira das constantes físicas do
+  3f5 (D-0002, KNOWN_DIFFS). O `k/q` do ngspice-47 (CODATA 2014) é
+  2.82e-5 maior; com `vbe/vt ≈ 27` o `Ic` do `.op` do `pz_bjt` sai
+  +5.31e-4 no Dune (atenuado pela degeneração de RE e da fonte), o
+  `gm = Ic/vt` +5.6e-4, e os polos/zeros andam de 1.1e-5 a 1.36e-4.
+  Medido: compilando o Dune com as constantes do ngspice, o `Ic` fica a
+  2e-8 (o resíduo é da ordem do gmin de substrato do ngspice, também
+  em KNOWN_DIFFS), os sete polos/zeros a ≤1.6e-9 e as margens do
+  `pz_bjt` e do `pz_decoupled` vão a 0.000 (as demais sondas `.pz`
+  seguem ≤ 0.001). Nada a corrigir na carga `bjtpzld.c` nem na busca.
   Os dois typos do `NIpzSym2` que o ngspice corrigiu (`b == 0.0` e
   `b_mag = 0`) seguem literais do 3f5 — não mordem em nenhuma sonda. Valida: `simplepz`, `pz2`, `pzt` PASS
   contra o ngspice-47 a ≤1.5e-8.
