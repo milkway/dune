@@ -55,7 +55,7 @@ pub fn parse_file(path: &Path) -> Result<ParseOutcome, crate::Error> {
     Ok(parse_deck(deck))
 }
 
-/// Parse a deck from a string; `.include` resolves through `loader`.
+/// Parse a deck from a string; `.include`/`.lib` resolve through `loader`.
 pub fn parse_with_loader(
     name: &Path,
     text: String,
@@ -64,7 +64,7 @@ pub fn parse_with_loader(
     parse_deck(deck::read_with_loader(name, text, loader))
 }
 
-/// Parse a deck from a string; `.include` resolves on the file
+/// Parse a deck from a string; `.include`/`.lib` resolve on the file
 /// system, relative to `name`'s directory.
 pub fn parse_str(name: &str, text: &str) -> ParseOutcome {
     parse_with_loader(Path::new(name), text.to_string(), &mut deck::FsLoader)
@@ -115,7 +115,8 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     }
                 }
             }
-            ".param" => collect_params(card, &mut env, &mut all_diags),
+            // `.params` is ngspice's synonym (the IHP libraries use it).
+            ".param" | ".params" => collect_params(card, &mut env, &mut all_diags),
             _ => {}
         }
     }
@@ -204,15 +205,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     scope.models.push(model);
                 }
             }
-            ".param" => {} // collected in pass A
-            ".include" => {
-                // A column-1 `.include` was spliced by the reader;
-                // reaching here means it was indented.
-                all_diags.push(Diagnostic::error(
-                    ".include is only recognized at column 1",
-                    span,
-                ));
-            }
+            ".param" | ".params" => {} // collected in pass A
             k if k.starts_with('.') => {
                 if !stack.is_empty() {
                     all_diags.push(Diagnostic::error(

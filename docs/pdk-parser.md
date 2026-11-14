@@ -37,7 +37,7 @@ aberto. Trechos do ngspice citados vêm de arquivos Modified BSD
    (+ 57 MB sintéticos); o maior arquivo (1,36 MB) lê em 0,05 s.
 6. Dois desvios do Dune atual frente ao ngspice-47 achados de passagem
    (§8): `{2^3^2}` vale 512 no Dune e 64 no ngspice; `.include "arq"` com
-   aspas não abre.
+   aspas não abre. Ambos corrigidos em 2026-11-14, junto com a G1.
 
 ## 1. Fontes
 
@@ -238,13 +238,13 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 
 | # | Pergunta | ngspice-47 | Dune |
 |---|---|---|---|
-| S1 | `.lib arq seção` | só o trecho `.lib seção`…`.endl`; nome de seção case-insensitive; `.lib` aninhado no mesmo arquivo funciona; `.include` dentro da seção resolve relativo ao **arquivo que inclui**; seção não pedida nem é lida (lixo nela não dá erro); `.endl nome` divergente aceito; pedir a mesma seção 2× é inofensivo; seção inexistente é fatal (P01, P21, P22, P24) | erro |
+| S1 | `.lib arq seção` | só o trecho `.lib seção`…`.endl`; nome de seção case-insensitive; `.lib` aninhado no mesmo arquivo funciona; `.include` dentro da seção resolve relativo ao **arquivo que inclui**; seção não pedida nem é lida (lixo nela não dá erro); `.endl nome` divergente aceito; pedir a mesma seção 2× é inofensivo; seção inexistente é fatal (P01, P21, P22, P24) | erro; **igual desde 2026-11-14** (G1; `.endl` divergente é aviso) |
 | S2 | referência adiante entre `.param` | aceita (`a={b+1}` antes de `b=2` → 3) (P02) | erro |
 | S3 | redefinição | a **última** definição vale para todos os usos, inclusive anteriores (P03) | igual (coleta tudo antes) |
 | S4 | precedência em subcircuito | valor da linha `X` > padrão da linha `.subckt` = padrão via `.param` no corpo = `params:` > `.param` global de mesmo nome (sombreado) (P04, P18, P23) | erro |
 | S5 | `.param` local encadeado (`lw={w*g}`, `lw2={lw+1}`) | funciona, mistura global e da instância (P15) | erro |
 | S6 | `{…}` × `'…'` × nu | equivalentes; espaços livres; nomes case-insensitive; nome nu de parâmetro vale em `.model` e na instância (`rsh=rv`, `w=wv`) (P05b, P11, P19) | erro |
-| S7 | precedência/associatividade | `^` e `**` **associam à esquerda** (`2^3^2 = 2**3**2 = 64`); menos unário mais fraco que `^` (`-2^2 = -4`) (P05, D_POW) | `^` à direita: 512 |
+| S7 | precedência/associatividade | `^` e `**` **associam à esquerda** (`2^3^2 = 2**3**2 = 64`); menos unário mais fraco que `^` (`-2^2 = -4`) (P05, D_POW) | `^` à direita: 512; **igual desde 2026-11-14** no `{…}` (`**` segue faltando, G2) |
 | S8 | funções | `pwr(-2,3)=8` (não preserva sinal), `pow(-2,3)=-8`, `pow(-2,0.5)` e `sqrt(-4)` → NaN → erro fatal "unknown parameter (nan)" **se usado**; `log` é **natural** (`log(100)=4,6052`), `log10`; `nint(2.5)=2`; `int` trunca; `7/2=3,5`; `limit(5,0,3)=8` (não é clamp; nenhum PDK usa); `!0=1`; booleanos valem 0/1 (P05) | sem funções |
 | S9 | sufixos em expressão | `2k*3=6000`; **`1mil` = 1e-3** (não 25,4e-6 como no leitor de números do 3f5) (P05 e21) | `mil`=25,4e-6 |
 | S10 | ternário em linha `X` entre aspas (`lr='(d_sab==0) ? 2 : d_sab'`) | funciona (P17) | erro |
@@ -257,9 +257,9 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | S17 | `.if/.elseif/.else/.endif` | funciona no topo e em `.subckt`, condicionado a parâmetro da instância (P10) | erro |
 | S18 | `m` na linha `X` | multiplica o subcircuito (2 × 1 kΩ → 500 Ω), **exceto** se a linha `.subckt` declara `m=` — aí `m` vira parâmetro comum e o multiplicador some (`m=4` → 1 kΩ; em `hs` o ngspice avisa "m=xx on .subckt line will override multiplier m hierarchy!") (P13) | erro |
 | S19 | `X` que nomeia um **modelo** | erro com modelo nível 1 ("unknown subckt"), plain e `hs` (P14); **aceito** com o modelo binado do gf180 (`xmn … nmos_3p3`), plain e `hs`, mas Vout(0,9 V) muda de 3,2103 (linha `M`) para 3,2093 (plain) / 3,2052 V (`hs`) — causa não isolada | erro |
-| S20 | `.include` indentado, `.inc`, aspas | aceitos (P12) | erro |
-| S21 | `.params` | sinônimo de `.param` (P20) | erro |
-| S22 | entrada hostil | ciclo de `.param` → erro "level depth greater 1000" (H1); **ciclo de `.include` → segfault** do ngspice (H2, rc=139); ciclo de `.lib` → erro espúrio "Missing second quote" (H3); 5000 parênteses → "Closing ) not found" (H4); cadeia de 20 000 `.param` → ok (H5); subcircuito recursivo → erro após ~22 níveis (H6) | H1: erro (por outra razão); H2: limite 16 ok; H6: limite 64 ok |
+| S20 | `.include` indentado, `.inc`, aspas | aceitos (P12) | erro; **igual desde 2026-11-14** |
+| S21 | `.params` | sinônimo de `.param` (P20) | erro; **igual desde 2026-11-14** |
+| S22 | entrada hostil | ciclo de `.param` → erro "level depth greater 1000" (H1); **ciclo de `.include` → segfault** do ngspice (H2, rc=139); ciclo de `.lib` → erro espúrio "Missing second quote" (H3); 5000 parênteses → "Closing ) not found" (H4); cadeia de 20 000 `.param` → ok (H5); subcircuito recursivo → erro após ~22 níveis (H6) | H1: erro (por outra razão); H2: limite 16 ok; H6: limite 64 ok; desde 2026-11-14 H2/H3 são erro "cycle" com span |
 
 Versão do BSIM4 (`inpdomod.c`, BSD): `level=14|54` com `version` 4.0–4.5
 → `bsim4v5`, 4.6 → `bsim4v6`, 4.7 → `bsim4v7`, 4.8/"default" → `bsim4`
@@ -285,7 +285,12 @@ Tamanhos são **estimativas** em linhas de Rust com testes (referência: o
 biblioteca inteira. **[API]** = muda API pública (precisa de aprovação do dono).
 
 **G1 — Leitor: `.lib`/`.endl`, aspas, `.inc`, diretivas indentadas,
-`.params`.**
+`.params`.** ✅ **Feito em 2026-11-14** (`deck.rs`; descrição em
+`docs/dune-netlist.md`, seção "Bibliotecas `.lib`"; decks
+`regress/lib_section.cir` e `regress/lib_nested.cir` com golden do
+ngspice-47; diferenças no `KNOWN_DIFFS.md`). Limites escolhidos:
+aninhamento 16 (`.include` + `.lib`), ciclo detectado por
+(arquivo, seção), 256 MiB lidos, 256 MiB percorridos (cobrados a cada entrada, diretivas e comentários incluídos), 100 000 entradas e 1000 diagnósticos do leitor.
 (a) inv: os três; full: os três. (b) S1, S20, S21. Seções selecionadas no
 leitor, antes da junção de continuações; nome de seção case-insensitive;
 caminho relativo ao arquivo que inclui (já é a regra do Dune). Ler cada
@@ -417,20 +422,32 @@ código 0 e 586 com 1 (diagnóstico); **nenhum pânico, sinal ou timeout**;
 57 MB); no teto de 256 MiB do leitor isso daria ~1,6 GB (**estimativa**) —
 a guardar quando G3 criar cópias por instância.
 
-## 8. Defeitos do Dune atual achados de passagem (não corrigidos)
+## 8. Defeitos do Dune atual achados de passagem
 
-1. **`^` à direita em `{…}`**: `{2^3^2}` = 512 no Dune, 64 no ngspice-47
+Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1.
+
+1. ✅ **`^` à direita em `{…}`**: `{2^3^2}` = 512 no Dune, 64 no ngspice-47
    (`param.rs` comenta "Right-associative, like ngspice", e o
    `docs/dune-netlist.md` repete). Reprodutor: `D_POW` no Apêndice A.
-2. **`.include "arq"`**: as aspas entram no caminho
+   *Corrigido*: à esquerda, expoente com sinal (`2^-1`); deck
+   `regress/param_pow.cir`. A fonte `B` (outra gramática, porte do
+   `inpptree.c`) também difere do ngspice-47 (64 e −4 lá, 512 e 4 aqui)
+   e fica no 3f5 (`KNOWN_DIFFS.md`).
+2. ✅ **`.include "arq"`**: as aspas entram no caminho
    (`cannot open .include file …/"…"`); o ngspice aceita aspas simples e
-   duplas.
-3. **`X … nome=valor`**: o último token vira nome de subcircuito ("no
+   duplas. *Corrigido* com o leitor de diretivas da G1.
+3. ✅ **`X … nome=valor`**: o último token vira nome de subcircuito ("no
    such subcircuit `0.15`"); diagnóstico enganoso enquanto G3 não existe.
+   *Corrigido*: erro "subcircuit parameters on X lines (`w=…`) are not
+   supported yet" com o span do nome do parâmetro (também `params:`).
 4. **`.option scale` só avisa** e segue com geometria errada (deveria ser
    erro até G5).
-5. **Valor não finito em `.param`**: `.param z={1/0}` passa calado; o deck
+5. ✅ **Valor não finito em `.param`**: `.param z={1/0}` passa calado; o deck
    P05d termina em "resistor cannot have zero resistance" para um NaN.
+   *Corrigido* como no ngspice-47 (sondas de 2026-11-14): definir ou
+   repassar um não finito entre `.param` não é erro (`{1/z}` volta a 0
+   e roda), o `{…}` não finito que chega a elemento, `.model` ou cartão
+   de controle é erro com span.
 6. **Diodo `level=3`**: aceito com notas, simulado como nível 1 (sem
    geometria nem parede) — resultado errado silencioso até G11.
 

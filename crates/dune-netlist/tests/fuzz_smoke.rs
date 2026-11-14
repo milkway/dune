@@ -184,3 +184,90 @@ fn pathological_shapes_terminate() {
     // Many nested subcircuit scopes never closed.
     parse(format!("t\n{}.end\n", ".subckt s a b\n".repeat(200)));
 }
+
+/// Serves every path with the deck's own text, so a mutated `.lib` or
+/// `.include` reads the mutated bytes again: sections, nesting,
+/// cycles and the nesting limit get exercised. Paths more than four
+/// directories deep are refused: a mutation like `.lib x/self.lib s`
+/// otherwise names a new file at every level and fans out up to the
+/// 256 MiB splice budget, which is correct but takes seconds per deck
+/// in a debug build (`deck.rs` tests that budget on its own).
+struct SelfFs(String);
+
+impl dune_netlist::IncludeLoader for SelfFs {
+    fn load(&mut self, path: &Path, limit: u64) -> Result<String, String> {
+        if path.components().count() > 4 || path.to_string_lossy().contains("missing") {
+            return Err("no such file".into());
+        }
+        if self.0.len() as u64 > limit {
+            return Err("over budget".into());
+        }
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn mutated_library_decks_never_panic() {
+    let seeds: &[&str] = &[
+        "t\n.lib self.lib s\n.lib s\nr1 1 0 1\n.lib 'self.lib' t\n.endl s\n.lib t\n.param a=1\n.endl\n",
+        "t\n  .LIB \"x/../self.lib\" S\n.inc 'missing.inc'\n.lib s\n.include self.lib\n.endl\n",
+        "t\n.lib a.lib s\n.lib s\n.lib b.lib s\n.lib b.lib s\n.lib b.lib s\n.endl\n.endl x\n",
+        "t\n.endl\n.lib\n.lib only\nr1 1 0 1\n.endl\n.lib 'unterminated s\n",
+    ];
+    let mut rng = Rng(0x11b5_eed5_0000_0001);
+    let alphabet: &[u8] = b".lLiInNcCeEdDbB '\"/\\\n\t;$s+x0";
+    for round in 0..600 {
+        let mut bytes = seeds[round % seeds.len()].as_bytes().to_vec();
+        for _ in 0..1 + rng.below(6) {
+            match rng.below(4) {
+                0 if !bytes.is_empty() => {
+                    let i = rng.below(bytes.len());
+                    bytes[i] = alphabet[rng.below(alphabet.len())];
+                }
+                1 => {
+                    let i = rng.below(bytes.len() + 1);
+                    let j = rng.below(alphabet.len());
+                    bytes.splice(i..i, alphabet[j..].iter().copied().take(1 + rng.below(4)));
+                }
+                2 if bytes.len() > 2 => {
+                    let i = rng.below(bytes.len());
+                    bytes.truncate(i);
+                }
+                _ => {
+                    // Repeat a line: more requests for the same section.
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    if let Some(line) = text.lines().nth(rng.below(8)) {
+                        let line = format!("{line}\n");
+                        bytes.extend(line.repeat(1 + rng.below(8)).into_bytes());
+                    }
+                }
+            }
+        }
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let _ = parse_with_loader(Path::new("self.lib"), text.clone(), &mut SelfFs(text));
+    }
+}
+
+/// libFuzzer timeout of 2026-11-14 (13 s before the reader charged
+/// every entry into a file or section): `.lib`/`.inc` lines naming
+/// the input itself under new spellings fan out within the nesting
+/// limit while splicing next to nothing. Served the way the fuzz
+/// target serves it.
+#[test]
+fn fuzz_timeout_lib_fan_out_is_fast() {
+    struct FuzzFs(String);
+    impl dune_netlist::IncludeLoader for FuzzFs {
+        fn load(&mut self, path: &Path, limit: u64) -> Result<String, String> {
+            if path.components().count() > 4 || self.0.len() as u64 > limit {
+                return Err("refused under fuzzing".into());
+            }
+            Ok(self.0.clone())
+        }
+    }
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fuzz/lib-fanout-timeout.bin");
+    let text = String::from_utf8_lossy(&std::fs::read(path).unwrap()).into_owned();
+    let t = std::time::Instant::now();
+    let _ = parse_with_loader(Path::new("fuzz.lib"), text.clone(), &mut FuzzFs(text));
+    assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+}

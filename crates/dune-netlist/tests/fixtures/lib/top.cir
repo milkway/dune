@@ -1,0 +1,6 @@
+library sections from disk
+.lib "models/main.lib" TYP
+.inc 'sub/extra.inc'
+v1 1 0 {vsup}
+r1 1 0 {rload}
+.end

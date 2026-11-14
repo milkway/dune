@@ -1,0 +1,15 @@
+* Model library with nested sections, written for Dune (not from a PDK).
+* Read by corpus/regress/lib_nested.cir: section `typ` pulls another
+* section of this same file, a section of corners.lib (resolved next
+* to this file) and an include, all indented as in real PDKs.
+.LIB TYP
+  .lib 'pdk.lib' base
+  .lib "corners.lib" ff
+  .include 'params.inc'
+.ENDL TYP
+.lib base
+.model qn npn is={is0} bf=120 vaf=50
+.endl base
+.lib extra
+.param wfac=2
+.endl extra
