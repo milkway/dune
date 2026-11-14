@@ -1,0 +1,9 @@
+square wave and its rc-filtered copy, fourier
+* written for Dune (.four vs ngspice-47); not from Berkeley
+* 50 % duty pulse: odd harmonics 4/(pi k) (THD ~ 48 %); the RC rounds it
+v1 in 0 pulse(-1 1 0 1u 1u 499u 1m)
+r1 in out 1k
+c1 out 0 50n
+.tran 2u 4m
+.four 1k v(in) v(out)
+.end

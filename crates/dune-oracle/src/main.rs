@@ -14,6 +14,7 @@ mod accuracy;
 mod compare;
 mod corpus;
 mod dune_run;
+mod four;
 mod ngspice;
 
 use std::path::Path;
@@ -125,6 +126,7 @@ fn ci() -> Result<bool> {
         "\n{via_dune} circuit(s) simulated by dune, {via_self} still \
          golden-vs-golden (analyses pending per PLAN.md §3)"
     );
+    all_ok &= four::ci(&corpus.root)?;
     Ok(all_ok)
 }
 

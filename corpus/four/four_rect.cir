@@ -1,0 +1,13 @@
+half-wave rectifier, fourier with deck options
+* written for Dune (.four vs ngspice-47); not from Berkeley
+* nfreqs/fourgridsize/nperiods/polydegree read from .options, two cards
+v1 in 0 sin(0 5 60)
+d1 in out dmod
+r1 out 0 1k
+c1 out 0 2u
+.model dmod d is=1e-14 rs=1 cjo=2p
+.options nfreqs=16 fourgridsize=512 nperiods=2 polydegree=2
+.tran 20u 70m
+.four 60 v(out)
+.four 120 i(v1)
+.end

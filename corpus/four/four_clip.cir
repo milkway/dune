@@ -1,0 +1,12 @@
+diode clipper, fourier of distorted waves
+* written for Dune (.four vs ngspice-47); not from Berkeley
+* antiparallel diodes clip a 2 V sine; differential and current outputs
+v1 in 0 sin(0.1 2 1k)
+r1 in out 1k
+d1 out 0 dmod
+d2 0 out dmod
+r2 out 0 10k
+.model dmod d is=1e-14 n=1.2 rs=5
+.tran 5u 4m
+.four 1k v(out) v(in,out) i(v1)
+.end

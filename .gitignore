@@ -32,6 +32,7 @@ r/src/*.dll
 *.raw
 !corpus/golden/**/*.raw
 !corpus/measure/golden/*.raw
+!corpus/four/golden/*.raw
 !crates/*/tests/data/*.raw
 # Dune-only transient-noise probes: goldens written by Dune itself.
 !corpus/regress/golden/*.raw
