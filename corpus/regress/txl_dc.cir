@@ -1,0 +1,16 @@
+KSPICE TXL: DC sweep through two cascaded lines
+* Coverage: the DC load of the TXL (MODEDC): a series resistance
+* R*len between the two ends (G is ignored), both branch currents,
+* the 0.1*gmin it adds to all four entries of the node block, and the
+* instance `len` overriding the model `length` (y2: 2 m, 24.9 ohm; y1:
+* the model's 1 m, 12.45 ohm). Written for the Dune port of
+* ngspice-47's txl model.
+v1 in 0 dc 1
+r1 in a 10
+y1 a 0 b 0 ymod
+r2 b 0 50
+y2 b 0 c 0 ymod len=2
+r3 c 0 100
+.model ymod txl R=12.45 L=8.972e-9 G=0.01 C=0.468e-12 length=1
+.dc v1 -2 2 0.25
+.end

@@ -1,0 +1,16 @@
+KSPICE TXL: lossless line (R/L < 5e5, G < 1e-2), reflections
+* Coverage: the lossless TXL path (`lsl`): no Pade fit, Y = sqrt(C/L)
+* and a pure delay sqrt(LC)*len = 0.52 ns, delayed sources only. A
+* 50 ohm source and a 1 kohm load with 1 pF across it against Z0 =
+* 138.5 ohm: steps of the reflected wave every round trip. R=0 and a
+* small G (below the 1e-2 threshold) on the card. Spice3 profile.
+* Written for the Dune port of ngspice-47's txl model.
+.options compat=spice3
+v1 in 0 pulse(0 1 0.2003n 0.3n 0.3n 3n 20n)
+r1 in a 50
+y1 a 0 b 0 ymod
+r2 b 0 1k
+c2 b 0 1p
+.model ymod txl R=0 L=8.972e-9 G=1e-3 C=0.468e-12 length=8
+.tran 0.05n 10n 0 0.0503n
+.end

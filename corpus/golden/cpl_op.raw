@@ -1,0 +1,59 @@
+Title: kspice lines at the operating point: cpl and txl in dc
+Date: Sat Nov 14 10:29:57  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 25
+No. Points: 1       
+Variables:
+	0	v(in)	voltage
+	1	v(in2)	voltage
+	2	v(a1)	voltage
+	3	v(a2)	voltage
+	4	v(a3)	voltage
+	5	v(b1)	voltage
+	6	v(b2)	voltage
+	7	v(b3)	voltage
+	8	v(c1)	voltage
+	9	v(c2)	voltage
+	10	v(d)	voltage
+	11	i(p2)	current
+	12	i(p2)	current
+	13	i(p2)	current
+	14	i(p2)	current
+	15	i(p1)	current
+	16	i(p1)	current
+	17	i(p1)	current
+	18	i(p1)	current
+	19	i(p1)	current
+	20	i(p1)	current
+	21	i(y1)	current
+	22	i(y1)	current
+	23	i(v2)	current
+	24	i(v1)	current
+Values:
+0		1.000000000000000e+00
+	-5.000000000000000e-01
+	6.704021094087069e-01
+	-3.335553150526056e-01
+	0.000000000000000e+00
+	6.690837178463687e-01
+	-3.328895363128294e-01
+	0.000000000000000e+00
+	6.591957811292309e-01
+	-3.328893698681445e-01
+	0.000000000000000e+00
+	6.591957811425138e-03
+	-3.328893698748023e-03
+	-6.591957811425138e-03
+	3.328893698748023e-03
+	6.591957811691914e-03
+	-3.328893698881244e-03
+	0.000000000000000e+00
+	-6.591957811691914e-03
+	3.328893698881245e-03
+	0.000000000000000e+00
+	0.000000000000000e+00
+	0.000000000000000e+00
+	3.328893698947888e-03
+	-6.591957811825862e-03

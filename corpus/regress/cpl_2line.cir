@@ -1,0 +1,23 @@
+KSPICE CPL: two coupled lines, near- and far-end crosstalk
+* Coverage: a 2-conductor CPL (upper-triangle matrices R, L, G, C):
+* the Jacobi modal decomposition, the polynomial fits over the
+* frequency ladder, the Pade fits of every admittance and propagation
+* entry, two modal delays, the delayed sources of both modes, the
+* clamp of R to 1e-4 on the off-diagonal zero. Line 1 driven through
+* 50 ohm, line 2 quiet with 50 ohm at both ends: v(a2) is the
+* near-end and v(b2) the far-end crosstalk. Spice3 profile. Written
+* for the Dune port of ngspice-47's cpl model.
+.options compat=spice3
+v1 in 0 pulse(0 1 2.0003n 2n 2n 20n 100n)
+r1 in a1 50
+r2 0 a2 50
+p1 a1 a2 0 b1 b2 0 pmod
+r3 b1 0 50
+r4 b2 0 50
+.model pmod cpl length=1
++ R=1 0 1
++ L=3.83e-7 5.79e-8 3.83e-7
++ G=0 0 0
++ C=1.15e-10 -1.04e-11 1.15e-10
+.tran 0.5n 60n 0 0.2003n
+.end

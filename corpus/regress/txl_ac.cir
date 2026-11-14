@@ -1,0 +1,20 @@
+KSPICE TXL: AC through a lossy and a lossless line under DC bias
+* Coverage: ngspice-47 installs TXLload itself as the TXL's DEVacLoad.
+* At CKTtime = CKTdelta = 0 that is the transient companion at h = 0:
+* each end looks like sqrt(C/L) to ground, the two ends are not
+* coupled, and the history sources computed from the operating point
+* (the dc setup of the first AC load) go into the real right-hand side
+* as a constant excitation at every frequency. With the 1 V bias here
+* the AC solution carries it; Dune reproduces the load as is. Written
+* for the Dune port of ngspice-47's txl model.
+v1 in 0 dc 1 ac 1
+r1 in a 50
+y1 a 0 b 0 ylossy
+r2 b 0 50
+r3 in c 50
+y2 c 0 d 0 ylossless
+r4 d 0 50
+.model ylossy txl R=12.45 L=8.972e-9 G=0 C=0.468e-12 length=16
+.model ylossless txl R=0 L=8.972e-9 G=0 C=0.468e-12 length=16
+.ac dec 5 1meg 1g
+.end

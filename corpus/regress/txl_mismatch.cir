@@ -1,0 +1,16 @@
+KSPICE TXL: short mismatched lossy line, the load lowers TMAX
+* Coverage: a lossy TXL whose delay (64.8 ps) is shorter than the
+* default TMAX (0.1 ns): `TXLload` sets CKTmaxStep = 0.9*taul ("tmax is
+* now set to ...") from inside the load, and the following steps obey
+* it. A 10 ohm source into a 1 kohm load through Z0 = 138.5 ohm: the
+* reflections ring at the round trip of the line. Also `len` on the
+* card overriding the model `length`. Spice3 profile. Written for the
+* Dune port of ngspice-47's txl model.
+.options compat=spice3
+v1 in 0 pulse(0 1 0.2003n 0.2n 0.2n 2n 10n)
+r1 in a 10
+y1 a 0 b 0 ymod len=1
+r2 b 0 1k
+.model ymod txl R=12.45 L=8.972e-9 G=0 C=0.468e-12 length=16
+.tran 0.1n 6n
+.end
