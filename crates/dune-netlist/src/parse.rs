@@ -13,7 +13,7 @@ use crate::deck::{self, Card, Deck, IncludeLoader};
 use crate::diag::Diagnostic;
 use crate::elem::{ElemCtx, parse_element};
 use crate::ir::{Model, Netlist};
-use crate::param::ParamEnv;
+use crate::param::{ParamDef, ParamEnv};
 use crate::scan::Scanner;
 use crate::span::SourceMap;
 use crate::subckt::{Scope, SubcktDef, expand};
@@ -95,8 +95,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     let mut model_names: HashSet<String> = HashSet::new();
     // VDMOS model names: their `M` instances take 3 to 5 nodes.
     let mut vdmos_models: HashSet<String> = HashSet::new();
-    let mut env = ParamEnv::default();
+    let mut param_defs: Vec<ParamDef> = Vec::new();
     let mut in_control = false;
+    let mut subckt_depth = 0usize;
     for card in &cards {
         let kw = first_keyword(card);
         if in_control {
@@ -105,6 +106,8 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
         }
         match kw.as_str() {
             ".control" => in_control = true,
+            ".subckt" => subckt_depth += 1,
+            ".ends" => subckt_depth = subckt_depth.saturating_sub(1),
             ".model" => {
                 let mut sc = Scanner::new(card);
                 sc.next_tok();
@@ -116,10 +119,16 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 }
             }
             // `.params` is ngspice's synonym (the IHP libraries use it).
-            ".param" | ".params" => collect_params(card, &mut env, &mut all_diags),
+            // Definitions inside `.subckt` belong to the subcircuit's
+            // scope (G3, not supported yet: pass B reports them).
+            ".param" | ".params" if subckt_depth == 0 => {
+                collect_params(card, &mut param_defs, &mut all_diags);
+            }
             _ => {}
         }
     }
+    let env = crate::param::resolve(&param_defs, &mut all_diags);
+    drop(param_defs);
 
     // Pass B: the real parse.
     let mut top = Scope::default();
@@ -205,7 +214,18 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     scope.models.push(model);
                 }
             }
-            ".param" | ".params" => {} // collected in pass A
+            ".param" | ".params" => {
+                // Top-level ones were collected in pass A.
+                if !stack.is_empty() {
+                    all_diags.push(Diagnostic::error(
+                        format!(
+                            "{kw} inside .subckt is not supported yet (subcircuit \
+                             parameter scope)"
+                        ),
+                        span,
+                    ));
+                }
+            }
             k if k.starts_with('.') => {
                 if !stack.is_empty() {
                     all_diags.push(Diagnostic::error(
@@ -249,6 +269,8 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
         )));
     }
 
+    all_diags.extend(env.random_note());
+
     let (elements, models) = expand(&top, &mut all_diags);
     nl.elements = elements;
     nl.models = models;
@@ -260,48 +282,139 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     }
 }
 
-/// `.param name=value …` — each value is a number or a basic
-/// expression (one token, or a `{…}` token).
-fn collect_params(card: &Card, env: &mut ParamEnv, diags: &mut Vec<Diagnostic>) {
-    let mut sc = Scanner::new(card);
-    sc.next_tok(); // `.param`
-    while let Some(name_tok) = sc.next_tok() {
-        let name = name_tok.lc();
-        let nspan = sc.span(&name_tok);
-        if crate::scan::evaluate(&name).is_some() {
-            diags.push(Diagnostic::error(
-                format!("`{name}` cannot be a parameter name"),
-                nspan,
-            ));
+/// `.param name=value [,] name=value …`: collect the definitions of
+/// one card (evaluated later, all at once — forward references are
+/// legal). A value is `{expr}`, `'expr'` or a bare expression that
+/// runs to the first blank or `,` outside parentheses (ngspice's
+/// `inp_split_multi_param_lines` cuts there). Text after a value that
+/// does not start the next `name=` is an error: ngspice silently
+/// drops it on a multi-assignment line (`.param b = a * 3 c=1` gives
+/// `b = a`) and rejects it on a single one.
+fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut Vec<Diagnostic>) {
+    let text = card.text.as_str();
+    let b = text.as_bytes();
+    let blank = |c: u8| c == b' ' || c == b'\t';
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    // Skip the keyword.
+    let mut p = 0usize;
+    while p < b.len() && !blank(b[p]) {
+        p += 1;
+    }
+    loop {
+        while p < b.len() && (blank(b[p]) || b[p] == b',') {
+            p += 1;
+        }
+        if p >= b.len() {
             return;
         }
-        let value = if let Some((v, _)) = sc.try_value() {
-            Some(v)
-        } else if let Some(vtok) = sc.next_tok() {
-            let text = vtok.lc();
-            let vspan = sc.span(&vtok);
-            let result = if text.starts_with('{') {
-                env.eval_brace(&text)
-            } else {
-                env.eval_expr(&text)
-            };
-            match result {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    diags.push(Diagnostic::error(e, vspan));
-                    None
-                }
+        // Name.
+        let ns = p;
+        if b[p].is_ascii_alphabetic() || b[p] == b'_' {
+            while p < b.len() && ident(b[p]) {
+                p += 1;
             }
-        } else {
-            diags.push(Diagnostic::error(
-                format!("parameter `{name}` has no value"),
-                nspan,
-            ));
-            None
-        };
-        if let Some(v) = value {
-            env.define(&name, v);
         }
+        let ne = p;
+        let mut q = p;
+        while q < b.len() && blank(b[q]) {
+            q += 1;
+        }
+        let assigned = q < b.len() && b[q] == b'=' && b.get(q + 1) != Some(&b'=');
+        if ns == ne || !assigned {
+            // Not `name =`: either junk where a name belongs or text
+            // left over after the previous value.
+            let mut e = ns.max(ne);
+            while e < b.len() && !blank(b[e]) {
+                e += 1;
+            }
+            let e = e.max(ns + 1).min(b.len());
+            let word = &text[ns..e];
+            let msg = if defs.last().is_some_and(|d| std::ptr::eq(d.card, card)) {
+                format!(
+                    "unexpected `{word}` after a parameter value (an expression with \
+                     blanks must be written as {{…}} or '…')"
+                )
+            } else if ns == ne {
+                format!("`{word}` cannot be a parameter name")
+            } else {
+                format!("parameter `{word}` has no value")
+            };
+            diags.push(Diagnostic::error(msg, card.span_of(ns, e)));
+            return;
+        }
+        let name = text[ns..ne].to_ascii_lowercase();
+        let name_span = card.span_of(ns, ne);
+        p = q + 1;
+        while p < b.len() && blank(b[p]) {
+            p += 1;
+        }
+        let vs = p;
+        let (value_start, value_end) = match b.get(p) {
+            None => {
+                diags.push(Diagnostic::error(
+                    format!("parameter `{name}` has no value"),
+                    name_span,
+                ));
+                return;
+            }
+            Some(b'{') => match crate::scan::match_brace(b, p) {
+                Some(end) => {
+                    p = end;
+                    (vs + 1, p - 1)
+                }
+                None => {
+                    diags.push(Diagnostic::error(
+                        format!("missing `}}` in the value of parameter `{name}`"),
+                        card.span_of(vs, vs + 1),
+                    ));
+                    return;
+                }
+            },
+            Some(b'\'') => match b[p + 1..].iter().position(|&c| c == b'\'') {
+                Some(k) => {
+                    p = p + 1 + k + 1;
+                    (vs + 1, p - 1)
+                }
+                None => {
+                    diags.push(Diagnostic::error(
+                        format!("missing closing `'` in the value of parameter `{name}`"),
+                        card.span_of(vs, vs + 1),
+                    ));
+                    return;
+                }
+            },
+            Some(b'"') => {
+                diags.push(Diagnostic::error(
+                    format!("string-valued parameter `{name}` is not supported"),
+                    card.span_of(vs, vs + 1),
+                ));
+                return;
+            }
+            Some(_) => {
+                let mut depth = 0usize;
+                while p < b.len() {
+                    match b[p] {
+                        b' ' | b'\t' | b',' if depth == 0 => break,
+                        b'(' => depth += 1,
+                        b')' if depth > 0 => depth -= 1,
+                        b'{' => {
+                            p = crate::scan::skip_brace(b, p);
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    p += 1;
+                }
+                (vs, p)
+            }
+        };
+        defs.push(ParamDef {
+            name,
+            name_span,
+            card,
+            value_start,
+            value: &text[value_start..value_end],
+        });
     }
 }
 

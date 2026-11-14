@@ -33,23 +33,13 @@ impl DotCtx<'_> {
     }
 
     fn value_opt(&mut self, sc: &mut Scanner) -> Option<f64> {
-        if let Some((v, _)) = sc.try_value() {
-            return Some(v);
-        }
-        let tok = sc.peek_tok()?;
-        if !tok.text.starts_with('{') {
-            return None;
-        }
-        let span = sc.span(&tok);
-        let text = tok.lc();
-        sc.next_tok();
-        match self.env.eval_use(&text) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                self.err(span, e);
-                Some(0.0)
-            }
-        }
+        crate::elem::param_value(sc, self.card, self.env, self.diags, true)
+    }
+
+    /// `.options` values: no bare expressions after `=` (ngspice's
+    /// `inp_fix_param_values` skips option lines).
+    fn option_value(&mut self, sc: &mut Scanner) -> Option<f64> {
+        crate::elem::param_value(sc, self.card, self.env, self.diags, false)
     }
 
     fn value_req(&mut self, sc: &mut Scanner, what: &str) -> Option<f64> {
@@ -662,7 +652,7 @@ fn dot_options(ctx: &mut DotCtx, nl: &mut Netlist) {
             continue;
         }
         let mut nums = Vec::new();
-        while let Some(v) = ctx.value_opt(&mut sc) {
+        while let Some(v) = ctx.option_value(&mut sc) {
             nums.push(v);
         }
         let value = match nums.len() {

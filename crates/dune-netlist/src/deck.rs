@@ -143,12 +143,11 @@ impl Card {
     pub fn span_of(&self, start: usize, end: usize) -> Span {
         let start = start as u32;
         let end = end as u32;
-        let seg = self
-            .segments
-            .iter()
-            .rev()
-            .find(|s| s.text_start <= start)
-            .unwrap_or(&self.segments[0]);
+        // Segments are sorted by `text_start`; a binary search keeps
+        // spans cheap on cards with thousands of continuation lines
+        // (sky130's `montecarlo.spice` has a 1.26 MB `.param` card).
+        let k = self.segments.partition_point(|s| s.text_start <= start);
+        let seg = &self.segments[k.saturating_sub(1)];
         let off = start.saturating_sub(seg.text_start).min(seg.len);
         let len = end.saturating_sub(start).min(seg.len - off);
         Span {

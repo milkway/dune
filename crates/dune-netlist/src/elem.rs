@@ -54,26 +54,11 @@ impl ElemCtx<'_> {
         self.tok_req(what).map(|(t, _)| t)
     }
 
-    /// A number if one starts here: a plain SPICE number or a basic
-    /// `{expr}` parameter expression. Consumes nothing otherwise.
+    /// A number if one starts here: a plain SPICE number, a parameter
+    /// expression (`{expr}`, `'expr'`) or a bare expression right
+    /// after `name=`. Consumes nothing otherwise.
     pub(crate) fn value_opt(&mut self) -> Option<f64> {
-        if let Some((v, _)) = self.sc.try_value() {
-            return Some(v);
-        }
-        let tok = self.sc.peek_tok()?;
-        if !tok.text.starts_with('{') {
-            return None;
-        }
-        let span = self.sc.span(&tok);
-        let text = tok.lc();
-        self.sc.next_tok();
-        match self.env.eval_use(&text) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                self.err(span, e);
-                Some(0.0)
-            }
-        }
+        param_value(&mut self.sc, self.card, self.env, self.diags, true)
     }
 
     pub(crate) fn value_req(&mut self, what: &str) -> Option<f64> {
@@ -131,6 +116,36 @@ impl ElemCtx<'_> {
             }
         });
         (area, off, params)
+    }
+}
+
+/// The value scanning shared by element, model and control cards (see
+/// [`ElemCtx::value_opt`]); `bare` allows a bare expression after `=`
+/// (not on `.options`, as in ngspice's `inp_fix_param_values`). A
+/// value that fails to evaluate is reported and read as 0 so the
+/// card keeps its shape.
+pub(crate) fn param_value(
+    sc: &mut Scanner,
+    card: &Card,
+    env: &ParamEnv,
+    diags: &mut Vec<Diagnostic>,
+    bare: bool,
+) -> Option<f64> {
+    if let Some((v, _)) = sc.try_value() {
+        return Some(v);
+    }
+    let tok = match sc.peek_tok() {
+        Some(t) if t.text.starts_with('{') || t.text.starts_with('\'') => sc.next_tok()?,
+        _ if bare => sc.assign_value()?,
+        _ => return None,
+    };
+    let base = tok.start;
+    match env.eval_value(tok.text, &|s, e| card.span_of(base + s, base + e)) {
+        Ok(v) => Some(v),
+        Err(diag) => {
+            diags.extend(diag);
+            Some(0.0)
+        }
     }
 }
 

@@ -127,7 +127,9 @@ fn quoted_include_opens() {
     for q in ["\"sub/shared.inc\"", "'sub/shared.inc'", "sub/shared.inc"] {
         let out = parse_here(&format!("t\n.include {q}\nr1 1 0 {{kshared}}\n.end\n"));
         assert_eq!(errors(&out), Vec::<String>::new(), "{q}");
-        assert_eq!(value(&out.netlist, "r1"), 7.0);
+        // `{7}` reaches the device as 7.000000000000001, like
+        // ngspice-47's `%.15e` text substitution (probe c7 q_inst_7).
+        assert_eq!(value(&out.netlist, "r1"), 7f64.next_up());
     }
 }
 

@@ -65,7 +65,13 @@ impl<'c> Scanner<'c> {
         }
     }
 
-    /// `INPgetTok`: the next field, cut at separators only.
+    /// `INPgetTok`: the next field, cut at separators only. A
+    /// parameter expression is one field whatever it contains: from a
+    /// `{` to its matching `}` (ngspice's `inp_spawn_brace` counts
+    /// nesting), and a field that starts with `'` runs to the next
+    /// `'` (ngspice turns `'…'` into `{…}` before anything else,
+    /// `inp_change_quotes`). An unclosed one runs to the end of the
+    /// card, where the evaluator reports it.
     pub fn next_tok(&mut self) -> Option<Token<'c>> {
         self.skip_seps();
         let bytes = self.card.text.as_bytes();
@@ -73,13 +79,73 @@ impl<'c> Scanner<'c> {
             return None;
         }
         let start = self.pos;
+        if bytes[start] == b'\'' {
+            self.pos = match bytes[start + 1..].iter().position(|&b| b == b'\'') {
+                Some(k) => start + 1 + k + 1,
+                None => bytes.len(),
+            };
+        }
         while self.pos < bytes.len() && !is_sep(bytes[self.pos]) {
-            self.pos += 1;
+            if bytes[self.pos] == b'{' {
+                self.pos = skip_brace(bytes, self.pos);
+            } else {
+                self.pos += 1;
+            }
         }
         Some(Token {
             text: &self.card.text[start..self.pos],
             start,
             end: self.pos,
+        })
+    }
+
+    /// A bare parameter value right after an assignment `=`
+    /// (`w=wv`, `rsh=rv*2`, `noia=max(a, b)`): ngspice wraps such a
+    /// value in `{…}` (`inp_fix_param_values`, Modified BSD), taking
+    /// everything up to the first blank outside parentheses. Here a
+    /// `,` or `)` outside parentheses also ends it (the `)` closing a
+    /// `.model` parameter list). Consumes nothing and returns `None`
+    /// unless the separators before the next field contain an `=`.
+    pub fn assign_value(&mut self) -> Option<Token<'c>> {
+        let bytes = self.card.text.as_bytes();
+        let mut p = self.pos;
+        let mut after_eq = None;
+        while p < bytes.len() && is_sep(bytes[p]) {
+            if bytes[p] == b'=' {
+                if bytes.get(p + 1) == Some(&b'=') {
+                    return None;
+                }
+                after_eq = Some(p + 1);
+            }
+            p += 1;
+        }
+        let mut p = after_eq?;
+        while p < bytes.len() && matches!(bytes[p], b' ' | b'\t') {
+            p += 1;
+        }
+        let start = p;
+        let mut depth = 0usize;
+        while p < bytes.len() {
+            match bytes[p] {
+                b' ' | b'\t' | b',' | b')' if depth == 0 => break,
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b'{' => {
+                    p = skip_brace(bytes, p);
+                    continue;
+                }
+                _ => {}
+            }
+            p += 1;
+        }
+        if p == start {
+            return None;
+        }
+        self.pos = p;
+        Some(Token {
+            text: &self.card.text[start..p],
+            start,
+            end: p,
         })
     }
 
@@ -109,6 +175,30 @@ impl<'c> Scanner<'c> {
         self.pos = end;
         Some((value, Token { text, start, end }))
     }
+}
+
+/// Index just past the `}` matching the `{` at `bytes[at]`, or the
+/// end of the text when it is never closed.
+pub(crate) fn skip_brace(bytes: &[u8], at: usize) -> usize {
+    match_brace(bytes, at).unwrap_or(bytes.len())
+}
+
+/// Index just past the `}` matching the `{` at `bytes[at]`.
+pub(crate) fn match_brace(bytes: &[u8], at: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, &b) in bytes.iter().enumerate().skip(at) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Length of the value token starting at `bytes[0]` (`INPgetUTok`'s

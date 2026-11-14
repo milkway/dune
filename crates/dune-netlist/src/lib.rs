@@ -20,6 +20,7 @@ mod expr;
 mod meas;
 mod param;
 mod parse;
+mod pexpr;
 mod scan;
 mod subckt;
 
