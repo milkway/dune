@@ -1,0 +1,26 @@
+VBIC self-heating output families: thermal node, RTH, temperature laws
+* Coverage: collector sweep at four base currents of an npn with
+* self-heating on (RTH > 0 given): the thermal node dt (5th terminal)
+* carries the dissipated power Ith into RTH (scaled by AREA*M like every
+* output) with a 1 GOhm external path, and the device equations follow
+* the junction temperature through the resistor exponents XRE/XRBI/XRCI/
+* XRCX/XRBX/XRS and the saturation currents; a second copy with SELFT=0
+* names its thermal node, which nothing stamps (pinned at 0 V). Written
+* for the Dune port of ngspice-47's vbic model.
+vc c 0 dc 0
+ib 0 bin dc 50u
+vsense bin b dc 0
+vs s 0 dc 0
+q1 c b 0 s dt nh
+rext dt 0 1e9
+vc2 c2 c dc 0
+fb2 0 b2 vsense 1
+q2 c2 b2 0 s dt2 ns
+.model nh npn (level=4 is=1e-16 ibei=1e-18 iben=1e-15 ibci=2e-17 ibcn=5e-15
++ vef=50 ver=5 ikf=50e-3 rcx=2 rci=10 rbx=10 rbi=40 re=0.5 rs=20 rbp=50
++ isp=1e-17 ibcip=1e-18 ikp=1e-4 avc1=2 avc2=15 rth=300 cth=1e-9 xre=1 xrbi=1
++ xrci=1.5 xrcx=1 xrbx=1 xrs=1)
+.model ns npn (level=4 selft=0 is=1e-16 ibei=1e-18 iben=1e-15 vef=50 ikf=50e-3
++ rcx=2 rci=10 rbx=10 rbi=40 re=0.5 rth=300)
+.dc vc 0 6 0.1 ib 50u 200u 50u
+.end

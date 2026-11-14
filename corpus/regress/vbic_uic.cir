@@ -1,0 +1,25 @@
+VBIC transient from initial conditions: IC=, ICVBE/ICVCE, .ic and OFF
+* Coverage: .tran UIC of three npn devices (the MODEINITJCT/MODETRANOP/
+* MODEUIC branch of vbicload.c): q1 starts from IC=VBE,VCE on its card,
+* q2 from ICVBE= plus a VCE taken from the .ic node voltages
+* (VBICgetic reads the external nodes), q3 is OFF with no initial
+* condition; all relax through their charges into resistive loads.
+* Spice3 profile: the golden is ngspice's trapezoidal run. Written for
+* the Dune port of ngspice-47's vbic model.
+.options compat=spice3
+vcc vcc 0 dc 5
+rb1 vcc b1 200k
+q1 c1 b1 0 0 nu ic=0.65,1.5
+rc1 vcc c1 2k
+rb2 vcc b2 300k
+q2 c2 b2 0 0 nu icvbe=0.7
+rc2 vcc c2 2k
+.ic v(c2)=2.5
+rb3 vcc b3 250k
+q3 c3 b3 0 0 nu off
+rc3 vcc c3 2k
+.model nu npn (level=4 is=1e-16 ibei=1e-18 iben=1e-15 ibci=2e-17 ibcn=5e-15
++ vef=50 ver=5 ikf=5e-3 rcx=10 rci=50 rbx=20 rbi=80 re=2 cje=500f cjc=300f
++ cjcp=500f cbeo=50f cbco=30f tf=100p tr=5n)
+.tran 1n 300n uic
+.end

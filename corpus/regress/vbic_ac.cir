@@ -1,0 +1,33 @@
+VBIC small signal: charges, epi charge, excess phase, npn and pnp
+* Coverage: .ac of a common-emitter npn stage with emitter degeneration
+* (the small-signal pass stores every capacitance of vbicload.c: Qbe
+* with its Vbci term, Qbex, Qbc, Qbcx with the epi charge QCO, Qbep with
+* its Vbci term, Qbcp, the overlaps CBEO/CBCO; the excess-phase pair
+* xf1/xf2 with TD; AJC/AJS > 0, the other smoothing branch), and a
+* common-emitter pnp whose substrate sits at +2 V. Written for the Dune
+* port of ngspice-47's vbic model.
+vcc vcc 0 dc 5
+vin in 0 dc 0.78 ac 1
+rs in b 50
+q1 c b e 0 nv
+re e 0 20
+rc vcc c 1k
+vinp inp 0 dc -0.8 ac 1
+rsp inp bp 50
+q2 cp bp 0 sub pv
+vsub sub 0 dc 2
+rcp cp vee 1k
+vee vee 0 dc -5
+.model nv npn (level=4 is=1e-16 nf=1.0 nr=1.0 ibei=1e-18 nei=1 iben=1e-15 nen=2
++ ibci=2e-17 nci=1.01 ibcn=5e-15 ncn=2 vef=50 ver=5 ikf=5e-3 ikr=5e-4 nkf=0.5
++ rcx=10 rci=50 vo=1.5 gamm=2e-11 hrcf=1 rbx=20 rbi=80 re=2 rs=40 rbp=100
++ isp=1e-17 wsp=1 nfp=1 ibeip=1e-19 ibenp=1e-16 ibcip=1e-18 ncip=1 ibcnp=1e-15
++ ncnp=2 ikp=1e-4 cje=50f pe=0.8 me=0.35 aje=-0.5 cjc=30f pc=0.7 mc=0.3 ajc=0.3
++ cjep=10f cjcp=80f ps=0.6 ms=0.3 ajs=0.2 cbeo=5f cbco=3f qco=1e-15 ccso=2f
++ tf=10p qtf=0.1 xtf=5 vtf=1 itf=10e-3 tr=1n td=5p avc1=2 avc2=15 wbe=0.9)
+.model pv pnp (level=9 is=5e-17 ibei=5e-19 iben=2e-15 ibci=1e-17 ibcn=1e-15
++ vef=30 ver=4 ikf=2e-3 rcx=15 rci=80 vo=1 gamm=1e-11 rbx=30 rbi=100 re=3 qbm=1
++ isp=1e-17 ibcip=1e-18 ikp=1e-4 cje=60f cjc=40f cjcp=100f tf=20p tr=2n cbeo=4f
++ cbco=2f rs=10)
+.ac dec 10 1k 100g
+.end

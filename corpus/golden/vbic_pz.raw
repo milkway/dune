@@ -1,0 +1,31 @@
+Title: vbic pole-zero: npn common emitter into a pnp common emitter
+Date: Sat Nov 14 08:45:37  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 11
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(pole(4))	voltage
+	4	v(pole(5))	voltage
+	5	v(pole(6))	voltage
+	6	v(zero(1))	voltage
+	7	v(zero(2))	voltage
+	8	v(zero(3))	voltage
+	9	v(zero(4))	voltage
+	10	v(zero(5))	voltage
+Values:
+0		-4.919149056229827e+11,0.000000000000000e+00
+	-2.419933144148038e+11,0.000000000000000e+00
+	-6.768172462470995e+10,0.000000000000000e+00
+	-4.032459734912326e+10,0.000000000000000e+00
+	-4.626685539046249e+09,0.000000000000000e+00
+	-1.532491802124535e+09,0.000000000000000e+00
+	-4.627859906454023e+11,0.000000000000000e+00
+	-1.459851558305457e+11,0.000000000000000e+00
+	-8.333332019028114e+10,0.000000000000000e+00
+	4.000280324714845e+10,0.000000000000000e+00
+	1.053382516486188e+11,0.000000000000000e+00

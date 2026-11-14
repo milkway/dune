@@ -1,0 +1,17 @@
+VBIC self-heating transient: CTH, thermal node and excess phase together
+* Coverage: an npn with self-heating (RTH, CTH integrated on the thermal
+* node) and excess phase (TD: the xf1 node also depends on the thermal
+* node) switches a resistive load from a base-current pulse; the
+* junction warms and cools with the RTH*CTH time constant while the
+* collector current follows. Spice3 profile: the golden is ngspice's
+* trapezoidal run. Written for the Dune port of ngspice-47's vbic model.
+.options compat=spice3
+vcc vcc 0 dc 8
+ib 0 b pulse(1u 400u 100n 20n 20n 500n 1.2u)
+q1 c b 0 0 dt nh
+rl vcc c 100
+.model nh npn (level=4 is=1e-16 ibei=1e-18 iben=1e-15 ibci=2e-17 ibcn=5e-15
++ vef=50 ver=5 ikf=50e-3 rcx=2 rci=10 rbx=10 rbi=40 re=0.5 cje=200f cjc=100f
++ cjcp=200f tf=20p tr=2n td=10p rth=300 cth=1n xre=1 xrci=1.5 xrbi=1 xis=3)
+.tran 5n 2.4u
+.end

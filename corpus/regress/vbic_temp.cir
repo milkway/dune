@@ -1,0 +1,42 @@
+VBIC temperature mapping: circuit, instance TEMP/DTEMP, model TNOM/DTEMP
+* Coverage: Gummel sweep at .temp 85 of five copies of an npn whose card
+* sets every temperature parameter of vbic_4T_et_cf_t (TNOM=50 °C, EA
+* and the per-current activation energies EAIE/EAIC/EAIS/EANE/EANC/EANS,
+* EAP, DEAR, XIS/XII/XIN/XISR, TNF, TAVC, XIKF, XRE/XRBI/XRCI/XRS/XRCX/
+* XRBX/XRBP, XVO, TVBBE1/TVBBE2/TNBBE, and the built-in potentials and
+* capacitances through PE/PC/PS): at the circuit temperature, with
+* instance TEMP=-20, DTEMP=30, TEMP and DTEMP together (VBICtemp adds
+* them), and a second card with a model DTEMP; plus a pnp at TEMP=125.
+* Written for the Dune port of ngspice-47's vbic model.
+.options temp=85
+vb b 0 dc 0.6
+vc c 0 dc 2
+vs s 0 dc 0
+q1 c b 0 s nt
+vc2 c2 0 dc 2
+q2 c2 b 0 s nt temp=-20
+vc3 c3 0 dc 2
+q3 c3 b 0 s nt dtemp=30
+vc4 c4 0 dc 2
+q4 c4 b 0 s nt temp=10 dtemp=15
+vc5 c5 0 dc 2
+q5 c5 b 0 s nd
+ebp bp 0 b 0 -1
+vcp cp 0 dc -2
+q6 cp bp 0 0 pt temp=125
+.model nt npn (level=4 tnom=50 is=1e-16 nf=1.01 nr=1.02 isrr=1.5 ibei=1e-18
++ iben=1e-15 ibci=2e-17 ibcn=5e-15 vef=50 ver=5 ikf=5e-3 ikr=5e-4 rcx=10
++ rci=50 vo=1.5 gamm=2e-11 hrcf=1 rbx=20 rbi=80 re=2 rs=40 rbp=100 isp=1e-17
++ ibeip=1e-19 ibenp=1e-16 ibcip=1e-18 ibcnp=1e-15 ikp=1e-4 cje=50f pe=0.8
++ cjc=30f pc=0.7 cjep=10f cjcp=80f ps=0.6 avc1=2 avc2=15 vbbe=4 nbbe=3
++ ea=1.17 eaie=1.15 eaic=1.10 eais=1.05 eane=1.12 eanc=1.08 eans=1.0 eap=1.11
++ dear=0.02 xis=3.5 xii=2.5 xin=2.8 xisr=3.2 tnf=2e-4 tavc=1e-3 xikf=-0.4
++ xre=1.1 xrbi=1.3 xrci=1.6 xrs=0.9 xrcx=1.2 xrbx=0.8 xrbp=0.7 xvo=0.5
++ tvbbe1=1e-3 tvbbe2=2e-6 tnbbe=-1e-3)
+.model nd npn (level=4 dtemp=25 is=1e-16 ibei=1e-18 iben=1e-15 vef=50 ikf=5e-3
++ rcx=10 rci=50 rbx=20 rbi=80 re=2 xis=3 xre=1 xrci=1.5)
+.model pt pnp (level=4 is=5e-17 ibei=5e-19 iben=2e-15 ibci=1e-17 ibcn=1e-15
++ vef=30 ver=4 ikf=2e-3 rcx=15 rci=80 rbx=30 rbi=100 re=3 xis=3.2 eaie=1.1
++ xrci=1.4 tnf=1e-4)
+.dc vb 0.3 1.0 0.01
+.end

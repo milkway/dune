@@ -1,0 +1,25 @@
+VBIC output families: quasi-saturation, avalanche, Early, npn and pnp
+* Coverage: collector sweep from saturation into weak avalanche at four
+* base currents for a level-4 npn with Kull's quasi-saturation (RCI,
+* VO, GAMM, HRCF), weak avalanche (AVC1/AVC2), Early voltages (VEF/VER),
+* the forward knee with NKF, the reach-through smoothing of the B-C
+* depletion charge (VRT/ART enter qb through Qbc) and the default
+* (QBM=0) qb; a pnp with the SGP qb (QBM=1) mirrored through E sources
+* (current-controlled base drive). Written for the Dune port of
+* ngspice-47's vbic model.
+vc c 0 dc 0
+ib 0 bin dc 10u
+vsense bin b dc 0
+vs s 0 dc 0
+q1 c b 0 s nq
+ecp cp 0 c 0 -1
+fbp bp 0 vsense 1
+q2 cp bp 0 0 pq
+.model nq npn (level=4 is=2e-16 ibei=2e-18 iben=5e-16 ibci=1e-17 ibcn=1e-15
++ vef=40 ver=4 ikf=10e-3 nkf=0.7 ikr=1e-3 rcx=5 rci=200 vo=0.8 gamm=5e-11
++ hrcf=2 rbx=10 rbi=50 re=1 avc1=2.5 avc2=20 cjc=50f pc=0.7 mc=0.4 vrt=4 art=0.2)
+.model pq pnp (level=4 is=1e-16 ibei=1e-18 iben=1e-15 ibci=5e-18 ibcn=1e-15
++ vef=25 ver=3 ikf=5e-3 rcx=8 rci=150 vo=1 gamm=3e-11 rbx=15 rbi=60 re=2
++ avc1=2 avc2=25 qbm=1 cje=40f cjc=30f)
+.dc vc 0 8 0.05 ib 10u 40u 10u
+.end
