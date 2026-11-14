@@ -52,9 +52,23 @@ pub const DEF_FOURGRIDSIZE: usize = 200;
 /// vector length with `polydegree=0`): a hostile `.options` must not
 /// allocate gigabytes.
 pub const MAX_FOUR_POINTS: usize = 10_000_000;
-/// Most `sin`/`cos` pairs a transform may evaluate (points ×
-/// harmonics), about ten seconds of work.
+/// Most work units a transform may spend, about ten seconds: one per
+/// `sin`/`cos` pair of the DFT (points × harmonics) plus, for
+/// `polydegree ≥ 2`, `(degree+1)³` per polynomial fit (one fit per
+/// input sample at most, Gauss–Jordan in `ft_polyfit`).
 pub const MAX_FOUR_WORK: u128 = 1_000_000_000;
+/// Most harmonics (`nfreqs`, DC included). A fixed bound, not tied to
+/// the grid: ngspice prints harmonics above Nyquist (aliases of lower
+/// ones) and Dune keeps doing so for every `nfreqs` up to this; the
+/// bound only stops `nfreqs` from allocating its per-harmonic tables
+/// out of proportion when the grid is tiny (the work bound alone lets
+/// a 1-point grid ask for 10⁹ harmonics).
+pub const MAX_NFREQS: usize = 100_000;
+/// Highest `polydegree`. ngspice accepts any degree up to the number
+/// of samples, but each fit is a dense `(degree+1)²` Gauss–Jordan
+/// solve and fits of high degree through 1e-3-checked points fail and
+/// fall back degree by degree anyway; practical degrees are 1–3.
+pub const MAX_POLYDEGREE: usize = 32;
 
 /// `EDGE_FACTOR` of `interpolate.c`: a vertical edge (two samples at
 /// the same abscissa) is turned into a slope by pushing the earlier
@@ -121,6 +135,21 @@ impl FourParams {
             match value {
                 Some(v) if v >= min => {
                     let v = v as usize;
+                    let cap = match slot {
+                        0 => Some(MAX_NFREQS),
+                        2 => Some(MAX_POLYDEGREE),
+                        _ => None,
+                    };
+                    if let Some(cap) = cap.filter(|&c| v > c) {
+                        diags.push(Diagnostic::warning(
+                            format!(
+                                "option {} = {v} exceeds Dune's maximum {cap}; .four will \
+                                 refuse it",
+                                p.name
+                            ),
+                            p.span,
+                        ));
+                    }
                     match slot {
                         0 => out.nfreqs = v,
                         1 => out.nperiods = v,
@@ -198,10 +227,18 @@ pub enum FourError {
     /// `ft_interpolate` gave up (its message).
     #[error("can't interpolate: {0}")]
     Interpolate(String),
-    /// The grid or the work exceeds [`MAX_FOUR_POINTS`] /
+    /// The grid, the harmonics, the degree or the work exceed
+    /// [`MAX_FOUR_POINTS`], [`MAX_NFREQS`], [`MAX_POLYDEGREE`] or
     /// [`MAX_FOUR_WORK`].
-    #[error("fourier grid too large ({points} points × {nfreqs} harmonics)")]
-    TooLarge { points: usize, nfreqs: usize },
+    #[error(
+        "fourier too large ({points} points × {nfreqs} harmonics, degree {polydegree}; \
+         limits {MAX_FOUR_POINTS} points, {MAX_NFREQS} harmonics, degree {MAX_POLYDEGREE})"
+    )]
+    TooLarge {
+        points: usize,
+        nfreqs: usize,
+        polydegree: usize,
+    },
 }
 
 /// Fourier analysis of `values` sampled at `time` (a transient
@@ -221,7 +258,22 @@ pub fn fourier(
     }
     let nfreqs = params.nfreqs.max(1);
     let nperiods = params.nperiods.max(1);
-    let too_large = |points: usize| FourError::TooLarge { points, nfreqs };
+    let degree = params.polydegree;
+    let too_large = |points: usize| FourError::TooLarge {
+        points,
+        nfreqs,
+        polydegree: degree,
+    };
+    if nfreqs > MAX_NFREQS || degree > MAX_POLYDEGREE {
+        return Err(too_large(params.gridsize.saturating_mul(nperiods)));
+    }
+    // Fit work: at most one `ft_polyfit` per input sample, each a
+    // dense (degree+1)² Gauss–Jordan (degree 1 is closed-form).
+    let fit_work = if degree >= 2 {
+        time.len() as u128 * (degree as u128 + 1).pow(3)
+    } else {
+        0
+    };
     let (data, gridsize) = if params.polydegree > 0 {
         let n = params
             .gridsize
@@ -229,7 +281,7 @@ pub fn fourier(
             .checked_mul(nperiods)
             .filter(|&n| n <= MAX_FOUR_POINTS)
             .ok_or_else(|| too_large(params.gridsize.saturating_mul(nperiods)))?;
-        if n as u128 * nfreqs as u128 > MAX_FOUR_WORK {
+        if n as u128 * nfreqs as u128 + fit_work > MAX_FOUR_WORK {
             return Err(too_large(n));
         }
         // ft_minmax(time): HUGE / -HUGE seeds.
@@ -826,6 +878,80 @@ mod tests {
         // finite, never a panic.
         let f = fourier(&t, &v, 1e300, &FourParams::default()).unwrap();
         assert!(f.harmonics[0].mag.is_finite());
+    }
+
+    #[test]
+    fn harmonics_are_capped_even_on_a_tiny_grid() {
+        // A 1-point grid keeps n·nfreqs under the work bound, so only
+        // the harmonic cap stops 10⁹ harmonics' worth of tables.
+        let (t, v) = sampled(|t| t, 1e-3, 10);
+        let p = FourParams {
+            nfreqs: 999_999_999,
+            gridsize: 1,
+            ..FourParams::default()
+        };
+        let start = std::time::Instant::now();
+        assert!(matches!(
+            fourier(&t, &v, 1e3, &p),
+            Err(FourError::TooLarge { .. })
+        ));
+        assert!(start.elapsed().as_secs() < 1);
+        // At the cap it still runs (aliased harmonics, as ngspice).
+        let p = FourParams {
+            nfreqs: MAX_NFREQS,
+            gridsize: 4,
+            ..FourParams::default()
+        };
+        assert_eq!(
+            fourier(&t, &v, 1e3, &p).unwrap().harmonics.len(),
+            MAX_NFREQS
+        );
+    }
+
+    #[test]
+    fn polynomial_degree_and_fit_work_are_capped() {
+        let (t, v) = sampled(|t| t * t, 1e-3, 100);
+        let p = FourParams {
+            polydegree: 2_000_000_000,
+            ..FourParams::default()
+        };
+        let start = std::time::Instant::now();
+        assert!(matches!(
+            fourier(&t, &v, 1e3, &p),
+            Err(FourError::TooLarge { .. })
+        ));
+        // Within the degree cap but over the work budget: many samples
+        // times (degree+1)³.
+        let tt: Vec<f64> = (0..2_000_000).map(|i| i as f64 * 1e-9).collect();
+        let vv = vec![0.0; tt.len()];
+        let p = FourParams {
+            polydegree: MAX_POLYDEGREE,
+            ..FourParams::default()
+        };
+        assert!(matches!(
+            fourier(&tt, &vv, 1e3, &p),
+            Err(FourError::TooLarge { .. })
+        ));
+        assert!(start.elapsed().as_secs() < 2);
+        // A legitimate degree still runs.
+        let p = FourParams {
+            polydegree: 3,
+            ..FourParams::default()
+        };
+        assert!(fourier(&t, &v, 1e3, &p).is_ok());
+    }
+
+    #[test]
+    fn options_over_the_caps_warn() {
+        let parsed = dune_netlist::parse_str(
+            "caps.cir",
+            "caps\n.options nfreqs=1e6 polydegree=100\nr1 1 0 1\n.end\n",
+        );
+        let mut diags = Vec::new();
+        let fp = FourParams::from_options(&parsed.netlist.options, &mut diags);
+        assert_eq!((fp.nfreqs, fp.polydegree), (1_000_000, 100));
+        assert_eq!(diags.len(), 2);
+        assert!(diags[0].message.contains("maximum"));
     }
 
     #[test]

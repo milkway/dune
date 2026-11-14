@@ -106,9 +106,23 @@ do deck entre os `.print`; com `-r` saem também (depois das medidas)
 
 - `.four` sem frequência ou sem vetores, frequência não numérica,
   ≤ 0 ou não finita: erro com span no parser.
-- Grade ou trabalho excessivos (`fourgridsize·nperiods` > 10⁷ pontos,
-  ou pontos × harmônicos > 10⁹): `FourError::TooLarge` em vez de
-  horas de CPU ou gigabytes de alocação.
+- Limites (`FourError::TooLarge` em vez de horas de CPU ou gigabytes
+  de alocação; valores acima do limite em `.options` também dão aviso
+  com span):
+  - `fourgridsize·nperiods` ≤ 10⁷ pontos (`MAX_FOUR_POINTS`);
+  - `nfreqs` ≤ 10⁵ (`MAX_NFREQS`) — limite **fixo**, não amarrado à
+    grade: o ngspice imprime harmônicos acima de Nyquist (apelidos dos
+    de baixo) e o Dune continua imprimindo-os para todo `nfreqs` até o
+    limite; ele só impede que uma grade minúscula (1 ponto) peça 10⁹
+    harmônicos, que o limite de trabalho sozinho deixaria passar e que
+    alocariam ~24 GB de tabelas;
+  - `polydegree` ≤ 32 (`MAX_POLYDEGREE`) — o ngspice aceita qualquer
+    grau até o número de amostras, mas cada ajuste é uma eliminação
+    densa `(grau+1)²`, e ajustes de grau alto falham no critério 1e-3
+    do `ft_polyfit` e caem grau a grau; graus práticos são 1–3;
+  - trabalho ≤ 10⁹ unidades (`MAX_FOUR_WORK`): pontos × harmônicos da
+    DFT mais, para grau ≥ 2, `(grau+1)³` por ajuste, contando um ajuste
+    por amostra de entrada (cota superior).
 - Escalas degeneradas onde o C leria fora do vetor (todas as
   abscissas iguais etc.): erro de interpolação, nunca pânico.
 
