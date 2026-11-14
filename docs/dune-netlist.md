@@ -65,7 +65,7 @@ Registradas também em `corpus/KNOWN_DIFFS.md` quando observáveis:
    diretório corrente do processo; o ngspice-47 tenta o diretório
    corrente, depois o do deck, e só então o do arquivo que inclui);
    aninhamento ≤ 16 contando `.include` e `.lib` juntos, ciclo
-   detectado com span, 256 MiB lidos e 256 MiB emendados; o loader
+   detectado com span, 256 MiB lidos, 256 MiB percorridos, 100 000 entradas e 1000 diagnósticos do leitor; o loader
    recusa o que não for arquivo regular.
 4. **R/C semicondutores**: um token nu na posição do modelo que seja
    um keyword conhecido (`w l temp ic resistance capacitance area
@@ -132,10 +132,24 @@ junção de continuações:
   ciclo (o mesmo arquivo, ou a mesma seção do mesmo arquivo, já na
   pilha) é erro com o span da diretiva que fecha o ciclo — o ngspice-47
   dá *segfault* num ciclo de `.include` e um erro espúrio de aspas num
-  ciclo de `.lib`; 256 MiB de texto **lido** (cada arquivo uma vez) e
-  256 MiB **emendados** (uma seção pedida milhares de vezes, ou um
-  leque de aninhamentos, para com um erro só — tudo para a partir
-  dali).
+  ciclo de `.lib`; e quatro orçamentos, cada um parando a leitura com
+  um erro só (com span) — tudo para a partir dali:
+  - 256 MiB de texto **lido** (`MAX_READ_BYTES`; cada arquivo uma vez);
+  - 256 MiB de texto **percorrido** (`MAX_VISITED_BYTES`): cada entrada
+    num arquivo ou seção (`.include`, `.lib`, o deck raiz) cobra o
+    tamanho inteiro do que percorre — diretivas, comentários e linhas
+    em branco incluídos —, esteja o arquivo em cache ou não; um
+    arquivo só de comentários incluído milhares de vezes para aqui;
+  - 100 000 **entradas** (`MAX_ENTRIES`): um leque de seções só de
+    diretivas (cada seção pedindo outras quatro, 15 níveis: 4¹⁵
+    entradas sem limite) ou um arquivo vazio incluído sem fim para
+    aqui; o inversor sky130 usa 170;
+  - 1000 **diagnósticos** do leitor (`MAX_READER_DIAGS`), depois um
+    erro final; falha de abertura fica em cache (o loader é chamado
+    uma vez por caminho).
+  Os limites saíram de uma revisão e de um *timeout* do libFuzzer
+  (13 s, entrada em `tests/fixtures/fuzz/lib-fanout-timeout.bin`, hoje
+  18 ms).
 - Diferenças medidas (linhas no `KNOWN_DIFFS.md`): caminho só relativo
   ao arquivo que inclui (o ngspice procura antes no diretório corrente
   e no do deck); `.include` de seções **não pedidas** não é lido (o

@@ -37,7 +37,7 @@ aberto. Trechos do ngspice citados vêm de arquivos Modified BSD
    (+ 57 MB sintéticos); o maior arquivo (1,36 MB) lê em 0,05 s.
 6. Dois desvios do Dune atual frente ao ngspice-47 achados de passagem
    (§8): `{2^3^2}` vale 512 no Dune e 64 no ngspice; `.include "arq"` com
-   aspas não abre.
+   aspas não abre. Ambos corrigidos em 2026-11-14, junto com a G1.
 
 ## 1. Fontes
 
@@ -290,7 +290,7 @@ biblioteca inteira. **[API]** = muda API pública (precisa de aprovação do don
 `regress/lib_section.cir` e `regress/lib_nested.cir` com golden do
 ngspice-47; diferenças no `KNOWN_DIFFS.md`). Limites escolhidos:
 aninhamento 16 (`.include` + `.lib`), ciclo detectado por
-(arquivo, seção), 256 MiB lidos e 256 MiB emendados.
+(arquivo, seção), 256 MiB lidos, 256 MiB percorridos (cobrados a cada entrada, diretivas e comentários incluídos), 100 000 entradas e 1000 diagnósticos do leitor.
 (a) inv: os três; full: os três. (b) S1, S20, S21. Seções selecionadas no
 leitor, antes da junção de continuações; nome de seção case-insensitive;
 caminho relativo ao arquivo que inclui (já é a regra do Dune). Ler cada
