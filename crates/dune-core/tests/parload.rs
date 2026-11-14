@@ -1,7 +1,7 @@
 //! The parallel device load (issue #9, lever 1): `load_threads > 1`
 //! must reproduce the sequential load bit for bit — every plot of
-//! every analysis card of every corpus deck, and a synthetic BSIM3
-//! inverter chain through `.op`, `.dc`, `.ac` and `.tran`.
+//! every analysis card of every corpus deck, and synthetic BSIM3 and
+//! BSIM4 inverter chains through `.op`, `.dc`, `.ac` and `.tran`.
 //!
 //! Three thread counts: 2 and 3 split the device list into multi-device
 //! chunks; 64 gives every device of a corpus deck its own chunk, so
@@ -190,4 +190,51 @@ fn bsim3_chain_four_analyses_bit_identical() {
         ".op\n.dc vin 0 3.3 0.1\n.ac dec 5 1meg 1g\n.tran 0.1n 12n\n",
     );
     assert_eq!(assert_same(&nl, "chain"), 4);
+}
+
+/// A chain of `n` BSIM4 inverters (the `bsim4_inv` cards), with a gate
+/// resistance and a body network on alternate stages so the extra
+/// internal nodes and charge states take part.
+#[cfg(feature = "bsim")]
+fn chain4(n: usize, analyses: &str) -> Netlist {
+    let models = std::fs::read_to_string(corpus().join("regress/bsim4_inv.cir")).unwrap();
+    let models = &models[models.find(".model nch").unwrap()..models.find(".end").unwrap()];
+    let mut d = String::from("bsim4 inverter chain\nvdd vdd 0 dc 1.8\n");
+    d.push_str("vin in0 0 dc 0 pulse(0 1.8 0.2n 50p 50p 0.8n 2n) ac 1\n");
+    for k in 0..n {
+        let (a, b) = (format!("in{k}"), format!("in{}", k + 1));
+        let extra = match k % 3 {
+            1 => " rgatemod=1",
+            2 => " rbodymod=1",
+            _ => "",
+        };
+        d.push_str(&format!(
+            "mn{k} {b} {a} 0 0 nch l=0.18u w=1u ad=0.5p as=0.5p pd=3u ps=3u{extra}\n\
+             mp{k} {b} {a} vdd vdd pch l=0.18u w=2u ad=1p as=1p pd=5u ps=5u\n\
+             c{k} {b} 0 3f\n"
+        ));
+    }
+    d.push_str(analyses);
+    d.push_str(models);
+    d.push_str(".end\n");
+    let parsed = dune_netlist::parse_str("chain4.cir", &d);
+    assert!(
+        parsed
+            .diags
+            .iter()
+            .all(|d| d.severity != dune_netlist::Severity::Error),
+        "{:?}",
+        parsed.diags
+    );
+    parsed.netlist
+}
+
+#[cfg(feature = "bsim")]
+#[test]
+fn bsim4_chain_four_analyses_bit_identical() {
+    let nl = chain4(
+        12,
+        ".options compat=spice3\n.op\n.dc vin 0 1.8 0.05\n.ac dec 5 1meg 10g\n.tran 10p 3n\n",
+    );
+    assert_eq!(assert_same(&nl, "chain4"), 4);
 }

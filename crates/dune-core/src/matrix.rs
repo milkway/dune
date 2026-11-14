@@ -11,7 +11,7 @@ use crate::linalg::Pattern;
 pub(crate) type Var = usize;
 
 /// Index into the value array; slot 0 is the trash position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Slot(pub(crate) usize);
 
 pub(crate) const TRASH: Slot = Slot(0);
@@ -321,6 +321,13 @@ pub(crate) struct PzCtx<'a> {
 impl PzCtx<'_> {
     pub fn add_g(&mut self, sl: Slot, v: f64) {
         self.g[sl.0] += v;
+    }
+
+    /// Add `v` to the imaginary part of slot `sl` (the C's
+    /// `*(ptr + 1) += v`).
+    #[cfg_attr(not(feature = "bsim"), allow(dead_code))]
+    pub fn add_b(&mut self, sl: Slot, v: f64) {
+        self.b[sl.0] += v;
     }
 
     /// Stamp `s·c` — a capacitance (or inductance on a branch row)

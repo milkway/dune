@@ -18,6 +18,8 @@ mod bsim1;
 mod bsim2;
 #[cfg(feature = "bsim")]
 mod bsim3;
+#[cfg(feature = "bsim")]
+mod bsim4;
 mod circuit;
 mod dc;
 mod dderivs;
@@ -72,6 +74,8 @@ pub use bsim1::Bsim1Model;
 pub use bsim2::Bsim2Model;
 #[cfg(feature = "bsim")]
 pub use bsim3::Bsim3Model;
+#[cfg(feature = "bsim")]
+pub use bsim4::Bsim4Model;
 #[cfg(feature = "bsim")]
 pub use circuit::Bsim3;
 pub use circuit::{

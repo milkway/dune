@@ -39,6 +39,8 @@ impl Circuit {
             B2(Box<crate::bsim2::Bsim2Model>),
             #[cfg(feature = "bsim")]
             B3(Box<crate::bsim3::Bsim3Model>),
+            #[cfg(feature = "bsim")]
+            B4(Box<crate::bsim4::Bsim4Model>),
             Vd(Box<crate::vdmos::VdmosModel>),
         }
         let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
@@ -59,6 +61,10 @@ impl Circuit {
         let mut wmodels: HashMap<&str, crate::switch::CswModel> = HashMap::new();
         let mut rmodels: HashMap<&str, ResModel> = HashMap::new();
         let mut cmodels: HashMap<&str, CapModel> = HashMap::new();
+        // BSIM4 model families (binned `name.N` cards share one) already
+        // given the version note.
+        #[cfg(feature = "bsim")]
+        let mut bsim4_noted: std::collections::HashSet<String> = std::collections::HashSet::new();
         for m in &nl.models {
             match m.mtype.as_str() {
                 "r" => match res_model(m, &mut notes) {
@@ -268,6 +274,31 @@ impl Circuit {
                                 m.name
                             ),
                         );
+                    } else if level == 14.0 || level == 54.0 {
+                        // ngspice's `inpdomod.c`: `VERSION` picks the
+                        // BSIM4 code base; Dune has the 4.8.3 one (see
+                        // `bsim4_model` for the version policy).
+                        #[cfg(feature = "bsim")]
+                        match bsim4_model(m, &mut notes, &mut bsim4_noted) {
+                            Ok(Ok(mm)) => {
+                                mmodels.insert(m.name.as_str(), MosModel::B4(Box::new(mm)));
+                            }
+                            Ok(Err(reason)) => {
+                                unsupported_models.insert(
+                                    m.name.as_str(),
+                                    format!("model `{}`: {reason}", m.name),
+                                );
+                            }
+                            Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                        }
+                        #[cfg(not(feature = "bsim"))]
+                        unsupported_models.insert(
+                            m.name.as_str(),
+                            format!(
+                                "model `{}`: BSIM4 (LEVEL = {level}) is not available in this build (dune-core compiled without the `bsim` feature)",
+                                m.name
+                            ),
+                        );
                     } else if level == 6.0 {
                         match mos6_model(m, &mut notes) {
                             Ok(mm) => {
@@ -290,6 +321,10 @@ impl Circuit {
         }
 
         let mut ckt = Circuit::new(nl.title.clone());
+        ckt.noise_job = nl
+            .analyses
+            .iter()
+            .any(|a| matches!(a, ir::Analysis::Noise { .. }));
 
         for el in &nl.elements {
             let name = el.name.clone();
@@ -623,6 +658,19 @@ impl Circuit {
                         );
                         continue;
                     }
+                    #[cfg(feature = "bsim")]
+                    if let MosModel::B4(b4) = mm {
+                        bsim4_instance(
+                            &mut ckt,
+                            &name,
+                            &el.nodes,
+                            b4,
+                            params,
+                            &mut problems,
+                            &mut notes,
+                        );
+                        continue;
+                    }
                     if el.nodes.len() != 4 {
                         // `INP2M`.
                         problems.push(format!(
@@ -881,6 +929,8 @@ impl Circuit {
                             &mut problems,
                         ),
                         MosModel::Vd(_) => unreachable!("VDMOS instances return above"),
+                        #[cfg(feature = "bsim")]
+                        MosModel::B4(_) => unreachable!("BSIM4 instances return above"),
                     }
                 }
                 ir::Device::Jfet {
@@ -2157,6 +2207,166 @@ fn bsim3_model(
         return Ok(Err("BSIM3 CAPMOD must be 0, 1, 2 or 3".into()));
     }
     Ok(Ok(b))
+}
+
+/// Map `.model x nmos/pmos(level=14|54 …)` onto
+/// [`crate::bsim4::Bsim4Model`] (`b4.c` keyword table, `b4mpar.c`).
+/// The outer `Err` is a broken card; `Ok(Err(reason))` a card Dune
+/// cannot run faithfully, which only errs when instantiated.
+///
+/// Version policy (`inpdomod.c` routes by `VERSION`): 4.8.x and no
+/// `VERSION` run natively; 4.0–4.7, which ngspice-47 sends to its
+/// older BSIM4 code bases (not ported: D-0060), run on the 4.8.3
+/// equations with one note per card; any other version is refused
+/// with ngspice's message.
+#[cfg(feature = "bsim")]
+fn bsim4_model(
+    m: &ir::Model,
+    notes: &mut Vec<String>,
+    noted: &mut std::collections::HashSet<String>,
+) -> Result<Result<crate::bsim4::Bsim4Model, String>, String> {
+    // A version the lexer read as a number (`4.6` may arrive as
+    // 4.6000000000000005 after expression evaluation): back to the short
+    // decimal ngspice reads as a string.
+    let short = |x: f64| {
+        let s = format!("{x:.6}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let mut b = crate::bsim4::Bsim4Model::new(m.mtype == "nmos");
+    b.set_name(&m.name);
+    for p in &m.params {
+        if p.name == "version" {
+            let v = match &p.value {
+                ParamValue::Str(s) => s.clone(),
+                ParamValue::Num(v) => short(*v),
+                ParamValue::NumList(v) => v.iter().map(|x| short(*x)).collect::<Vec<_>>().join("."),
+                ParamValue::Flag => return Err("parameter version needs a value".into()),
+            };
+            if v.starts_with("4.8") {
+                // Native.
+            } else if crate::bsim4::older_version(&v) {
+                // One note per model family: the binned cards `name.N`
+                // of a PDK device share it.
+                let family = match m.name.rsplit_once('.') {
+                    Some((f, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => f,
+                    _ => m.name.as_str(),
+                };
+                if noted.insert(format!("{family}\u{0}{v}")) {
+                    notes.push(format!(
+                    "model `{family}`: BSIM4 version {v} runs on the BSIM4 4.8.3 equations (ngspice-47 uses its older {} code base for it)",
+                    if v.starts_with("4.6") {
+                        "bsim4v6"
+                    } else if v.starts_with("4.7") {
+                        "bsim4v7"
+                    } else {
+                        "bsim4v5"
+                    }
+                ));
+                }
+            } else {
+                return Ok(Err(format!(
+                    "Device type BSIM4 version {v} not available in this binary"
+                )));
+            }
+            b.set_version(&v);
+            continue;
+        }
+        let v = match p.value {
+            ParamValue::Num(v) => v,
+            ParamValue::Flag if p.name == "nmos" || p.name == "pmos" => continue,
+            _ => return Err(format!("parameter {} needs a numeric value", p.name)),
+        };
+        if p.name == "level" {
+            continue;
+        }
+        if let Err(e) = b.set(&p.name, v) {
+            // `INPmakeMod`: unknown parameters are a warning.
+            notes.push(format!("model `{}`: {e} (ignored)", m.name));
+        }
+    }
+    if !m.params.iter().any(|p| p.name == "version") {
+        // `INPfindVer`: "Version not specified … Setting version to
+        // 'default'" (4.8.3).
+        notes.push(format!(
+            "model `{}`: BSIM4 VERSION not specified; running 4.8.3 (ngspice's default)",
+            m.name
+        ));
+    }
+    if let Some(reason) = b.unsupported() {
+        return Ok(Err(reason));
+    }
+    Ok(Ok(b))
+}
+
+/// An `M` card on a BSIM4 model: the `BSIM4pTable` keywords (`b4.c`)
+/// kept as given, `OFF` and the `IC=VDS,VGS,VBS` vector (`b4par.c`).
+#[cfg(feature = "bsim")]
+fn bsim4_instance(
+    ckt: &mut Circuit,
+    name: &str,
+    nodes: &[String],
+    model: &crate::bsim4::Bsim4Model,
+    params: &[ir::Param],
+    problems: &mut Vec<String>,
+    notes: &mut Vec<String>,
+) {
+    if nodes.len() != 4 {
+        // `INP2M`.
+        problems.push(format!(
+            "`{name}`: {}",
+            if nodes.len() < 4 {
+                "not enough nodes"
+            } else {
+                "too many nodes connected to instance"
+            }
+        ));
+        return;
+    }
+    let mut out: Vec<(String, f64)> = Vec::new();
+    let mut off = false;
+    let mut ok = true;
+    for p in params {
+        match (p.name.as_str(), &p.value) {
+            ("off", ParamValue::Flag) => off = true,
+            // `BSIM4_IC`: VDS, VGS, VBS from the front of the vector.
+            ("ic", ParamValue::Num(v)) => out.push(("icvds".into(), *v)),
+            ("ic", ParamValue::NumList(v)) if (1..=3).contains(&v.len()) => {
+                for (k, x) in ["icvds", "icvgs", "icvbs"].iter().zip(v) {
+                    out.push(((*k).into(), *x));
+                }
+            }
+            (k, ParamValue::Num(v)) if crate::bsim4::is_instance_keyword(k) => {
+                let k = if k == "delvt0" { "delvto" } else { k };
+                if k == "dtemp" {
+                    notes.push(format!(
+                        "`{name}`: DTEMP has no effect on a BSIM4 4.8.3 instance (as in ngspice)"
+                    ));
+                }
+                out.push((k.to_string(), *v));
+            }
+            _ => {
+                problems.push(format!("`{name}`: unknown parameter ({})", p.name));
+                ok = false;
+            }
+        }
+    }
+    if !ok {
+        return;
+    }
+    let spec = crate::circuit::Bsim4 {
+        name: name.to_string(),
+        nodes: four(nodes),
+        model: model.clone(),
+        params: out,
+        off,
+    };
+    if let Some(reason) = crate::bsim4::unsupported_instance(&spec) {
+        problems.push(format!("`{name}`: {reason}"));
+        return;
+    }
+    if let Err(e) = ckt.add(spec) {
+        problems.push(e.to_string());
+    }
 }
 
 /// Map `.model x nmos/pmos(level=5 …)` parameters onto
