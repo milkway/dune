@@ -3025,12 +3025,16 @@ impl Engine {
         let drive_n =
             (input_neg != 0 && solution_col != 0).then(|| mb.slot(input_neg, solution_col));
 
-        // `SMPcAddCol` needs a slot in the solution column for every
-        // row the balance column touches.
+        // `SMPcAddCol(matrix, balance_col, solution_col)` accumulates
+        // the solution column INTO the balance column (Accum_Col is
+        // the balance), creating a balance slot for every row the
+        // solution column touches: with `x = v(out+) − v(out−)` as
+        // the unknown, `v(out−)` keeps its own coefficients plus
+        // those of `v(out+)`. The solution column is then zeroed.
         let mut bal_pairs = Vec::new();
         if balance_col != 0 && solution_col != 0 {
-            for (r, bs) in mb.rows_in_col(balance_col) {
-                let ss = mb.slot(r, solution_col);
+            for (r, ss) in mb.rows_in_col(solution_col) {
+                let bs = mb.slot(r, balance_col);
                 bal_pairs.push((bs, ss));
             }
         }
@@ -3073,11 +3077,11 @@ impl Engine {
             d.load_pz(&mut ctx)
                 .map_err(|e| Error::Build(format!("pole-zero: {e}")))?;
         }
-        // Column surgery: fold the balance column into the solution
+        // Column surgery: fold the solution column into the balance
         // column, zero the solution column, then set the drive.
         for &(bs, ss) in &setup.bal_pairs {
-            setup.g[ss.0] += setup.g[bs.0];
-            setup.b[ss.0] += setup.b[bs.0];
+            setup.g[bs.0] += setup.g[ss.0];
+            setup.b[bs.0] += setup.b[ss.0];
         }
         for sl in &setup.sol_slots {
             setup.g[sl.0] = 0.0;

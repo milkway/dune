@@ -1,0 +1,19 @@
+Pole-zero with the input on an AC voltage source, output sharing its node
+* Coverage: vsrcpzld.c's AC branch. A voltage source WITH an AC value
+* is the stimulus the .pz drive replaces, so its pole-zero load opens it
+* (branch row ibr = 0); one without AC is a short. Dune used to short
+* every source, so a .pz input on the source's own nodes was shorted and
+* the run stopped with "the input signal is shorted on the way to the
+* output" (ngspice-47 and the 3f5 run it). The output (3, 1) shares the
+* input node and has a nonzero negative node, so the zero search also
+* exercises the balance column of cktpzld.c.
+* Hand-derived answer: series R-L-C with the output across the R-L pair,
+* H = (v3 - v1)/v1 = -(L*C*s^2 + R*C*s)/(L*C*s^2 + R*C*s + 1):
+* poles s^2 + (R/L) s + 1/(L C) = 0 -> -5000 +- j31224.99 rad/s,
+* zeros 0 and -R/L = -10000 rad/s.
+vin 1 0 dc 0 ac 1
+r1 1 2 10
+l1 2 3 1m
+c1 3 0 1u
+.pz 1 0 3 1 vol pz
+.end

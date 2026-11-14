@@ -1,0 +1,17 @@
+Title: pole-zero with the input on an ac voltage source, output sharing its node
+Date: Sat Nov 14 15:56:51  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 4
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(zero(1))	voltage
+	3	v(zero(2))	voltage
+Values:
+0		-5.000000000000000e+03,3.122498999199199e+04
+	-5.000000000000000e+03,-3.122498999199199e+04
+	-1.000000000000000e+04,0.000000000000000e+00
+	0.000000000000000e+00,0.000000000000000e+00
