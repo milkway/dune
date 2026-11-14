@@ -540,6 +540,7 @@ pub(crate) fn parse_model(
         card,
         diags,
         env,
+        replaced_m: false,
     };
     ctx.sc.next_tok(); // `.model`
     let (name, _) = ctx.tok_req("model name")?;

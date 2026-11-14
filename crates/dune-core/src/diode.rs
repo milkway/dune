@@ -254,6 +254,10 @@ pub(crate) struct DiodeI {
     pos_prime: Var,
     t: DiodeTemp,
     area: f64,
+    /// ngspice's multiplier `m` at setup: `DIOjunctionCap =
+    /// CJO·AREA·M` (`diosetup.c`), fixed there — a `.sens`
+    /// perturbation of `m` re-runs only the temperature pass.
+    cap_mult: f64,
     off: bool,
     /// `IC=` initial junction voltage, for UIC.
     init_cond: f64,
@@ -342,6 +346,7 @@ impl DiodeI {
             pos_prime,
             t,
             area,
+            cap_mult: sens.m,
             off,
             init_cond,
             st,
@@ -485,7 +490,7 @@ impl crate::devices::Device for DiodeI {
             || (ctx.kind == AnKind::TranOp && ctx.uic)
             || ctx.mode == InitMode::Smsig
         {
-            let czero = self.t.t_jct_cap * self.area;
+            let czero = self.t.t_jct_cap * self.area * self.cap_mult;
             #[allow(clippy::needless_late_init)] // mirrors dioload.c
             let capd;
             if vd < self.t.t_dep_cap {
@@ -705,7 +710,7 @@ impl crate::devices::Device for DiodeI {
         }
 
         // Junction (depletion) charge storage.
-        let czero = self.t.t_jct_cap * self.area;
+        let czero = self.t.t_jct_cap * self.area * self.cap_mult;
         let (cjunc2, cjunc3);
         if czero != 0.0 {
             let (m, vj) = (self.t.m, self.t.vj);

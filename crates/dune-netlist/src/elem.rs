@@ -24,9 +24,43 @@ pub(crate) struct ElemCtx<'a> {
     pub card: &'a Card,
     pub diags: &'a mut Vec<Diagnostic>,
     pub env: &'a ParamEnv<'a>,
+    /// The card belongs to a subcircuit an `X`-line `m=` multiplies:
+    /// its own `m` is replaced (see [`parse_element_in`]).
+    pub replaced_m: bool,
 }
 
 impl ElemCtx<'_> {
+    /// Check a device's own multiplier `m` (ngspice-47 simulates
+    /// `m ≤ 0` — `m=0` opens the device, `m<0` inverts it, probes
+    /// `r_m_zero`/`r_m_neg` — which Dune refuses, as for the `X`
+    /// line; KNOWN_DIFFS).
+    pub(crate) fn own_mult(&mut self, m: f64, span: Span) -> Option<f64> {
+        if m.is_finite() && m > 0.0 {
+            Some(m)
+        } else {
+            self.err(span, format!("multiplier m={m} must be a positive number"));
+            None
+        }
+    }
+
+    /// Take the device's own `m=` out of a parameter list that the
+    /// IR does not keep (controlled sources): `Ok(None)` without one,
+    /// `Err(())` after reporting a bad one.
+    fn take_own_mult(&mut self, params: &mut Vec<Param>) -> Result<Option<f64>, ()> {
+        let Some(i) = params.iter().rposition(|p| p.name == "m") else {
+            return Ok(None);
+        };
+        let p = params.remove(i);
+        params.retain(|q| q.name != "m");
+        match p.value {
+            ParamValue::Num(v) => self.own_mult(v, p.span).map(Some).ok_or(()),
+            _ => {
+                self.err(p.span, "multiplier m needs one numeric value");
+                Err(())
+            }
+        }
+    }
+
     pub(crate) fn err(&mut self, span: Span, msg: impl Into<String>) {
         self.diags.push(Diagnostic::error(msg.into(), span));
     }
@@ -161,11 +195,30 @@ pub(crate) fn parse_element(
     vdmos_models: &HashSet<String>,
     env: &ParamEnv,
 ) -> Option<Element> {
+    parse_element_in(card, diags, model_names, vdmos_models, env, false)
+}
+
+/// [`parse_element`] for a card of a subcircuit an `X`-line `m=`
+/// multiplies (`replaced_m`): the card's own `m` on an `I`, `G`, `F`
+/// or current-type `B` line — folded here, since those devices keep
+/// no parameter list — is dropped, because ngspice-47 appends the
+/// instance's `m={m}` after it and the later value wins (probes
+/// `i_sub_own`, `g_sub_own`, `bi_sub_own`); the expansion then folds
+/// the instance's `m`.
+pub(crate) fn parse_element_in(
+    card: &Card,
+    diags: &mut Vec<Diagnostic>,
+    model_names: &HashSet<String>,
+    vdmos_models: &HashSet<String>,
+    env: &ParamEnv,
+    replaced_m: bool,
+) -> Option<Element> {
     let mut ctx = ElemCtx {
         sc: Scanner::new(card),
         card,
         diags,
         env,
+        replaced_m,
     };
     let name_tok = ctx.sc.next_tok()?;
     let span = ctx.sc.span(&name_tok);
@@ -314,10 +367,19 @@ fn source(ctx: &mut ElemCtx, kind: SourceKind) -> Parsed {
     let mut port_num: Option<i64> = None;
     let mut port_z0 = 0.0_f64;
     let mut port_z0_given = false;
+    // ngspice-47's `ISRCmValue` (`isrc.c`): the parallel multiplier
+    // scales every value of the source (`isrcload.c`, `isrcacld.c`;
+    // probes `i_m`, `i_m_ac`). The V source has none (`unknown
+    // parameter (m)`, probe `v_m`).
+    let mut own_m: Option<(f64, Span)> = None;
 
     while let Some(tok) = ctx.sc.next_tok() {
         let span = ctx.sc.span(&tok);
         match tok.lc().as_str() {
+            "m" if kind == SourceKind::Current => {
+                let m = ctx.value_req("multiplier")?;
+                own_m = Some((m, span));
+            }
             "portnum" if kind == SourceKind::Voltage => {
                 // IF_INTEGER: `(int) INPevaluate(…)`, truncation.
                 let v = ctx.value_req("port number")?;
@@ -406,6 +468,30 @@ fn source(ctx: &mut ElemCtx, kind: SourceKind) -> Parsed {
         }
     }
 
+    if let Some((m, span)) = own_m
+        && !ctx.replaced_m
+    {
+        let m = ctx.own_mult(m, span)?;
+        if m != 1.0 {
+            if tran.is_some() || distof1.is_some() || distof2.is_some() {
+                ctx.err(
+                    span,
+                    format!(
+                        "multiplier m={m} is not supported yet for a current source with a \
+                         transient or distortion spec"
+                    ),
+                );
+                return None;
+            }
+            if let Some(v) = &mut dc {
+                *v *= m;
+            }
+            if let Some(a) = &mut ac {
+                a.mag *= m;
+            }
+        }
+    }
+
     // `VSRCtemp`: an absent Z0 defaults to 50 Ω; the source is a
     // port when both the index and the impedance are positive.
     let port = port_num.and_then(|num| {
@@ -440,17 +526,52 @@ fn vc_source(ctx: &mut ElemCtx, is_e: bool) -> Parsed {
         ctx.node_req("negative controlling node")?,
     ];
     let (lead, params) = ctx.tail_params();
+    let (gain, m) = controlled_gain(ctx, lead, params, !is_e)?;
+    let device = if is_e {
+        Device::Vcvs { gain }
+    } else {
+        Device::Vccs {
+            gain: gain.map(|g| g * m),
+        }
+    };
+    Some((nodes, device))
+}
+
+/// The gain of an `E`/`G`/`F`/`H` card: the leading value, else
+/// `gain=`. Only `G` and `F` have ngspice-47's parallel multiplier
+/// `m` (`vccs.c`, `cccs.c`: the gain is multiplied, probes `g_m`,
+/// `f_m`), returned as the second value (1 without one, and when
+/// the card's subcircuit is multiplied, see [`parse_element_in`]);
+/// any other keyword is an unknown parameter, as in the C (`e_m`,
+/// `h_m`: "unknown parameter (m)").
+fn controlled_gain(
+    ctx: &mut ElemCtx,
+    lead: Option<f64>,
+    mut params: Vec<Param>,
+    has_m: bool,
+) -> Option<(Option<f64>, f64)> {
+    let m = if has_m {
+        ctx.take_own_mult(&mut params).ok()?
+    } else {
+        None
+    };
+    let mut bad = false;
+    for p in &params {
+        if p.name != "gain" {
+            ctx.err(p.span, format!("unknown parameter ({})", p.name));
+            bad = true;
+        }
+    }
     let gain = lead.or_else(|| find_num(&params, "gain"));
     if gain.is_none() {
         let span = ctx.sc.here();
         ctx.err(span, "missing gain");
     }
-    let device = if is_e {
-        Device::Vcvs { gain }
-    } else {
-        Device::Vccs { gain }
-    };
-    Some((nodes, device))
+    if bad {
+        return None;
+    }
+    let m = if ctx.replaced_m { None } else { m };
+    Some((gain, m.unwrap_or(1.0)))
 }
 
 /// `F`/`H`: `name N+ N- VNAM VALUE`.
@@ -464,13 +585,12 @@ fn cc_source(ctx: &mut ElemCtx, is_f: bool) -> Parsed {
         ctx.err(vspan, format!("`{vname}` is not a voltage source name"));
     }
     let (lead, params) = ctx.tail_params();
-    let gain = lead.or_else(|| find_num(&params, "gain"));
-    if gain.is_none() {
-        let span = ctx.sc.here();
-        ctx.err(span, "missing gain");
-    }
+    let (gain, m) = controlled_gain(ctx, lead, params, is_f)?;
     let device = if is_f {
-        Device::Cccs { vname, gain }
+        Device::Cccs {
+            vname,
+            gain: gain.map(|g| g * m),
+        }
     } else {
         Device::Ccvs { vname, gain }
     };
@@ -837,11 +957,17 @@ fn behavioral(ctx: &mut ElemCtx) -> Parsed {
     }
     let mut source: Option<(SourceKind, Expr)> = None;
     let mut failed = false;
+    let mut own_m: Option<(f64, Span)> = None;
     while let Some(tok) = ctx.sc.next_tok() {
         let span = ctx.sc.span(&tok);
         let kind = match tok.lc().as_str() {
             "v" => SourceKind::Voltage,
             "i" => SourceKind::Current,
+            "m" => {
+                let m = ctx.value_req("multiplier")?;
+                own_m = Some((m, span));
+                continue;
+            }
             other => {
                 ctx.err(span, format!("unknown parameter ({other})"));
                 failed = true;
@@ -867,6 +993,25 @@ fn behavioral(ctx: &mut ElemCtx) -> Parsed {
             }
         }
         ctx.sc.seek(start + used);
+    }
+    // ngspice-47's `ASRCm` (`asrc.c`; `asrcload.c` multiplies the
+    // value of either type by it, probes `bi_m`, `bv_m`). In a
+    // multiplied subcircuit the instance's `m` replaces the card's
+    // on a current source only: ngspice does not append it to a
+    // voltage-type `B` line (`inp_fix_subckt_multiplier`).
+    if let (Some((m, span)), Some((kind, expr))) = (own_m, &mut source)
+        && !failed
+        && !(ctx.replaced_m && *kind == SourceKind::Current)
+    {
+        let m = ctx.own_mult(m, span)?;
+        if m != 1.0 {
+            let e = std::mem::replace(expr, Expr::Num(0.0));
+            *expr = Expr::Bin(
+                crate::ir::ExprOp::Times,
+                Box::new(Expr::Num(m)),
+                Box::new(e),
+            );
+        }
     }
     match source {
         Some((kind, expr)) if !failed => Some((nodes, Device::Behavioral { kind, expr })),

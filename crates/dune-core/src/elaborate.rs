@@ -344,6 +344,9 @@ impl Circuit {
                         },
                         None => None,
                     };
+                    if !set_mult(&mut ckt, &name, params, &mut problems) {
+                        continue;
+                    }
                     match res_instance(&name, *value, rm, params, &mut notes) {
                         Ok((r, temp)) => {
                             if let Some(t) = temp {
@@ -378,6 +381,9 @@ impl Circuit {
                         None => None,
                     };
                     let ic = num_param(params, "ic");
+                    if !set_mult(&mut ckt, &name, params, &mut problems) {
+                        continue;
+                    }
                     match cap_instance(&name, *value, cm, params, &mut notes) {
                         Ok(c) => add(
                             &mut ckt,
@@ -394,6 +400,17 @@ impl Circuit {
                 }
                 ir::Device::Inductor { value, params } => {
                     let ic = num_param(params, "ic");
+                    if !set_mult(&mut ckt, &name, params, &mut problems) {
+                        continue;
+                    }
+                    for p in params {
+                        if !matches!(p.name.as_str(), "ic" | "m") {
+                            notes.push(format!(
+                                "`{name}`: inductor parameter {} is not in the 3f5 - ignored",
+                                p.name
+                            ));
+                        }
+                    }
                     match value {
                         Some(v) => add(
                             &mut ckt,
@@ -527,15 +544,25 @@ impl Circuit {
                     };
                     let mut temp = None;
                     let mut ic = None;
+                    let mut area_kw = None;
+                    if !set_mult(&mut ckt, &name, params, &mut problems) {
+                        continue;
+                    }
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
                             // ngspice-47 `dio.c` (KNOWN_DIFFS).
                             ("dtemp", ParamValue::Num(v)) => ckt.set_dtemp(&name, *v),
                             ("ic", ParamValue::Num(v)) => ic = Some(*v),
+                            // `dio.c` `area` (probe `d_areakw`); the
+                            // positional value wins, set after the
+                            // keywords as `INP2D` does.
+                            ("area", ParamValue::Num(v)) => area_kw = Some(*v),
+                            ("m", ParamValue::Num(_)) => {}
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
+                    let area = &area.or(area_kw);
                     add(
                         &mut ckt,
                         Diode {
@@ -591,6 +618,7 @@ impl Circuit {
                     let mut temp = None;
                     let mut ic = (0.0, 0.0);
                     let mut icg = IcGiven::NONE;
+                    let mut area_kw = None;
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
@@ -607,10 +635,13 @@ impl Circuit {
                                 );
                                 icg = IcGiven::first(v.len().min(2));
                             }
-                            ("area", ParamValue::Num(_)) => {}
+                            // `bjt.c` `area` (probe `q_areakw`); the
+                            // positional value wins (`INP2Q`).
+                            ("area", ParamValue::Num(v)) => area_kw = Some(*v),
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
+                    let area = &area.or(area_kw);
                     let mut nodes4 = [
                         el.nodes[0].clone(),
                         el.nodes[1].clone(),
@@ -949,7 +980,10 @@ impl Circuit {
                         }
                         continue;
                     };
-                    let mut area = *area;
+                    // `INP2J` sets the positional area after the
+                    // keywords: it wins over `area=`.
+                    let positional = *area;
+                    let mut area = None;
                     let mut temp = None;
                     let mut ic = (0.0, 0.0);
                     let mut icg = IcGiven::NONE;
@@ -976,7 +1010,7 @@ impl Circuit {
                             name,
                             nodes: three(&el.nodes),
                             model: jm.clone(),
-                            area: area.unwrap_or(1.0),
+                            area: positional.or(area).unwrap_or(1.0),
                             off: *off,
                             ic,
                             temp,
@@ -1001,7 +1035,11 @@ impl Circuit {
                         }
                         continue;
                     };
-                    let mut area = *area;
+                    // The positional area wins over `area=`, as
+                    // in `INP2Z` (which ngspice-47 skips for `MES`
+                    // models, KNOWN_DIFFS).
+                    let positional = *area;
+                    let mut area = None;
                     let mut ic = (0.0, 0.0);
                     let mut icg = IcGiven::NONE;
                     for p in params {
@@ -1032,7 +1070,7 @@ impl Circuit {
                             name,
                             nodes: three(&el.nodes),
                             model: zm.clone(),
-                            area: area.unwrap_or(1.0),
+                            area: positional.or(area).unwrap_or(1.0),
                             off: *off,
                             ic,
                         },
@@ -2553,6 +2591,37 @@ fn add_ic(
     }
 }
 
+/// Record the ngspice-47 multiplier `m` of an R, C, L or D card
+/// (the last `m=` wins, as `INPdevParse` overwrites; the netlist
+/// expansion puts an `X`-line multiplier here too). `false` after
+/// reporting an `m` that is not one finite positive number (the
+/// netlist parser reports it with a span first; this guards a
+/// hand-built IR).
+fn set_mult(
+    ckt: &mut Circuit,
+    name: &str,
+    params: &[ir::Param],
+    problems: &mut Vec<String>,
+) -> bool {
+    let Some(p) = params.iter().rev().find(|p| p.name == "m") else {
+        return true;
+    };
+    match p.value {
+        ParamValue::Num(m) if m.is_finite() && m > 0.0 => {
+            if m != 1.0 {
+                ckt.set_mult(name, m);
+            }
+            true
+        }
+        _ => {
+            problems.push(format!(
+                "`{name}`: multiplier m must be one positive number"
+            ));
+            false
+        }
+    }
+}
+
 fn num_param(params: &[ir::Param], name: &str) -> Option<f64> {
     params
         .iter()
@@ -2655,6 +2724,8 @@ fn res_instance(
             "temp" => temp = Some(v + CTOK),
             // ngspice-47 `res.c` (KNOWN_DIFFS).
             "dtemp" => dtemp = Some(v),
+            // ngspice-47's multiplier, read by `mult_param`.
+            "m" => {}
             other => notes.push(format!(
                 "`{name}`: resistor parameter {other} is not in the 3f5 - ignored"
             )),
@@ -2767,7 +2838,9 @@ fn cap_instance(
         };
         match p.name.as_str() {
             "capacitance" => value = Some(v),
-            "ic" => {}
+            // `ic` is read by the caller; ngspice-47's multiplier `m`
+            // by `mult_param`.
+            "ic" | "m" => {}
             "l" => l = Some(v),
             "w" => w = Some(v),
             other => notes.push(format!(

@@ -315,6 +315,13 @@ impl ResistorI {
         res
     }
 
+    /// Set ngspice's parallel multiplier `m` (`RESm`: `G = m/R`).
+    pub(crate) fn with_mult(mut self, m: f64) -> Self {
+        self.m = m;
+        self.update_conduct();
+        self
+    }
+
     /// The instance temperature (kelvin): `TEMP=`, else `CKTtemp +
     /// DTEMP`.
     fn temperature(&self) -> f64 {
@@ -491,6 +498,13 @@ impl CapacitorI {
             q,
         }
     }
+
+    /// Set ngspice's parallel multiplier `m` (`CAPm`: `C·m`).
+    pub(crate) fn with_mult(mut self, m: f64) -> Self {
+        self.m = m;
+        self.capac = self.c * self.m * self.scale;
+        self
+    }
 }
 
 impl Device for CapacitorI {
@@ -650,6 +664,15 @@ impl InductorI {
             br_br: TRASH,
             flux,
         }
+    }
+
+    /// Set ngspice's parallel multiplier `m` (`INDm`: `L/m`; the
+    /// mutual factor of a `K` card keeps the undivided `L`, as
+    /// `muttemp.c` reads `INDinduct`).
+    pub(crate) fn with_mult(mut self, m: f64) -> Self {
+        self.m = m;
+        self.induct = self.l * self.scale / self.m;
+        self
     }
 }
 

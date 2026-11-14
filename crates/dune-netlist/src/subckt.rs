@@ -33,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::deck::Card;
 use crate::diag::{Diagnostic, Severity};
-use crate::elem::parse_element;
+use crate::elem::parse_element_in;
 use crate::ir::{Device, Element, Expr, ExprOp, Model, Param, ParamValue, SourceKind};
 use crate::param::{self, ParamDef, ParamEnv};
 use crate::scan::Scanner;
@@ -641,16 +641,31 @@ impl<'c> Expander<'_, 'c> {
         }
         if let Some(f) = frame
             && let Some(m) = f.mult
-            && let Err(what) = apply_multiplier(&mut out, m, kind.as_ref())
         {
-            self.report(Diagnostic::error(
-                format!(
-                    "the multiplier m={m} of subcircuit instance `{}` is not supported yet for \
-                     {what} (`{}`)",
-                    f.path, out.name
-                ),
-                out.span,
-            ));
+            if let Err(what) = apply_multiplier(&mut out, m, kind.as_ref()) {
+                self.report(Diagnostic::error(
+                    format!(
+                        "the multiplier m={m} of subcircuit instance `{}` is not supported yet \
+                         for {what} (`{}`)",
+                        f.path, out.name
+                    ),
+                    out.span,
+                ));
+            }
+        } else if let Some((m, span)) = own_multiplier(&out) {
+            // The card's own `m` (top level, or a subcircuit no `X`
+            // line multiplies) acts like the instance's would.
+            match m {
+                Ok(m) => {
+                    if let Err(what) = apply_multiplier(&mut out, m, kind.as_ref()) {
+                        self.report(Diagnostic::error(
+                            format!("multiplier m={m} is not supported yet for {what}"),
+                            span,
+                        ));
+                    }
+                }
+                Err(msg) => self.report(Diagnostic::error(msg, span)),
+            }
         }
         // After binning, which scales L and W itself.
         if self.ctx.scale != 1.0 {
@@ -1011,12 +1026,13 @@ impl<'c> Expander<'_, 'c> {
                         return;
                     }
                     let mut ds = Vec::new();
-                    let el = parse_element(
+                    let el = parse_element_in(
                         card,
                         &mut ds,
                         self.ctx.model_names,
                         self.ctx.vdmos_models,
                         frame.env,
+                        frame.mult.is_some(),
                     );
                     self.report_all(ds);
                     if let Some(el) = el {
@@ -1042,16 +1058,47 @@ impl<'c> Expander<'_, 'c> {
     }
 }
 
-/// Apply an instance multiplier to one device of a multiplied
-/// subcircuit, the way ngspice's appended `m={m}` acts on it
-/// (`s4`): the device's own `m` is replaced, not multiplied. Devices
-/// with a native `m` (BSIM3/BSIM4/VDMOS MOSFETs, VBIC) get the
-/// parameter; the others get the equivalent existing parameter —
-/// `R/m`, `C·m`, `L/m`, `area·m` (D, J, Z, Gummel–Poon Q), gain·m (G,
-/// F), value·m (DC/AC current source, current-type B source).
-/// `Err` names what cannot express a multiplier other than 1.
-/// ngspice skips the lines of `V E H A K N O P S T U W Y` and
-/// voltage-type `B`.
+/// The card's own `m=` on a device that keeps a parameter list (R, C,
+/// L, D, Q, J, Z, M; the last one wins, as `INPdevParse` overwrites),
+/// with its span: `Err` when it is not one finite positive number.
+/// ngspice-47 simulates `m ≤ 0` (probes `r_m_zero`, `r_m_neg`); Dune
+/// refuses it as it does on the `X` line (KNOWN_DIFFS). The `I`, `G`,
+/// `F` and `B` cards fold their own `m` in the parser.
+fn own_multiplier(el: &Element) -> Option<(Result<f64, String>, Span)> {
+    let params = match &el.device {
+        Device::Resistor { params, .. }
+        | Device::Capacitor { params, .. }
+        | Device::Inductor { params, .. }
+        | Device::Diode { params, .. }
+        | Device::Bjt { params, .. }
+        | Device::Jfet { params, .. }
+        | Device::Mesfet { params, .. }
+        | Device::Mosfet { params, .. } => params,
+        _ => return None,
+    };
+    let p = params.iter().rev().find(|p| p.name == "m")?;
+    let m = match p.value {
+        ParamValue::Num(v) if v.is_finite() && v > 0.0 => Ok(v),
+        ParamValue::Num(v) => Err(format!("multiplier m={v} must be a positive number")),
+        _ => Err("multiplier m needs one numeric value".to_string()),
+    };
+    Some((m, p.span))
+}
+
+/// Apply a multiplier to one device: the `m=` of the `X` line of a
+/// multiplied subcircuit, the way ngspice's appended `m={m}` acts on
+/// it (`s4`: the device's own `m` is replaced, not multiplied), or
+/// the card's own `m` elsewhere (probes `fix-probes/m.cases`).
+/// Devices whose Dune model carries ngspice's multiplier get the
+/// parameter `m` — R, C, L and D (read by the elaborator; for the
+/// diode the multiplier also enters the breakdown match as `M·IBV`,
+/// which an area cannot express, probe `d_m_bv`), the BSIM3/BSIM4/
+/// VDMOS MOSFETs and VBIC; the others get the equivalent existing
+/// parameter — `area·m` (J, Z, Gummel–Poon Q; the positional area,
+/// else `area=`), gain·m (G, F), value·m (DC/AC current source,
+/// current-type B source). `Err` names what cannot express a
+/// multiplier other than 1. ngspice skips the lines of
+/// `V E H A K N O P S T U W Y` and voltage-type `B`.
 fn apply_multiplier(el: &mut Element, m: f64, model: Option<&ModelRef>) -> Result<(), String> {
     fn drop_m(params: &mut Vec<Param>) {
         params.retain(|p| p.name != "m");
@@ -1074,44 +1121,35 @@ fn apply_multiplier(el: &mut Element, m: f64, model: Option<&ModelRef>) -> Resul
         }
         hit
     }
+    /// `area·m`: the positional area wins over `area=` in the
+    /// elaborator (`INP2J`/`INP2Q`/`INP2Z` set it after the keywords).
+    fn scale_area(area: &mut Option<f64>, params: &mut [Param], m: f64) {
+        match area {
+            Some(a) => *a *= m,
+            None => {
+                if !scale_kw(params, "area", |a| a * m) {
+                    *area = Some(m);
+                }
+            }
+        }
+    }
     let span = el.span;
     let one = m == 1.0;
     match &mut el.device {
-        Device::Resistor { value, params, .. } => {
-            drop_m(params);
+        Device::Resistor { params, .. }
+        | Device::Capacitor { params, .. }
+        | Device::Inductor { params, .. }
+        | Device::Diode { params, .. } => {
             if one {
-            } else if let Some(v) = value {
-                *v /= m;
-                scale_kw(params, "resistance", |r| r / m);
-            } else if !scale_kw(params, "resistance", |r| r / m) {
-                return Err("a resistor given by its model geometry".into());
-            }
-        }
-        Device::Capacitor { value, params, .. } => {
-            drop_m(params);
-            if one {
-            } else if let Some(v) = value {
-                *v *= m;
-                scale_kw(params, "capacitance", |c| c * m);
-            } else if !scale_kw(params, "capacitance", |c| c * m) {
-                return Err("a capacitor given by its model geometry".into());
-            }
-        }
-        Device::Inductor { value, params } => {
-            drop_m(params);
-            if one {
-            } else if let Some(v) = value {
-                *v /= m;
+                drop_m(params);
             } else {
-                return Err("an inductor without a value".into());
+                set_m(params, m, span);
             }
         }
-        Device::Diode { area, params, .. }
-        | Device::Jfet { area, params, .. }
-        | Device::Mesfet { area, params, .. } => {
+        Device::Jfet { area, params, .. } | Device::Mesfet { area, params, .. } => {
             drop_m(params);
             if !one {
-                *area = Some(area.unwrap_or(1.0) * m);
+                scale_area(area, params, m);
             }
         }
         Device::Bjt { area, params, .. } => {
@@ -1121,7 +1159,7 @@ fn apply_multiplier(el: &mut Element, m: f64, model: Option<&ModelRef>) -> Resul
             } else {
                 drop_m(params);
                 if !one {
-                    *area = Some(area.unwrap_or(1.0) * m);
+                    scale_area(area, params, m);
                 }
             }
         }

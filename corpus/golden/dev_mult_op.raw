@@ -1,0 +1,51 @@
+Title: a device's own m= outside multiplied subcircuits (operating point)
+Date: Sat Nov 14 15:22:28  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 21
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(5)	voltage
+	5	v(6)	voltage
+	6	v(7)	voltage
+	7	v(8)	voltage
+	8	v(9)	voltage
+	9	v(10)	voltage
+	10	v(11)	voltage
+	11	v(12)	voltage
+	12	v(13)	voltage
+	13	v(14)	voltage
+	14	v(15)	voltage
+	15	v(16)	voltage
+	16	v(17)	voltage
+	17	i(b2)	current
+	18	i(vs)	current
+	19	i(vc)	current
+	20	i(v1)	current
+Values:
+0		2.000000000000000e+00
+	1.000000000000000e+00
+	6.479639076091676e-01
+	-5.163257011690690e+00
+	-5.181185251324703e+00
+	2.000000000000000e+00
+	6.506121994632492e-01
+	7.522096803568956e-02
+	4.719769142396573e-01
+	4.000000000000000e+00
+	2.000000000000000e+00
+	1.200000000000000e+00
+	4.000000000000000e+00
+	2.000000000000000e+00
+	6.483623332407490e-01
+	6.483623332568573e-01
+	6.427756088416625e-01
+	-2.000000000000000e-03
+	2.000000000000000e-03
+	-5.971979051436582e-03
+	-4.000000000000000e-03

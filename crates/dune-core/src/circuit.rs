@@ -845,6 +845,13 @@ pub struct Circuit {
     /// else `CKTtemp + DTEMP` (`*temp.c` of each device). The 3f5 has
     /// no `DTEMP`; a device without an entry has `DTEMP = 0`.
     pub(crate) dtemp: HashMap<String, f64>,
+    /// Instance name → the ngspice-47 parallel multiplier `m` of an
+    /// R, C, L or D card (`RESm`, `CAPm`, `INDm`, `DIOm`), recorded
+    /// by the netlist front end: `G = m/R`, `C·m`, `L/m`, and the
+    /// diode's currents, conductances and charges times `m` with the
+    /// breakdown matched as `M·IBV` (`diotemp.c`). The 3f5 has no
+    /// `m`; a device without an entry has `m = 1`.
+    pub(crate) mult: HashMap<String, f64>,
     /// A `.noise` analysis is part of the deck (ngspice's
     /// `noiseAnalGiven`, read by `BSIM4setup`).
     pub(crate) noise_job: bool,
@@ -910,6 +917,17 @@ impl Circuit {
     /// front end; see [`Circuit::dtemp`]).
     pub(crate) fn set_dtemp(&mut self, name: &str, dtemp: f64) {
         self.dtemp.insert(name.to_ascii_lowercase(), dtemp);
+    }
+
+    /// Record the ngspice multiplier `m` of instance `name` (the
+    /// netlist front end; see [`Circuit::mult`]).
+    pub(crate) fn set_mult(&mut self, name: &str, m: f64) {
+        self.mult.insert(name.to_ascii_lowercase(), m);
+    }
+
+    /// The multiplier of instance `name` (1 when none was recorded).
+    fn instance_mult(&self, name: &str) -> f64 {
+        self.mult.get(name).copied().unwrap_or(1.0)
     }
 
     /// The temperature of a semiconductor instance (kelvin): its
@@ -1874,32 +1892,41 @@ impl Circuit {
                 }
                 Spec::Resistor(s) => {
                     let rt = self.res_temp.get(&s.name).copied().unwrap_or_default();
-                    devices.push(Box::new(ResistorI::with_temp(
-                        s.value,
-                        rt,
-                        opts,
-                        get(&node_ids, &s.nodes[0]),
-                        get(&node_ids, &s.nodes[1]),
-                    )));
+                    devices.push(Box::new(
+                        ResistorI::with_temp(
+                            s.value,
+                            rt,
+                            opts,
+                            get(&node_ids, &s.nodes[0]),
+                            get(&node_ids, &s.nodes[1]),
+                        )
+                        .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Capacitor(s) => {
-                    devices.push(Box::new(CapacitorI::new(
-                        s.value,
-                        s.ic,
-                        get(&node_ids, &s.nodes[0]),
-                        get(&node_ids, &s.nodes[1]),
-                        base,
-                    )));
+                    devices.push(Box::new(
+                        CapacitorI::new(
+                            s.value,
+                            s.ic,
+                            get(&node_ids, &s.nodes[0]),
+                            get(&node_ids, &s.nodes[1]),
+                            base,
+                        )
+                        .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Inductor(s) => {
-                    devices.push(Box::new(InductorI::new(
-                        s.value,
-                        s.ic.unwrap_or(0.0),
-                        get(&node_ids, &s.nodes[0]),
-                        get(&node_ids, &s.nodes[1]),
-                        branches[&s.name],
-                        base,
-                    )));
+                    devices.push(Box::new(
+                        InductorI::new(
+                            s.value,
+                            s.ic.unwrap_or(0.0),
+                            get(&node_ids, &s.nodes[0]),
+                            get(&node_ids, &s.nodes[1]),
+                            branches[&s.name],
+                            base,
+                        )
+                        .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Mutual(s) => {
                     for l in [&s.l1, &s.l2] {
@@ -2157,11 +2184,12 @@ impl Circuit {
                         pos
                     };
                     let temp = self.instance_temp(&s.name, s.temp, opts);
+                    let mult = self.instance_mult(&s.name);
                     let t = DiodeTemp::new(
                         &s.name,
                         &s.model,
                         s.area,
-                        1.0,
+                        mult,
                         temp,
                         opts.tnom,
                         opts.reltol,
@@ -2180,7 +2208,7 @@ impl Circuit {
                             name: s.name.clone(),
                             model: s.model.clone(),
                             temp,
-                            m: 1.0,
+                            m: mult,
                             default_tnom: opts.tnom,
                             reltol: opts.reltol,
                         },

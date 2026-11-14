@@ -37,11 +37,17 @@ fn names(nl: &Netlist) -> Vec<&str> {
     nl.elements.iter().map(|e| e.name.as_str()).collect()
 }
 
-/// The value of resistor `name`, rounded to 12 significant digits (the
-/// card sees `%.15e`-rounded values, 7 → 7.000000000000001).
+/// The effective resistance of resistor `name` — its value over the
+/// multiplier `m` the elaborator applies (`G = m/R`) — rounded to 12
+/// significant digits (the card sees `%.15e`-rounded values, 7 →
+/// 7.000000000000001).
 fn r(nl: &Netlist, name: &str) -> f64 {
     match &element(nl, name).device {
-        Device::Resistor { value: Some(v), .. } => round(*v),
+        Device::Resistor {
+            value: Some(v),
+            params,
+            ..
+        } => round(*v / param(params, "m").unwrap_or(1.0)),
         d => panic!("{d:?}"),
     }
 }
@@ -656,10 +662,17 @@ fn x_line_multiplier_per_device_kind_s4() {
          .ends\nx1 1 2 s m=2",
     );
     let dev = |n: &str| &element(&nl, n).device;
-    assert!(matches!(dev("c.x1.c1"), Device::Capacitor { value: Some(v), .. } if *v == 2e-6));
-    assert!(matches!(dev("l.x1.l1"), Device::Inductor { value: Some(v), .. } if *v == 0.5e-3));
-    assert!(matches!(dev("d.x1.d1"), Device::Diode { area: Some(a), .. } if *a == 2.0));
-    assert!(matches!(dev("d.x1.d2"), Device::Diode { area: Some(a), .. } if *a == 6.0));
+    // R, C, L and D keep the value and carry the multiplier, which
+    // the elaborator applies (for the diode it also enters the
+    // breakdown match, fix-probes `d_x_bv`).
+    assert!(matches!(dev("c.x1.c1"),
+        Device::Capacitor { value: Some(v), params, .. } if *v == 1e-6 && param(params, "m") == Some(2.0)));
+    assert!(matches!(dev("l.x1.l1"),
+        Device::Inductor { value: Some(v), params } if *v == 1e-3 && param(params, "m") == Some(2.0)));
+    assert!(matches!(dev("d.x1.d1"),
+        Device::Diode { area: None, params, .. } if param(params, "m") == Some(2.0)));
+    assert!(matches!(dev("d.x1.d2"),
+        Device::Diode { area: Some(a), params, .. } if *a == 3.0 && param(params, "m") == Some(2.0)));
     assert!(matches!(dev("q.x1.q1"), Device::Bjt { area: Some(a), .. } if *a == 2.0));
     assert!(
         matches!(dev("q.x1.q2"), Device::Bjt { area: None, params, .. } if param(params, "m") == Some(2.0))
@@ -693,7 +706,10 @@ fn x_line_multiplier_per_device_kind_s4() {
             ".model nm nmos level=1\nm1 a a 0 0 nm l=1u w=1u",
             "MOS level 1",
         ),
-        (".model rm r rsh=1\nr1 a 0 rm l=1 w=1", "model geometry"),
+        (
+            ".model n2 nmos level=2\nm1 a a 0 0 n2 l=1u w=1u",
+            "MOS level 2",
+        ),
         ("i1 a 0 pulse(0 1 0 1n 1n 1n 2n)", "transient"),
     ] {
         let out = parse(&format!(".subckt s a\n{dev}\n.ends\nx1 1 s m=2"));
@@ -764,6 +780,133 @@ fn option_scale_folds_into_the_geometry_s6() {
     // A scale that is not a positive number is an error.
     let e = errors(&parse(".option scale=0\nr1 1 0 1"));
     assert!(e[0].contains("must be a positive number"), "{e:?}");
+}
+
+#[test]
+fn own_multiplier_outside_multiplied_subcircuits() {
+    // fix-probes m.cases: a device's own `m` acts like the X line's.
+    let nl = clean(
+        ".model dm d is=1e-14\n.model qm npn is=1e-15\n.model vb npn level=4\n\
+         .model jm njf\n.model zm nmf\n.model b3 nmos level=49\n.model rm r rsh=100\n\
+         r1 1 0 1k m=2\nr2 1 0 rm l=10u w=1u m=4\nc1 1 0 1u m=3\nl1 1 0 1m m=2\n\
+         d1 1 0 dm m=3\nd2 1 0 dm area=2 m=3\nq1 1 2 0 qm m=2\nq2 1 2 0 qm area=2 m=3\n\
+         q3 1 2 0 vb m=2\nj1 1 2 0 jm 2 m=3\nz1 1 2 0 zm area=2 m=1.5\n\
+         m1 1 2 0 0 b3 l=1u w=1u m=2\ng1 1 0 2 0 1m m=2\nvs 2 0 0\nf1 1 0 vs 2 m=3\n\
+         i1 1 0 1m ac 2 m=2\nb1 1 0 i=v(2) m=2\nb2 3 0 v=v(2) m=2\nr3 3 0 1\n\
+         r4 4 0 1k m=2 m=4",
+    );
+    let dev = |n: &str| &element(&nl, n).device;
+    let m = |n: &str| match dev(n) {
+        Device::Resistor { params, .. }
+        | Device::Capacitor { params, .. }
+        | Device::Inductor { params, .. }
+        | Device::Diode { params, .. }
+        | Device::Bjt { params, .. }
+        | Device::Jfet { params, .. }
+        | Device::Mesfet { params, .. }
+        | Device::Mosfet { params, .. } => param(params, "m"),
+        d => panic!("{d:?}"),
+    };
+    // Kept for the elaborator: R, C, L, D and the native ones.
+    for (n, want) in [
+        ("r1", 2.0),
+        ("r2", 4.0),
+        ("c1", 3.0),
+        ("l1", 2.0),
+        ("d1", 3.0),
+        ("d2", 3.0),
+        ("q3", 2.0),
+        ("m1", 2.0),
+    ] {
+        assert_eq!(m(n), Some(want), "{n}");
+    }
+    assert_eq!(r(&nl, "r4"), 250.0); // the last `m=` wins (m_last)
+    // Folded into the area: positional, else `area=`, else m.
+    assert!(matches!(dev("q1"), Device::Bjt { area: Some(a), .. } if *a == 2.0));
+    assert!(matches!(dev("q2"),
+        Device::Bjt { area: None, params, .. } if param(params, "area") == Some(6.0)));
+    assert!(matches!(dev("j1"), Device::Jfet { area: Some(a), .. } if *a == 6.0));
+    assert!(matches!(dev("z1"),
+        Device::Mesfet { area: None, params, .. } if param(params, "area") == Some(3.0)));
+    for n in ["q1", "q2", "j1", "z1"] {
+        assert_eq!(m(n), None, "{n}");
+    }
+    // Folded into gains and values.
+    assert!(matches!(dev("g1"), Device::Vccs { gain: Some(g) } if *g == 2e-3));
+    assert!(matches!(dev("f1"), Device::Cccs { gain: Some(g), .. } if *g == 6.0));
+    assert!(matches!(dev("i1"),
+        Device::Source { dc: Some(v), ac: Some(a), .. } if *v == 2e-3 && a.mag == 4.0));
+    for n in ["b1", "b2"] {
+        assert!(
+            matches!(dev(n),
+                Device::Behavioral { expr: Expr::Bin(ExprOp::Times, k, _), .. }
+                    if **k == Expr::Num(2.0)),
+            "{n}"
+        );
+    }
+}
+
+#[test]
+fn own_multiplier_inside_subcircuits_s4() {
+    // A subcircuit no X line multiplies keeps the own m (r_m_sub_own,
+    // i_sub_own_nox); one an X line multiplies replaces it
+    // (r_m_sub_both, i_sub_own, g_sub_own, bi_sub_own) — except on a
+    // voltage-type B, which ngspice leaves alone (bv_sub_own).
+    let body = ".subckt s a\nr1 a 0 1k m=2\ni1 0 a 1 m=3\ng1 0 a a 0 -1m m=3\n\
+                b1 0 a i=v(a) m=3\nb2 b 0 v=3 m=2\nrb b 0 1\n.ends";
+    let nl = clean(&format!("{body}\nx1 1 s\n"));
+    assert_eq!(r(&nl, "r.x1.r1"), 500.0);
+    assert!(
+        matches!(&element(&nl, "i.x1.i1").device, Device::Source { dc: Some(v), .. } if *v == 3.0)
+    );
+    let nl = clean(&format!("{body}\nx1 1 s m=5\n"));
+    assert_eq!(r(&nl, "r.x1.r1"), 200.0);
+    assert!(
+        matches!(&element(&nl, "i.x1.i1").device, Device::Source { dc: Some(v), .. } if *v == 5.0)
+    );
+    assert!(
+        matches!(&element(&nl, "g.x1.g1").device, Device::Vccs { gain: Some(g) } if *g == -5e-3)
+    );
+    let k = |n: &str| match &element(&nl, n).device {
+        Device::Behavioral {
+            expr: Expr::Bin(ExprOp::Times, k, _),
+            ..
+        } => match **k {
+            Expr::Num(v) => v,
+            _ => panic!("{k:?}"),
+        },
+        d => panic!("{d:?}"),
+    };
+    assert_eq!(k("b.x1.b1"), 5.0);
+    assert_eq!(k("b.x1.b2"), 2.0);
+}
+
+#[test]
+fn own_multiplier_errors_are_spanned() {
+    for (card, what) in [
+        ("r1 1 0 1k m=0", "positive"),
+        ("r1 1 0 1k m=-2", "positive"),
+        ("d1 1 0 dm m=0\n.model dm d", "positive"),
+        ("i1 0 1 1 m=0", "positive"),
+        ("g1 0 1 1 0 1m m=-1", "positive"),
+        ("b1 0 1 i=1 m=0", "positive"),
+        (".model nm nmos level=1\nm1 1 1 0 0 nm m=2", "MOS level 1"),
+        ("i1 0 1 pulse(0 1 0 1n 1n 1n 2n) m=2", "transient"),
+        ("v1 1 0 1 m=2", "unknown parameter (m)"),
+        ("e1 1 0 2 0 1 m=2", "unknown parameter (m)"),
+        ("h1 1 0 v2 2 m=2\nv2 2 0 1", "unknown parameter (m)"),
+        ("e1 1 0 2 0 1 foo=2", "unknown parameter (foo)"),
+    ] {
+        let out = parse(card);
+        let e: Vec<_> = out
+            .diags
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect();
+        assert!(!e.is_empty(), "{card}: no error");
+        assert!(e[0].message.contains(what), "{card}: {:?}", e[0].message);
+        assert!(e[0].span.is_some(), "{card}: unspanned");
+    }
 }
 
 #[test]
