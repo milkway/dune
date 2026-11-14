@@ -727,3 +727,41 @@ fn instances_agreeing_on_a_model_share_it() {
     assert_eq!(model("r.x3.r1"), "x1.rm");
     assert_eq!(nl.models.len(), 2);
 }
+
+#[test]
+fn option_scale_folds_into_the_geometry_s6() {
+    // s6 sc_mos1 / sc_bsim3 / sc_mos6 / sc_r_model / sc_c_model /
+    // sc_d_area / sc_subckt_param.
+    let nl = clean(
+        ".option scale=1u\n.model n1 nmos level=1\n.model n6 nmos level=6\n\
+         .model b3 nmos level=49\n.model rm r rsh=1\n.model cm c cj=1\n.model dm d\n\
+         m1 1 1 0 0 n1 l=2 w=10 ad=3 as=4 pd=5 ps=6\nm2 1 1 0 0 n6 l=2 w=10 ad=3\n\
+         m3 1 1 0 0 b3 l=2 w=10 ad=3\nr1 1 0 rm l=10 w=2\nr2 1 0 1k\nc1 1 0 cm l=10 w=10\n\
+         d1 1 0 dm 2\n.subckt s d w=1\nm1 d d 0 0 n1 l=2 w={w}\n.ends\nx1 1 s w=10",
+    );
+    let mos = |n: &str, p: &str| match &element(&nl, n).device {
+        Device::Mosfet { params, .. } => round(param(params, p).unwrap()),
+        d => panic!("{d:?}"),
+    };
+    assert_eq!(
+        ["l", "w", "ad", "as", "pd", "ps"].map(|p| mos("m1", p)),
+        [2e-6, 1e-5, 3e-12, 4e-12, 5e-6, 6e-6]
+    );
+    assert_eq!(["l", "w", "ad"].map(|p| mos("m2", p)), [2.0, 10.0, 3.0]);
+    assert_eq!(["l", "w", "ad"].map(|p| mos("m3", p)), [2e-6, 1e-5, 3e-12]);
+    assert_eq!(mos("m.x1.m1", "w"), 1e-5);
+    match &element(&nl, "r1").device {
+        Device::Resistor { params, .. } => {
+            assert_eq!(param(params, "l").map(round), Some(1e-5));
+            assert_eq!(param(params, "w").map(round), Some(2e-6));
+        }
+        d => panic!("{d:?}"),
+    }
+    assert_eq!(r(&nl, "r2"), 1000.0);
+    assert!(matches!(&element(&nl, "c1").device,
+        Device::Capacitor { params, .. } if param(params, "w").map(round) == Some(1e-5)));
+    assert!(matches!(&element(&nl, "d1").device, Device::Diode { area: Some(a), .. } if *a == 2.0));
+    // A scale that is not a positive number is an error.
+    let e = errors(&parse(".option scale=0\nr1 1 0 1"));
+    assert!(e[0].contains("must be a positive number"), "{e:?}");
+}

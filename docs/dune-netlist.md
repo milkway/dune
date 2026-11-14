@@ -471,6 +471,20 @@ fora de subcircuito multiplicado continua sem efeito no núcleo (nota
 "not in the 3f5"; o cartão `r1 a b 1k m=2` agora é lido como
 parâmetro, não como modelo `m`).
 
+### `.option scale` (G5)
+
+Aplicado na expansão, depois do binning (que escala L e W sozinho),
+onde o ngspice-47 o aplica (os `*par.c`; sondas `s6`): `l`, `w` de
+MOSFET de nível 1, 2, 3, BSIM3 e BSIM4 × `scale`, `ad`, `as` ×
+`scale²`, `pd`, `ps` × `scale`; `l`, `w` de `R` e `C` × `scale`. Não
+são escalados: MOS6, BSIM1/2, VDMOS, áreas de diodo/BJT/JFET, valores
+e qualquer parâmetro de modelo (`ld=0.1` continua 0,1 m,
+`sc_model_ld`); `scalm` não faz nada no ngspice-47 para esses níveis.
+O IR passa a carregar a geometria **já escalada** e o `scale` fica nas
+opções só como informação; o `dune-core` não avisa mais "option scale
+is not implemented". `scale` ≤ 0 ou não finito é erro com span. Deck
+`regress/scale_geom.cir`.
+
 ### Entrada hostil e custo
 
 - Profundidade ≤ 64; subcircuito que instancia a si mesmo (direto ou

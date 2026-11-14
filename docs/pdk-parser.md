@@ -253,7 +253,7 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | S13 | `.model` local dependente da instância | uma cópia por instância (`rsh={w*100}` → 100 e 300 Ω) (P08) | erro; **igual desde 2026-11-14** (G3; instâncias com os mesmos valores compartilham a cópia) |
 | S14 | avaliação preguiçosa | parâmetro indefinido num subcircuito não instanciado ou num `.model` não usado **não** é erro; erro num `.param` global **é** fatal (P05e, P05f) | avalia tudo; **igual desde 2026-11-14** (G3, também `.model` de topo) |
 | S15 | binning | `nome` casa `nome.<dígitos>`; só tipos BSIM3/BSIM4/HiSIM; bin se `lmin ≤ L ≤ lmax` e `wmin ≤ W ≤ wmax` **inclusivo nas duas pontas** com tolerância absoluta 1e-9 (código BSD `in_range`); a tabela é percorrida do último `.model` definido ao primeiro (a fronteira L=1 µm caiu no bin definido por último); L e W multiplicados por `scale`; W dividido por `nf` se `wnflag` (padrão 1 em `hs`/`spe`); faltando um dos quatro limites o bin é pulado; nenhum bin → "could not find a valid modelname" (P09, P09b, P09c) | erro; **igual desde 2026-11-14** (G4, na expansão; `wnflag` padrão 0, modo normal) |
-| S16 | `.option scale` | L/W dos bins e da instância BSIM4 × `scale`, AD/AS × `scale²`, PD/PS × `scale` (`b4par.c`); `lmin…wmax` **não** são escalados (P09b) | aviso "not implemented; ignored" |
+| S16 | `.option scale` | L/W dos bins e da instância BSIM4 × `scale`, AD/AS × `scale²`, PD/PS × `scale` (`b4par.c`); `lmin…wmax` **não** são escalados (P09b) | aviso "not implemented; ignored"; **igual desde 2026-11-14** (G5: também MOS 1–3/BSIM3 e `l w` de R/C; não MOS6/BSIM1/2, sonda `s6`) |
 | S17 | `.if/.elseif/.else/.endif` | funciona no topo e em `.subckt`, condicionado a parâmetro da instância (P10) | erro |
 | S18 | `m` na linha `X` | multiplica o subcircuito (2 × 1 kΩ → 500 Ω), **exceto** se a linha `.subckt` declara `m=` — aí `m` vira parâmetro comum e o multiplicador some (`m=4` → 1 kΩ; em `hs` o ngspice avisa "m=xx on .subckt line will override multiplier m hierarchy!") (P13) | erro; **igual desde 2026-11-14** (G6: o `m` do dispositivo é substituído; por tipo em `docs/dune-netlist.md`) |
 | S19 | `X` que nomeia um **modelo** | erro com modelo nível 1 ("unknown subckt"), plain e `hs` (P14); **aceito** com o modelo binado do gf180 (`xmn … nmos_3p3`), plain e `hs`, mas Vout(0,9 V) muda de 3,2103 (linha `M`) para 3,2093 (plain) / 3,2052 V (`hs`) — causa não isolada | erro |
@@ -409,7 +409,13 @@ definido primeiro" decidem as fronteiras; `binunit=2` é coisa do BSIM4).
 nova. (e) número de bins por base limitado pelo orçamento de modelos; L/W
 não finitos ou ≤ 0 → diagnóstico.
 
-**G5 — `.option scale` (e `wnflag`).**
+**G5 — `.option scale` (e `wnflag`).** ✅ **Feito em 2026-11-14**
+**sem campo novo em `Options`**: o `dune-netlist` dobra o `scale` na
+geometria das instâncias durante a expansão (MOS 1–3, BSIM3/4: `l w` ×s,
+`ad as` ×s², `pd ps` ×s; `R`/`C`: `l w` ×s; sonda `s6`) e o núcleo
+para de avisar; `wnflag` só entra no binning. Muda o contrato do IR
+(geometria pós-`scale`), não assinaturas — commit separado, para o
+dono aprovar. Plano original:
 (a) inv: sky130; full: sky130. (b) S16. (c) ~150 linhas (MOS de todos os
 níveis, R, C, D nível 3, binning). (d) **[API]** campo novo em `Options`
 (público). (e) `scale` ≤ 0 ou não finito → erro.
@@ -505,7 +511,7 @@ a guardar quando G3 criar cópias por instância.
 
 ## 8. Defeitos do Dune atual achados de passagem
 
-Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1.
+Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1; o 4, com a G5.
 
 1. ✅ **`^` à direita em `{…}`**: `{2^3^2}` = 512 no Dune, 64 no ngspice-47
    (`param.rs` comenta "Right-associative, like ngspice", e o
@@ -521,8 +527,8 @@ Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1.
    such subcircuit `0.15`"); diagnóstico enganoso enquanto G3 não existe.
    *Corrigido*: erro "subcircuit parameters on X lines (`w=…`) are not
    supported yet" com o span do nome do parâmetro (também `params:`).
-4. **`.option scale` só avisa** e segue com geometria errada (deveria ser
-   erro até G5).
+4. ✅ **`.option scale` só avisa** e segue com geometria errada.
+   *Corrigido* com a G5 (2026-11-14).
 5. ✅ **Valor não finito em `.param`**: `.param z={1/0}` passa calado; o deck
    P05d termina em "resistor cannot have zero resistance" para um NaN.
    *Corrigido* como no ngspice-47 (sondas de 2026-11-14): definir ou

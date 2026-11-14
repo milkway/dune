@@ -299,12 +299,28 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 _ => None,
             })
     };
+    let scale = match option("scale") {
+        None => 1.0,
+        Some(s) if s.is_finite() && s > 0.0 => s,
+        Some(s) => {
+            let span = nl
+                .options
+                .iter()
+                .rev()
+                .find(|p| p.name == "scale")
+                .map(|p| p.span);
+            let msg = format!(".option scale={s} must be a positive number");
+            all_diags.push(match span {
+                Some(sp) => Diagnostic::error(msg, sp),
+                None => Diagnostic::global_error(msg),
+            });
+            1.0
+        }
+    };
     let ctx = ExpandCtx {
         model_names: &model_names,
         vdmos_models: &vdmos_models,
-        scale: option("scale")
-            .filter(|s| s.is_finite() && *s > 0.0)
-            .unwrap_or(1.0),
+        scale,
         wnflag: option("wnflag").is_some_and(|f| f != 0.0),
     };
     let (elements, models) = expand(&top, &env, &ctx, &mut all_diags);

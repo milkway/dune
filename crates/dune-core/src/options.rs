@@ -519,6 +519,10 @@ impl Options {
                 // ngspice front-end variables read by the `.four` layer
                 // (`four::FourParams::from_options`).
                 "nfreqs" | "nperiods" | "polydegree" | "fourgridsize" => {}
+                // Applied by `dune-netlist` during subcircuit expansion:
+                // `scale` to the instance geometry and to model binning,
+                // `wnflag` to binning (`docs/dune-netlist.md`, G4/G5).
+                "scale" | "wnflag" => {}
                 // `spiceif.c`'s `obsolete[]`: SPICE2 artifacts (lvlcod
                 // generated machine code for the solver) that must
                 // never do anything — the 3f5 words it "is obsolete".

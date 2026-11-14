@@ -652,6 +652,10 @@ impl<'c> Expander<'_, 'c> {
                 out.span,
             ));
         }
+        // After binning, which scales L and W itself.
+        if self.ctx.scale != 1.0 {
+            apply_scale(&mut out, self.ctx.scale, kind.as_ref());
+        }
         self.elements.push(out);
     }
 
@@ -1173,6 +1177,45 @@ fn apply_multiplier(el: &mut Element, m: f64, model: Option<&ModelRef>) -> Resul
         _ => {}
     }
     Ok(())
+}
+
+/// Fold `.option scale` into the instance geometry, where ngspice-47
+/// applies it (`*par.c`, Modified BSD; probe `s6`): the `l`, `w` of
+/// MOSFETs of levels 1, 2, 3, BSIM3 (8/49) and BSIM4 (14/54) — and
+/// HiSIM (68/73), which Dune lacks — times `scale`, their `ad`, `as`
+/// times `scale²` and `pd`, `ps` times `scale`; the `l`, `w` of
+/// resistors and capacitors times `scale`. MOS6, BSIM1/2, VDMOS,
+/// diode, BJT and JFET areas, values and every model parameter are
+/// not scaled (`sc_mos6`, `sc_bsim1`, `sc_d_area`, `sc_model_ld`).
+/// The netlist therefore carries scaled geometry (D-0002 superset:
+/// `scale` stays in the options, for information).
+fn apply_scale(el: &mut Element, s: f64, model: Option<&ModelRef>) {
+    fn times(params: &mut [Param], names: &[&str], f: f64) {
+        for p in params
+            .iter_mut()
+            .filter(|p| names.contains(&p.name.as_str()))
+        {
+            if let ParamValue::Num(v) = &mut p.value {
+                *v *= f;
+            }
+        }
+    }
+    match &mut el.device {
+        Device::Mosfet { params, .. } => {
+            let scaled = model.is_some_and(|r| {
+                matches!(r.mtype.as_str(), "nmos" | "pmos")
+                    && [1.0, 2.0, 3.0, 8.0, 49.0, 14.0, 54.0, 68.0, 73.0].contains(&r.level.round())
+            });
+            if scaled {
+                times(params, &["l", "w", "pd", "ps"], s);
+                times(params, &["ad", "as"], s * s);
+            }
+        }
+        Device::Resistor { params, .. } | Device::Capacitor { params, .. } => {
+            times(params, &["l", "w"], s);
+        }
+        _ => {}
+    }
 }
 
 /// `r1` in instance path `x1` → `r.x1.r1` (ngspice convention).
