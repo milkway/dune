@@ -35,6 +35,7 @@ impl Circuit {
             B1(Box<crate::bsim1::Bsim1Model>),
             B2(Box<crate::bsim2::Bsim2Model>),
             B3(Box<crate::bsim3::Bsim3Model>),
+            Vd(Box<crate::vdmos::VdmosModel>),
         }
         let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
         // Unsupported-level MOS models only become an error when an
@@ -136,6 +137,12 @@ impl Circuit {
                 "npn" | "pnp" => match bjt_model(m, &mut notes) {
                     Ok(bm) => {
                         qmodels.insert(m.name.as_str(), bm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
+                "vdmos" | "vdmosn" | "vdmosp" => match vdmos_model(m, &mut notes) {
+                    Ok(vm) => {
+                        mmodels.insert(m.name.as_str(), MosModel::Vd(Box::new(vm)));
                     }
                     Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                 },
@@ -511,6 +518,30 @@ impl Circuit {
                         }
                         continue;
                     };
+                    if let MosModel::Vd(vm) = mm {
+                        vdmos_instance(
+                            &mut ckt,
+                            &name,
+                            &el.nodes,
+                            vm,
+                            params,
+                            &mut problems,
+                            &mut notes,
+                        );
+                        continue;
+                    }
+                    if el.nodes.len() != 4 {
+                        // `INP2M`.
+                        problems.push(format!(
+                            "`{name}`: {}",
+                            if el.nodes.len() < 4 {
+                                "not enough nodes"
+                            } else {
+                                "too many nodes connected to instance"
+                            }
+                        ));
+                        continue;
+                    }
                     let mut inst = MosInst::new();
                     let is_b3 = matches!(mm, MosModel::B3(_));
                     for p in params {
@@ -752,6 +783,7 @@ impl Circuit {
                             inst.ic_given,
                             &mut problems,
                         ),
+                        MosModel::Vd(_) => unreachable!("VDMOS instances return above"),
                     }
                 }
                 ir::Device::Jfet {
@@ -1176,6 +1208,107 @@ fn mos1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::mos1::Mos
         }
     }
     Ok(mm)
+}
+
+/// Map `.model x vdmos(…)` onto [`crate::vdmos::VdmosModel`]
+/// (`vdmos.c` keyword table). ngspice's front end
+/// (`inp_vdmos_model`) makes the card P-channel when `pchan` appears
+/// on it (or the type is `vdmosp`), and drops the `nchan`/`pchan`
+/// tokens and the datasheet annotations `ron=`, `vds=`, `qg=`,
+/// `mfg=` before the model is parsed.
+fn vdmos_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::vdmos::VdmosModel, String> {
+    let pchan = m.mtype == "vdmosp"
+        || m.params
+            .iter()
+            .any(|p| p.name == "pchan" && p.value == ParamValue::Flag);
+    let mut vm = crate::vdmos::VdmosModel::new(!pchan);
+    for p in &m.params {
+        match (p.name.as_str(), &p.value) {
+            ("pchan" | "nchan", ParamValue::Flag) => {}
+            ("ron" | "vds" | "qg" | "mfg", _) => {}
+            ("vdmosn" | "vdmosp" | "vdmos", ParamValue::Flag) => {
+                vm.set(&p.name, 1.0).map_err(|e| e.to_string())?;
+            }
+            (name, ParamValue::Num(v)) => {
+                if let Err(e) = vm.set(name, *v) {
+                    notes.push(format!("model `{}`: {e} - ignored", m.name));
+                }
+            }
+            (name, _) => return Err(format!("parameter {name} needs a numeric value")),
+        }
+    }
+    Ok(vm)
+}
+
+/// Elaborate one VDMOS instance (`vdmos.c` instance table: `M`,
+/// `OFF`, `ICVDS`, `ICVGS`, `TEMP`, `DTEMP`, `IC`, `THERMAL`).
+/// `VDMOSsetup`: with both `TEMP` and `DTEMP` given, `DTEMP` wins.
+fn vdmos_instance(
+    ckt: &mut Circuit,
+    name: &str,
+    nodes: &[String],
+    vm: &crate::vdmos::VdmosModel,
+    params: &[ir::Param],
+    problems: &mut Vec<String>,
+    notes: &mut Vec<String>,
+) {
+    let mut m = 1.0;
+    let mut off = false;
+    let mut ic = (0.0, 0.0);
+    let mut given = IcGiven::NONE;
+    let mut temp = None;
+    let mut dtemp = None;
+    let mut thermal = false;
+    for p in params {
+        match (p.name.as_str(), &p.value) {
+            ("m", ParamValue::Num(v)) => m = *v,
+            ("off", ParamValue::Flag) => off = true,
+            ("thermal", ParamValue::Flag) => thermal = true,
+            ("icvds", ParamValue::Num(v)) => {
+                ic.0 = *v;
+                given = given.with(0);
+            }
+            ("icvgs", ParamValue::Num(v)) => {
+                ic.1 = *v;
+                given = given.with(1);
+            }
+            ("ic", ParamValue::Num(v)) => {
+                ic.0 = *v;
+                given = given.with(0);
+            }
+            ("ic", ParamValue::NumList(v)) if v.len() == 2 => {
+                ic = (v[0], v[1]);
+                given = IcGiven(given.0 | IcGiven::first(2).0);
+            }
+            ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
+            ("dtemp", ParamValue::Num(v)) => dtemp = Some(*v),
+            _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
+        }
+    }
+    if temp.is_some() && dtemp.is_some() {
+        notes.push(format!(
+            "{name}: temp and dtemp instance parameter given - using dtemp"
+        ));
+        temp = None;
+    }
+    if let Some(d) = dtemp {
+        ckt.set_dtemp(name, d);
+    }
+    add_ic(
+        ckt,
+        crate::circuit::Vdmos {
+            name: name.to_string(),
+            nodes: nodes.to_vec(),
+            model: vm.clone(),
+            m,
+            off,
+            ic,
+            temp,
+            thermal,
+        },
+        given,
+        problems,
+    );
 }
 
 /// MOSFET instance parameters shared by every level
