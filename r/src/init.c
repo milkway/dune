@@ -39,6 +39,11 @@ SEXP handle_result(SEXP res_) {
     return (SEXP)res;
 }
 
+SEXP savvy_ffi_fourier__impl(SEXP c_arg__plot, SEXP c_arg__scale, SEXP c_arg__freq, SEXP c_arg__vectors, SEXP c_arg__nfreqs, SEXP c_arg__nperiods, SEXP c_arg__polydegree, SEXP c_arg__gridsize) {
+    SEXP res = savvy_ffi_fourier__ffi(c_arg__plot, c_arg__scale, c_arg__freq, c_arg__vectors, c_arg__nfreqs, c_arg__nperiods, c_arg__polydegree, c_arg__gridsize);
+    return handle_result(res);
+}
+
 SEXP savvy_ffi_measure__impl(SEXP c_arg__plot, SEXP c_arg__scale, SEXP c_arg__names, SEXP c_arg__specs) {
     SEXP res = savvy_ffi_measure__ffi(c_arg__plot, c_arg__scale, c_arg__names, c_arg__specs);
     return handle_result(res);
@@ -161,6 +166,7 @@ SEXP savvy_SpiceSession_warm_stats__impl(SEXP self__) {
 
 
 static const R_CallMethodDef CallEntries[] = {
+    {"savvy_ffi_fourier__impl", (DL_FUNC) &savvy_ffi_fourier__impl, 8},
     {"savvy_ffi_measure__impl", (DL_FUNC) &savvy_ffi_measure__impl, 4},
     {"savvy_ffi_option_names__impl", (DL_FUNC) &savvy_ffi_option_names__impl, 0},
     {"savvy_ffi_pic_extract__impl", (DL_FUNC) &savvy_ffi_pic_extract__impl, 5},

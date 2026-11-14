@@ -223,6 +223,31 @@ assert.ok(Math.abs(t2 / trise.value - 2) < 1e-3, `${trise.value} -> ${t2}`);
 assert.ok(Math.abs(t2 / (Math.log(9) * 2 * tau) - 1) < 1e-3);
 assert.equal(ms.runTyped().measurements[0].value, t2);
 ms.free();
+
+// .four results (D-0061): one row per harmonic, a failed vector is a row.
+const fDeck = 'rc\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 100n\n.tran 10u 5m\n' +
+  '.four 1k v(2) v(7)\n.end\n';
+const fr = simulate(fDeck);
+assert.equal(fr.fourier.length, 11);
+const h1 = fr.fourier[1];
+assert.deepEqual(Object.keys(h1), ['card', 'vector', 'harmonic', 'frequency', 'magnitude',
+  'phase', 'norm_magnitude', 'norm_phase', 'thd', 'gridsize', 'polydegree', 'nperiods']);
+assert.deepEqual([h1.card, h1.vector, h1.harmonic, h1.frequency], [0, 'v(2)', 1, 1000]);
+const wrc = 2 * Math.PI * 1e3 * 1e-4;
+assert.ok(Math.abs(h1.magnitude * Math.sqrt(1 + wrc * wrc) - 1) < 1e-3, `|V1| = ${h1.magnitude}`);
+assert.equal(h1.norm_magnitude, 1);
+assert.ok(!('error' in h1));
+const bad = fr.fourier[10];
+assert.equal(bad.vector, 'v(7)');
+assert.equal(bad.error, 'no such vector v(7)');
+assert.equal(bad.magnitude, null);
+assert.deepEqual(simulate('d\nv1 1 0 1\nr1 1 0 1k\n.op\n.end\n').fourier, []);
+assert.deepEqual(simulateTyped(fDeck).fourier, fr.fourier);
+const fs = Session.fromDeck(fDeck);
+assert.deepEqual(fs.run().fourier, fr.fourier);
+fs.alter('r1', 2e3);
+assert.ok(fs.run().fourier[1].magnitude < h1.magnitude);
+fs.free();
 // A figure's .meas line: rows at the top level of simulatePic's result.
 const rcMeas = rc.replace('.tran 20u 5m', '.tran 20u 5m\n.meas tran trise trig v(vout) val=0.5 rise=1 targ v(vout) val=4.5 rise=1');
 const pm = simulatePic(rcMeas).measurements;

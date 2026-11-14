@@ -11,7 +11,7 @@ spice_rerun(session)
 }
 \value{
 A \code{spice_result}, as from \code{\link[=spice_run]{spice_run()}} -- the deck's
-\code{.measure} cards evaluated on the new plots included: with
+\code{.measure} and \code{.four} cards evaluated on the new plots included: with
 \code{warm_start = FALSE}, the result \code{spice_run()} gives for the altered
 deck.
 }

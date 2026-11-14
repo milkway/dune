@@ -59,8 +59,10 @@
 #' @return A `spice_pss`, which is also a `spice_result` (so
 #'   [spice_plots()], [spice_tidy()] and [spice_measure()] on its plots
 #'   work as for [spice_run()]): a list with
-#'   * `title`, `notes`, `diagnostics`, `measurements` (always zero rows:
-#'     a deck's `.measure` cards do not apply to `.pss` plots) and
+#'   * `title`, `notes`, `diagnostics`, `measurements` and `fourier`
+#'     (always zero rows: a deck's `.measure` and `.four` cards do not
+#'     apply to `.pss` plots; [spice_fourier()] analyses the time plot)
+#'     and
 #'     `plots` -- the two `spice_plot`s, `"Time Domain Periodic Steady
 #'     State Analysis"` and `"Frequency Domain Periodic Steady State
 #'     Analysis"` (ngspice's plot names) -- as in [spice_run()];
@@ -152,7 +154,7 @@ spice_pss <- function(deck, freq = 0, tstab = 0, osc_node = NULL, points = 128L,
   if (!isTRUE(out$ok)) {
     abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
-  res <- new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements)
+  res <- new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier)
   res$time <- pss_time_tibble(res$plots[[1L]])
   res$spectrum <- pss_spectrum_tibble(res$plots[[2L]])
   res$period <- out$period

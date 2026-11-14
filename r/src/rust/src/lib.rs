@@ -23,8 +23,8 @@ use savvy::{
     RealSexp, Sexp, StringSexp, TypedSexp, savvy,
 };
 
-use dune_core::{AlterValue, PssParams};
-use engine::{Diag, Failure, MeasRow, OptValue, Source, SweepRunOutput};
+use dune_core::{AlterValue, FourParams, PssParams};
+use engine::{Diag, Failure, FourRow, MeasRow, OptValue, Source, SweepRunOutput};
 
 fn strings<I, S>(it: I) -> savvy::Result<Sexp>
 where
@@ -236,6 +236,109 @@ fn ffi_measure(
     Ok(out.into())
 }
 
+/// Fourier rows as parallel columns (see `R/fourier.R`): `card` is
+/// 1-based (`NA` for `spice_fourier()`), NaN numbers and absent
+/// integers are `NA`, `error` is `NA` on success.
+fn four_columns(rows: &[FourRow]) -> savvy::Result<Sexp> {
+    let mut out = OwnedListSexp::new(13, true)?;
+    let ints = |f: &dyn Fn(&FourRow) -> Option<usize>| -> savvy::Result<Sexp> {
+        let mut v = OwnedIntegerSexp::new(rows.len())?;
+        for (i, r) in rows.iter().enumerate() {
+            match f(r).and_then(|x| i32::try_from(x).ok()) {
+                Some(x) => v[i] = x,
+                None => v.set_na(i)?,
+            }
+        }
+        Ok(v.into())
+    };
+    let reals = |f: &dyn Fn(&FourRow) -> f64| -> savvy::Result<Sexp> {
+        let mut v = OwnedRealSexp::new(rows.len())?;
+        for (i, r) in rows.iter().enumerate() {
+            let x = f(r);
+            if x.is_nan() {
+                v.set_na(i)?;
+            } else {
+                v[i] = x;
+            }
+        }
+        Ok(v.into())
+    };
+    out.set_name_and_value(0, "card", ints(&|r| r.card.map(|c| c + 1))?)?;
+    out.set_name_and_value(
+        1,
+        "vector",
+        strings(rows.iter().map(|r| r.vector.as_str()))?,
+    )?;
+    out.set_name_and_value(2, "harmonic", ints(&|r| r.harmonic)?)?;
+    out.set_name_and_value(3, "frequency", reals(&|r| r.frequency)?)?;
+    out.set_name_and_value(4, "magnitude", reals(&|r| r.magnitude)?)?;
+    out.set_name_and_value(5, "phase", reals(&|r| r.phase)?)?;
+    out.set_name_and_value(6, "norm_magnitude", reals(&|r| r.norm_magnitude)?)?;
+    out.set_name_and_value(7, "norm_phase", reals(&|r| r.norm_phase)?)?;
+    out.set_name_and_value(8, "thd", reals(&|r| r.thd)?)?;
+    out.set_name_and_value(9, "gridsize", ints(&|r| r.gridsize)?)?;
+    out.set_name_and_value(10, "polydegree", ints(&|r| r.polydegree)?)?;
+    out.set_name_and_value(11, "nperiods", ints(&|r| r.nperiods)?)?;
+    let mut err = OwnedStringSexp::new(rows.len())?;
+    for (i, r) in rows.iter().enumerate() {
+        match &r.error {
+            Some(e) => err.set_elt(i, e)?,
+            None => err.set_na(i)?,
+        }
+    }
+    out.set_name_and_value(12, "error", err)?;
+    Ok(out.into())
+}
+
+/// Fourier analysis of one plot (a list as `plot_to_r` makes; `scale`
+/// 1-based, 0 for none) at fundamental `freq`, for the `.print`-style
+/// expressions `vectors`, with `nfreqs`, `nperiods`, `polydegree` and
+/// `gridsize` already checked by the R side: `list(ok, message,
+/// fourier)`.
+/// @noRd
+#[savvy]
+#[allow(clippy::too_many_arguments)]
+fn ffi_fourier(
+    plot: ListSexp,
+    scale: i32,
+    freq: f64,
+    vectors: StringSexp,
+    nfreqs: i32,
+    nperiods: i32,
+    polydegree: i32,
+    gridsize: i32,
+) -> savvy::Result<Sexp> {
+    let p = plot_from_r(&plot)?;
+    let scale = usize::try_from(scale)
+        .ok()
+        .and_then(|s| s.checked_sub(1))
+        .filter(|&s| s < p.variables.len());
+    let count = |name: &str, v: i32| {
+        usize::try_from(v).map_err(|_| savvy::Error::new(format!("`{name}` must not be negative")))
+    };
+    let params = FourParams {
+        nfreqs: count("nfreqs", nfreqs)?,
+        nperiods: count("nperiods", nperiods)?,
+        polydegree: count("polydegree", polydegree)?,
+        gridsize: count("gridsize", gridsize)?,
+    };
+    let vectors: Vec<String> = vectors.iter().map(str::to_string).collect();
+    let mut out = OwnedListSexp::new(3, true)?;
+    match engine::compute(|| engine::fourier_plot(p, scale, freq, &vectors, &params)) {
+        Ok(rows) => {
+            out.set_name_and_value(0, "ok", logical(true)?)?;
+            out.set_name_and_value(1, "message", savvy::NullSexp)?;
+            out.set_name_and_value(2, "fourier", four_columns(&rows)?)?;
+        }
+        Err(m) => {
+            out.set_name_and_value(0, "ok", logical(false)?)?;
+            out.set_name_and_value(1, "message", string(&m)?)?;
+            out.set_name_and_value(2, "fourier", savvy::NullSexp)?;
+        }
+    }
+    Ok(out.into())
+}
+
 /// A `tmax_divisor` from R: `numeric(0)` (what `NULL` becomes on the
 /// R side) is none, else its one value.
 fn divisor(d: &RealSexp) -> Option<f64> {
@@ -273,11 +376,12 @@ fn ffi_run_deck(
 }
 
 /// `list(ok = FALSE, message, plots = NULL, notes, diagnostics, kind,
-/// measurements = NULL, iterations, residuals, period)`; the last
+/// measurements = NULL, fourier = NULL, iterations, residuals,
+/// period)`; the last
 /// three are the shooting history for kind `pss` (`period` `NULL` for
 /// a driven circuit), `NULL` otherwise.
 fn failure_list(f: &Failure) -> savvy::Result<Sexp> {
-    let mut out = OwnedListSexp::new(10, true)?;
+    let mut out = OwnedListSexp::new(11, true)?;
     out.set_name_and_value(0, "ok", logical(false)?)?;
     out.set_name_and_value(1, "message", string(&f.message)?)?;
     out.set_name_and_value(2, "plots", savvy::NullSexp)?;
@@ -285,7 +389,8 @@ fn failure_list(f: &Failure) -> savvy::Result<Sexp> {
     out.set_name_and_value(4, "diagnostics", diag_list(&f.diagnostics)?)?;
     out.set_name_and_value(5, "kind", string(f.kind)?)?;
     out.set_name_and_value(6, "measurements", savvy::NullSexp)?;
-    set_pss_history(&mut out, 7, f.pss.as_ref())?;
+    out.set_name_and_value(7, "fourier", savvy::NullSexp)?;
+    set_pss_history(&mut out, 8, f.pss.as_ref())?;
     Ok(out.into())
 }
 
@@ -326,10 +431,10 @@ fn run_list(result: Result<engine::RunOutput, Failure>) -> savvy::Result<Sexp> {
     }
 }
 
-/// The 7 fields of a successful run, in a list with room for `extra`
+/// The 8 fields of a successful run, in a list with room for `extra`
 /// more after them.
 fn ok_list(r: &engine::RunOutput, extra: usize) -> savvy::Result<OwnedListSexp> {
-    let mut out = OwnedListSexp::new(7 + extra, true)?;
+    let mut out = OwnedListSexp::new(8 + extra, true)?;
     out.set_name_and_value(0, "ok", logical(true)?)?;
     out.set_name_and_value(1, "title", string(&r.title)?)?;
     out.set_name_and_value(
@@ -341,6 +446,7 @@ fn ok_list(r: &engine::RunOutput, extra: usize) -> savvy::Result<OwnedListSexp> 
     out.set_name_and_value(4, "diagnostics", diag_list(&r.diagnostics)?)?;
     out.set_name_and_value(5, "kind", savvy::NullSexp)?;
     out.set_name_and_value(6, "measurements", meas_columns(&r.measures)?)?;
+    out.set_name_and_value(7, "fourier", four_columns(&r.fourier)?)?;
     Ok(out)
 }
 
@@ -398,14 +504,14 @@ fn ffi_pss_deck(
     match engine::compute(|| engine::pss(source, &user, tmax, &params)) {
         Ok(out) => {
             let mut list = ok_list(&out.run, 4)?;
-            list.set_name_and_value(7, "period", OwnedRealSexp::try_from_scalar(out.period)?)?;
-            list.set_name_and_value(8, "t0", OwnedRealSexp::try_from_scalar(out.t0)?)?;
+            list.set_name_and_value(8, "period", OwnedRealSexp::try_from_scalar(out.period)?)?;
+            list.set_name_and_value(9, "t0", OwnedRealSexp::try_from_scalar(out.t0)?)?;
             list.set_name_and_value(
-                9,
+                10,
                 "residuals",
                 OwnedRealSexp::try_from_slice(out.residuals)?,
             )?;
-            list.set_name_and_value(10, "periods", OwnedRealSexp::try_from_slice(out.periods)?)?;
+            list.set_name_and_value(11, "periods", OwnedRealSexp::try_from_slice(out.periods)?)?;
             Ok(list.into())
         }
         Err(f) => failure_list(&f),
@@ -580,8 +686,8 @@ impl SpiceSession {
 /// column-major matrix (one row per run, one column per parameter),
 /// `threads` 1 for the sequential path, 0 for one per core. Returns
 /// `list(ok, title, params, runs, diagnostics, kind, message)`; each
-/// run is `list(ok, plots, notes, measurements)` or `list(ok = FALSE, kind,
-/// message)`.
+/// run is `list(ok, plots, notes, measurements, fourier)` or
+/// `list(ok = FALSE, kind, message)`.
 /// @noRd
 #[savvy]
 #[allow(clippy::too_many_arguments)]
@@ -633,9 +739,10 @@ fn ffi_sweep_deck(
                     SweepRunOutput::Ok {
                         plots,
                         measures,
+                        fourier,
                         notes,
                     } => {
-                        let mut item = OwnedListSexp::new(4, true)?;
+                        let mut item = OwnedListSexp::new(5, true)?;
                         item.set_name_and_value(0, "ok", logical(true)?)?;
                         item.set_name_and_value(
                             1,
@@ -644,16 +751,18 @@ fn ffi_sweep_deck(
                         )?;
                         item.set_name_and_value(2, "notes", strings(notes)?)?;
                         item.set_name_and_value(3, "measurements", meas_columns(measures)?)?;
+                        item.set_name_and_value(4, "fourier", four_columns(fourier)?)?;
                         item
                     }
                     // Kind `pss` carries the shooting history too.
                     SweepRunOutput::Failed { kind, message, pss } => {
-                        let mut item = OwnedListSexp::new(7, true)?;
+                        let mut item = OwnedListSexp::new(8, true)?;
                         item.set_name_and_value(0, "ok", logical(false)?)?;
                         item.set_name_and_value(1, "kind", string(kind)?)?;
                         item.set_name_and_value(2, "message", string(message)?)?;
                         item.set_name_and_value(3, "measurements", savvy::NullSexp)?;
-                        set_pss_history(&mut item, 4, pss.as_ref())?;
+                        item.set_name_and_value(4, "fourier", savvy::NullSexp)?;
+                        set_pss_history(&mut item, 5, pss.as_ref())?;
                         item
                     }
                 };

@@ -100,7 +100,7 @@ export class Session {
   readonly warmStats: { hits: number; misses: number };
   /** The extraction of a session opened with {@link Session.fromPic}. */
   readonly pic: PicExtraction | undefined;
-  /** {@link simulate}'s result for the current circuit, `measurements` re-evaluated. */
+  /** {@link simulate}'s result for the current circuit, `measurements` and `fourier` re-evaluated. */
   run(): Rawfile;
   /** {@link simulateTyped}'s result for the current circuit. */
   runTyped(): TypedRawfile;
@@ -163,6 +163,14 @@ export interface Rawfile {
    * `res$measurements` (D-0029).
    */
   measurements: Measurement[];
+  /**
+   * The deck's `.four` cards evaluated on the run's last transient plot
+   * (with the `nfreqs`, `nperiods`, `polydegree` and `fourgridsize` of its
+   * `.options`): one row per harmonic of each vector, in card order then
+   * vector order. `[]` when the deck has none. Same rows as Python's
+   * `Result.fourier` / R's `res$fourier` (D-0061).
+   */
+  fourier: FourierRow[];
   notes: string[];
   /** Netlist parser and `.options` warnings (file `deck.cir`). */
   diagnostics: Diagnostic[];
@@ -226,6 +234,39 @@ export interface Measurement {
    * Why it failed (`out of interval (WHEN)`, an unknown vector…). Absent on
    * success (Python's `None`): a row failed exactly when it has this key.
    */
+  error?: string;
+}
+
+/**
+ * One harmonic of one `.four` vector (ngspice-47 `fourier` semantics). A
+ * vector without a table (no transient plot, an unknown vector, a run
+ * shorter than the periods) is one row with every field after `vector`
+ * `null` and `error` set, never a thrown error.
+ */
+export interface FourierRow {
+  /** Position of the card among the deck's `.four` cards (0 for the first). */
+  card: number;
+  /** The vector as ngspice names it: `v(out)`, `v(a,b)`, `i(v1)`. */
+  vector: string;
+  /** 0 for DC, then 1 to `nfreqs - 1`. */
+  harmonic: number | null;
+  /** `harmonic * f` (Hz). */
+  frequency: number | null;
+  /** The harmonic's amplitude (the signed mean for DC). */
+  magnitude: number | null;
+  /** Phase in degrees, referred to a sine (0 for DC). */
+  phase: number | null;
+  /** `magnitude` over the fundamental's (0 for DC). */
+  norm_magnitude: number | null;
+  /** `phase` minus the fundamental's, not wrapped (0 for DC). */
+  norm_phase: number | null;
+  /** The vector's total harmonic distortion (%), repeated on each of its rows. */
+  thd: number | null;
+  /** Points transformed (`fourgridsize * nperiods`, or the samples with `polydegree` 0). */
+  gridsize: number | null;
+  polydegree: number | null;
+  nperiods: number | null;
+  /** Why the vector has no table. Absent on success. */
   error?: string;
 }
 

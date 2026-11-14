@@ -59,6 +59,7 @@ reference:
       - spice_wide
       - spice_op
       - spice_measure
+      - spice_fourier
       - autoplot.spice_plot
       - as_tibble.spice_plot
   - title: Sessions

@@ -1,5 +1,20 @@
 # Changelog — spice3 (Python)
 
+## Unreleased
+
+- **`.four` cards** (Fourier analysis and THD, ngspice-47 semantics)
+  come back in `Result.fourier`: a polars frame with one row per
+  harmonic of each vector (`card`, `vector`, `harmonic`, `frequency`,
+  `magnitude`, `phase` in degrees, `norm_magnitude`, `norm_phase`,
+  `thd` in percent, `gridsize`, `polydegree`, `nperiods`, `error`;
+  dtypes in `spice.FOURIER_SCHEMA`). The deck's `.options` `nfreqs`,
+  `nperiods`, `polydegree` and `fourgridsize` apply. A vector that
+  cannot be analysed is a row with `error` set (`nan` numbers, null
+  integers). `spice.fourier(plot, freq, vectors, *, nfreqs, nperiods,
+  polydegree, gridsize)` analyses any transient plot the same way, as
+  `spice.measure()` measures one. Sweep runs and session runs carry
+  their `fourier` too.
+
 ## 0.7.1
 
 Metadata only; the code is that of 0.7.0.

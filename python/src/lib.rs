@@ -26,10 +26,11 @@ use std::path::{Path, PathBuf};
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    AlterValue, Circuit, Compat, Data, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT,
-    PSS_TIME_PLOT, PssParams, Session, Solution, SweepParam, SweepRun, VarType, measure_all,
+    AlterValue, Circuit, Compat, Data, FourError, FourParams, Fourier, MeasureError, Measurement,
+    Method, Options, OutExpr, PSS_FREQ_PLOT, PSS_TIME_PLOT, PssParams, Session, Solution,
+    SweepParam, SweepRun, VarType, four_all, measure_all,
 };
-use dune_netlist::ir::Netlist;
+use dune_netlist::ir::{Netlist, Output as OutputCard, OutputKind};
 use dune_netlist::{Diagnostic, IncludeLoader, ParseOutcome, Severity, SourceMap};
 use num_complex::Complex64;
 use numpy::{PyArray1, PyReadonlyArray1};
@@ -199,8 +200,124 @@ struct Output {
     title: String,
     solutions: Vec<Solution>,
     measures: Vec<MeasRow>,
+    /// The deck's `.four` cards on the last transient plot.
+    fourier: Vec<FourRow>,
     notes: Vec<String>,
     diags: Vec<Diag>,
+}
+
+/// One harmonic of one `.four` vector, as plain data (a row of
+/// `spice.Result.fourier`). A vector without a table is one row with
+/// `error` set, the numbers NaN and the integers `None`.
+struct FourRow {
+    /// 0-based position of the card among the deck's `.four` cards;
+    /// `None` for `spice.fourier`.
+    card: Option<usize>,
+    vector: String,
+    harmonic: Option<usize>,
+    frequency: f64,
+    magnitude: f64,
+    phase: f64,
+    norm_magnitude: f64,
+    norm_phase: f64,
+    thd: f64,
+    gridsize: Option<usize>,
+    polydegree: Option<usize>,
+    nperiods: Option<usize>,
+    error: Option<String>,
+}
+
+impl FourRow {
+    /// The rows of one vector's outcome.
+    fn of(card: Option<usize>, vector: &str, r: &Result<Fourier, FourError>) -> Vec<FourRow> {
+        match r {
+            Ok(f) => f
+                .harmonics
+                .iter()
+                .enumerate()
+                .map(|(k, h)| FourRow {
+                    card,
+                    vector: vector.to_string(),
+                    harmonic: Some(k),
+                    frequency: h.freq,
+                    magnitude: h.mag,
+                    phase: h.phase,
+                    norm_magnitude: h.norm_mag,
+                    norm_phase: h.norm_phase,
+                    thd: f.thd,
+                    gridsize: Some(f.gridsize),
+                    polydegree: Some(f.polydegree),
+                    nperiods: Some(f.nperiods),
+                    error: None,
+                })
+                .collect(),
+            Err(e) => vec![FourRow {
+                card,
+                vector: vector.to_string(),
+                harmonic: None,
+                frequency: f64::NAN,
+                magnitude: f64::NAN,
+                phase: f64::NAN,
+                norm_magnitude: f64::NAN,
+                norm_phase: f64::NAN,
+                thd: f64::NAN,
+                gridsize: None,
+                polydegree: None,
+                nperiods: None,
+                error: Some(e.to_string()),
+            }],
+        }
+    }
+}
+
+/// The deck's `.four` cards (`outputs`, with the `.options`-derived
+/// `params`) on a run's plots; `card` numbers the `.four` cards alone.
+fn deck_fourier(
+    outputs: &[OutputCard],
+    solutions: &[Solution],
+    params: &FourParams,
+) -> Vec<FourRow> {
+    let ordinal: Vec<Option<usize>> = outputs
+        .iter()
+        .scan(0usize, |n, o| {
+            Some(matches!(o.kind, OutputKind::Four { .. }).then(|| {
+                *n += 1;
+                *n - 1
+            }))
+        })
+        .collect();
+    four_all(outputs, solutions, params)
+        .iter()
+        .flat_map(|o| FourRow::of(ordinal[o.card], &o.var, &o.result))
+        .collect()
+}
+
+/// Fourier rows as a dict of column lists (`spice/_fourier.py` makes
+/// the polars frame).
+fn four_dict<'py>(py: Python<'py>, rows: &[FourRow]) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    let ints = |f: &dyn Fn(&FourRow) -> Option<usize>| rows.iter().map(f).collect::<Vec<_>>();
+    let reals = |f: &dyn Fn(&FourRow) -> f64| rows.iter().map(f).collect::<Vec<_>>();
+    d.set_item("card", ints(&|r| r.card))?;
+    d.set_item(
+        "vector",
+        rows.iter().map(|r| r.vector.as_str()).collect::<Vec<_>>(),
+    )?;
+    d.set_item("harmonic", ints(&|r| r.harmonic))?;
+    d.set_item("frequency", reals(&|r| r.frequency))?;
+    d.set_item("magnitude", reals(&|r| r.magnitude))?;
+    d.set_item("phase", reals(&|r| r.phase))?;
+    d.set_item("norm_magnitude", reals(&|r| r.norm_magnitude))?;
+    d.set_item("norm_phase", reals(&|r| r.norm_phase))?;
+    d.set_item("thd", reals(&|r| r.thd))?;
+    d.set_item("gridsize", ints(&|r| r.gridsize))?;
+    d.set_item("polydegree", ints(&|r| r.polydegree))?;
+    d.set_item("nperiods", ints(&|r| r.nperiods))?;
+    d.set_item(
+        "error",
+        rows.iter().map(|r| r.error.as_deref()).collect::<Vec<_>>(),
+    )?;
+    Ok(d)
 }
 
 /// One measurement, as plain data (what `spice.Measurement` wraps).
@@ -289,6 +406,9 @@ impl IncludeLoader for MapLoader<'_> {
 struct Prepared {
     netlist: Netlist,
     options: Options,
+    /// `nfreqs`, `nperiods`, `polydegree`, `fourgridsize` from the
+    /// deck's `.options` (what its `.four` cards use).
+    four: FourParams,
     diags: Vec<Diag>,
 }
 
@@ -320,6 +440,7 @@ fn prepare(source: &Source, overrides: &[Override]) -> Result<Prepared, Failure>
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
     options.apply(&parsed.netlist.options, &mut opt_diags);
+    let four = FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
     diags.extend(opt_diags.iter().map(|d| Diag::new(d, &parsed.sources)));
     for set in overrides {
         set(&mut options);
@@ -327,6 +448,7 @@ fn prepare(source: &Source, overrides: &[Override]) -> Result<Prepared, Failure>
     Ok(Prepared {
         netlist: parsed.netlist,
         options,
+        four,
         diags,
     })
 }
@@ -336,6 +458,7 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
     let Prepared {
         netlist,
         options,
+        four,
         diags,
     } = prepare(source, overrides)?;
     let (circuit, mut notes) =
@@ -352,10 +475,12 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
     }
     // `.measure` cards: pure post-processing of the plots.
     let measures = deck_measures(&netlist.measures, &solutions);
+    let fourier = deck_fourier(&netlist.outputs, &solutions, &four);
     Ok(Output {
         title: netlist.title.clone(),
         solutions,
         measures,
+        fourier,
         notes,
         diags,
     })
@@ -379,6 +504,10 @@ struct SweepOut {
     runs: Vec<SweepRun>,
     /// The deck's `.measure` cards, evaluated on every run.
     measures: Vec<dune_netlist::ir::Measure>,
+    /// The deck's output cards (its `.four` cards are evaluated on
+    /// every run) and the `.options` they read.
+    outputs: Vec<OutputCard>,
+    four: FourParams,
     diags: Vec<Diag>,
 }
 
@@ -393,6 +522,7 @@ fn run_sweep(
     let Prepared {
         netlist,
         options,
+        four,
         diags,
     } = prepare(source, overrides)?;
     let runs = if threads == 1 {
@@ -406,6 +536,8 @@ fn run_sweep(
         keys: params.iter().map(SweepParam::key).collect(),
         runs,
         measures: netlist.measures.clone(),
+        outputs: netlist.outputs.clone(),
+        four,
         diags,
     })
 }
@@ -783,14 +915,111 @@ fn _measure<'py>(
     }
 }
 
+/// `_fourier(plotname, variables, scale, columns, freq, vectors,
+/// nfreqs, nperiods, polydegree, gridsize) -> dict`.
+///
+/// Rebuild one plot from its parts (as `_measure` does) and run the
+/// Fourier analysis of `vectors` (`.print`-style expressions, or
+/// `all`) at fundamental `freq`. A plot that is not a transient (or
+/// the time plot of a `.pss`) or a malformed expression raises
+/// `NativeError("fourier", …)`; a vector without a table comes back
+/// as a row with `error` set. Returns the column dict of
+/// `_simulate`'s `"fourier"`.
+#[pyfunction]
+#[pyo3(signature = (plotname, variables, scale, columns, freq, vectors, nfreqs, nperiods, polydegree, gridsize))]
+#[allow(clippy::too_many_arguments)]
+fn _fourier<'py>(
+    py: Python<'py>,
+    plotname: String,
+    variables: Vec<(String, String)>,
+    scale: Option<usize>,
+    columns: Vec<Bound<'py, PyAny>>,
+    freq: f64,
+    vectors: Vec<String>,
+    nfreqs: usize,
+    nperiods: usize,
+    polydegree: usize,
+    gridsize: usize,
+) -> PyResult<Bound<'py, PyDict>> {
+    let fail = |msg: String| NativeError::new_err(("fourier", msg, PyList::empty(py).unbind()));
+    if plotname != "Transient Analysis" && plotname != PSS_TIME_PLOT {
+        return Err(fail(format!(
+            "plot {plotname:?} is not a transient: fourier needs a .tran plot (or the time plot of a .pss)"
+        )));
+    }
+    if columns.len() != variables.len() {
+        return Err(PyValueError::new_err("one column per variable is needed"));
+    }
+    let mut real = Vec::with_capacity(columns.len());
+    for c in &columns {
+        let a = c
+            .extract::<PyReadonlyArray1<'py, f64>>()
+            .map_err(|_| PyTypeError::new_err("columns must be 1-D float64 arrays"))?;
+        real.push(a.as_array().iter().copied().collect::<Vec<f64>>());
+    }
+    let mut exprs = Vec::with_capacity(vectors.len());
+    for v in &vectors {
+        exprs.push(OutExpr::parse(v).map_err(|e| fail(e.to_string()))?);
+    }
+    let sol = Solution {
+        plotname: "Transient Analysis".to_string(),
+        variables: variables
+            .into_iter()
+            .map(|(n, t)| (n, VarType::from_name(&t)))
+            .collect(),
+        data: Data::Real(real),
+        scale,
+    };
+    let params = FourParams {
+        nfreqs,
+        nperiods,
+        polydegree,
+        gridsize,
+    };
+    let rows = py.detach(|| {
+        catch_unwind(AssertUnwindSafe(|| {
+            let mut rows = Vec::new();
+            for e in &exprs {
+                // `all`: every vector of the plot, the scale included
+                // (as `four_all` expands it).
+                let each: Vec<OutExpr> = match e {
+                    OutExpr::All => sol
+                        .variables
+                        .iter()
+                        .map(|(n, _)| OutExpr::Name(n.clone()))
+                        .collect(),
+                    _ => vec![e.clone()],
+                };
+                for e in each {
+                    rows.extend(FourRow::of(
+                        None,
+                        &e.label(),
+                        &sol.fourier(freq, &e, &params),
+                    ));
+                }
+            }
+            rows
+        }))
+        .map_err(|_| "internal error in the fourier analysis (please report)".to_string())
+    });
+    match rows {
+        Ok(rows) => four_dict(py, &rows),
+        Err(msg) => Err(NativeError::new_err((
+            "internal",
+            msg,
+            PyList::empty(py).unbind(),
+        ))),
+    }
+}
+
 /// `_simulate(text, path, includes, options, tmax_divisor) -> dict`.
 ///
 /// Exactly one of `text` (a deck; `.include` from `includes`) and
 /// `path` (a deck file; `.include` on disk) is given. Returns
 /// `{"title", "plots": [{"title", "plotname", "variables": [(name,
 /// type)], "scale": int | None, "complex": bool, "columns":
-/// [ndarray]}], "measurements": [dict], "notes": [str], "diagnostics":
-/// [dict]}`. The GIL is
+/// [ndarray]}], "measurements": [dict], "fourier": {column: list},
+/// "notes": [str], "diagnostics": [dict]}`. The GIL is
 /// released while the simulation runs.
 #[pyfunction]
 #[pyo3(signature = (text, path, includes, options, tmax_divisor=None))]
@@ -829,6 +1058,7 @@ fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<Pss
         netlist,
         options,
         diags,
+        ..
     } = prepare(source, overrides)?;
     let (circuit, mut notes) =
         Circuit::from_netlist(&netlist).map_err(|e| Failure::new("elaborate", e.to_string()))?;
@@ -839,6 +1069,7 @@ fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<Pss
             title: netlist.title.clone(),
             solutions: vec![pss.time, pss.spectrum],
             measures: Vec::new(),
+            fourier: Vec::new(),
             notes,
             diags,
         },
@@ -938,6 +1169,7 @@ fn outcome_dict<'py>(
                 measures.append(meas_dict(py, m)?)?;
             }
             result.set_item("measurements", measures)?;
+            result.set_item("fourier", four_dict(py, &out.fourier)?)?;
             result.set_item("notes", out.notes)?;
             result.set_item("diagnostics", diag_list(py, &out.diags)?)?;
             Ok(result)
@@ -954,6 +1186,10 @@ struct SessionBase {
     diags: Vec<Diag>,
     /// The deck's `.measure` cards, evaluated on every run.
     measures: Vec<dune_netlist::ir::Measure>,
+    /// The deck's output cards (its `.four` cards are evaluated on
+    /// every run) and the `.options` they read.
+    outputs: Vec<OutputCard>,
+    four: FourParams,
 }
 
 impl SessionBase {
@@ -966,6 +1202,7 @@ impl SessionBase {
         Output {
             title: self.title.clone(),
             measures: deck_measures(&self.measures, &solutions),
+            fourier: deck_fourier(&self.outputs, &solutions, &self.four),
             solutions,
             notes,
             diags: self.diags.clone(),
@@ -1006,6 +1243,7 @@ impl NativeSession {
                 let Prepared {
                     netlist,
                     options,
+                    four,
                     diags,
                 } = prepare(&source, &overrides)?;
                 let (circuit, notes) = Circuit::from_netlist(&netlist)
@@ -1017,6 +1255,8 @@ impl NativeSession {
                         notes,
                         diags,
                         measures: netlist.measures.clone(),
+                        outputs: netlist.outputs.clone(),
+                        four,
                     },
                 })
             })
@@ -1133,7 +1373,7 @@ impl NativeSession {
 /// `dune_core::SweepParam`), `rows` one list of values per run,
 /// `threads` 1 for the sequential path, 0 for one per core. Returns
 /// `{"title", "params": [canonical key], "diagnostics": [dict],
-/// "runs": [{"ok": True, "plots", "measurements", "notes"} | {"ok": False, "kind",
+/// "runs": [{"ok": True, "plots", "measurements", "fourier", "notes"} | {"ok": False, "kind",
 /// "message"}]}` — a failed run of kind `pss` also has `"iterations"`,
 /// `"residuals"` and `"period"`. Bad parameter names or rows raise `ValueError`.
 /// The GIL is released while the runs execute.
@@ -1186,6 +1426,8 @@ fn _sweep<'py>(
                     measures.append(meas_dict(py, &row)?)?;
                 }
                 d.set_item("measurements", measures)?;
+                let fourier = deck_fourier(&out.outputs, &o.solutions, &out.four);
+                d.set_item("fourier", four_dict(py, &fourier)?)?;
                 let plots = PyList::empty(py);
                 for s in o.solutions {
                     plots.append(plot_dict(py, &out.title, s)?)?;
@@ -1403,6 +1645,7 @@ fn _spice(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<NativeSession>()?;
     m.add_function(wrap_pyfunction!(_sweep, m)?)?;
     m.add_function(wrap_pyfunction!(_measure, m)?)?;
+    m.add_function(wrap_pyfunction!(_fourier, m)?)?;
     m.add_function(wrap_pyfunction!(_pss, m)?)?;
     m.add("TEXLABELS", pic::TEXLABELS)?;
     m.add_function(wrap_pyfunction!(_pic_extract, m)?)?;

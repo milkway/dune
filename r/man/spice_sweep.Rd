@@ -42,7 +42,8 @@ A \code{spice_sweep}: a list with
 double column per swept parameter, named in canonical form
 (\code{"r1"}, \code{"@m1[w]"}, \code{"temp"});
 \item \code{runs}: a list of \code{spice_result}, one per run (each with the
-deck's \code{.measure} cards evaluated in its \code{measurements});
+deck's \code{.measure} cards evaluated in its \code{measurements} and its
+\code{.four} cards in its \code{fourier});
 \item \code{diagnostics}: the deck's parser warnings, as in \code{\link[=spice_run]{spice_run()}}.
 }
 

@@ -68,6 +68,13 @@ warnings, each message prefixed with its \code{file:line:col};
 each evaluated on every plot of its analysis, as the tibble
 \code{\link[=spice_measure]{spice_measure()}} returns (zero rows without \code{.measure} cards).
 Failed measurements are rows with \code{error} set.
+\item \code{fourier}: the deck's \code{.four} cards, evaluated on the run's last
+transient plot with the \code{nfreqs}, \code{nperiods}, \code{polydegree} and
+\code{fourgridsize} of its \code{.options} card, as the tibble
+\code{\link[=spice_fourier]{spice_fourier()}} returns, \code{card} numbering the \code{.four} cards
+(zero rows without \code{.four} cards). A vector that cannot be
+analysed (no transient, an unknown vector, a run shorter than the
+periods asked for) is a row with \code{error} set.
 }
 }
 \description{

@@ -44,7 +44,8 @@
 #'     double column per swept parameter, named in canonical form
 #'     (`"r1"`, `"@m1[w]"`, `"temp"`);
 #'   * `runs`: a list of `spice_result`, one per run (each with the
-#'     deck's `.measure` cards evaluated in its `measurements`);
+#'     deck's `.measure` cards evaluated in its `measurements` and its
+#'     `.four` cards in its `fourier`);
 #'   * `diagnostics`: the deck's parser warnings, as in [spice_run()].
 #'
 #'   [spice_tidy()] turns it into one long tibble.
@@ -134,7 +135,7 @@ spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
         call = call, failure = r
       )
     }
-    runs[[i]] <- new_spice_result(out$title, r$plots, r$notes, diagnostics[0, ], r$measurements)
+    runs[[i]] <- new_spice_result(out$title, r$plots, r$notes, diagnostics[0, ], r$measurements, r$fourier)
   }
   structure(
     list(title = out$title, params = tab, runs = runs, diagnostics = diagnostics),

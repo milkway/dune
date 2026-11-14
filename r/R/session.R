@@ -164,7 +164,7 @@ spice_alter <- function(session, refdes, ...) {
 #'
 #' @param session A [spice_session()].
 #' @return A `spice_result`, as from [spice_run()] -- the deck's
-#'   `.measure` cards evaluated on the new plots included: with
+#'   `.measure` and `.four` cards evaluated on the new plots included: with
 #'   `warm_start = FALSE`, the result `spice_run()` gives for the altered
 #'   deck.
 #' @section Errors:
@@ -188,7 +188,7 @@ spice_rerun <- function(session) {
   if (!isTRUE(out$ok)) {
     abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
-  new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements)
+  new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier)
 }
 
 #' Read a session's element values

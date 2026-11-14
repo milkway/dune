@@ -10,6 +10,7 @@ import numpy.typing as npt
 import polars as pl
 
 from ._errors import Diagnostic
+from ._fourier import _frame as _fourier_frame
 from ._measure import Measurement
 from ._repr import has_preview, plot_html, plot_svg, result_html
 
@@ -295,7 +296,7 @@ class Result(Sequence[Plot]):
     iteration work as on a list.
     """
 
-    __slots__ = ("_plots", "diagnostics", "measurements", "notes", "title")
+    __slots__ = ("_plots", "diagnostics", "fourier", "measurements", "notes", "title")
 
     title: str
     """The deck's title line."""
@@ -307,6 +308,14 @@ class Result(Sequence[Plot]):
     """The deck's ``.measure`` cards, each evaluated on every plot of its
     analysis: in plot order, then card order (what ``dune -b`` prints).
     Failed ones are kept, with :attr:`Measurement.error` set."""
+    fourier: pl.DataFrame
+    """The deck's ``.four`` cards, evaluated on the run's last transient plot
+    with the ``nfreqs``, ``nperiods``, ``polydegree`` and ``fourgridsize`` of
+    its ``.options``: the frame :func:`spice.fourier` returns, one row per
+    harmonic of each vector, ``card`` the card's 0-based position among the
+    deck's ``.four`` cards (zero rows without ``.four`` cards). A vector that
+    cannot be analysed (no transient, an unknown vector, a run shorter than
+    the periods asked for) is a row with ``error`` set."""
 
     def __init__(self, native: dict[str, Any]) -> None:
         self.title = native["title"]
@@ -314,6 +323,7 @@ class Result(Sequence[Plot]):
         self.notes = list(native["notes"])
         self.diagnostics = [Diagnostic._from_native(d) for d in native["diagnostics"]]
         self.measurements = [Measurement._from_native(m) for m in native["measurements"]]
+        self.fourier = _fourier_frame(native.get("fourier"))
 
     def measurement(self, name: str) -> Measurement:
         """A deck measurement by name (case-insensitive; the first if repeated).
