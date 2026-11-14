@@ -1,0 +1,46 @@
+conditional blocks (.if) choosing a subcircuit's elements per instance
+* written for Dune (Fase 8, G9 of docs/pdk-parser.md); the nesting is
+* the IHP SG13G2 one (rfmode, as, odd/even ng). Rules probed in
+* ngspice-47 (docs/dune-netlist.md, probes i1-i4): each instance picks
+* its own branch, local models under a condition, .elseif, a
+* top-level block on a global parameter, .param inside a branch read
+* unconditionally.
+.param top=1
+.subckt dev a w=1 as=0 ng=1 rfmode=0
+.if (rfmode == 0)
+    .if (as <= 1e-50)
+        .if (floor(floor(ng/2+0.501)*2+0.001) != ng)
+            r1 a 0 {w*1k}
+        .else
+            r1 a 0 {w*2k}
+        .endif
+    .else
+        r1 a 0 {w*3k}
+    .endif
+.elseif (rfmode == 1)
+    r1 a 0 rm l=1k w=1
+    .model rm r rsh=4
+.else
+    r1 a 0 5k
+.endif
+.ends
+i1 0 1 1m
+x1 1 dev ng=1
+i2 0 2 1m
+x2 2 dev ng=2 w=2
+i3 0 3 1m
+x3 3 dev as=1
+i4 0 4 1m
+x4 4 dev rfmode=1
+i5 0 5 1m
+x5 5 dev rfmode=7
+.if (top == 1)
+.param k=6
+r6 6 0 {k*1k}
+.else
+.param k=7
+r6 6 0 1
+.endif
+i6 0 6 1m
+.op
+.end

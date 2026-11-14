@@ -195,7 +195,7 @@ nenhuma; o do sky130 só `agauss` e `sqrt`; o do IHP só `max`.
 | padrão via `.param` no corpo (padrão sky130) | sim (`sky130_fd_pr__nfet_01v8`: `.param l=1 w=1 ad=0 … mult=1 nf=1.0`) | — | — | **não** |
 | `X` com `nome=valor` | 117 / 689 | 8 / 30 | 0 / 2 | **não** (último token vira nome do subcircuito) |
 | `.model` dentro de `.subckt` dependente de parâmetro da instância | sim: os 288 bins do inversor (`toxe = {…/sqrt(l*w*mult)}`) | não | sim (IHP) | modelo local sim, dependente **não** |
-| `.if/.elseif/.else/.endif` | 0 | 0 | 36 / 177 (todos em `.subckt`, por parâmetro da instância) | **não** |
+| `.if/.elseif/.else/.endif` | 0 | 0 | 36 / 177 (todos em `.subckt`, por parâmetro da instância) | **sim** (G9, Fase 8) |
 | letras de elemento (full) | x 780, r 513, c 345, m 128, d 58, q 6, l 6 | r 70, c 37, x 30, d 25, m 23, q 10 | n 69, c 42, r 39, d 30, l 10, q 8, x 2 | `N` não existe |
 
 Parâmetros nas linhas `X` (sky130 inv): `l` 116, `mult` 113, `ad/as/pd/ps`
@@ -254,7 +254,7 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | S14 | avaliação preguiçosa | parâmetro indefinido num subcircuito não instanciado ou num `.model` não usado **não** é erro; erro num `.param` global **é** fatal (P05e, P05f) | avalia tudo; **igual desde 2026-11-14** (G3, também `.model` de topo) |
 | S15 | binning | `nome` casa `nome.<dígitos>`; só tipos BSIM3/BSIM4/HiSIM; bin se `lmin ≤ L ≤ lmax` e `wmin ≤ W ≤ wmax` **inclusivo nas duas pontas** com tolerância absoluta 1e-9 (código BSD `in_range`); a tabela é percorrida do último `.model` definido ao primeiro (a fronteira L=1 µm caiu no bin definido por último); L e W multiplicados por `scale`; W dividido por `nf` se `wnflag` (padrão 1 em `hs`/`spe`); faltando um dos quatro limites o bin é pulado; nenhum bin → "could not find a valid modelname" (P09, P09b, P09c) | erro; **igual desde 2026-11-14** (G4, na expansão; `wnflag` padrão 0, modo normal) |
 | S16 | `.option scale` | L/W dos bins e da instância BSIM4 × `scale`, AD/AS × `scale²`, PD/PS × `scale` (`b4par.c`); `lmin…wmax` **não** são escalados (P09b) | aviso "not implemented; ignored"; **igual desde 2026-11-14** (G5: também MOS 1–3/BSIM3 e `l w` de R/C; não MOS6/BSIM1/2, sonda `s6`) |
-| S17 | `.if/.elseif/.else/.endif` | funciona no topo e em `.subckt`, condicionado a parâmetro da instância (P10) | erro |
+| S17 | `.if/.elseif/.else/.endif` | funciona no topo e em `.subckt`, condicionado a parâmetro da instância (P10) | erro; **igual desde 2026-11-14** (G9; regras e desvios em `docs/dune-netlist.md` "Condicionais") |
 | S18 | `m` na linha `X` | multiplica o subcircuito (2 × 1 kΩ → 500 Ω), **exceto** se a linha `.subckt` declara `m=` — aí `m` vira parâmetro comum e o multiplicador some (`m=4` → 1 kΩ; em `hs` o ngspice avisa "m=xx on .subckt line will override multiplier m hierarchy!") (P13) | erro; **igual desde 2026-11-14** (G6: o `m` do dispositivo é substituído; por tipo em `docs/dune-netlist.md`) |
 | S19 | `X` que nomeia um **modelo** | erro com modelo nível 1 ("unknown subckt"), plain e `hs` (P14); **aceito** com o modelo binado do gf180 (`xmn … nmos_3p3`), plain e `hs`, mas Vout(0,9 V) muda de 3,2103 (linha `M`) para 3,2093 (plain) / 3,2052 V (`hs`) — causa não isolada | erro |
 | S20 | `.include` indentado, `.inc`, aspas | aceitos (P12) | erro; **igual desde 2026-11-14** |
@@ -472,7 +472,10 @@ de oráculo sem desligar a chave). (b) S11. (c) ~100 linhas. (d) **[API]**
 (média) por padrão, Monte Carlo com semente explícita opcional — desvio a
 registrar em `KNOWN_DIFFS`. (e) nada novo.
 
-**G9 — Condicionais `.if/.elseif/.else/.endif`.**
+**G9 — Condicionais `.if/.elseif/.else/.endif`.** ✔ **Feito em
+2026-11-14** (`cond.rs`, sondas `g9-probes i1–i5`): o inversor IHP
+cai de 48 para 2 erros de parser — as duas linhas `N` (OSDI/PSP) que
+os ramos escolhidos instanciam, fora de escopo.
 (a) inv: IHP; full: IHP. (b) S17. (c) ~300 linhas, por instância; risco
 médio. (d) não. (e) aninhamento limitado; `.endif` faltando = erro com o
 span do `.if`. Prioridade baixa: o IHP não é alvo de BSIM4.

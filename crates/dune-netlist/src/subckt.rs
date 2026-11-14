@@ -31,6 +31,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use crate::cond::{Activity, Conds};
 use crate::deck::Card;
 use crate::diag::{Diagnostic, Severity};
 use crate::elem::parse_element_in;
@@ -77,6 +78,8 @@ pub(crate) struct ModelCard<'c> {
     pub name: String,
     pub mtype: String,
     keys: [Option<KeyVal>; 5],
+    /// The `.if` branch holding the card (local cards only).
+    pub guard: Option<u32>,
     /// For a local card: the names its values read, deduplicated, or
     /// `None` when some value does not parse (no sharing then).
     free: Option<Vec<Box<str>>>,
@@ -142,6 +145,7 @@ impl<'c> ModelCard<'c> {
             name,
             mtype,
             keys,
+            guard: None,
             free,
         }
     }
@@ -199,8 +203,9 @@ fn bin_base(name: &str) -> Option<&str> {
 /// Exact and binned model names of one scope, by index.
 #[derive(Debug, Default)]
 pub(crate) struct ModelIndex {
-    /// Name → last definition with that name.
-    exact: HashMap<String, usize>,
+    /// Name → its definitions, in order (the last one in effect wins;
+    /// `.if` branches can hold several).
+    exact: HashMap<String, Vec<usize>>,
     /// Bin base → its bins, in definition order.
     families: HashMap<String, Vec<usize>>,
 }
@@ -209,7 +214,7 @@ impl ModelIndex {
     fn build<'a>(names: impl Iterator<Item = &'a str>) -> Self {
         let mut ix = ModelIndex::default();
         for (i, n) in names.enumerate() {
-            ix.exact.insert(n.to_string(), i);
+            ix.exact.entry(n.to_string()).or_default().push(i);
             if let Some(b) = bin_base(n) {
                 ix.families.entry(b.to_string()).or_default().push(i);
             }
@@ -230,13 +235,16 @@ pub(crate) struct SubcktDef<'c> {
     pub ports: Vec<String>,
     /// `.subckt` line defaults, then body `.param`s, in card order.
     pub formals: Vec<ParamDef<'c>>,
-    pub items: Vec<BodyItem<'c>>,
+    /// Element and `X` cards, each with the `.if` branch holding it.
+    pub items: Vec<(Option<u32>, BodyItem<'c>)>,
     pub models: Vec<ModelCard<'c>>,
     pub model_index: ModelIndex,
     pub subckts: Vec<SubcktDef<'c>>,
     /// The body's user functions (`.func`), seen by the body and by
     /// the subcircuits defined inside it.
     pub funcs: FuncTable<'c>,
+    /// The body's `.if` blocks, evaluated per instance.
+    pub conds: Conds<'c>,
     /// Problems found while reading the body, reported when (and
     /// only if) the subcircuit is instantiated.
     pub deferred: Vec<Diagnostic>,
@@ -396,7 +404,7 @@ pub(crate) fn mark_multiplied(top: &mut TopScope) {
     }
     fn walk_calls(defs: &[SubcktDef], f: &mut dyn FnMut(&XCall)) {
         for d in defs {
-            for i in &d.items {
+            for (_, i) in &d.items {
                 if let BodyItem::X(x) = i {
                     f(x);
                 }
@@ -415,7 +423,7 @@ pub(crate) fn mark_multiplied(top: &mut TopScope) {
             if !d.multiplied && names.contains(&d.name) && !d.declares_m() {
                 d.multiplied = true;
                 changed = true;
-                for i in &d.items {
+                for (_, i) in &d.items {
                     if let BodyItem::X(x) = i {
                         names.insert(x.subname.clone());
                     }
@@ -435,6 +443,8 @@ struct Frame<'a, 'c> {
     env: &'a ParamEnv<'a>,
     /// The user functions visible in the body (lexical).
     funcs: &'a FuncScope<'a>,
+    /// The body's `.if` branches in effect for this instance.
+    active: &'a Activity,
     path: &'a str,
     node_map: &'a HashMap<String, String>,
     /// The instance's multiplier when the subcircuit is multiplied.
@@ -695,15 +705,27 @@ impl<'c> Expander<'_, 'c> {
     ) -> Option<ModelRef> {
         let mut fr = frame;
         while let Some(f) = fr {
-            if let Some(&i) = f.def.model_index.exact.get(name) {
+            let on = |i: &usize| f.active.on(f.def.models[*i].guard);
+            if let Some(&i) = f
+                .def
+                .model_index
+                .exact
+                .get(name)
+                .and_then(|v| v.iter().rev().find(|i| on(i)))
+            {
                 return self.emit_local(f, i);
             }
-            if let Some(fam) = f.def.model_index.families.get(name) {
+            if let Some(fam) = f.def.model_index.families.get(name)
+                && fam.iter().any(on)
+            {
                 // ngspice renames the reference to the instance's
                 // family (`subckt.c` `model_name_match`) and bins
                 // among the instance's cards only (`s5 b_local_*`).
-                let cands: Vec<(usize, &ModelCard)> =
-                    fam.iter().map(|&i| (i, &f.def.models[i])).collect();
+                let cands: Vec<(usize, &ModelCard)> = fam
+                    .iter()
+                    .filter(|i| on(i))
+                    .map(|&i| (i, &f.def.models[i]))
+                    .collect();
                 return match self.select_bin(el, &cands, f.env, name) {
                     Some(i) => self.emit_local(f, i),
                     None => Some(ModelRef {
@@ -716,7 +738,7 @@ impl<'c> Expander<'_, 'c> {
             fr = f.parent;
         }
         let top = self.top;
-        if let Some(&i) = self.global_index.exact.get(name) {
+        if let Some(&i) = self.global_index.exact.get(name).and_then(|v| v.last()) {
             self.global_used[i] = true;
             return top.models[i]
                 .model
@@ -991,6 +1013,14 @@ impl<'c> Expander<'_, 'c> {
         let mut ds = Vec::new();
         let env = param::resolve_local(&defs, caller_env, Some(&funcs), &mut ds);
         self.report_all(ds);
+        // The instance's `.if` branches (`g9-probes i_sub_param2`:
+        // two instances, two branches).
+        if !self.charge(def.conds.len(), call.span) {
+            return;
+        }
+        let mut ds = Vec::new();
+        let active = def.conds.evaluate(&env, &mut |d| ds.push(d));
+        self.report_all(ds);
 
         let mult = if def.multiplied {
             match env.get("m") {
@@ -1026,14 +1056,18 @@ impl<'c> Expander<'_, 'c> {
             def,
             env: &env,
             funcs: &funcs,
+            active: &active,
             path: &inst_path,
             node_map: &inner_nodes,
             mult,
             emitted: RefCell::new(HashMap::new()),
         };
-        for item in &def.items {
+        for (guard, item) in &def.items {
             if self.overflowed {
                 return;
+            }
+            if !active.on(*guard) {
+                continue;
             }
             match item {
                 BodyItem::Elem(card) => {

@@ -1,0 +1,30 @@
+conditional blocks (.if) selecting models and elements in a dc sweep
+* written for Dune (Fase 8, G9 of docs/pdk-parser.md; probes i1-i4 in
+* ngspice-47): a top-level chain picks the diode model, an instance
+* parameter picks a branch of a subcircuit, .options inside a branch
+* not taken still applies (ngspice reads .options unconditionally).
+.param corner=2
+.if (corner == 1)
+.model dm d is=1e-14 n=1
+.elseif (corner == 2)
+.model dm d is=1e-13 n=1.2
+.else
+.model dm d is=1e-12 n=1.5
+.endif
+.if (corner == 9)
+.options gmin=1e-12
+.endif
+.subckt load a series=0
+.if (series)
+r1 a b 1k
+d1 b 0 dm
+.else
+d1 a 0 dm
+.endif
+.ends
+v1 1 0 0
+x1 1 load series=1
+v2 2 0 0
+x2 2 load
+.dc v1 0 1 0.1 v2 0 1 0.5
+.end

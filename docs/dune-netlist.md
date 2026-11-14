@@ -422,6 +422,54 @@ calado) é erro quando chamado; recursão é erro, não *segfault*; o corpo
 expressão (o ngspice substitui o texto e lê `3*-2`); `.func` em fonte
 `B` é erro "not supported yet" (a linguagem da fonte B é a do 3f5).
 
+### Condicionais (`.if`/`.elseif`/`.else`/`.endif`, `cond.rs`)
+
+G9 de `docs/pdk-parser.md` (2026-11-14): o IHP SG13G2 escolhe a linha
+do dispositivo dentro do `.subckt` por parâmetro da instância
+(`rfmode`, `as`, `ng` par/ímpar). No ngspice-47 quem avalia é o
+`numparam` (LGPL, não aberto); do `inpcom.c` só se leu que a linha
+`.if(expr)` vira `.if{expr}` antes de chegar lá. Regras por sondas
+(`.claude/scratch/g9-probes/i1.txt`–`i5.txt`; testes em
+`tests/cond.rs`; decks `regress/if_subckt_op.cir` e `if_dc.cir`):
+
+| Regra | ngspice-47 | Sonda |
+|---|---|---|
+| Condição | expressão de parâmetros **entre parênteses**, verdadeira se ≠ 0; `.if(a==1)` colado, brancos dentro, `=` sozinho compara, `&&`/`||`/`?:`, funções e `.func`; continuação `+` | `i1 i_top_*`, `i_glued`, `i_spaces`, `i_single_eq`, `i_value*`, `i_logic*`, `i_func_cond`, `i_udf_cond`, `i_continuation`, `i2 i_cond_ternary`, `i_cond_nested_parens` |
+| Sem parênteses | `.if a==1`, `.if {a==1}`, `.if 'a==1'`, `.if` e `.elseif a==2` são fatais ("Bad syntax"); `.if ()` e `.if (1+)` também | `i_noparen`, `i_brace`, `i_quote`, `i_no_cond`, `i_empty_cond`, `i_bad_cond`, `i2 i_elseif_noparen` |
+| O que lê | no topo, os `.param` globais (inclusive definidos depois); no `.subckt`, o escopo da instância (linha `X`, padrões, `.param` do corpo, escopo de quem chama, `m`) — cada instância escolhe o seu ramo; no topo não vê parâmetro de subcircuito | `i_fwd_param`, `i_sub_param2`, `i_sub_body_param`, `i2 i_sub_dyn`, `i_cond_m`, `i_sub_param_cond_top`, `i_sub_cond_fwd_body` |
+| Cadeias e aninhamento | `.elseif` em qualquer número, `.else`, aninhamento (21 níveis testados) | `i_elseif*`, `i_nested*`, `i2 i_deep` |
+| `.else if (c)` | é um `.else` **comum**: o texto depois de `.else` é ignorado, a condição nunca é lida | `i5 i_else_if_false_cond`, `i_else_if_then_else` |
+| Avaliação | **toda** condição de um escopo que existe é avaliada — também no ramo não tomado e depois do tomado (nome indefinido lá é fatal) | `i_undef_untaken_elseif`, `i2 i_nested_untaken_undef`, `i_taken_then_elseif_bad` |
+| Condicional | elementos, linhas `X`, `.model` (de topo e local, por instância), `.temp`, cartões de análise | `i_top_*`, `i2 i_x_top_false`, `i3 i_model_top_a/b`, `i1 i_sub_model`, `i4 i_d_temp_*`, `i3 i_op_card_false` |
+| **Não** condicional | `.param` (topo e corpo: o último vence, dentro ou fora de ramo), `.func`, `.include`/`.lib` (lidos antes), `.options` (o último vence), definições `.subckt` (as duas existem; a primeira vence) e o corpo de um `.subckt` escrito dentro de um ramo | `i_param_in_branch(_false)`, `i_sub_param_in_branch`, `i_func_in`, `i_include_in`, `i4 i_d_options_*`, `i2 i_subckt_def_false`, `i_sub_nested_subckt_false` |
+| Onde | topo, corpo de `.subckt`, seção de `.lib`; um bloco não atravessa `.ends` | `i2 i_lib_if`, `i1 i_sub_cross` |
+| Preguiça | subcircuito não instanciado: condições não lidas | `i_sub_undef_unused` |
+| Desbalanceado | `.endif`/`.else` soltos, `.else` repetido, `.elseif` depois de `.else` são erro; `.if` sem `.endif` é fechado calado no fim do deck ou do `.subckt` | `i_endif_alone`, `i_else_alone`, `i_else_twice`, `i_elseif_after_else`, `i_unclosed`, `i_sub_unclosed` |
+| Texto sobrando | ignorado depois de `.endif`, `.else` e da condição | `i_trailing_endif`, `i_trailing_else`, `i_cond_trailing` |
+
+Como ficou: a estrutura de blocos de cada escopo é lida uma vez (lista
+plana de ramos em ordem de cartão, pais antes dos filhos, pilha de
+blocos abertos — nada recursivo); cada cartão condicional guarda o ramo
+mais interno que o contém. No topo, as condições são avaliadas ao ler
+(os globais já estão resolvidos) e os cartões de ramo não tomado são
+pulados, menos `.subckt`/`.ends`, `.options`, `.control` e `.end`. No
+`.subckt`, `subckt::expand` avalia as condições por instância
+(`Conds::evaluate`, uma unidade do orçamento da expansão por ramo) e
+filtra elementos, `X` e `.model` locais; a busca do modelo local pega a
+**última definição ativa** do nome (e só bins ativos). O IR público não
+mudou.
+
+Diferenças (linhas no `KNOWN_DIFFS.md`), todas em entradas que o
+ngspice aceita calado ou lê errado: `.if` sem `.endif`, texto depois de
+`.endif`/`.else`/da condição e `.else if` são erro com span (a mensagem
+do `.else if` diz que é um `.else`); condição não finita (`(1/0)`, que
+o ngspice trata como falsa) é erro; num ramo não tomado o Dune não olha
+os cartões — o ngspice ainda substitui os `{…}` deles e um nome
+indefinido ali é fatal (`i3 i_sub_param_body_after`,
+`i_top_untaken_bad_elem`; lixo sem chaves passa nos dois,
+`i_top_untaken_garbage`). Limites: ≤ 256 blocos aninhados por escopo
+(erro com span; 10 000 aninhados dão um erro, em tempo linear).
+
 ### Entrada hostil e medidas
 
 Limites: expressão ≤ 64 KiB (o IHP chega a 613 bytes; o limite antigo

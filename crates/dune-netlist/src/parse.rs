@@ -9,6 +9,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::cond::{Activity, Conds};
 use crate::deck::{self, Card, Deck, IncludeLoader};
 use crate::diag::Diagnostic;
 use crate::elem::{ElemCtx, parse_element};
@@ -172,6 +173,10 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     // The last `.temp` card: set after every `.options` (ngspice-47
     // applies it once the circuit exists, `frontend/inp.c`).
     let mut temp_card: Option<Param> = None;
+    // Top-level `.if` blocks, evaluated as they are read (the global
+    // parameters are known); a subcircuit body records its own.
+    let mut top_conds = Conds::default();
+    let mut top_act = Activity::default();
 
     for card in &cards {
         let kw = first_keyword(card);
@@ -188,6 +193,31 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
             continue;
         }
         let span = card.span();
+        if let Some(d) = crate::cond::directive(&kw) {
+            match stack.last_mut() {
+                Some(def) => {
+                    def.conds.read(d, card, &mut def.deferred);
+                }
+                None => {
+                    if let Some(b) = top_conds.read(d, card, &mut all_diags) {
+                        top_conds.eval_branch(b, &env, &mut top_act, &mut |d| all_diags.push(d));
+                    }
+                }
+            }
+            continue;
+        }
+        // In a branch not taken at the top level only the cards
+        // ngspice-47 treats unconditionally stay (`.subckt` bodies,
+        // `.options`; `.param`/`.func` were read in pass A).
+        if stack.is_empty()
+            && !top_act.on(top_conds.guard())
+            && !matches!(
+                kw.as_str(),
+                ".control" | ".end" | ".subckt" | ".ends" | ".options" | ".option" | ".opt"
+            )
+        {
+            continue;
+        }
         match kw.as_str() {
             ".control" => in_control = true,
             ".endc" => {
@@ -212,6 +242,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     model_index: Default::default(),
                     subckts: Vec::new(),
                     funcs: FuncTable::default(),
+                    conds: Conds::default(),
                     deferred,
                     multiplied: false,
                     span,
@@ -227,6 +258,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                         all_diags.push(Diagnostic::error(".ends without .subckt", span));
                     }
                     Some(mut def) => {
+                        let mut ds = Vec::new();
+                        def.conds.finish(&format!(".subckt {}", def.name), &mut ds);
+                        def.deferred.append(&mut ds);
                         // Upstream decks carry mismatched names here
                         // (ltra_3.cir has `.ends lump` for `.subckt
                         // rlclump`), so this cannot be fatal.
@@ -247,7 +281,11 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 }
             }
             ".model" => match stack.last_mut() {
-                Some(def) => def.models.push(ModelCard::new(card, true, &func_names)),
+                Some(def) => {
+                    let mut mc = ModelCard::new(card, true, &func_names);
+                    mc.guard = def.conds.guard();
+                    def.models.push(mc);
+                }
                 None => {
                     // Evaluated now with the global parameters; its
                     // diagnostics only count if an element uses it
@@ -310,7 +348,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
             k if k.starts_with('x') => match stack.last_mut() {
                 Some(def) => {
                     if let Some(x) = crate::subckt::parse_xcall(card, &mut def.deferred) {
-                        def.items.push(BodyItem::X(x));
+                        def.items.push((def.conds.guard(), BodyItem::X(x)));
                     }
                 }
                 None => {
@@ -320,7 +358,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 }
             },
             _ => match stack.last_mut() {
-                Some(def) => def.items.push(BodyItem::Elem(card)),
+                Some(def) => def.items.push((def.conds.guard(), BodyItem::Elem(card))),
                 None => {
                     if let Some(el) =
                         parse_element(card, &mut all_diags, &model_names, &vdmos_models, &env)
@@ -332,6 +370,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
         }
     }
 
+    top_conds.finish("the deck", &mut all_diags);
     for def in &stack {
         all_diags.push(Diagnostic::error(
             format!(".subckt {} never closed by .ends", def.name),

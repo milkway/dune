@@ -14,6 +14,7 @@ pub mod diag;
 pub mod ir;
 pub mod span;
 
+mod cond;
 mod dot;
 mod elem;
 mod expr;
