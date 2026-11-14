@@ -124,7 +124,7 @@ impl Circuit {
             )));
         };
 
-        let built = self.build(opts)?;
+        let built = self.build_noise(opts)?;
         let notes = built.notes.clone();
         let mut engine = Engine::new(built);
 

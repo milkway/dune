@@ -361,6 +361,48 @@ pub struct Bsim3 {
     pub ic: (f64, f64, f64),
 }
 
+/// A BSIM4 4.8.3 MOSFET (`LEVEL=14`/`54`, ngspice-47's instance line
+/// `MXXX D G S B MNAME <L=> <W=> <NF=> <AD=> … <OFF> <IC=VDS,VGS,VBS>`,
+/// `b4.c` `BSIM4pTable`). The instance parameters are kept as given
+/// (keyword, value), validated against `BSIM4pTable`; L and W default
+/// to 5 µm (`b4set.c`), not the `.options` MOS defaults.
+#[cfg(feature = "bsim")]
+#[derive(Clone, Debug)]
+pub struct Bsim4 {
+    pub name: String,
+    /// Drain, gate, source, bulk.
+    pub nodes: [String; 4],
+    pub model: crate::bsim4::Bsim4Model,
+    /// Instance parameters as given, by `BSIM4pTable` keyword (`l`,
+    /// `w`, `nf`, `ad`, `as`, `pd`, `ps`, `nrd`, `nrs`, `sa`, `sb`,
+    /// `sd`, `sca`, `scb`, `scc`, `sc`, `min`, `rbdb`, `rbsb`, `rbpb`,
+    /// `rbps`, `rbpd`, `delvto`, `mulu0`, `xgw`, `ngcon`, `wnflag`,
+    /// `dtemp`, `trnqsmod`, `acnqsmod`, `rbodymod`, `rgatemod`,
+    /// `geomod`, `rgeomod`, `m`, `mult_i`, `mult_q`, `mult_fn`,
+    /// `icvds`, `icvgs`, `icvbs`).
+    pub params: Vec<(String, f64)>,
+    pub off: bool,
+}
+
+#[cfg(feature = "bsim")]
+impl Bsim4 {
+    /// The value given for instance parameter `kw` (the last one if
+    /// given twice), if any.
+    pub fn param(&self, kw: &str) -> Option<f64> {
+        self.params
+            .iter()
+            .rev()
+            .find(|(k, _)| k == kw)
+            .map(|(_, v)| *v)
+    }
+
+    /// Set instance parameter `kw` (replacing an earlier value).
+    pub fn set_param(&mut self, kw: &str, value: f64) {
+        self.params.retain(|(k, _)| k != kw);
+        self.params.push((kw.to_string(), value));
+    }
+}
+
 /// An ngspice-47 VDMOS power MOSFET (`MXXX ND NG NS <TJ <TC>> MNAME
 /// <M=> <OFF> <IC=VDS,VGS> <ICVDS=> <ICVGS=> <TEMP=> <DTEMP=>
 /// <THERMAL>`, `vdmos.c`) with its model inline. Internal nodes are
@@ -543,6 +585,8 @@ pub enum Spec {
     Bsim2(Box<Bsim2>),
     #[cfg(feature = "bsim")]
     Bsim3(Box<Bsim3>),
+    #[cfg(feature = "bsim")]
+    Bsim4(Box<Bsim4>),
     Resistor(Resistor),
     Capacitor(Capacitor),
     Inductor(Inductor),
@@ -626,6 +670,13 @@ impl From<Bsim3> for Spec {
     }
 }
 
+#[cfg(feature = "bsim")]
+impl From<Bsim4> for Spec {
+    fn from(s: Bsim4) -> Spec {
+        Spec::Bsim4(Box::new(s))
+    }
+}
+
 impl From<Jfet> for Spec {
     fn from(s: Jfet) -> Spec {
         Spec::Jfet(Box::new(s))
@@ -680,6 +731,8 @@ impl Spec {
             Spec::Bsim2(s) => &s.name,
             #[cfg(feature = "bsim")]
             Spec::Bsim3(s) => &s.name,
+            #[cfg(feature = "bsim")]
+            Spec::Bsim4(s) => &s.name,
             Spec::Resistor(s) => &s.name,
             Spec::Capacitor(s) => &s.name,
             Spec::Inductor(s) => &s.name,
@@ -736,6 +789,9 @@ pub struct Circuit {
     /// else `CKTtemp + DTEMP` (`*temp.c` of each device). The 3f5 has
     /// no `DTEMP`; a device without an entry has `DTEMP = 0`.
     pub(crate) dtemp: HashMap<String, f64>,
+    /// A `.noise` analysis is part of the deck (ngspice's
+    /// `noiseAnalGiven`, read by `BSIM4setup`).
+    pub(crate) noise_job: bool,
     /// The warm-start channel of a [`Session`](crate::Session):
     /// empty for a plain circuit (the engine then runs exactly the
     /// 3f5 path).
@@ -900,6 +956,11 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        #[cfg(feature = "bsim")]
+        Spec::Bsim4(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
         Spec::Jfet(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -1039,7 +1100,20 @@ impl Circuit {
     /// Resolve names and build device instances (the 3f5's setup
     /// pass).
     pub(crate) fn build(&self, opts: &Options) -> Result<Built, Error> {
+        self.build_job(opts, self.noise_job)
+    }
+
+    /// [`Circuit::build`] for a `.noise` analysis: the device set-up
+    /// sees a noise job in the task (ngspice's `noiseAnalGiven`, which
+    /// makes a BSIM4 `TNOIMOD = 1` instance create its S/D nodes).
+    pub(crate) fn build_noise(&self, opts: &Options) -> Result<Built, Error> {
+        self.build_job(opts, true)
+    }
+
+    fn build_job(&self, opts: &Options, noise_job: bool) -> Result<Built, Error> {
         use crate::devices::*;
+        #[cfg(not(feature = "bsim"))]
+        let _ = noise_job;
 
         let mut vars = Vars::new();
         let mut node_ids: HashMap<String, Var> = HashMap::new();
@@ -1062,6 +1136,10 @@ impl Circuit {
         // Node → how many device terminals name it (VDMOS dangling
         // temperature nodes).
         let mut node_uses: HashMap<Var, usize> = HashMap::new();
+        // `BSIM4setup`'s model defaulting, per card as given.
+        #[cfg(feature = "bsim")]
+        let mut bsim4_setups: Vec<(crate::bsim4::Bsim4Model, crate::bsim4::Bsim4Model)> =
+            Vec::new();
         for spec in &self.specs {
             let first = st.total();
             state_base.push(match spec {
@@ -1074,6 +1152,8 @@ impl Circuit {
                 Spec::Bsim2(_) => st.alloc(crate::bsim2::BSIM2_NUM_STATES),
                 #[cfg(feature = "bsim")]
                 Spec::Bsim3(_) => st.alloc(crate::bsim3::BSIM3_NUM_STATES),
+                #[cfg(feature = "bsim")]
+                Spec::Bsim4(_) => st.alloc(crate::bsim4::BSIM4_NUM_STATES),
                 Spec::Capacitor(_) => st.alloc(2),
                 Spec::Inductor(s) => {
                     let flux = st.alloc(2);
@@ -1100,6 +1180,8 @@ impl Circuit {
                 Spec::Bsim2(s) => &s.nodes,
                 #[cfg(feature = "bsim")]
                 Spec::Bsim3(s) => &s.nodes,
+                #[cfg(feature = "bsim")]
+                Spec::Bsim4(s) => &s.nodes,
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
                 Spec::Inductor(s) => &s.nodes,
@@ -1298,6 +1380,14 @@ impl Circuit {
                         node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
                     }
                 }
+                // `BSIM4setup`: `CKTmkVolt` in its order.
+                #[cfg(feature = "bsim")]
+                Spec::Bsim4(s) => {
+                    let (_, h) = bsim4_setup(s, &mut bsim4_setups, opts, noise_job)?;
+                    for v in crate::bsim4::internal_nodes(&h.0, &h.1, noise_job) {
+                        node(&mut vars, &mut node_ids, &format!("{}#{v}", s.name));
+                    }
+                }
                 // `VDMOSsetup`, in its order.
                 Spec::Vdmos(s) => {
                     if !(3..=5).contains(&s.nodes.len()) {
@@ -1334,6 +1424,8 @@ impl Circuit {
         // parameter sets already built, keyed by drawn (L, W).
         #[cfg(feature = "bsim")]
         let mut bsim3_models: Vec<crate::bsim3::Bsim3Knots> = Vec::new();
+        #[cfg(feature = "bsim")]
+        let mut bsim4_models: Vec<crate::bsim4::Bsim4Knots> = Vec::new();
         for (spec, &base) in self.specs.iter().zip(&state_base) {
             names.push(spec.name().to_string());
             match spec {
@@ -1651,6 +1743,32 @@ impl Circuit {
                         s.off,
                         s.ic,
                         base,
+                    )));
+                }
+                #[cfg(feature = "bsim")]
+                Spec::Bsim4(s) => {
+                    let (_, (_, mut h)) = bsim4_setup(s, &mut bsim4_setups, opts, noise_job)?;
+                    let ext = [
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[1]),
+                        get(&node_ids, &s.nodes[2]),
+                        get(&node_ids, &s.nodes[3]),
+                    ];
+                    crate::bsim4::assign_nodes(&mut h, ext, |suffix| {
+                        node_ids.get(&format!("{}#{suffix}", s.name)).copied()
+                    });
+                    let (model, pp) = crate::bsim4::Bsim4Knots::resolve(
+                        &mut bsim4_models,
+                        &s.name,
+                        &s.model,
+                        &mut h,
+                        opts.temp,
+                        opts.tnom,
+                        &mut notes,
+                    )
+                    .map_err(Error::Build)?;
+                    devices.push(Box::new(crate::bsim4::Bsim4I::new(
+                        h, model, pp, base, opts.temp,
                     )));
                 }
                 Spec::Resistor(s) => {
@@ -2224,4 +2342,31 @@ fn ctrl_branch(branches: &HashMap<String, Var>, name: &str, ctrl: &str) -> Resul
         .get(ctrl)
         .copied()
         .ok_or_else(|| Error::Build(format!("`{name}`: controlling source `{ctrl}` not found")))
+}
+
+/// `BSIM4setup` for one BSIM4 spec: the model defaults (cached per card
+/// as given in `cache`) and the instance's `here` with its parameters
+/// and defaults, node fields still unset. Returns the cache index and
+/// the (set-up model, `here`) pair.
+#[cfg(feature = "bsim")]
+fn bsim4_setup(
+    s: &Bsim4,
+    cache: &mut Vec<(crate::bsim4::Bsim4Model, crate::bsim4::Bsim4Model)>,
+    opts: &Options,
+    _noise_job: bool,
+) -> Result<(usize, (crate::bsim4::Bsim4Model, crate::bsim4::Bsim4Here)), Error> {
+    let idx = match cache.iter().position(|(g, _)| *g == s.model) {
+        Some(i) => i,
+        None => {
+            let mut dropped = Vec::new();
+            let m = crate::bsim4::Bsim4Knots::setup_model(&s.model, opts.tnom, &mut dropped);
+            cache.push((s.model.clone(), m));
+            cache.len() - 1
+        }
+    };
+    let md = &cache[idx].1;
+    let mut dropped = Vec::new();
+    let h = crate::bsim4::new_here(md, &s.params, s.off, &mut dropped)
+        .map_err(|e| Error::Build(format!("`{}`: {e}", s.name)))?;
+    Ok((idx, (md.clone(), h)))
 }
