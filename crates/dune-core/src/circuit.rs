@@ -2518,7 +2518,17 @@ fn fet3_vars(
     ([d, g, s], [dp, sp])
 }
 
+/// The branch an `F`/`H` card senses: a V source, as in the 3f5, or
+/// — as ngspice-47's `CKTfndBranch` allows, and its behavioural-L
+/// rewriting needs (`fLxxx … bLxxx -1`) — a voltage-type B source.
 fn ctrl_branch(branches: &HashMap<String, Var>, name: &str, ctrl: &str) -> Result<Var, Error> {
+    if ctrl.starts_with('b') {
+        return branches.get(ctrl).copied().ok_or_else(|| {
+            Error::Build(format!(
+                "`{name}`: controlling source `{ctrl}` must be a voltage-type B source"
+            ))
+        });
+    }
     if !ctrl.starts_with('v') {
         return Err(Error::Build(format!(
             "`{name}`: controlling source `{ctrl}` must be a voltage source"

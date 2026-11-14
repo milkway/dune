@@ -1,0 +1,13 @@
+Behavioural capacitor and inductor in a transient
+* written for Dune: a charge-form varactor (C q=) and a current-
+* dependent inductor in an LC tank driven by a pulse, in
+* compat=spice3 so the accuracy ruler can refine it
+.options compat=spice3
+v1 1 0 pulse(0 1 10n 5n 5n 200n 500n)
+r1 1 2 50
+cv 2 0 q='2n*v(2)+0.5n*v(2)*v(2)'
+l1 2 3 l='1u*(1+0.2*abs(i(vm)))'
+vm 3 4 0
+r2 4 0 20
+.tran 2n 600n
+.end

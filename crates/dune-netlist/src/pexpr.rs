@@ -990,11 +990,12 @@ impl Parser<'_> {
                     let lp = self.lx.next()?;
                     let Some(f) = Func::lookup(&name) else {
                         let msg = if name == "v" || name == "i" {
-                            // ngspice turns such R/C/L values into
-                            // B sources (`inp_compat`); not here yet.
+                            // Only an R/C/L value (rewritten into B
+                            // sources, `behav.rs`) or a B source
+                            // reads the circuit.
                             format!(
-                                "`{name}(…)` in an element value (behavioural R/C/L) is \
-                                 not supported yet"
+                                "`{name}(…)` is not allowed here: only a behavioural R/C/L \
+                                 value or a B source reads the circuit"
                             )
                         } else {
                             format!("unknown function `{name}`")
@@ -1366,8 +1367,8 @@ mod tests {
                 "{missing}"
             );
         }
-        assert!(err("v(1)").contains("behavioural"));
-        assert!(err("i(vx)").contains("behavioural"));
+        assert!(err("v(1)").contains("behavioural R/C/L"));
+        assert!(err("i(vx)").contains("behavioural R/C/L"));
         // Wrong argument counts: ngspice garbles them, Dune refuses.
         for bad in [
             "sqrt(1,2)",

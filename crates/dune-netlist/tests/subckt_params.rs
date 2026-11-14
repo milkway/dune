@@ -992,3 +992,59 @@ fn temp_card_sets_the_temperature() {
         assert!(e.iter().any(|m| m.contains(what)), "{deck}: {e:?}");
     }
 }
+
+#[test]
+fn behavioural_rcl_rewritten_as_ngspice() {
+    // dev-probes s3: the names and topology of `inp_compat`.
+    let nl = clean(
+        "r1 1 0 r='1k*(1+v(1))' m=2\nc1 2 0 c='1p*(1+v(2))'\nc2 3 0 q='1p*v(3)' m=3\n\
+         l1 4 0 l='1u*(1+v(4))'\n.subckt s a\nrx a 0 '1k+v(a)'\n.ends\nx1 5 s",
+    );
+    let names: Vec<_> = nl.elements.iter().map(|e| e.name.as_str()).collect();
+    for n in [
+        "br1",
+        "gc1",
+        "rc1",
+        "cc1",
+        "vcurrmeasc1",
+        "rc1par",
+        "bc1",
+        "gc2",
+        "lc2",
+        "bc2",
+        "fl1",
+        "ll1",
+        "bl1",
+        "b.x1.brx",
+    ] {
+        assert!(names.contains(&n), "{n} in {names:?}");
+    }
+    assert!(!names.contains(&"r1") && !names.contains(&"c1"));
+    // `%se9` with m given reads as m; without m, 1e9.
+    assert!(matches!(&element(&nl, "gc1").device, Device::Vccs { gain: Some(g) } if *g == 1e9));
+    assert!(matches!(&element(&nl, "gc2").device, Device::Vccs { gain: Some(g) } if *g == 3.0));
+    assert_eq!(element(&nl, "gc1").nodes, ["c1_int1", "0", "0", "2"]);
+    assert_eq!(element(&nl, "bl1").nodes, ["0", "4"]);
+    assert!(matches!(&element(&nl, "fl1").device, Device::Cccs { vname, .. } if vname == "bl1"));
+    let nl = clean("c1 2 0 c='1p*(1+v(2))' m=2");
+    assert!(matches!(&element(&nl, "gc1").device, Device::Vccs { gain: Some(g) } if *g == 2.0));
+}
+
+#[test]
+fn behavioural_rcl_refusals_are_spanned() {
+    for (card, what) in [
+        ("r1 1 0 r=1k*v(1)", "{…} or '…'"),
+        ("r1 1 0 r='1k*v(1)' tc1=0.01", "tc1"),
+        ("r1 1 0 r='1k*v(1)' noisy=1", "noisy"),
+        ("r1 1 0 r='1k*(1+temper)+0*v(1)'", "temper"),
+        ("r1 1 0 r='v(1)>0 ? 1k : 2k'", "comparisons"),
+        (
+            ".subckt s a\nr1 a 0 r='1k*v(a)'\n.ends\nx1 1 s m=2",
+            "multiplies",
+        ),
+    ] {
+        let out = parse(card);
+        let e = errors(&out);
+        assert!(!e.is_empty() && e[0].contains(what), "{card}: {e:?}");
+    }
+}

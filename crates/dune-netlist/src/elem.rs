@@ -194,7 +194,7 @@ pub(crate) fn parse_element(
     model_names: &HashSet<String>,
     vdmos_models: &HashSet<String>,
     env: &ParamEnv,
-) -> Option<Element> {
+) -> Vec<Element> {
     parse_element_in(card, diags, model_names, vdmos_models, env, false)
 }
 
@@ -212,7 +212,7 @@ pub(crate) fn parse_element_in(
     vdmos_models: &HashSet<String>,
     env: &ParamEnv,
     replaced_m: bool,
-) -> Option<Element> {
+) -> Vec<Element> {
     let mut ctx = ElemCtx {
         sc: Scanner::new(card),
         card,
@@ -220,10 +220,32 @@ pub(crate) fn parse_element_in(
         env,
         replaced_m,
     };
-    let name_tok = ctx.sc.next_tok()?;
+    let Some(name_tok) = ctx.sc.next_tok() else {
+        return Vec::new();
+    };
     let span = ctx.sc.span(&name_tok);
     let name = name_tok.lc();
     let letter = name.chars().next().unwrap_or('\0');
+    // ngspice-47 rewrites an R/C/L whose value depends on the circuit
+    // into B sources and helpers (`inp_compat`; `behav.rs`).
+    if crate::behav::wanted(card, letter) {
+        return behavioral_rlc(&mut ctx, &name, letter, span);
+    }
+    single_element(ctx, name, letter, span, model_names, vdmos_models)
+        .into_iter()
+        .collect()
+}
+
+/// The element of a card that is not rewritten.
+fn single_element(
+    mut ctx: ElemCtx,
+    name: String,
+    letter: char,
+    span: Span,
+    model_names: &HashSet<String>,
+    vdmos_models: &HashSet<String>,
+) -> Option<Element> {
+    let card = ctx.card;
 
     let (nodes, device) = match letter {
         'r' => two_terminal_rc(&mut ctx, true)?,
@@ -261,6 +283,117 @@ pub(crate) fn parse_element_in(
         nodes,
         device,
         span,
+    })
+}
+
+/// A behavioural R/C/L (`behav.rs`): the nodes, the expression in
+/// `{…}` or `'…'` after them (ngspice looks for the first `{` once
+/// quotes became braces, and refuses a card without one), then the
+/// keywords ngspice carries over — `tc1`, `tc2` (refused unless zero:
+/// Dune's B source has no temperature coefficients yet), `m` — and
+/// `noisy=1`/`noise=1` (refused: ngspice's extra noise subcircuit).
+fn behavioral_rlc(ctx: &mut ElemCtx, name: &str, letter: char, span: Span) -> Vec<Element> {
+    let card = ctx.card;
+    let Some(n1) = ctx.node_req("first node") else {
+        return Vec::new();
+    };
+    let Some(n2) = ctx.node_req("second node") else {
+        return Vec::new();
+    };
+    let text = &card.text;
+    let at = crate::behav::after_nodes(text).unwrap_or(text.len());
+    let whole = card.span_of(0, text.len());
+    let rest = &text[at..];
+    let Some(open_rel) = rest.find(['{', '\'']) else {
+        ctx.err(
+            card.span_of(at, text.len()),
+            "a behavioural R/C/L needs its expression in {…} or '…' (as in ngspice)",
+        );
+        return Vec::new();
+    };
+    let open = at + open_rel;
+    let close_ch = if text.as_bytes()[open] == b'{' {
+        '}'
+    } else {
+        '\''
+    };
+    let Some(close_rel) = text[open + 1..].find(close_ch) else {
+        ctx.err(
+            card.span_of(open, text.len()),
+            format!(
+                "`{}` without its closing `{close_ch}`",
+                &text[open..open + 1]
+            ),
+        );
+        return Vec::new();
+    };
+    let close = open + 1 + close_rel;
+    let expr = match crate::behav::translate(&text[open + 1..close], ctx.env) {
+        Ok(e) => e,
+        Err(e) => {
+            ctx.err(card.span_of(open + 1 + e.start, open + 1 + e.end), e.msg);
+            return Vec::new();
+        }
+    };
+    let charge = letter == 'c' && {
+        let before = text[at..open].trim();
+        before.ends_with('=') && before[..before.len() - 1].trim().eq_ignore_ascii_case("q")
+    };
+    ctx.sc.seek(close + 1);
+    let mut m = None;
+    let mut failed = false;
+    for p in ctx.keyword_params() {
+        let v = crate::behav::num(&p.value);
+        match (p.name.as_str(), v) {
+            ("tc1" | "tc2", Some(0.0)) => {}
+            ("tc1" | "tc2", _) => {
+                ctx.err(
+                    p.span,
+                    format!(
+                        "{} on a behavioural R/C/L is not supported yet (the B source has no \
+                         temperature coefficients)",
+                        p.name
+                    ),
+                );
+                failed = true;
+            }
+            ("m", Some(x)) => match ctx.own_mult(x, p.span) {
+                Some(x) => m = Some(x),
+                None => failed = true,
+            },
+            ("noisy" | "noise", Some(0.0)) => {}
+            ("noisy" | "noise", _) => {
+                ctx.err(
+                    p.span,
+                    "the noisy behavioural resistor (noisy=1) is not supported yet",
+                );
+                failed = true;
+            }
+            (other, _) => ctx.warn(
+                p.span,
+                format!("`{other}` on a behavioural R/C/L is dropped, as ngspice drops it"),
+            ),
+        }
+    }
+    if ctx.replaced_m {
+        ctx.err(
+            whole,
+            "a behavioural R/C/L in a subcircuit an X line multiplies (m=) is not supported yet",
+        );
+        failed = true;
+    }
+    if failed {
+        return Vec::new();
+    }
+    crate::behav::elements(crate::behav::Behav {
+        letter,
+        name,
+        n1: &n1,
+        n2: &n2,
+        expr,
+        m,
+        charge,
+        span: span.to(whole),
     })
 }
 
@@ -1095,7 +1228,9 @@ mod tests {
             .filter(|s| s.starts_with("vd"))
             .map(|s| s.to_string())
             .collect();
-        let e = parse_element(&card, &mut diags, &names, &vd, &env);
+        let e = parse_element(&card, &mut diags, &names, &vd, &env)
+            .into_iter()
+            .next();
         (e, diags)
     }
 

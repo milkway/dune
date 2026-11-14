@@ -282,8 +282,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
             _ => match stack.last_mut() {
                 Some(def) => def.items.push(BodyItem::Elem(card)),
                 None => {
-                    if let Some(el) =
-                        parse_element(card, &mut all_diags, &model_names, &vdmos_models, &env)
+                    for el in parse_element(card, &mut all_diags, &model_names, &vdmos_models, &env)
                     {
                         top.items.push(TopItem::Elem(el));
                     }

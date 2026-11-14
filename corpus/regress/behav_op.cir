@@ -1,0 +1,36 @@
+Behavioural resistors at the operating point
+* written for Dune: R cards whose value reads v() or i(), which
+* ngspice-47 rewrites into B sources (inp_compat: bRxxx n1 n2
+* i = v(n1,n2)/(eq), m multiplies) - r=, positional quoted and
+* braced forms, parameters, m, tc1=0, the functions with and without
+* a 3f5 counterpart (log is natural, min/max/pwr/pow), ^ and **
+* left-associative with unary minus looser than ^, an i() reference,
+* and a subcircuit (probes behav*.cases in .claude/scratch/dev-probes/s3)
+.param rr=2k a=0.25
+r1 1 0 r='1k*(1+0.5*v(1))'
+i1 0 1 1m
+r2 2 0 {rr*(1+a*v(2))} m=2
+i2 0 2 1m
+r3 3 0 '1k*(1+0.1*v(3)^2)' tc1=0 tc2=0
+i3 0 3 1m
+r4 4 0 r='1k*2**v(4)**0.5'
+i4 0 4 1m
+r5 5 0 r='-1k*(-2^2)+0*v(5)'
+i5 0 5 1m
+r6 6 0 r='1k*log(3+v(6))+100*sqrt(abs(v(6)))'
+i6 0 6 1m
+r7 7 0 r='1k*(1+max(v(7),0.1))*(1+0.1*min(v(7),0.05))'
+i7 0 7 0.1m
+r8 8 0 r='1k*(1+pwr(v(8),1.5)+0.1*pow(v(8),2)+0.01*exp(v(8))+tanh(v(8)))'
+i8 0 8 0.1m
+vs 9 0 1
+rs 9 0 100
+r10 10 0 r='1k + 1e4*abs(i(vs))'
+i10 0 10 1m
+.subckt rnl a b k=1
+rx a b r='k*1k*(1+0.2*v(a,b))'
+.ends
+x1 11 0 rnl k=2
+i11 0 11 1m
+.op
+.end

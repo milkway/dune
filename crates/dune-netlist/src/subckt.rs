@@ -1026,7 +1026,7 @@ impl<'c> Expander<'_, 'c> {
                         return;
                     }
                     let mut ds = Vec::new();
-                    let el = parse_element_in(
+                    let els = parse_element_in(
                         card,
                         &mut ds,
                         self.ctx.model_names,
@@ -1035,7 +1035,12 @@ impl<'c> Expander<'_, 'c> {
                         frame.mult.is_some(),
                     );
                     self.report_all(ds);
-                    if let Some(el) = el {
+                    for (k, el) in els.into_iter().enumerate() {
+                        // A behavioural R/C/L becomes up to six
+                        // elements: charge the extra ones.
+                        if k > 0 && !self.charge(1, card.span()) {
+                            return;
+                        }
                         self.finish_element(
                             el,
                             Some(&frame),

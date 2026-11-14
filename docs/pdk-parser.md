@@ -485,7 +485,9 @@ precisa ser entendida antes); (c) ~100; (d) não. Opcional.
 ✅ diodo nível 3 com geometria e parâmetros de parede (os três PDKs;
 feito em 2026-11-14, `docs/diode.md`: diodos do sky130 da biblioteca
 contra o ngspice-47 em ≤ 4e-4 do máximo); resistor/capacitor
-comportamental com `v()` (sky130 104, gf180 149 — Fase 8 item 6); modelos
+comportamental com `v()` (sky130 104, gf180 149 — Fase 8 item 6; a
+reescrita do ngspice está feita desde 2026-11-14, `docs/dune-netlist.md`,
+mas os usos reais dependem de `temper` — G7 — e de `tc1`/`tc2`); modelos
 `r`/`c` semicondutores completos; BSIM3v32 (sky130 células especiais);
 `bsim4v6` (`version=4.62`/`4.6`); VBIC nível 9 (IHP, item 4); PSP/OSDI
 (IHP, fora de escopo).
