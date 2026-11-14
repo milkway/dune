@@ -21,6 +21,7 @@ use crate::overrides::Overrides;
 /// {
 ///   "plots": [ PlotJson, ... ],
 ///   "measurements": [ MeasurementJson, ... ],
+///   "fourier": [ FourierJson, ... ],
 ///   "notes": [ "string", ... ],
 ///   "diagnostics": [ DiagnosticJson, ... ],
 ///   "pss": [ PssJson, ... ]
@@ -34,6 +35,10 @@ use crate::overrides::Overrides;
 ///   run's plots ([`MeasurementJson`]): each card against every plot
 ///   of its analysis, in plot order then card order (what `dune -b`
 ///   prints). Empty when the deck has no `.measure` card.
+/// * `fourier` — the deck's `.four` cards evaluated on the run's last
+///   transient plot ([`FourierJson`]): one row per harmonic of each
+///   vector, in card order then vector order (what `dune -b` prints).
+///   Empty when the deck has no `.four` card.
 /// * `notes` — informational messages from elaboration and from each
 ///   analysis (`note: …` lines on the CLI's stderr), in order.
 /// * `diagnostics` — the non-fatal parser and `.options`
@@ -46,6 +51,8 @@ pub struct RawfileJson {
     pub plots: Vec<PlotJson>,
     #[serde(default)]
     pub measurements: Vec<MeasurementJson>,
+    #[serde(default)]
+    pub fourier: Vec<FourierJson>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<DiagnosticJson>,
     #[serde(default)]
@@ -179,6 +186,108 @@ impl MeasurementJson {
             value,
             details,
             error,
+        }
+    }
+}
+
+/// One harmonic of one `.four` vector: the flat row Python's
+/// `Result.fourier` and R's `res$fourier` carry (D-0061).
+///
+/// ```json
+/// { "card": 0, "vector": "v(out)", "harmonic": 1, "frequency": 1000,
+///   "magnitude": 0.846, "phase": -32.15, "norm_magnitude": 1,
+///   "norm_phase": 0, "thd": 0.000637, "gridsize": 200,
+///   "polydegree": 1, "nperiods": 1 }
+/// { "card": 0, "vector": "v(7)", "harmonic": null, "frequency": null,
+///   "magnitude": null, "phase": null, "norm_magnitude": null,
+///   "norm_phase": null, "thd": null, "gridsize": null,
+///   "polydegree": null, "nperiods": null,
+///   "error": "no such vector v(7)" }
+/// ```
+///
+/// * `card` — position of the card among the deck's `.four` cards
+///   (0 for the first).
+/// * `vector` — the vector as ngspice names it (`v(out)`, `v(a,b)`,
+///   `i(v1)`; plot names for `all`).
+/// * `harmonic` — 0 for DC, then 1 to `nfreqs − 1`.
+/// * `frequency` — `harmonic · f` (Hz).
+/// * `magnitude` — the harmonic's amplitude (the signed mean for DC).
+/// * `phase` — degrees, referred to a sine (0 for DC).
+/// * `norm_magnitude`, `norm_phase` — over the fundamental's magnitude,
+///   minus its phase (not wrapped; 0 for DC).
+/// * `thd` — the vector's total harmonic distortion (%), repeated on
+///   each of its rows.
+/// * `gridsize`, `polydegree`, `nperiods` — the points transformed,
+///   the interpolation degree and the periods (the deck's `.options`
+///   `fourgridsize·nperiods`, `polydegree`, `nperiods`).
+///
+/// The numbers are `null` when not finite. A vector without a table
+/// (no transient plot, an unknown vector, a run shorter than the
+/// periods) is **one** row with every field after `vector` `null` and
+/// `error` set; `error` is **absent** on success, as in
+/// [`MeasurementJson`]. A failure is a row, never a thrown error.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FourierJson {
+    pub card: usize,
+    pub vector: String,
+    pub harmonic: Option<usize>,
+    pub frequency: Option<f64>,
+    pub magnitude: Option<f64>,
+    pub phase: Option<f64>,
+    pub norm_magnitude: Option<f64>,
+    pub norm_phase: Option<f64>,
+    pub thd: Option<f64>,
+    pub gridsize: Option<usize>,
+    pub polydegree: Option<usize>,
+    pub nperiods: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl FourierJson {
+    /// The rows of one vector of card `card` (its position among the
+    /// `.four` cards).
+    pub(crate) fn rows(
+        card: usize,
+        vector: &str,
+        r: &Result<dune_core::Fourier, dune_core::FourError>,
+    ) -> Vec<Self> {
+        match r {
+            Ok(f) => f
+                .harmonics
+                .iter()
+                .enumerate()
+                .map(|(k, h)| FourierJson {
+                    card,
+                    vector: vector.to_string(),
+                    harmonic: Some(k),
+                    frequency: finite(h.freq),
+                    magnitude: finite(h.mag),
+                    phase: finite(h.phase),
+                    norm_magnitude: finite(h.norm_mag),
+                    norm_phase: finite(h.norm_phase),
+                    thd: finite(f.thd),
+                    gridsize: Some(f.gridsize),
+                    polydegree: Some(f.polydegree),
+                    nperiods: Some(f.nperiods),
+                    error: None,
+                })
+                .collect(),
+            Err(e) => vec![FourierJson {
+                card,
+                vector: vector.to_string(),
+                harmonic: None,
+                frequency: None,
+                magnitude: None,
+                phase: None,
+                norm_magnitude: None,
+                norm_phase: None,
+                thd: None,
+                gridsize: None,
+                polydegree: None,
+                nperiods: None,
+                error: Some(e.to_string()),
+            }],
         }
     }
 }
@@ -761,8 +870,8 @@ impl From<&OverlayMap> for OverlayMapJson {
 /// level) plus the extraction under `pic`.
 ///
 /// ```json
-/// { "plots": [...], "measurements": [...], "notes": [...], "diagnostics": [...],
-///   "pic": PicJson }
+/// { "plots": [...], "measurements": [...], "fourier": [...], "notes": [...],
+///   "diagnostics": [...], "pic": PicJson }
 /// ```
 ///
 /// The top-level `diagnostics` are the netlist parser's and

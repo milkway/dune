@@ -809,6 +809,140 @@ fn pic_run_carries_measurements() {
     assert!((t / (1e-3 * 9f64.ln()) - 1.0).abs() < 1e-2, "trise = {t}");
 }
 
+// ---- .four results (D-0061) -----------------------------------------
+
+fn corpus_four(name: &str) -> String {
+    let path = format!("{}/../../corpus/four/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(path).unwrap()
+}
+
+/// The rows are the engine's tables, bit for bit: `four_all` on the
+/// same plots with the deck's `.options`, one row per harmonic,
+/// `card` numbering the `.four` cards alone.
+#[test]
+fn fourier_rows_are_the_engine_tables() {
+    for deck in [
+        "four_sine.cir",
+        "four_square.cir",
+        "four_clip.cir",
+        "four_rect.cir",
+    ] {
+        let text = corpus_four(deck);
+        let raw = run(&text, &SimOptions::default()).unwrap();
+        let parsed = dune_netlist::parse_str("deck.cir", &text);
+        let (circuit, _) = Circuit::from_netlist(&parsed.netlist).unwrap();
+        let mut options = Options::default();
+        options.apply(&parsed.netlist.options, &mut Vec::new());
+        let params = FourParams::from_options(&parsed.netlist.options, &mut Vec::new());
+        let mut sols = Vec::new();
+        for a in &parsed.netlist.analyses {
+            sols.extend(circuit.run(a, &options).unwrap().0);
+        }
+        let want = dune_core::four_all(&parsed.netlist.outputs, &sols, &params);
+        let mut rows = raw.fourier.iter();
+        let mut cards = Vec::new();
+        for o in &want {
+            if !cards.contains(&o.card) {
+                cards.push(o.card);
+            }
+            let f = o.result.as_ref().unwrap();
+            for (k, h) in f.harmonics.iter().enumerate() {
+                let r = rows.next().unwrap();
+                assert_eq!(r.card, cards.len() - 1, "{deck}");
+                assert_eq!((r.vector.as_str(), r.harmonic), (o.var.as_str(), Some(k)));
+                assert_eq!(r.frequency, Some(h.freq));
+                assert_eq!(r.magnitude, Some(h.mag), "{deck} {} {k}", o.var);
+                assert_eq!(r.phase, Some(h.phase));
+                assert_eq!(r.norm_magnitude, Some(h.norm_mag));
+                assert_eq!(r.norm_phase, Some(h.norm_phase));
+                assert_eq!(r.thd, Some(f.thd));
+                assert_eq!(
+                    (r.gridsize, r.polydegree, r.nperiods),
+                    (Some(f.gridsize), Some(f.polydegree), Some(f.nperiods))
+                );
+                assert_eq!(r.error, None);
+            }
+        }
+        assert!(rows.next().is_none(), "{deck}");
+    }
+    // The deck's `.options` reached the cards (16 harmonics, 2 periods
+    // of 512 points, degree 2; second card at 120 Hz).
+    let raw = run(&corpus_four("four_rect.cir"), &SimOptions::default()).unwrap();
+    assert_eq!(raw.fourier.len(), 32);
+    let last = raw.fourier.last().unwrap();
+    assert_eq!(
+        (
+            last.card,
+            last.vector.as_str(),
+            last.gridsize,
+            last.polydegree
+        ),
+        (1, "i(v1)", Some(1024), Some(2))
+    );
+    assert_eq!(raw.fourier[17].frequency, Some(120.0));
+}
+
+/// The wire shape: every field always there, `null` on failure,
+/// `error` only on failure; a failed vector is one row.
+#[test]
+fn fourier_wire_shape() {
+    let deck = "rc\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nc1 2 0 100n\n.tran 10u 5m\n\
+                .four 1k v(2) v(7)\n.end\n";
+    let text = simulate_json(deck, None).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let rows = v["fourier"].as_array().unwrap();
+    assert_eq!(rows.len(), 11);
+    let keys =
+        |r: &serde_json::Value| -> Vec<String> { r.as_object().unwrap().keys().cloned().collect() };
+    let fields = [
+        "card",
+        "frequency",
+        "gridsize",
+        "harmonic",
+        "magnitude",
+        "norm_magnitude",
+        "norm_phase",
+        "nperiods",
+        "phase",
+        "polydegree",
+        "thd",
+        "vector",
+    ];
+    assert_eq!(keys(&rows[0]), fields);
+    let mut with_error: Vec<&str> = fields.to_vec();
+    with_error.insert(1, "error");
+    assert_eq!(keys(&rows[10]), with_error);
+    assert_eq!(rows[10]["vector"], "v(7)");
+    assert_eq!(rows[10]["error"], "no such vector v(7)");
+    assert!(rows[10]["magnitude"].is_null() && rows[10]["harmonic"].is_null());
+    assert_eq!(rows[1]["harmonic"], 1);
+    // A run shorter than the period: one failed row for the vector.
+    let short = run(&deck.replace("5m", "0.5m"), &SimOptions::default()).unwrap();
+    assert_eq!(short.fourier.len(), 2);
+    assert_eq!(
+        short.fourier[0].error.as_deref(),
+        Some("(1 * wavelength) longer than time span")
+    );
+    // Without `.four` cards: an empty array, never absent.
+    let v: serde_json::Value =
+        serde_json::from_str(&simulate_json(DIVIDER, None).unwrap()).unwrap();
+    assert_eq!(v["fourier"], serde_json::json!([]));
+}
+
+/// Typed header and session runs carry the rows too.
+#[test]
+fn fourier_in_header_and_session() {
+    let deck = corpus_four("four_sine.cir");
+    let data = run_data(&deck, &SimOptions::default()).unwrap();
+    assert_eq!(data.header_json().fourier, data.to_json().fourier);
+    let mut s = SimSession::open(&deck, &SimOptions::default()).unwrap();
+    let first = s.run().unwrap();
+    assert_eq!(first.fourier, data.fourier);
+    s.alter("r1", "", AlterValue::Num(2e3)).unwrap();
+    let m = |d: &RunData| d.fourier[11].magnitude.unwrap();
+    assert!(m(&s.run().unwrap()) < m(&first));
+}
+
 // ---- engine overrides: `options` / `tmaxDivisor` (issue #16) ----
 
 /// Every column of every plot, as bits.

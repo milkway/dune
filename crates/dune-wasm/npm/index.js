@@ -36,10 +36,15 @@ function ensure() {
 }
 
 /**
- * Run a SPICE3 deck; returns `{ plots, measurements, notes, diagnostics }`.
- * `measurements` holds the deck's `.measure` results, one row per card and
- * plot: `{ name, analysis, plot, value, details, error? }` (`value` is `null`
- * and `error` is set when the measurement failed). Throws a `SimError`.
+ * Run a SPICE3 deck; returns `{ plots, measurements, fourier, notes,
+ * diagnostics, pss }`. `measurements` holds the deck's `.measure` results,
+ * one row per card and plot: `{ name, analysis, plot, value, details, error? }`
+ * (`value` is `null` and `error` is set when the measurement failed).
+ * `fourier` holds the deck's `.four` results, one row per harmonic of each
+ * vector: `{ card, vector, harmonic, frequency, magnitude, phase,
+ * norm_magnitude, norm_phase, thd, gridsize, polydegree, nperiods, error? }`
+ * (a vector without a table is one row of `null`s with `error`). Throws a
+ * `SimError`.
  */
 export function simulate(netlist, opts) {
   ensure();
@@ -212,7 +217,8 @@ export class Session {
 
   /**
    * Re-run every analysis card: `simulate`'s result for the current circuit,
-   * the deck's `.measure` cards re-evaluated (`measurements`).
+   * the deck's `.measure` and `.four` cards re-evaluated (`measurements`,
+   * `fourier`).
    */
   run() {
     return this.#inner.run();

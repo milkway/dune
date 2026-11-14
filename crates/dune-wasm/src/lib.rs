@@ -49,10 +49,10 @@ mod schema;
 mod session;
 
 pub use schema::{
-    CanvasJson, Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, MeasurementJson,
-    NetOverlayJson, OverlayMapJson, ParamSpanJson, PicJson, PicRunJson, PicSimOptions, PlotJson,
-    PssFailureJson, PssJson, RawfileJson, RenderOptionsJson, ShapeRangeJson, SimError, SimOptions,
-    SourceRangeJson, ValueSpanJson, VariableJson,
+    CanvasJson, Columns, DiagnosticJson, ElementOverlayJson, ExtractOptionsJson, FourierJson,
+    MeasurementJson, NetOverlayJson, OverlayMapJson, ParamSpanJson, PicJson, PicRunJson,
+    PicSimOptions, PlotJson, PssFailureJson, PssJson, RawfileJson, RenderOptionsJson,
+    ShapeRangeJson, SimError, SimOptions, SourceRangeJson, ValueSpanJson, VariableJson,
 };
 
 pub use overrides::Overrides;
@@ -63,7 +63,7 @@ use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use dune_core::{CardOutput, Circuit, Options, Solution};
+use dune_core::{CardOutput, Circuit, FourParams, Options, Solution};
 use dune_netlist::{IncludeLoader, Severity};
 use dune_pic::{ExtractOptions, PicError};
 use dune_raw::{Data, Plot};
@@ -296,6 +296,8 @@ pub struct RunData {
     pub plots: Vec<Plot>,
     /// The deck's `.measure` results (as [`RawfileJson::measurements`]).
     pub measurements: Vec<MeasurementJson>,
+    /// The deck's `.four` results (as [`RawfileJson::fourier`]).
+    pub fourier: Vec<FourierJson>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<DiagnosticJson>,
     /// One per `.pss` card (as [`RawfileJson::pss`]).
@@ -308,6 +310,7 @@ impl RunData {
         RawfileJson {
             plots: self.plots.iter().map(PlotJson::from).collect(),
             measurements: self.measurements.clone(),
+            fourier: self.fourier.clone(),
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
             pss: self.pss.clone(),
@@ -320,6 +323,7 @@ impl RunData {
         RawfileJson {
             plots: self.plots.iter().map(PlotJson::header).collect(),
             measurements: self.measurements.clone(),
+            fourier: self.fourier.clone(),
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
             pss: self.pss.clone(),
@@ -401,6 +405,10 @@ pub(crate) struct Prepared {
     pub analyses: Vec<dune_netlist::ir::Analysis>,
     /// The deck's `.measure` cards, evaluated on every run.
     pub measures: Vec<dune_netlist::ir::Measure>,
+    /// The deck's output cards (its `.four` cards are evaluated on
+    /// every run) and the `.options` variables they read.
+    pub outputs: Vec<dune_netlist::ir::Output>,
+    pub four: FourParams,
     pub title: String,
     /// Elaboration notes (each run's result starts with them).
     pub notes: Vec<String>,
@@ -412,7 +420,8 @@ pub(crate) struct Prepared {
 
 impl Prepared {
     /// A run's [`RunData`] from its plots and notes (the elaboration
-    /// notes first), with the deck's `.measure` cards evaluated on it.
+    /// notes first), with the deck's `.measure` and `.four` cards
+    /// evaluated on it.
     pub fn finish(&self, out: Outcome) -> RunData {
         let Outcome {
             solutions,
@@ -426,8 +435,25 @@ impl Prepared {
             .iter()
             .map(|o| MeasurementJson::from_outcome(&self.measures[o.card], o.plot, &o.result))
             .collect();
+        // `card` numbers the `.four` cards alone, in deck order.
+        let ordinal: Vec<usize> = self
+            .outputs
+            .iter()
+            .scan(0usize, |n, o| {
+                let i = *n;
+                if matches!(o.kind, dune_netlist::ir::OutputKind::Four { .. }) {
+                    *n += 1;
+                }
+                Some(i)
+            })
+            .collect();
+        let fourier = dune_core::four_all(&self.outputs, &solutions, &self.four)
+            .iter()
+            .flat_map(|o| FourierJson::rows(ordinal[o.card], &o.var, &o.result))
+            .collect();
         RunData {
             measurements,
+            fourier,
             plots: solutions
                 .iter()
                 .map(|s| s.to_plot(&self.title, ""))
@@ -474,6 +500,7 @@ pub(crate) fn prepare(
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
     options.apply(&parsed.netlist.options, &mut opt_diags);
+    let four = FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
     diagnostics.extend(
         opt_diags
             .iter()
@@ -484,6 +511,8 @@ pub(crate) fn prepare(
         options,
         analyses: parsed.netlist.analyses.clone(),
         measures: parsed.netlist.measures.clone(),
+        outputs: parsed.netlist.outputs.clone(),
+        four,
         title: parsed.netlist.title.clone(),
         notes,
         diagnostics,

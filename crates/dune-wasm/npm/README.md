@@ -41,7 +41,7 @@ await ready(wasmUrl);
 ## API
 
 - `ready(wasm?)` — initialize once (idempotent; a failed init can be retried).
-- `simulate(netlist, { includes? })` → `{ plots, measurements, notes, diagnostics, pss }`. Plots
+- `simulate(netlist, { includes? })` → `{ plots, measurements, fourier, notes, diagnostics, pss }`. Plots
   mirror the SPICE rawfile: `variables` (first = scale) and `columns`
   (numbers, or `[re, im]` pairs in complex plots; NaN/±inf as `null`).
   `includes` maps `.include` paths to file text (there is no file system).
@@ -71,6 +71,24 @@ await ready(wasmUrl);
   `error` is present only on failure; `details` is always an object
   (`trig`/`targ`, `at`, `with`, `from`/`to`, in ngspice's order). A
   `Session` re-measures on every `run()`.
+  `fourier` holds the deck's `.four` results (harmonics and THD, with the
+  `nfreqs`, `nperiods`, `polydegree` and `fourgridsize` of its `.options`)
+  — the rows Python's `Result.fourier` and R's `res$fourier` carry, one per
+  harmonic of each vector, `card` counting the `.four` cards from 0:
+
+  ```js
+  { card: 0, vector: 'v(out)', harmonic: 1, frequency: 1000,
+    magnitude: 0.8463, phase: -32.15, norm_magnitude: 1, norm_phase: 0,
+    thd: 0.000637, gridsize: 200, polydegree: 1, nperiods: 1 }
+  { card: 0, vector: 'v(7)', harmonic: null, frequency: null, magnitude: null,
+    phase: null, norm_magnitude: null, norm_phase: null, thd: null,
+    gridsize: null, polydegree: null, nperiods: null,
+    error: 'no such vector v(7)' }
+  ```
+
+  Phases are in degrees; `thd` is in percent and repeated on each row of a
+  vector; `error` is present only on failure (a vector without a table is
+  one row of `null`s). A `Session` re-evaluates them on every `run()`.
 - `extractPic(src, { snap? })` → `{ netlist, diagnostics, map }`. `map`
   relates netlist names to the shapes (`<g id="sN">`) of the figure as
   rpic compiles it with the dune prelude: `elements[{ refdes, shapes:
