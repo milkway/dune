@@ -499,7 +499,10 @@ pub struct SwitchI {
     pub on: bool,
 }
 
+// Non-exhaustive (D-0062): device models keep being added, and a new
+// variant must not break a downstream `match`.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Spec {
     Bjt(Box<Bjt>),
     Mos1(Box<Mos1>),
