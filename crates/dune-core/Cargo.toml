@@ -12,7 +12,14 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-default = ["solver-faer"]
+default = ["solver-faer", "bsim"]
+# The Berkeley BSIM models from BSIM3 on (today BSIM3v3.3.0, `src/bsim3/`).
+# They are translations of code that carries the BSIM terms of use (or,
+# for BSIM4 4.8.x, ECL-2.0) on top of the Modified BSD licence of the rest
+# of the engine — see NOTICE. On by default; a build without it is plain
+# Modified BSD and a deck that instantiates such a model gets a spanned
+# "not available in this build" error (D-0060).
+bsim = []
 # Dense LU backend over the `faer` crate (D-0005 naming; D-0013 keeps
 # it the default).
 solver-faer = ["dep:faer"]
@@ -56,4 +63,4 @@ harness = false
 
 [[example]]
 name = "parload_bench"
-required-features = ["parallel"]
+required-features = ["parallel", "bsim"]

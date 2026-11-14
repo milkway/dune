@@ -16,6 +16,7 @@ mod b1disto;
 mod bjt;
 mod bsim1;
 mod bsim2;
+#[cfg(feature = "bsim")]
 mod bsim3;
 mod circuit;
 mod dc;
@@ -65,11 +66,14 @@ pub use ac::{Ac, AcSweep};
 pub use bjt::BjtModel;
 pub use bsim1::Bsim1Model;
 pub use bsim2::Bsim2Model;
+#[cfg(feature = "bsim")]
 pub use bsim3::Bsim3Model;
+#[cfg(feature = "bsim")]
+pub use circuit::Bsim3;
 pub use circuit::{
-    Asrc, Bjt, Bsim1, Bsim2, Bsim3, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet,
-    Ltra, Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vccs,
-    Vcvs, Vsource,
+    Asrc, Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra,
+    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vccs, Vcvs,
+    Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;

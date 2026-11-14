@@ -2266,3 +2266,25 @@ resultado). Dentro de `sweep_parallel` cada rodada criaria o seu pool:
 não combine os dois com contagens altas (oversubscription). Laços
 ainda sequenciais por dispositivo: `conv_test`, `trunc`, `accept`,
 `load_ac` (o `.ac`/`.noise` por frequência é da alavanca 2).
+
+## Feature `bsim` (D-0060)
+
+Os modelos BSIM a partir do BSIM3 (`src/bsim3/` hoje; BSIM4 e BSIM-SOI
+quando entrarem) ficam atrás da feature `bsim` do `dune-core`, que está
+no `default`. O motivo é de licença: são traduções de código que traz
+os termos de uso do BSIM (ou ECL-2.0, no BSIM4 4.8.x) além do Modified
+BSD do resto do motor — ver `NOTICE`.
+
+Sem a feature (`--no-default-features --features solver-faer`):
+
+- `Bsim3`, `Bsim3Model` e `Spec::Bsim3` não existem na API;
+- `.model … LEVEL=8|49` não usado é inofensivo; instanciado, a
+  elaboração devolve `BSIM3 (LEVEL = n) is not available in this build
+  (dune-core compiled without the `bsim` feature)`;
+- o CI compila, passa o clippy e roda `--lib --test no_bsim` assim. Os
+  testes que varrem o corpus inteiro só rodam com a feature (os decks
+  `bsim3_*` estão lá).
+
+Regra para modelo novo desta família: tudo o que cita o módulo leva
+`#[cfg(feature = "bsim")]`, e o ramo de `LEVEL` em `elaborate.rs`
+ganha a mensagem do caminho desligado.

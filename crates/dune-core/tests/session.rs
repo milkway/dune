@@ -214,6 +214,7 @@ fn circuit_temperature_matches_a_fresh_run() {
     }
 }
 
+#[cfg(feature = "bsim")]
 #[test]
 fn bsim3_width_matches_a_fresh_run() {
     let path = concat!(

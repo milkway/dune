@@ -348,6 +348,8 @@ pub(crate) enum FlickerGen {
         coef: f64,
         ef: f64,
     },
+    // Only the BSIM3 noise routine reaches this.
+    #[cfg_attr(not(feature = "bsim"), allow(dead_code))]
     Unsupported(&'static str),
 }
 
@@ -426,6 +428,8 @@ impl NoiseCtx<'_> {
 
     /// Mark a flicker generator with no power-law form (it then has
     /// no transient counterpart).
+    // Only the BSIM3 noise routine reaches this.
+    #[cfg_attr(not(feature = "bsim"), allow(dead_code))]
     pub fn flicker_unsupported(&self, what: &'static str) {
         if let Some(sink) = self.flicker_sink {
             sink.borrow_mut().push(FlickerGen::Unsupported(what));

@@ -7,9 +7,11 @@ use std::collections::HashMap;
 
 use dune_netlist::ir::{self, Netlist, ParamValue};
 
+#[cfg(feature = "bsim")]
+use crate::circuit::Bsim3;
 use crate::circuit::{
-    Bjt, Bsim1, Bsim2, Bsim3, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra,
-    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Tra, Vccs, Vcvs, Vsource,
+    Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra, Mes,
+    Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, SwitchI, SwitchV, Tra, Vccs, Vcvs, Vsource,
 };
 use crate::consts::CTOK;
 use crate::devices::IcGiven;
@@ -34,6 +36,7 @@ impl Circuit {
             M6(crate::mos6::Mos6Model),
             B1(Box<crate::bsim1::Bsim1Model>),
             B2(Box<crate::bsim2::Bsim2Model>),
+            #[cfg(feature = "bsim")]
             B3(Box<crate::bsim3::Bsim3Model>),
         }
         let mut mmodels: HashMap<&str, MosModel> = HashMap::new();
@@ -182,6 +185,7 @@ impl Circuit {
                         // ngspice's `inpdomod.c`: `VERSION` picks the
                         // BSIM3 code base; 3.3 (the default) is the
                         // one implemented.
+                        #[cfg(feature = "bsim")]
                         match bsim3_model(m, &mut notes) {
                             Ok(Ok(mm)) => {
                                 mmodels.insert(m.name.as_str(), MosModel::B3(Box::new(mm)));
@@ -194,6 +198,16 @@ impl Circuit {
                             }
                             Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                         }
+                        // Built without the BSIM models: the card
+                        // only errs when a device instantiates it.
+                        #[cfg(not(feature = "bsim"))]
+                        unsupported_models.insert(
+                            m.name.as_str(),
+                            format!(
+                                "model `{}`: BSIM3 (LEVEL = {level}) is not available in this build (dune-core compiled without the `bsim` feature)",
+                                m.name
+                            ),
+                        );
                     } else if level == 6.0 {
                         match mos6_model(m, &mut notes) {
                             Ok(mm) => {
@@ -512,7 +526,10 @@ impl Circuit {
                         continue;
                     };
                     let mut inst = MosInst::new();
+                    #[cfg(feature = "bsim")]
                     let is_b3 = matches!(mm, MosModel::B3(_));
+                    #[cfg(not(feature = "bsim"))]
+                    let is_b3 = false;
                     for p in params {
                         if is_b3 {
                             // The BSIM3 instance table (`b3.c`) adds
@@ -709,6 +726,7 @@ impl Circuit {
                             inst.ic_given,
                             &mut problems,
                         ),
+                        #[cfg(feature = "bsim")]
                         MosModel::B3(b3) => add_ic(
                             &mut ckt,
                             Bsim3 {
@@ -1521,6 +1539,7 @@ fn bsim1_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bsim1::B
 /// card; `Ok(Err(reason))` a card for a BSIM3 variant that is not
 /// implemented (another `VERSION`, the NQS model, `ACM > 0`, a
 /// `CAPMOD` outside 0–3), which only errs when instantiated.
+#[cfg(feature = "bsim")]
 fn bsim3_model(
     m: &ir::Model,
     notes: &mut Vec<String>,

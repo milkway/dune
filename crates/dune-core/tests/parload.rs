@@ -148,6 +148,7 @@ fn basic_pss_measure_bit_identical() {
 /// A chain of `n` BSIM3 inverters (the `bsim3_inv` cards), with a
 /// mutual-inductor pair in the middle of the device list so the plan
 /// has in-place devices between parallel runs.
+#[cfg(feature = "bsim")]
 fn chain(n: usize, analyses: &str) -> Netlist {
     let models = std::fs::read_to_string(corpus().join("regress/bsim3_inv.cir")).unwrap();
     let models = &models[models.find(".model n1").unwrap()..models.find(".end").unwrap()];
@@ -181,6 +182,7 @@ fn chain(n: usize, analyses: &str) -> Netlist {
     parsed.netlist
 }
 
+#[cfg(feature = "bsim")]
 #[test]
 fn bsim3_chain_four_analyses_bit_identical() {
     let nl = chain(

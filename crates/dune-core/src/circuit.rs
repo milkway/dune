@@ -335,6 +335,7 @@ pub struct Bsim2 {
 /// <NRS=> <M=> <DELVTO=> <MULU0=> <OFF> <IC=VDS,VGS,VBS>`, `b3.c`).
 /// L and W default to 5 µm (`b3set.c`), not the `.options` MOS
 /// defaults.
+#[cfg(feature = "bsim")]
 #[derive(Clone, Debug)]
 pub struct Bsim3 {
     pub name: String,
@@ -479,6 +480,7 @@ pub enum Spec {
     Mos6(Box<Mos6>),
     Bsim1(Box<Bsim1>),
     Bsim2(Box<Bsim2>),
+    #[cfg(feature = "bsim")]
     Bsim3(Box<Bsim3>),
     Resistor(Resistor),
     Capacitor(Capacitor),
@@ -554,6 +556,7 @@ impl From<Bsim2> for Spec {
     }
 }
 
+#[cfg(feature = "bsim")]
 impl From<Bsim3> for Spec {
     fn from(s: Bsim3) -> Spec {
         Spec::Bsim3(Box::new(s))
@@ -600,6 +603,7 @@ impl Spec {
             Spec::Mos6(s) => &s.name,
             Spec::Bsim1(s) => &s.name,
             Spec::Bsim2(s) => &s.name,
+            #[cfg(feature = "bsim")]
             Spec::Bsim3(s) => &s.name,
             Spec::Resistor(s) => &s.name,
             Spec::Capacitor(s) => &s.name,
@@ -814,6 +818,7 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        #[cfg(feature = "bsim")]
         Spec::Bsim3(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -977,6 +982,7 @@ impl Circuit {
                 Spec::Mos6(_) => st.alloc(crate::mos6::MOS6_NUM_STATES),
                 Spec::Bsim1(_) => st.alloc(crate::bsim1::BSIM1_NUM_STATES),
                 Spec::Bsim2(_) => st.alloc(crate::bsim2::BSIM2_NUM_STATES),
+                #[cfg(feature = "bsim")]
                 Spec::Bsim3(_) => st.alloc(crate::bsim3::BSIM3_NUM_STATES),
                 Spec::Capacitor(_) => st.alloc(2),
                 Spec::Inductor(s) => {
@@ -1000,6 +1006,7 @@ impl Circuit {
                 Spec::Mos6(s) => &s.nodes,
                 Spec::Bsim1(s) => &s.nodes,
                 Spec::Bsim2(s) => &s.nodes,
+                #[cfg(feature = "bsim")]
                 Spec::Bsim3(s) => &s.nodes,
                 Spec::Resistor(s) => &s.nodes,
                 Spec::Capacitor(s) => &s.nodes,
@@ -1180,6 +1187,7 @@ impl Circuit {
                     }
                 }
                 // `BSIM3setup`: `CKTmkVolt(…, "drain")` / `"source"`.
+                #[cfg(feature = "bsim")]
                 Spec::Bsim3(s) => {
                     if s.model.needs_prime(s.nrd) {
                         node(&mut vars, &mut node_ids, &format!("{}#drain", s.name));
@@ -1203,6 +1211,7 @@ impl Circuit {
         // `BSIM3temp`'s per-model knot list: models (as given) with
         // their set-up copy, temperature part and the size-dependent
         // parameter sets already built, keyed by drawn (L, W).
+        #[cfg(feature = "bsim")]
         let mut bsim3_models: Vec<crate::bsim3::Bsim3Knots> = Vec::new();
         for (spec, &base) in self.specs.iter().zip(&state_base) {
             names.push(spec.name().to_string());
@@ -1471,6 +1480,7 @@ impl Circuit {
                         base,
                     )));
                 }
+                #[cfg(feature = "bsim")]
                 Spec::Bsim3(s) => {
                     let d = get(&node_ids, &s.nodes[0]);
                     let gt = get(&node_ids, &s.nodes[1]);

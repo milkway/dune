@@ -43,6 +43,12 @@ jobs:
           # Every corpus deck x {2, 3, 64} load threads vs 1; release
           # because the debug build takes ~20 min over the corpus.
           cargo test -p dune-core --features parallel --release --lib --test parload
+      # D-0060: the engine must build, lint and refuse BSIM decks
+      # cleanly without the `bsim` feature (plain Modified BSD build).
+      - name: Without the BSIM models (feature bsim off)
+        run: |
+          cargo clippy -p dune-core --no-default-features --features solver-faer --all-targets -- -D warnings
+          cargo test -p dune-core --no-default-features --features solver-faer --lib --test no_bsim
       - name: Oracle golden check
         run: cargo run -p dune-oracle -- --ci
       # Fidelity is the golden check above; this is accuracy: every
