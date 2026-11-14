@@ -8,6 +8,10 @@
 //! (`measure.rs`) after the analyses, in both modes — unlike
 //! `ngspice -b -r`, which refuses measurements next to a rawfile;
 //! a measurement never changes what is simulated or written.
+//! `.four` cards print ngspice's Fourier tables (`four.rs`) in deck
+//! order among the `.print` output, and — like `.measure`, unlike
+//! `ngspice -b -r` ("ignored since rawfile was produced") — also in
+//! rawfile mode, after the measurements.
 //! `dune pic FIGURE.pic` extracts the netlist of an rpic figure
 //! (`dune-pic`); `dune pic --run` simulates it the same way, and
 //! `--svg OUT.svg` also writes the drawing. With the default
@@ -18,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+mod four;
 mod measure;
 mod print;
 
@@ -165,6 +170,7 @@ fn run_deck(
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
     options.apply(&parsed.netlist.options, &mut opt_diags);
+    let four_params = dune_core::FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
     for d in &opt_diags {
         eprintln!("{}", d.render(&parsed.sources));
     }
@@ -192,10 +198,16 @@ fn run_deck(
         print!("{out}");
     }
 
+    // `.four`: pure post-processing too, on the last transient plot.
+    let fourier = dune_core::four_all(&parsed.netlist.outputs, &solutions, &four_params);
+
     match rawfile {
         Some(path) => {
             // Rawfile mode: like `spice3 -b -r`, everything goes to
             // the rawfile and `.print` cards are not rendered.
+            let (out, err) = four::render_all(&fourier);
+            eprint!("{err}");
+            print!("{out}");
             let raw = Rawfile {
                 plots: solutions
                     .iter()
@@ -209,7 +221,7 @@ fn run_deck(
             raw.write(&mut f, Format::Binary)?;
         }
         None => {
-            run_prints(&parsed.netlist, &solutions, &options)?;
+            run_prints(&parsed.netlist, &solutions, &options, &fourier)?;
         }
     }
     Ok(())
@@ -222,6 +234,7 @@ fn run_prints(
     nl: &dune_netlist::ir::Netlist,
     solutions: &[Solution],
     options: &Options,
+    fourier: &[dune_core::FourOutcome],
 ) -> Result<()> {
     let page = print::PageSetup {
         width: nl.width_out.unwrap_or(print::DEF_WIDTH),
@@ -229,7 +242,7 @@ fn run_prints(
         nobreak: options.nopage,
     };
     let mut printed = false;
-    for output in &nl.outputs {
+    for (card, output) in nl.outputs.iter().enumerate() {
         let Output {
             kind,
             analysis,
@@ -242,9 +255,19 @@ fn run_prints(
                 eprintln!("note: .plot (ascii graphs) is not implemented yet; use .print");
                 continue;
             }
+            // `ft_cktcoms` runs `.four` in deck order with `.print`.
+            OutputKind::Four { .. } => {
+                let mine: Vec<&dune_core::FourOutcome> =
+                    fourier.iter().filter(|o| o.card == card).collect();
+                let (out, err) = four::render_card(&mine);
+                eprint!("{err}");
+                print!("{out}");
+                printed = true;
+                continue;
+            }
             // `.save` narrows what gets saved; Dune currently saves
-            // everything. `.four` waits for its analysis.
-            _ => continue,
+            // everything.
+            OutputKind::Save => continue,
         }
         let plotname = match analysis.as_deref() {
             Some("tran") => "Transient Analysis",

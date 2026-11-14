@@ -136,6 +136,41 @@ decks do corpus batem a ~1e-9..1e-6.
   necessidade quando o corpus ganhar circuitos grandes).
 - `--gen-golden` sobrescreve sem perguntar — o git é a rede de proteção.
 
+## `.four` no `--ci` (2026-11-13)
+
+Seção própria no fim do `--ci` (`crates/dune-oracle/src/four.rs`),
+sobre `corpus/four/` (tabelas do ngspice-47 a 17 dígitos + o rawfile
+de onde vieram; `tools/four-golden.sh`). Duas checagens por tabela:
+
+- **port**: o código `.four` do Dune transforma o plot do próprio
+  ngspice. Mesmas amostras: só arredondamento difere (ordem de
+  operações, FMA na build do C, `sin`/`cos` da plataforma). Régua por
+  amostra `τ = 4·ε·S·(N + t_end/h_min)`: a reta do grau 1 é avaliada
+  como `c0 + c1·t` com `c0 = (x1·y0 − x0·y1)/(x1 − x0)`, que cancela
+  até `t/h` dígitos, e a DFT soma `N` produtos.
+- **simulação**: o Dune simula o deck no perfil spice3 e transforma
+  o próprio plot. Régua por amostra = a do transiente (D-0010),
+  `τ = 2·(TRTOL·reltol·S + floor)`, `S` = escala do vetor nos dois
+  runs; para `v(a,b)`, a soma das réguas dos dois nós.
+
+De `τ` tudo segue pela linearidade da DFT, sem tolerância inventada:
+DC é média, `|ΔDC| ≤ τ`; pela desigualdade de Bessel,
+`Σ_{k≥1}|Δz_k|² ≤ (2/N)ΣΔv_i² ≤ 2τ²` enquanto os harmônicos forem
+bins distintos abaixo de Nyquist (`(nfreqs−1)·nperiods < N/2`; senão
+`2τ` por harmônico), logo `|Δmag_k| ≤ E = √2·τ`; a fase de `z_k`
+gira no máximo `asin(E/|z_k|)` — quando `E ≥ |z_k|` o harmônico está
+dentro da própria bola de erro e a fase dele é ruído: **não é
+comparada** (e é contada no relatório; é o caso de todo harmônico de
+um seno puro); `nmag_k ≤ E·√(1+nmag_k²)/(|z_1|−E)`,
+`THD/100 ≤ E·√(1+(THD/100)²)/(|z_1|−E)`; `nphase` soma as duas
+réguas de fase; fases comparadas módulo 360°. O THD de referência é
+recalculado dos `nmag` de 17 dígitos (o impresso tem só 6).
+Correntes de ramo são reportadas e não decidem (D-0011).
+
+Medido em 2026-11-13 (4 decks, 9 tabelas): pior *port* 2,4e-3 da
+régua; pior *simulação* 1,5e-3 (mag), 85/93 fases comparadas no port
+e 24/69 na simulação (as demais dentro da bola de erro).
+
 ## XFAIL de 5 campos (D-0022)
 
 `stem|plot|cap|flags|reason`; `flags` = `-` ou lista com:

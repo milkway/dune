@@ -794,11 +794,16 @@ fn dot_four(ctx: &mut DotCtx, nl: &mut Netlist, span: Span) {
         ctx.err(span, ".four needs a frequency and output variables");
         return;
     }
+    let fspan = ctx.card.span_of(flds[1].0, flds[1].1);
     let Some(freq) = crate::scan::evaluate(&ctx.card.text[flds[1].0..flds[1].1]) else {
-        let s = ctx.card.span_of(flds[1].0, flds[1].1);
-        ctx.err(s, "expected the fundamental frequency");
+        ctx.err(fspan, "expected the fundamental frequency");
         return;
     };
+    // `fourier.c`: "bad fundamental freq" unless positive.
+    if !(freq.is_finite() && freq > 0.0) {
+        ctx.err(fspan, "the fundamental frequency must be positive");
+        return;
+    }
     let vars: Vec<OutVar> = flds[2..]
         .iter()
         .map(|f| parse_outvar_field(ctx, *f))

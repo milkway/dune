@@ -61,7 +61,7 @@ impl Default for Tolerances {
 
 /// `TRTOL`, the truncation-error overestimation factor of the step
 /// control (3f5 default 7): the transient comparison budget.
-const TRTOL: f64 = 7.0;
+pub(crate) const TRTOL: f64 = 7.0;
 
 /// The transient pointwise guard (see `compare_tran`): the raw
 /// interpolated error, without the time tube, may reach this many

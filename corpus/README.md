@@ -79,6 +79,18 @@ mede o rawfile do ngspice com a camada do Dune e compara com a
 saída dele — código de medida contra código de medida, nos mesmos
 dados.
 
+## four/
+
+Decks com cartões `.four` (análise de Fourier, `docs/dune-four.md`)
+e, em `four/golden/`, para cada um, as tabelas que o ngspice-47
+imprimiu em modo batch, verbatim, com 17 dígitos (`<deck>.four`;
+`set numdgt=17` num `.spiceinit` privado) e o plot de transiente de
+onde vieram (`<deck>.raw`, binário). Gerados por
+`tools/four-golden.sh`. Não são raízes do oráculo de rawfiles, mas
+entram no `--ci` numa seção própria: o Dune simula cada deck e
+compara as tabelas (régua do LTE), e transforma o rawfile do ngspice
+com o próprio código (régua de arredondamento).
+
 ## Proveniência e licenças
 
 Resumo de onde vem cada parte do corpus (os avisos de copyright e de

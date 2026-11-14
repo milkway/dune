@@ -495,3 +495,43 @@ fn pss_card_in_ngspice_order() {
         "{errs:?}"
     );
 }
+
+#[test]
+fn four_cards_parse_and_bad_ones_are_spanned_errors() {
+    let nl = clean(
+        "t\nv1 1 0 sin(0 1 1k)\nr1 1 2 1k\nr2 2 0 1k\n.tran 10u 3m\n\
+         .four 1k v(1) v(1,2) i(v1)\n.fourier 2khz v(2)\n.end\n",
+    );
+    let fours: Vec<&Output> = nl
+        .outputs
+        .iter()
+        .filter(|o| matches!(o.kind, OutputKind::Four { .. }))
+        .collect();
+    assert_eq!(fours.len(), 2);
+    assert_eq!(fours[0].kind, OutputKind::Four { freq: 1e3 });
+    assert_eq!(fours[1].kind, OutputKind::Four { freq: 2e3 });
+    assert_eq!(fours[0].vars.len(), 3);
+    assert!(matches!(
+        &fours[0].vars[1],
+        OutVar::Voltage { node, reference: Some(r), .. } if node == "1" && r == "2"
+    ));
+    assert!(matches!(&fours[0].vars[2], OutVar::Current { vsrc, .. } if vsrc == "v1"));
+    for (card, want) in [
+        (".four", "frequency and output"),
+        (".four 1k", "frequency and output"),
+        (".four abc v(1)", "fundamental frequency"),
+        (".four 0 v(1)", "must be positive"),
+        (".four -1k v(1)", "must be positive"),
+        (".four 1e999 v(1)", "must be positive"),
+    ] {
+        let out = parse_str("t.cir", &format!("t\nr1 1 0 1\n{card}\n.end\n"));
+        let err = out
+            .diags
+            .iter()
+            .find(|d| d.severity == Severity::Error)
+            .unwrap_or_else(|| panic!("{card}: no error"));
+        assert!(err.message.contains(want), "{card}: {}", err.message);
+        // Spanned: the rendering points into the card.
+        assert!(err.render(&out.sources).contains("t.cir"), "{card}");
+    }
+}
