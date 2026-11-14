@@ -1383,7 +1383,7 @@ impl Circuit {
                 // `BSIM4setup`: `CKTmkVolt` in its order.
                 #[cfg(feature = "bsim")]
                 Spec::Bsim4(s) => {
-                    let (_, h) = bsim4_setup(s, &mut bsim4_setups, opts, noise_job)?;
+                    let (_, h) = bsim4_setup(s, &mut bsim4_setups, opts, None)?;
                     for v in crate::bsim4::internal_nodes(&h.0, &h.1, noise_job) {
                         node(&mut vars, &mut node_ids, &format!("{}#{v}", s.name));
                     }
@@ -1747,7 +1747,8 @@ impl Circuit {
                 }
                 #[cfg(feature = "bsim")]
                 Spec::Bsim4(s) => {
-                    let (_, (_, mut h)) = bsim4_setup(s, &mut bsim4_setups, opts, noise_job)?;
+                    let (_, (_, mut h)) =
+                        bsim4_setup(s, &mut bsim4_setups, opts, Some(&mut notes))?;
                     let ext = [
                         get(&node_ids, &s.nodes[0]),
                         get(&node_ids, &s.nodes[1]),
@@ -2353,7 +2354,7 @@ fn bsim4_setup(
     s: &Bsim4,
     cache: &mut Vec<(crate::bsim4::Bsim4Model, crate::bsim4::Bsim4Model)>,
     opts: &Options,
-    _noise_job: bool,
+    notes: Option<&mut Vec<String>>,
 ) -> Result<(usize, (crate::bsim4::Bsim4Model, crate::bsim4::Bsim4Here)), Error> {
     let idx = match cache.iter().position(|(g, _)| *g == s.model) {
         Some(i) => i,
@@ -2365,8 +2366,11 @@ fn bsim4_setup(
         }
     };
     let md = &cache[idx].1;
-    let mut dropped = Vec::new();
-    let h = crate::bsim4::new_here(md, &s.params, s.off, &mut dropped)
+    let mut inotes = Vec::new();
+    let h = crate::bsim4::new_here(md, &s.params, s.off, &mut inotes)
         .map_err(|e| Error::Build(format!("`{}`: {e}", s.name)))?;
+    if let Some(n) = notes {
+        n.extend(inotes.into_iter().map(|t| format!("`{}`: {t}", s.name)));
+    }
     Ok((idx, (md.clone(), h)))
 }

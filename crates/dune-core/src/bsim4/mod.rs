@@ -57,6 +57,8 @@ mod params;
 mod pzld;
 mod setup;
 mod temp;
+#[cfg(test)]
+mod tests;
 
 use std::sync::Arc;
 

@@ -89,6 +89,8 @@ fn params_of(spec: &Spec) -> &'static [&'static str] {
         Spec::Bsim1(_) | Spec::Bsim2(_) => &["w", "l"],
         #[cfg(feature = "bsim")]
         Spec::Bsim3(_) => &["w", "l"],
+        #[cfg(feature = "bsim")]
+        Spec::Bsim4(_) => &["w", "l"],
         Spec::Diode(_) | Spec::Bjt(_) | Spec::Jfet(_) => &["area", "temp"],
         Spec::Mes(_) => &["area"],
         _ => &[],
@@ -290,6 +292,11 @@ impl Circuit {
             Spec::Cccs(s) if p == "gain" => s.gain = num(n, p, v)?,
             Spec::Ccvs(s) if p == "gain" => s.gain = num(n, p, v)?,
             #[cfg(feature = "bsim")]
+            Spec::Bsim4(m) if p == "w" || p == "l" => {
+                let x = positive(n, p, v)?;
+                m.set_param(p, x);
+            }
+            #[cfg(feature = "bsim")]
             Spec::Bsim3(m) if p == "w" || p == "l" => {
                 let x = Some(positive(n, p, v)?);
                 if p == "w" {
@@ -394,6 +401,8 @@ impl Circuit {
             Spec::Bsim2(m) => mos(p, m.w, m.l, None),
             #[cfg(feature = "bsim")]
             Spec::Bsim3(m) => mos(p, m.w, m.l, None),
+            #[cfg(feature = "bsim")]
+            Spec::Bsim4(m) => mos(p, m.param("w"), m.param("l"), None),
             Spec::Diode(d) => area_temp(p, d.area, Some(d.temp)),
             Spec::Bjt(q) => area_temp(p, q.area, Some(q.temp)),
             Spec::Jfet(j) => area_temp(p, j.area, Some(j.temp)),

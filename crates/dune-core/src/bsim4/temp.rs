@@ -495,8 +495,8 @@ pub(super) fn temp_size(
     name: &str,
     notes: &mut Vec<String>,
 ) -> Result<(), String> {
-    tv.lnew = 0.0;
-    tv.fatal_flag = 0;
+    tv.ldrn = h.l;
+    tv.wdrn = h.w / h.nf;
     pp.length = h.l;
     pp.width = h.w;
     pp.nfinger = h.nf;
@@ -1119,9 +1119,8 @@ pub(super) fn temp_instance(
     _ck_temp: f64,
     notes: &mut Vec<String>,
 ) {
-    tv.lnew = 0.0;
-    tv.fatal_flag = 0;
     tv.ldrn = h.l;
+    tv.wdrn = h.w / h.nf;
     if h.sa > 0.0 && h.sb > 0.0 && (h.nf == 1.0 || h.nf > 1.0 && h.sd > 0.0) {
         tv.inv_sa = 0.0;
         tv.inv_sb = 0.0;
