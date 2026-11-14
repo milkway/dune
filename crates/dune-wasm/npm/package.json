@@ -1,6 +1,6 @@
 {
   "name": "@strategicprojects/dune-sim",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "The Dune circuit simulator (derived from Berkeley SPICE3f5 and ngspice; independent project) in WebAssembly: run a SPICE3 netlist, or extract and simulate an rpic (pic) schematic figure. Browser + Node.",
   "type": "module",
   "main": "./index.js",
@@ -41,7 +41,7 @@
     "wasm"
   ],
   "author": "André Leite <leite@castlab.org>",
-  "license": "BSD-3-Clause",
+  "license": "BSD-3-Clause AND ECL-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/milkway/dune.git",

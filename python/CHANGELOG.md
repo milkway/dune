@@ -1,7 +1,33 @@
 # Changelog — spice3 (Python)
 
-## Unreleased
+## 0.8.0
 
+The engine gains the ngspice-47 models and the netlist language that the
+open PDKs need. Decks, options and results keep their shapes.
+
+- **Models from ngspice-47:** BSIM4 4.8.3 (`LEVEL=14|54`; cards that
+  declare version 4.0-4.7 run on the 4.8.3 equations, with a note), the
+  VDMOS power MOSFET, the VBIC bipolar transistor (`LEVEL=4|9`, with
+  self-heating), the KSPICE lossy and coupled transmission lines
+  (elements `Y` and `P`), and the ngspice diode beyond the SPICE3 card
+  (`LEVEL=3` geometry, sidewall junction, recombination, tunnelling,
+  high injection, `TLEV`/`TLEVC`).
+- **Open PDK model libraries are read directly:** `.lib`/`.endl`
+  sections, the parameter expression language (`{...}`, `'...'`,
+  functions, `?:`), subcircuit parameters, `.model` binning, `m` on
+  `X` lines and on devices, `.option scale`, `.func`,
+  `.if`/`.elseif`/`.else`/`.endif`, `temper`, and behavioural R, C and
+  L. The gf180mcu and sky130 inverters run from the PDK files and
+  match ngspice-47 within 1 mV.
+- The `.temp` card is applied (it was ignored).
+- `.pz`: a voltage source with an AC value is opened, as in SPICE3;
+  differential ports keep their negative node; the search no longer
+  loses poles when it converges onto a real root.
+- The branch currents of a `Y` or `P` line are named `i(y1#1)`,
+  `i(y1#2)`, ... (ngspice repeats `i(y1)`).
+- The package now also contains code under the Educational Community
+  License 2.0 (BSIM4); the licence field is `BSD-3-Clause AND ECL-2.0`
+  and `NOTICE` reproduces the notices.
 - **`.four` cards** (Fourier analysis and THD, ngspice-47 semantics)
   come back in `Result.fourier`: a polars frame with one row per
   harmonic of each vector (`card`, `vector`, `harmonic`, `frequency`,

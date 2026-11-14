@@ -181,3 +181,9 @@ BSD-3-Clause — © 2026 André Leite; portions derived from SPICE3f5,
 © 1985–1991 The Regents of the University of California, and from
 ngspice, © 1985–2018 The Regents of the University of California and
 others. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The BSIM4 model (`crates/dune-core/src/bsim4`, compiled with the default
+`bsim` feature) is a translation of BSIM4 4.8.3, © 2025 University of
+California, under the Educational Community License 2.0; the packages
+that include it are `BSD-3-Clause AND ECL-2.0`. A build without the
+`bsim` feature is plain BSD-3-Clause.

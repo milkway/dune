@@ -1,11 +1,11 @@
 [package]
 name = "spice-py"
 description = "Python bindings of the Dune simulator: the `spice` package (PyO3 native module `spice._spice`)"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2024"
 # Same MSRV as the repo workspace (dune-raw uses let-chains, 1.88).
 rust-version = "1.88"
-license = "BSD-3-Clause"
+license = "BSD-3-Clause AND ECL-2.0"
 publish = false
 
 # Detached from the repo workspace: this crate is built by maturin

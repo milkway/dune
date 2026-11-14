@@ -11,7 +11,7 @@ name = "spice3"
 dynamic = ["version"]
 description = "Circuit simulation for Python on Dune, an engine derived from Berkeley SPICE3f5 and ngspice (independent project)"
 readme = "README.md"
-license = "BSD-3-Clause"
+license = "BSD-3-Clause AND ECL-2.0"
 # Both ship in the sdist and in the wheels (dist-info/licenses/):
 # NOTICE credits SPICE3f5, ngspice and BSIM3 and reproduces their
 # copyright and licence notices.

@@ -4,7 +4,9 @@ description = "The `dune` command-line simulator (batch mode, spice3 -b compatib
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+# BSIM4 (crates/dune-core/src/bsim4, feature `bsim`, on by default) is
+# under the Educational Community License 2.0; see NOTICE (D-0060).
+license = "BSD-3-Clause AND ECL-2.0"
 publish = false
 
 [[bin]]
