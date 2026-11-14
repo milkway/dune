@@ -137,6 +137,21 @@ upstream file headers.
       and model card handling follows spicelib/parser/inp2m.c and
       frontend/inpcom.c.
 
+  crates/dune-core/src/vbic/ (mod.rs, load.rs, fj.rs, model.rs)
+      VBIC bipolar transistor model - spicelib/devices/vbic/: vbic.c,
+      vbicmpar.c, vbicsetup.c, vbictemp.c, vbicload.c, vbicacld.c,
+      vbicpzld.c, vbicnoise.c, vbicconv.c, vbictrunc.c, vbicgetic.c,
+      vbicparam.c ("Copyright 1990 Regents of the University of
+      California. Author: 1985 Thomas L. Quarles. Model Author: 1995
+      Colin McAndrew Motorola. Spice3 Implementation: 2003 Dietmar
+      Warning DAnalyse GmbH"); the Q card handling follows
+      spicelib/parser/inp2q.c.
+
+  crates/dune-netlist/src/deck.rs (`.lib` sections)
+      Behaviour follows frontend/inpcom.c ("Copyright 1990 Regents of
+      the University of California. Author: 1985 Wayne A.
+      Christopher"); the reader itself is Dune's own.
+
   crates/dune-core/src/four.rs, crates/dune-cli/src/four.rs (`.four`)
       frontend/fourier.c ("Copyright 1990 Regents of the University of
       California. Author: 1985 Wayne A. Christopher, U. C. Berkeley
