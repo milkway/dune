@@ -1,0 +1,28 @@
+subcircuit parameters reaching per-instance models and device lines
+* written for Dune (Fase 8 item 7, G3 of docs/pdk-parser.md): a local
+* .model depends on the instance's parameters, so each instance gets
+* its own copy (P08); unused models with undefined names are never
+* evaluated (P05f); the area comes from the instance (`{area}`)
+.param is0=1e-14
+.subckt dres a b w=1
+.model rmod r rsh={w*100}
+.model unused r rsh={nosuch}
+r1 a b rmod l=1 w=1
+.ends
+.subckt ddio a k area=1 n=1
+.model dloc d is={is0*area} n={n} rs={10/area}
+d1 a k dloc {area}
+.ends
+.subckt never a
+r1 a 0 {undefined_here}
+.ends
+vin 1 0 0
+x1 1 2 dres w=1
+x2 2 3 ddio area=2
+x3 2 4 ddio area=1 n=1.5
+x4 2 5 dres w=3
+r3 3 0 100
+r4 4 0 200
+r5 5 0 50
+.dc vin 0 2 0.1
+.end

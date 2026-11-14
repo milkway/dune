@@ -1,0 +1,27 @@
+Title: subcircuit parameters: precedence, scope and evaluation per instance
+Date: Sat Nov 14 11:34:22  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 9
+No. Points: 1       
+Variables:
+	0	v(n1)	voltage
+	1	v(n2)	voltage
+	2	v(n3)	voltage
+	3	v(n4)	voltage
+	4	v(n5)	voltage
+	5	v(n6)	voltage
+	6	v(n7)	voltage
+	7	v(n8)	voltage
+	8	v(n9)	voltage
+Values:
+0		5.002000000000000e+00
+	5.002000000000000e+00
+	6.999999999999999e+00
+	1.002000000000000e+00
+	7.130000000000000e-01
+	6.000000000000000e+00
+	1.201039914706470e+00
+	5.000000000000000e+00
+	1.002000000000000e+00

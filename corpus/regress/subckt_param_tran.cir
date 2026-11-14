@@ -1,0 +1,20 @@
+subcircuit parameters in a transient: RC sections sized per instance
+* written for Dune (Fase 8 item 7, G3 of docs/pdk-parser.md): a ladder
+* of RC sections whose R and C come from instance parameters and body
+* .params (tau = r*c), passed down through a nested subcircuit
+.param rbase=1k
+.subckt rc in out r=1k tau=1u
+.param c={tau/r}
+r1 in out {r}
+c1 out 0 {c}
+.ends
+.subckt two in out k=1
+x1 in mid rc r={rbase*k} tau={k*0.5u}
+x2 mid out rc r={rbase*k*2} tau={k*1u}
+.ends
+vin 1 0 pulse(0 1 0 10n 10n 2u 5u)
+x1 1 2 two k=1
+x2 2 3 two k=3
+rl 3 0 100k
+.tran 20n 8u
+.end

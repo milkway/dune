@@ -1,0 +1,33 @@
+model binning: BSIM3 bins picked by L and W, global and per instance
+* written for Dune (Fase 8 item 7, G4 of docs/pdk-parser.md): the rule
+* of ngspice's INPgetModBin (probes P09 and s5 in
+* .claude/scratch/g3-probes) - both ends inclusive with a 1e-9 absolute
+* tolerance, the most recently defined bin tried first, an exact name
+* before the family; a family local to a subcircuit is specialised per
+* instance and shadows the global one. One drain source per device so
+* each bin shows in its own current.
+.model nch.1 nmos level=49 version=3.3 lmin=0.1u lmax=1u wmin=1u wmax=10u vth0=0.3 tox=4n
+.model nch.2 nmos level=49 version=3.3 lmin=1u lmax=10u wmin=1u wmax=10u vth0=0.6 tox=4n
+.model nch.3 nmos level=49 version=3.3 lmin=0.1u lmax=10u wmin=10u wmax=100u vth0=0.45 tox=4n
+.subckt cell d g w=2u
+.model nch.1 nmos level=49 version=3.3 lmin=0.1u lmax=1u wmin=1u wmax=10u vth0={0.3+w*1e4} tox=4n
+m1 d g 0 0 nch l=0.5u w={w}
+.ends
+vg g 0 0
+vd1 d1 0 1.2
+vd2 d2 0 1.2
+vd3 d3 0 1.2
+vd4 d4 0 1.2
+vd5 d5 0 1.2
+vd6 d6 0 1.2
+* bin 1; the 1 um boundary (bin 2, defined last); 9 angstrom past the
+* end of bin 2 (inside the tolerance); wide (bin 3)
+m1 d1 g 0 0 nch l=0.5u w=2u
+m2 d2 g 0 0 nch l=1u w=2u
+m3 d3 g 0 0 nch l=10.0009u w=5u
+m4 d4 g 0 0 nch l=0.5u w=20u
+* the instance's own family, one model per instance
+x1 d5 g cell w=3u
+x2 d6 g cell
+.dc vg 0 1.2 0.05
+.end

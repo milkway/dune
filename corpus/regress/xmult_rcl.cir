@@ -1,0 +1,28 @@
+m on X lines: R, C, L and nested calls in an AC analysis
+* written for Dune (Fase 8 item 7, G6 of docs/pdk-parser.md): ngspice
+* gives a subcircuit called with m= a parameter m=1 and appends m={m}
+* to its device and X lines (inp_fix_subckt_multiplier), so m divides
+* R and L, multiplies C, replaces a device's own m and reaches nested
+* calls (probes P13 and s4 in .claude/scratch/g3-probes); a subcircuit
+* declaring m keeps it as an ordinary parameter
+.subckt tank a
+r1 a 0 1k
+c1 a 0 1n
+l1 a 0 10u m=5
+.ends
+.subckt wrap a
+x1 a tank m=7
+.ends
+.subckt own a m=1
+r1 a 0 {1k/m}
+.ends
+i1 0 1 dc 0 ac 1m
+i2 0 2 dc 0 ac 1m
+i3 0 3 dc 0 ac 1m
+i4 0 4 dc 0 ac 1m
+x1 1 tank m=2
+x2 2 tank
+x3 3 wrap m=3
+x4 4 own m=4
+.ac dec 10 100k 10meg
+.end
