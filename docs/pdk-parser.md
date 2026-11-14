@@ -239,17 +239,17 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | # | Pergunta | ngspice-47 | Dune |
 |---|---|---|---|
 | S1 | `.lib arq seção` | só o trecho `.lib seção`…`.endl`; nome de seção case-insensitive; `.lib` aninhado no mesmo arquivo funciona; `.include` dentro da seção resolve relativo ao **arquivo que inclui**; seção não pedida nem é lida (lixo nela não dá erro); `.endl nome` divergente aceito; pedir a mesma seção 2× é inofensivo; seção inexistente é fatal (P01, P21, P22, P24) | erro; **igual desde 2026-11-14** (G1; `.endl` divergente é aviso) |
-| S2 | referência adiante entre `.param` | aceita (`a={b+1}` antes de `b=2` → 3) (P02) | erro |
-| S3 | redefinição | a **última** definição vale para todos os usos, inclusive anteriores (P03) | igual (coleta tudo antes) |
+| S2 | referência adiante entre `.param` | aceita (`a={b+1}` antes de `b=2` → 3) (P02) | erro; **igual desde 2026-11-14** (G2) |
+| S3 | redefinição | a **última** definição vale para todos os usos, inclusive anteriores (P03) | igual (coleta tudo antes); desde a G2 também para dependentes (`d={c}` com `c` redefinido depois vale o último) |
 | S4 | precedência em subcircuito | valor da linha `X` > padrão da linha `.subckt` = padrão via `.param` no corpo = `params:` > `.param` global de mesmo nome (sombreado) (P04, P18, P23) | erro |
 | S5 | `.param` local encadeado (`lw={w*g}`, `lw2={lw+1}`) | funciona, mistura global e da instância (P15) | erro |
-| S6 | `{…}` × `'…'` × nu | equivalentes; espaços livres; nomes case-insensitive; nome nu de parâmetro vale em `.model` e na instância (`rsh=rv`, `w=wv`) (P05b, P11, P19) | erro |
-| S7 | precedência/associatividade | `^` e `**` **associam à esquerda** (`2^3^2 = 2**3**2 = 64`); menos unário mais fraco que `^` (`-2^2 = -4`) (P05, D_POW) | `^` à direita: 512; **igual desde 2026-11-14** no `{…}` (`**` segue faltando, G2) |
-| S8 | funções | `pwr(-2,3)=8` (não preserva sinal), `pow(-2,3)=-8`, `pow(-2,0.5)` e `sqrt(-4)` → NaN → erro fatal "unknown parameter (nan)" **se usado**; `log` é **natural** (`log(100)=4,6052`), `log10`; `nint(2.5)=2`; `int` trunca; `7/2=3,5`; `limit(5,0,3)=8` (não é clamp; nenhum PDK usa); `!0=1`; booleanos valem 0/1 (P05) | sem funções |
-| S9 | sufixos em expressão | `2k*3=6000`; **`1mil` = 1e-3** (não 25,4e-6 como no leitor de números do 3f5) (P05 e21) | `mil`=25,4e-6 |
+| S6 | `{…}` × `'…'` × nu | equivalentes; espaços livres; nomes case-insensitive; nome nu de parâmetro vale em `.model` e na instância (`rsh=rv`, `w=wv`) (P05b, P11, P19) | erro; **igual desde 2026-11-14** (G2) no escopo global — nome nu só depois de `nome=` |
+| S7 | precedência/associatividade | `^` e `**` **associam à esquerda** (`2^3^2 = 2**3**2 = 64`); menos unário mais fraco que `^` (`-2^2 = -4`) (P05, D_POW) | `^` à direita: 512; **igual desde 2026-11-14** (`**` desde a G2) |
+| S8 | funções | `pwr(-2,3)=8` (não preserva sinal), `pow(-2,3)=-8`, `pow(-2,0.5)` e `sqrt(-4)` → NaN → erro fatal "unknown parameter (nan)" **se usado**; `log` é **natural** (`log(100)=4,6052`), `log10`; `nint(2.5)=2`; `int` trunca; `7/2=3,5`; `limit(5,0,3)=8` (não é clamp; nenhum PDK usa); `!0=1`; booleanos valem 0/1 (P05) | sem funções; **igual desde 2026-11-14** (G2: as 34 funções do ngspice-47; NaN usado é erro com span; aridade errada é erro, o ngspice a lê errado) |
+| S9 | sufixos em expressão | `2k*3=6000`; **`1mil` = 1e-3** (não 25,4e-6 como no leitor de números do 3f5) (P05 e21) | `mil`=25,4e-6; **igual desde 2026-11-14** dentro de expressões (fora delas segue o `INPevaluate` do 3f5) |
 | S10 | ternário em linha `X` entre aspas (`lr='(d_sab==0) ? 2 : d_sab'`) | funciona (P17) | erro |
-| S11 | `agauss/gauss/aunif/unif` | **aleatórios a cada execução** sem semente fixa (duas rodadas: 0,9708 / 1,0276); `0*agauss(…)` = 0 (P06) | erro |
-| S12 | `temper` | vale em `.model`, na instância e em `.param` local de subcircuito, com a temperatura do circuito (`.options temp`/`.temp`); em `.param` **global** é erro fatal "Undefined parameter [temper]" (P07, P07a–d) | erro |
+| S11 | `agauss/gauss/aunif/unif` | **aleatórios a cada execução** sem semente fixa (duas rodadas: 0,9708 / 1,0276); `0*agauss(…)` = 0 (P06) | erro; desde a G2 lidas inteiras e avaliadas no **nominal** com um aviso por deck (decisão pendente, G8) |
+| S12 | `temper` | vale em `.model`, na instância e em `.param` local de subcircuito, com a temperatura do circuito (`.options temp`/`.temp`); em `.param` **global** é erro fatal "Undefined parameter [temper]" (P07, P07a–d) | erro; desde a G2 erro "not supported yet" onde é avaliado (G7) |
 | S13 | `.model` local dependente da instância | uma cópia por instância (`rsh={w*100}` → 100 e 300 Ω) (P08) | erro |
 | S14 | avaliação preguiçosa | parâmetro indefinido num subcircuito não instanciado ou num `.model` não usado **não** é erro; erro num `.param` global **é** fatal (P05e, P05f) | avalia tudo |
 | S15 | binning | `nome` casa `nome.<dígitos>`; só tipos BSIM3/BSIM4/HiSIM; bin se `lmin ≤ L ≤ lmax` e `wmin ≤ W ≤ wmax` **inclusivo nas duas pontas** com tolerância absoluta 1e-9 (código BSD `in_range`); a tabela é percorrida do último `.model` definido ao primeiro (a fronteira L=1 µm caiu no bin definido por último); L e W multiplicados por `scale`; W dividido por `nf` se `wnflag` (padrão 1 em `hs`/`spe`); faltando um dos quatro limites o bin é pulado; nenhum bin → "could not find a valid modelname" (P09, P09b, P09c) | erro |
@@ -307,7 +307,21 @@ viram diagnóstico; o loader do WASM continua decidindo o que é caminho
 válido.
 
 **G2 — Linguagem de expressão de parâmetros (semântica numparam, escrita
-pelo manual).**
+pelo manual).** ✅ **Feito em 2026-11-14** (`pexpr.rs` + `param.rs`;
+descrição, tabela de precedência e as ~490 sondas que a fundamentam em
+`docs/dune-netlist.md`, seção "Linguagem de expressões de parâmetros";
+decks `regress/param_{ops,funcs,forms,tran}.cir` com golden do
+ngspice-47; diferenças no `KNOWN_DIFFS.md`). Sem mudança de API
+pública. Achados além do previsto abaixo: comparações são **um só
+nível** associativo à esquerda; depois de um operador o `-` só forma
+literal negativo (o resto o ngspice rejeita ou lê errado); `^` eleva o
+módulo da base; não há constantes (`pi`, `e`); o sufixo `a` é atto; o
+valor chega ao cartão arredondado por `%.15e` + `INPevaluate` (`{7}` →
+7,000000000000001); aspas duplas somem das expressões de cartão (o
+sky130 depende disso). Depois da G2, nos três inversores, **todos** os
+erros de expressão sumiram; o que resta é G3 (`.param` em `.subckt`,
+nomes de parâmetro de subcircuito, linha `X`), comportamental `v()`
+(G11) e, no IHP, OSDI e `.if` — tabela em "Depois da G2", abaixo.
 (a) inv: sky130 (`{…}` com espaços, `agauss`, `sqrt`, 11 851 `.param`
 globais avaliados de saída — S14), gf180 (`'…'`, nomes nus em `.model`,
 43 globais), IHP (`'…'`, `max`); full: os três. (b) S6–S11, S12. Gramática:
@@ -327,6 +341,31 @@ recursão limitada (profundidade e nº de nós como `EXPR_MAX_*`); o limite de
 512 bytes por expressão **não serve** (IHP tem 613) — sugerido 64 KiB;
 NaN/∞ viram diagnóstico com span no uso (como o ngspice), não um valor
 mudo.
+
+*Depois da G2* (os mesmos `tb/<pdk>/inv.cir`, `dune` em `--release`;
+`.claude/scratch/g2-probes/tbrun.py`, saídas em `tb-before/`,
+`tb-after1/`):
+
+| Classe | sky130 antes → depois | gf180 | IHP |
+|---|---|---|---|
+| `malformed parameter expression` | 3628 → 0 | — | — |
+| `unexpected … in expression` | 177 → 0 | 72 → 0 | — |
+| `` `X` cannot be a parameter name `` | 72 → 0 | 17 → 0 | — |
+| `parameter has no value` / `expression ends…` | 8 → 0 | 1 → 0 | — |
+| `unknown parameter` (todos dentro de `.subckt`: G3) | 475 → 4614 | 1 → 118 | — |
+| `.param inside .subckt is not supported yet` (G3; antes vazava calado para o global) | 0 → 323 | 0 → 24 | — |
+| `subcircuit parameters on X lines` (G3) | 119 → 119 | 8 → 8 | 2 → 2 |
+| `v(…)` em valor (R comportamental, G11) | 0 → 24 | 0 → 4 | — |
+| OSDI / `.if` em `.subckt` | — | — | 76 → 76 |
+| **total** | 4479 → 5080 | 99 → 154 | 78 → 78 |
+
+Os `unknown parameter` cresceram porque antes a expressão morria na
+sintaxe e agora chega a procurar `l`, `w`, `mult`… — parâmetros da
+instância que só a G3 define. Primeiro bloqueio de cada um: sky130 —
+`.param` no corpo de `sky130_fd_pr__nfet_01v8` (G3); gf180 — `.param`
+dentro dos subcircuitos de resistor/`_sab` do `sm141064.ngspice`
+(linha 743), que o inversor nem usa (G3, parte "guardar sem avaliar");
+IHP — `psp103va` (OSDI, fora de escopo).
 
 **G3 — Escopo e avaliação adiada: parâmetros de subcircuito, linha `X`,
 modelo por instância, preguiça.**
