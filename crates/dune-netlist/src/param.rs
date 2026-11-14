@@ -82,8 +82,10 @@ impl ParamEnv {
     }
 
     fn power(&self, lx: &mut Lexer) -> Result<f64, String> {
-        // Unary sign binds looser than `^` (`-2^2` is -4, like
-        // ngspice's numparam). Recursion is bounded by MAX_EXPR_LEN.
+        // Unary sign binds looser than `^` (`-2^2` is -4) and `^` is
+        // LEFT-associative (`2^3^2` is 64): both observed in
+        // ngspice-47 (probes P05 and D_POW of `docs/pdk-parser.md`).
+        // Recursion is bounded by MAX_EXPR_LEN.
         match lx.peek() {
             Some(b'-') => {
                 lx.bump();
@@ -95,14 +97,28 @@ impl ParamEnv {
             }
             _ => {}
         }
-        let base = self.atom(lx)?;
-        if lx.peek() == Some(b'^') {
+        let mut acc = self.atom(lx)?;
+        while lx.peek() == Some(b'^') {
             lx.bump();
-            // Right-associative, like ngspice.
-            let exp = self.power(lx)?;
-            return Ok(base.powf(exp));
+            acc = acc.powf(self.exponent(lx)?);
         }
-        Ok(base)
+        Ok(acc)
+    }
+
+    /// The right operand of `^`: an atom, optionally signed
+    /// (`2^-1` is 0.5).
+    fn exponent(&self, lx: &mut Lexer) -> Result<f64, String> {
+        match lx.peek() {
+            Some(b'-') => {
+                lx.bump();
+                Ok(-self.exponent(lx)?)
+            }
+            Some(b'+') => {
+                lx.bump();
+                self.exponent(lx)
+            }
+            _ => self.atom(lx),
+        }
     }
 
     fn atom(&self, lx: &mut Lexer) -> Result<f64, String> {
@@ -210,7 +226,8 @@ mod tests {
         assert_eq!(e.eval_expr("1+two*3"), Ok(7.0));
         assert_eq!(e.eval_expr("rload/two"), Ok(5e3));
         assert_eq!(e.eval_expr("-two^two"), Ok(-4.0)); // sign binds looser than ^
-        assert_eq!(e.eval_expr("two^two^two"), Ok(16.0)); // right-assoc
+        assert_eq!(e.eval_expr("2^3^2"), Ok(64.0)); // left-assoc, as ngspice-47
+        assert_eq!(e.eval_expr("two^-1"), Ok(0.5));
         assert_eq!(e.eval_expr("1-two-two"), Ok(-3.0)); // left-assoc
     }
 
