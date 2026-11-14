@@ -161,6 +161,7 @@ ausência, fixo e documentado no `index.d.ts`:
 
 - `PARAM=`/`EXPR` (medidas sobre medidas; precisa de avaliador de
   expressões — o `.param` do netlist é só constante).
-- THD/`.four` (a issue menciona THD; é outra análise).
+- ~~THD/`.four`~~: entregue como camada própria (`four`), ver
+  `docs/dune-four.md`.
 - Entrar no `--ci` do oráculo (comparar a saída `.meas` do ngspice
   por deck).

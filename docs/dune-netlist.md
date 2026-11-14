@@ -32,7 +32,9 @@ produz diagnóstico com span, nunca pânico, nunca loop infinito.
   `v n val`; `.noise` idem para `v(out,ref)`; `.temp` e `.width`
   recebem os mesmos avisos de obsoleto do C; `.print/.plot/.save/
   .four` são parseados para a IR (no 3f5 viviam no frontend,
-  `fte/dotcards.c`); `PRTYPE` aceita também `pz` (os decks `pz*.cir`
+  `fte/dotcards.c`); o `.four` exige frequência positiva e finita
+  (erro com span) e é executado pela camada `four` do `dune-core`
+  (`docs/dune-four.md`); `PRTYPE` aceita também `pz` (os decks `pz*.cir`
   do upstream usam `.print pz all`).
 - **`.ends nome` divergente é aviso, não erro**: `ltra_3.cir` do
   upstream traz `.ends lump` fechando `.subckt rlclump`.
