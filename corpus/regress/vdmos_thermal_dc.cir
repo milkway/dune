@@ -1,0 +1,25 @@
+VDMOS self-heating: output curves with the junction temperature node
+* Coverage: the thermal flag with RTHJC/RTHCA (VDMOSload's self-heating
+* stamps: the power of the channel, RD, RS and the body diode into the
+* junction node tj, the temperature derivatives of KP (MU), VTO
+* (TCVTH), RD (TEXP0) and RS, the case node tc and the ambient source
+* branch), with the case tied to a 27 C sink through 0.5 K/W; the IRFP240
+* card of ngspice-47's examples/vdmos/self-heating.sp (Rthca and the
+* heat sink changed). Written for the Dune port of ngspice-47's vdmos
+* model.
+m1 d g 0 tj tc irfp240 thermal
+vamb amb 0 dc 27
+rthk tc amb 0.5
+vg g 0 dc 5
+vd d 0 dc 2
+.model irfp240 vdmos nchan
++ vto=4 kp=5.9 lambda=.001 theta=0.015 ksubthres=.27
++ rd=61m rs=18m rg=3 rds=1e7
++ cgdmax=2.45n cgdmin=10p a=0.3 cgs=1.2n
++ is=60p n=1.1 rb=14m xti=3
++ cjo=1.5n vj=0.8 m=0.5
++ tcvth=-0.0065 mu=-1.27 texp0=1.5
++ rthjc=0.5 cthj=1e-3 rthca=100
++ mtriode=0.8
+.dc vd 0.1 12 0.1 vg 4.5 5.1 0.3
+.end

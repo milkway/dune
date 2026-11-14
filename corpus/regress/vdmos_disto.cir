@@ -1,0 +1,22 @@
+VDMOS distortion: intermodulation of n and p channel stages
+* Coverage: .disto (f1+f2, f1-f2, 2f1-f2) of an n-channel stage in
+* saturation and a p-channel stage, with vdmosdset.c's MOS1-style
+* Taylor coefficients in (vgs, vds) and its Meyer-style gate terms
+* (the body diode has no distortion load in the C). Written for the
+* Dune port of ngspice-47's vdmos model.
+vdd vdd 0 dc 15
+vin in 0 dc 3.6 ac 1 distof1 0.1 distof2 0.05
+rs in g 50
+m1 d g 0 mm
+rl vdd d 20
+vin2 in2 0 dc -3.4 distof1 0.05
+rs2 in2 g2 50
+m2 d2 g2 0 mp
+rl2 0 d2 30
+vee vee 0 dc -10
+rl3 vee d2 1e9
+.model mm vdmos (rd=0.05 rs=0.02 rg=1.5 kp=10 vto=3 lambda=0.01 theta=0.1
++ cjo=300p rb=0.01)
+.model mp vdmos pchan (kp=5 vto=-3 lambda=0.02)
+.disto dec 5 1k 10meg 0.9
+.end

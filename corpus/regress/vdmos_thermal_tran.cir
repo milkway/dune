@@ -1,0 +1,26 @@
+VDMOS self-heating transient: junction heating through CTHJ
+* Coverage: the thermal network in .tran (CTHJ integrated on the
+* junction node, the per-iteration temperature update of the model),
+* a gate pulse switching a resistive load, the case tied to a 27 C sink;
+* the IRFP240 card of ngspice-47's examples/vdmos/self-heating.sp
+* (thermal values changed). Spice3 profile: the golden is ngspice's
+* trapezoidal run. Written for the Dune port of ngspice-47's vdmos
+* model.
+.options compat=spice3
+m1 d g 0 tj tc irfp240 thermal
+vamb amb 0 dc 27
+rthk tc amb 2
+vg g 0 pulse(0 8 1m 0.2m 0.2m 5m 20m)
+rl vdd d 1
+vd vdd 0 dc 10
+.model irfp240 vdmos nchan
++ vto=4 kp=5.9 lambda=.001 theta=0.015 ksubthres=.27
++ rd=61m rs=18m rg=3 rds=1e7
++ cgdmax=2.45n cgdmin=10p a=0.3 cgs=1.2n
++ is=60p n=1.1 rb=14m xti=3
++ cjo=1.5n vj=0.8 m=0.5
++ tcvth=-0.0065 mu=-1.27 texp0=1.5
++ rthjc=0.5 cthj=1e-3 rthca=100
++ mtriode=0.8
+.tran 20u 10m
+.end

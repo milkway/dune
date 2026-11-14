@@ -1,0 +1,21 @@
+Title: vdmos pole-zero: common-source stage with cgd feedback and body diode
+Date: Fri Nov 13 22:27:01  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 6
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(zero(1))	voltage
+	4	v(zero(2))	voltage
+	5	v(zero(3))	voltage
+Values:
+0		-7.992704507841330e+10,0.000000000000000e+00
+	-7.346634128177577e+09,0.000000000000000e+00
+	-3.004408771686396e+08,0.000000000000000e+00
+	-3.718860382049078e+11,0.000000000000000e+00
+	-7.558272895993822e+10,0.000000000000000e+00
+	1.216443260112695e+09,0.000000000000000e+00

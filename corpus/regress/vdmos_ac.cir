@@ -1,0 +1,28 @@
+VDMOS small signal: gate/drain capacitances, quasi-saturation, p channel
+* Coverage: .ac of a common-source n-channel stage (RD/RS/RG, Cgd at
+* the operating vgd, CGS, CJO/TT body-diode capacitance through RB),
+* a quasi-saturated device (RQ/VQ, RDS, graded junction M/VJ/FC)
+* driven at its drain, and a p-channel common-source stage. Written for
+* the Dune port of ngspice-47's vdmos model.
+vdd vdd 0 dc 15
+vin in 0 dc 3.6 ac 1
+rs in g 50
+m1 d g 0 mm
+rl vdd d 20
+vb bb 0 dc 4 ac 1
+rbb bb dp 1k
+m2 dp gp 0 mq
+vg2 gp 0 dc 3.4
+vss vss 0 dc -12
+vinp inp 0 dc -3.5 ac 1
+rsp inp gpp 100
+m3 dpp gpp 0 mp
+rlp vss dpp 30
+.model mm vdmos (rd=0.05 rs=0.02 rg=1.5 kp=10 vto=3 lambda=0.01 cgdmin=50p
++ cgdmax=1n a=0.5 cgs=800p cjo=300p tt=20n rb=0.01)
+.model mq vdmos (rd=0.1 rq=0.5 vq=3 kp=6 vto=3.2 cjo=500p m=0.4 vj=0.7 fc=0.4
++ rds=1e5 theta=0.1)
+.model mp vdmos pchan (rd=0.1 kp=4 vto=-3 lambda=0.02 cgdmin=30p cgdmax=600p
++ a=0.8 cgs=500p)
+.ac dec 10 1k 1g
+.end

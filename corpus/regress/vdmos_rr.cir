@@ -1,0 +1,17 @@
+VDMOS body diode reverse recovery: soft recovery (VP) and plain TT charge
+* Coverage: two body diodes driven forward by about 1 A and then
+* reversed through 10 ohm from -10 V: m1 with VP=0.5 (ngspice's soft
+* reverse recovery, the extra qp node and its TT charge), m2 with the
+* plain diffusion charge TT*id. Spice3 profile: the golden is
+* ngspice's trapezoidal run. Written for the Dune port of ngspice-47's
+* vdmos model.
+.options compat=spice3
+vin in 0 pulse(10 -10 1u 10n 10n 2u 4u)
+rin in s 10
+m1 0 0 s mr
+rin2 in s2 10
+m2 0 0 s2 mt
+.model mr vdmos (kp=5 vto=3 cjo=200p tt=100n vp=0.5 rb=0.02 is=1e-10 n=1.2)
+.model mt vdmos (kp=5 vto=3 cjo=200p tt=100n rb=0.02 is=1e-10 n=1.2)
+.tran 2n 3u
+.end

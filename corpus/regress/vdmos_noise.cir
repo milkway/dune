@@ -1,0 +1,17 @@
+VDMOS noise: RD/RS and channel thermal noise, KF/AF flicker
+* Coverage: .noise of a common-source n-channel stage with RD/RS
+* (thermal noise of both), the channel's 4kT(2/3)|gm| and the flicker
+* term KF*|Id|^AF/(f*Cox^2) (ngspice's 100 nm oxide), with a p-channel
+* current-source load. Written for the Dune port of ngspice-47's vdmos
+* model.
+vdd vdd 0 dc 15
+vin in 0 dc 3.6 ac 1
+rs in g 50
+m1 d g 0 mm
+vbp bp 0 dc 11.2
+m2 d bp vdd mp
+.model mm vdmos (rd=0.05 rs=0.02 rg=1.5 kp=10 vto=3 lambda=0.05 kf=1e-12 af=1.2
++ cjo=300p rb=0.01)
+.model mp vdmos pchan (rd=0.1 rs=0.03 kp=4 vto=-3 lambda=0.02 kf=3e-13)
+.noise v(d) vin dec 10 10 100meg 5
+.end
