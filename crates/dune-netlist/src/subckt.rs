@@ -249,6 +249,8 @@ fn device_model_mut(device: &mut Device) -> Option<&mut String> {
         | Device::SwitchV { model, .. }
         | Device::SwitchI { model, .. }
         | Device::TlineLossy { model }
+        | Device::Txl { model, .. }
+        | Device::Cpl { model, .. }
         | Device::Urc { model, .. } => Some(model),
         _ => None,
     }
