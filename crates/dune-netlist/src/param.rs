@@ -185,6 +185,75 @@ impl<'p> ParamEnv<'p> {
         self.root().temper_first.get()
     }
 
+    /// Whether `name`, as this scope resolves it, depends on `temper`
+    /// (ngspice-47 makes such a `.param` a function and expands it
+    /// into the line, `inp_fix_temper_in_param`).
+    pub fn is_tainted(&self, name: &str) -> bool {
+        let mut env = self;
+        loop {
+            if env.map.contains_key(name) {
+                return env.tainted.contains(name);
+            }
+            if env.poisoned.contains(name) {
+                return false;
+            }
+            match env.parent {
+                Some(p) => env = p,
+                None => return false,
+            }
+        }
+    }
+
+    /// Spend `units` of the deck's user-function budget (shared with
+    /// the parameter evaluator, `pexpr::MAX_FN_WORK`); `false` once it
+    /// is spent.
+    pub fn charge_fn_work(&self, units: u64) -> bool {
+        self.root().ctx.charge(units)
+    }
+
+    /// Record that the card at `at` uses the circuit temperature,
+    /// evaluated now (the `tc1`/`tc2` factor of a behavioural R/C/L):
+    /// it counts as a read of `temper` for the once-only warning and
+    /// the `.dc temp` refusal.
+    pub fn note_temperature_use(&self, at: Span) {
+        let root = self.root();
+        if root.temper_first.get().is_none() {
+            root.temper_first.set(Some(at));
+        }
+    }
+
+    /// The value of a bare name in a behavioural R/C/L expression
+    /// (`behav.rs`): `temper` or a parameter, with the same rules of
+    /// `temper` as a value on the card (`read_temper`); a read of
+    /// `temper` is recorded at `at`. `Err(None)` is a failure already
+    /// reported (a failed `.param`).
+    pub fn read_for_behav(&self, name: &str, at: Span) -> Result<f64, Option<String>> {
+        let root = self.root();
+        let v = VarRef {
+            name: name.into(),
+            start: 0,
+            end: name.len().min(u32::MAX as usize) as u32,
+        };
+        let silenced = Cell::new(false);
+        let before = root.ctx.temper_touched.replace(false);
+        let r = self.lookup(&v, &silenced);
+        let touched = root.ctx.temper_touched.get();
+        root.ctx.temper_touched.set(before || touched);
+        match r {
+            Ok(x) => {
+                if touched
+                    && root.temper_use.get() == TemperUse::Device
+                    && root.temper_first.get().is_none()
+                {
+                    root.temper_first.set(Some(at));
+                }
+                Ok(x)
+            }
+            Err(e) if silenced.get() || e.msg.is_empty() => Err(None),
+            Err(e) => Err(Some(e.msg)),
+        }
+    }
+
     /// Run `f` with `temper` readable as `u` says, then restore.
     pub fn with_temper<R>(&self, u: TemperUse, f: impl FnOnce() -> R) -> R {
         let root = self.root();

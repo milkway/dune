@@ -23,7 +23,14 @@
 //!
 //! The rewriting applies when the text after the name and the two
 //! nodes holds `v(`, `i(`, `time`, `temper` or `hertz`
-//! (`b_transformation_wanted`), or a `q=` on a capacitor. ngspice then
+//! (`b_transformation_wanted`) — also once the parameters that depend
+//! on `temper` and the user functions are expanded, as ngspice tests
+//! the expanded line ([`wanted`]) — or a `q=` on a capacitor. The
+//! expression is the first `{…}` after the nodes as ngspice sees the
+//! line ([`equation`]); `temper` in it is the circuit temperature,
+//! user functions are expanded in place, and `tc1`/`tc2` become the B
+//! source's temperature factor at that temperature ([`tc_factor`]),
+//! all evaluated once (`parse.rs` `temper_checks`). ngspice then
 //! hands the B lines to numparam with every parameter name in braces
 //! (`inp_modify_exp`) and parses them with its B-source grammar
 //! (`inpptree-parser.y`: `^` left-associative, unary minus looser
@@ -34,8 +41,11 @@
 //! `docs/dune-netlist.md`), and the rest is refused with a spanned
 //! diagnostic.
 
+use std::cell::Cell;
+
 use crate::deck::Card;
-use crate::ir::{Device, Element, Expr, ExprFunc, ExprOp, ParamValue, SourceKind};
+use crate::func::{FuncScope, UserFn};
+use crate::ir::{Device, Element, Expr, ExprFunc, ExprOp, SourceKind};
 use crate::param::ParamEnv;
 use crate::span::Span;
 
@@ -81,6 +91,136 @@ pub(crate) fn after_nodes(text: &str) -> Option<usize> {
     Some(i)
 }
 
+/// Where the behavioural expression of a card is: the inner text
+/// `start..end` and the outer range `lo..hi` (with its delimiters),
+/// and the keyword whose value it is (`None` when positional).
+pub(crate) struct Equation {
+    pub start: usize,
+    pub end: usize,
+    pub lo: usize,
+    pub hi: usize,
+    pub keyword: Option<String>,
+}
+
+/// The behavioural expression of `text`, searched from byte `at` (the
+/// end of the second node) as ngspice-47 finds it: `inp_compat` takes
+/// the first `{` of the line — after `inp_change_quotes` made every
+/// `'…'` a `{…}` and `inp_fix_param_values` wrapped every bare value
+/// after an `=` in braces (one that starts with a digit, `.`, a signed
+/// number, `{`, `true` or `false` is left alone; the value runs to the
+/// first blank outside parentheses). So in `rb a b rm l=r_l r='…'` the
+/// expression is `r_l`, not the `r=` value (probes `behav-probes b3
+/// r_kw_bare_first`, `r_kw_bare_expr`, `r_kw_bare_paren`,
+/// `r_kw_brace_first`; the gf180 `ppolyf_u` body resistor is written
+/// so). `Ok(None)`: no expression; `Err`: an unclosed one, or a
+/// vector/complex value (`[…]`, `<…>`) before it.
+pub(crate) fn equation(text: &str, at: usize) -> Result<Option<Equation>, BError> {
+    let b = text.as_bytes();
+    let blank = |c: u8| c == b' ' || c == b'\t';
+    // The identifier right before a `=` at `q` (blanks skipped).
+    let keyword_before = |q: usize| -> Option<String> {
+        let mut e = q;
+        while e > at && blank(b[e - 1]) {
+            e -= 1;
+        }
+        let mut s = e;
+        while s > at && (b[s - 1].is_ascii_alphanumeric() || b[s - 1] == b'_') {
+            s -= 1;
+        }
+        (s < e).then(|| text[s..e].to_ascii_lowercase())
+    };
+    // The keyword of a group at `q`: `name =` before it.
+    let group_keyword = |q: usize| -> Option<String> {
+        let mut e = q;
+        while e > at && blank(b[e - 1]) {
+            e -= 1;
+        }
+        (e > at && b[e - 1] == b'=')
+            .then(|| keyword_before(e - 1))
+            .flatten()
+    };
+    let mut p = at;
+    while p < b.len() {
+        match b[p] {
+            b'{' => {
+                let Some(close) = crate::scan::match_brace(b, p) else {
+                    return Err(berr("`{` without its closing `}`", p - at, b.len() - at));
+                };
+                return Ok(Some(Equation {
+                    start: p + 1,
+                    end: close - 1,
+                    lo: p,
+                    hi: close,
+                    keyword: group_keyword(p),
+                }));
+            }
+            b'\'' => {
+                let Some(k) = b[p + 1..].iter().position(|&c| c == b'\'') else {
+                    return Err(berr("`'` without its closing `'`", p - at, b.len() - at));
+                };
+                return Ok(Some(Equation {
+                    start: p + 1,
+                    end: p + 1 + k,
+                    lo: p,
+                    hi: p + 2 + k,
+                    keyword: group_keyword(p),
+                }));
+            }
+            b'=' if b.get(p + 1) == Some(&b'=') => p += 2,
+            b'=' if p > at && matches!(b[p - 1], b'!' | b'<' | b'>') => p += 1,
+            b'=' => {
+                // `inp_casefix` deleted the `"`s before this.
+                let mut v = p + 1;
+                while v < b.len() && (blank(b[v]) || b[v] == b'"') {
+                    v += 1;
+                }
+                let c = b.get(v).copied().unwrap_or(b' ');
+                let c1 = b.get(v + 1).copied().unwrap_or(b' ');
+                let c2 = b.get(v + 2).copied().unwrap_or(b' ');
+                let lower = text[v..].to_ascii_lowercase();
+                let left_alone = v >= b.len()
+                    || c.is_ascii_digit()
+                    || matches!(c, b'{' | b'\'' | b'.')
+                    || (matches!(c, b'+' | b'-')
+                        && (c1.is_ascii_digit() || (c1 == b'.' && c2.is_ascii_digit())))
+                    || lower.starts_with("true")
+                    || lower.starts_with("false");
+                if left_alone {
+                    p += 1;
+                    continue;
+                }
+                if matches!(c, b'[' | b'<') {
+                    return Err(berr(
+                        "a vector or complex value before the behavioural expression is not \
+                         supported",
+                        v - at,
+                        v + 1 - at,
+                    ));
+                }
+                let mut e = v;
+                let mut parens = 0usize;
+                while e < b.len() && (!blank(b[e]) || parens > 0) {
+                    match b[e] {
+                        b'(' => parens += 1,
+                        b')' => parens = parens.saturating_sub(1),
+                        _ => {}
+                    }
+                    e += 1;
+                }
+                return Ok(Some(Equation {
+                    start: v,
+                    end: e,
+                    lo: v,
+                    hi: e,
+                    keyword: keyword_before(p),
+                }));
+            }
+            _ => p += 1,
+        }
+    }
+    Ok(None)
+}
+
 /// Whether a capacitor card is in the charge form (`q=`; ngspice
 /// tests the whole line, blanks around `=` already squeezed).
 fn charge_form(rest: &str) -> bool {
@@ -92,8 +232,22 @@ fn charge_form(rest: &str) -> bool {
     })
 }
 
-/// Whether the card is a behavioural R/C/L that ngspice rewrites.
-pub(crate) fn wanted(card: &Card, letter: char) -> bool {
+/// Whether the card is a behavioural R/C/L that ngspice rewrites:
+/// its text after the nodes triggers `b_transformation_wanted`, or a
+/// capacitor is in the charge form — or the text reaches one of the
+/// trigger words only through a name ngspice expands first.
+///
+/// ngspice-47 tests the line after `inp_fix_temper_in_param` (a
+/// `.param` that names `temper` becomes a function, and every use of
+/// it a call) and `inp_expand_macros_in_deck` (each user-function call
+/// replaced by its body), both in `frontend/inpcom.c`. So `r1 1 0
+/// {p}` with `.param p={temper}`, `{f()}` with `.func f() {temper}` or
+/// `{g(1)}` with `.func g(x) {x*v(1)}` are rewritten as well (probes
+/// `behav-probes b1 r_tparam_op`, `r_tparam_sub`, `r_func_op`; the
+/// rewritten R has no thermal noise, `r_temper_noise`, and the
+/// rewritten C and L add their internal nodes to the rawfile,
+/// `c_temper_op`, `l_temper_op`).
+pub(crate) fn wanted(card: &Card, letter: char, env: &ParamEnv) -> bool {
     if !matches!(letter, 'r' | 'c' | 'l') {
         return false;
     }
@@ -101,27 +255,124 @@ pub(crate) fn wanted(card: &Card, letter: char) -> bool {
         return false;
     };
     let rest = &card.text[at..];
-    transformation_wanted(rest) || (letter == 'c' && charge_form(rest))
+    transformation_wanted(rest)
+        || (letter == 'c' && charge_form(rest))
+        || expands_to_trigger(rest, env)
+}
+
+/// The identifiers of `text` (not preceded by an identifier
+/// character, not starting with a digit), lowercased, each with
+/// whether a `(` follows it.
+fn identifiers(text: &str) -> impl Iterator<Item = (String, bool)> + '_ {
+    let b = text.as_bytes();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        while i < b.len() {
+            if (b[i].is_ascii_alphabetic() || b[i] == b'_') && (i == 0 || !ident(b[i - 1])) {
+                let s = i;
+                while i < b.len() && ident(b[i]) {
+                    i += 1;
+                }
+                let name = text[s..i].to_ascii_lowercase();
+                let mut j = i;
+                while j < b.len() && matches!(b[j], b' ' | b'\t') {
+                    j += 1;
+                }
+                return Some((name, b.get(j) == Some(&b'(')));
+            }
+            i += 1;
+        }
+        None
+    })
+}
+
+/// Whether `rest` names a parameter that depends on `temper`, or calls
+/// a user function whose body (transitively) holds a trigger word or
+/// such a parameter: the names ngspice expands before it tests the
+/// line (see [`wanted`]). Each body is read once, charged to the
+/// deck's user-function budget (`ParamEnv::charge_fn_work`).
+fn expands_to_trigger(rest: &str, env: &ParamEnv) -> bool {
+    let mut todo: Vec<(&UserFn, Option<&FuncScope>)> = Vec::new();
+    for (name, call) in identifiers(rest) {
+        if call {
+            if let Some((f, sc)) = env.funcs.and_then(|s| s.find(&name)) {
+                todo.push((f, Some(sc)));
+            }
+        } else if env.is_tainted(&name) {
+            return true;
+        }
+    }
+    let mut seen: std::collections::HashSet<*const UserFn> = Default::default();
+    while let Some((f, sc)) = todo.pop() {
+        if !seen.insert(std::ptr::from_ref(f)) {
+            continue;
+        }
+        let body = f.body_text();
+        // Charged to the deck's user-function budget; once it is spent
+        // the card goes to the rewriting, whose translator charges the
+        // same budget and stops with a spanned error.
+        if !env.charge_fn_work(body.len() as u64 + 1) {
+            return true;
+        }
+        if transformation_wanted(body) {
+            return true;
+        }
+        for (name, call) in identifiers(body) {
+            if call {
+                let found = sc
+                    .and_then(|s| s.find(&name))
+                    .or_else(|| env.funcs.and_then(|s| s.find(&name)));
+                if let Some((g, gsc)) = found {
+                    todo.push((g, Some(gsc)));
+                }
+            } else if !f.formals.iter().any(|a| **a == *name) && env.is_tainted(&name) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// A failure while translating the expression: message and byte
-/// range inside the expression text.
+/// range inside the expression text, or — inside a user function's
+/// body — the span there. An empty message is a failure already
+/// reported elsewhere (a failed `.param`, a recursive function).
 pub(crate) struct BError {
     pub msg: String,
     pub start: usize,
     pub end: usize,
+    pub at: Option<Span>,
 }
 
+#[cold]
 fn berr(msg: impl Into<String>, start: usize, end: usize) -> BError {
     BError {
         msg: msg.into(),
         start,
         end: end.max(start + 1),
+        at: None,
     }
 }
 
-/// Deepest nesting the translator accepts (as `pexpr::MAX_NEST`).
-const MAX_NEST: usize = 100;
+/// Deepest nesting the translator accepts, counting parentheses,
+/// signs and calls (user-function bodies included). Lower than
+/// `pexpr::MAX_NEST` because this parser is recursive descent with
+/// five to seven frames per level: measured in a debug build, 9.5 KB
+/// of stack per parenthesis and 12 KB per call, so 40 levels stay
+/// under 0.5 MiB and the parser runs in a 1 MiB thread (the PDK
+/// expressions nest fewer than ten levels).
+const MAX_NEST: usize = 40;
+
+/// 0 °C in kelvin (`CONSTCtoK`): ngspice's B source reads `temper`
+/// as `CKTtemp - CONSTCtoK` with `CKTtemp = T + CONSTCtoK`.
+const CTOK: f64 = 273.15;
+
+/// The value a B source gives `temper` at circuit temperature `t` °C
+/// (`PT_TEMPERATURE`, `spicelib/parser/ifeval.c`).
+fn b_temper(t: f64) -> f64 {
+    (t + CTOK) - CTOK
+}
 
 #[derive(Clone, Debug, PartialEq)]
 enum Tok {
@@ -140,9 +391,12 @@ struct Lexer<'a> {
 }
 
 impl Lexer<'_> {
-    /// Blanks, and the braces `inp_modify_exp` blanks out.
+    /// Blanks, and the braces `inp_modify_exp` blanks out (in a
+    /// user-function body also its `'…'` and the `"` ngspice deletes).
     fn skip_ws(&mut self) {
-        while self.pos < self.s.len() && matches!(self.s[self.pos], b' ' | b'\t' | b'{' | b'}') {
+        while self.pos < self.s.len()
+            && matches!(self.s[self.pos], b' ' | b'\t' | b'{' | b'}' | b'\'' | b'"')
+        {
             self.pos += 1;
         }
     }
@@ -220,11 +474,16 @@ const LIM_DEPTH: u32 = crate::expr::MAX_DEPTH - 4;
 /// Most nodes the translator builds: the B-source limit
 /// (`expr::MAX_NODES`) less what [`elements`] adds.
 const LIM_NODES: u32 = crate::expr::MAX_NODES - 8;
+/// The deck's user-function budget (bytes of body text read plus
+/// nodes of argument trees copied are charged to it, shared with the
+/// parameter evaluator).
+const MAX_FN_WORK: u64 = crate::pexpr::MAX_FN_WORK;
 
 /// A subtree with its depth and node count, carried while building so
 /// the limits are enforced at every node: no tree past them is ever
 /// built, walked or dropped (the left-associative loops would
 /// otherwise grow one level per term).
+#[derive(Clone)]
 struct T {
     e: Expr,
     d: u32,
@@ -237,13 +496,31 @@ impl T {
     }
 }
 
+/// State shared by the parser of the expression and those of the
+/// user-function bodies it expands.
+struct Shared {
+    depth: Cell<usize>,
+}
+
+/// Inside a user function's body: its formal arguments bound to the
+/// argument trees, and the scope it was defined in (where the calls
+/// of the body resolve first).
+struct FnCtx<'a, 'e> {
+    formals: &'e [Box<str>],
+    args: &'a [T],
+    scope: &'e FuncScope<'e>,
+}
+
 struct Parser<'a, 'e> {
     lx: Lexer<'a>,
     tok: Tok,
     start: usize,
     end: usize,
     env: &'e ParamEnv<'e>,
-    depth: usize,
+    /// Maps byte ranges of the text being parsed to spans.
+    span_of: &'a dyn Fn(usize, usize) -> Span,
+    st: &'a Shared,
+    func: Option<FnCtx<'a, 'e>>,
 }
 
 fn bin(op: ExprOp, a: Expr, b: Expr) -> Expr {
@@ -296,6 +573,18 @@ fn tcall(f: ExprFunc, a: T, s: usize, e: usize) -> Result<T, BError> {
     })
 }
 
+#[cold]
+fn too_deep(s: usize, e: usize) -> BError {
+    berr(
+        format!(
+            "expression nested too deeply (more than {MAX_NEST} parentheses, calls, signs or \
+             function bodies)"
+        ),
+        s,
+        e,
+    )
+}
+
 impl<'a, 'e> Parser<'a, 'e> {
     fn bump(&mut self) -> Result<(), BError> {
         let (t, s, e) = self.lx.next()?;
@@ -306,17 +595,31 @@ impl<'a, 'e> Parser<'a, 'e> {
     }
 
     fn enter(&mut self) -> Result<(), BError> {
-        self.depth += 1;
-        if self.depth > MAX_NEST {
-            return Err(berr(
-                format!(
-                    "expression nested too deeply (more than {MAX_NEST} parentheses, calls or signs)"
-                ),
-                self.start,
-                self.end,
-            ));
+        let d = self.st.depth.get() + 1;
+        self.st.depth.set(d);
+        if d > MAX_NEST {
+            return Err(too_deep(self.start, self.end));
         }
         Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.st.depth.set(self.st.depth.get().saturating_sub(1));
+    }
+
+    /// Spend `units` of the deck's user-function budget.
+    fn charge(&mut self, units: u64, s: usize, e: usize) -> Result<(), BError> {
+        if self.env.charge_fn_work(units) {
+            Ok(())
+        } else {
+            Err(berr(
+                format!(
+                    "user-function evaluation exceeds {MAX_FN_WORK} steps in this deck; giving up"
+                ),
+                s,
+                e,
+            ))
+        }
     }
 
     fn expect(&mut self, t: Tok, what: &str) -> Result<(), BError> {
@@ -367,14 +670,14 @@ impl<'a, 'e> Parser<'a, 'e> {
                 self.enter()?;
                 self.bump()?;
                 let x = self.unary()?;
-                self.depth -= 1;
+                self.leave();
                 tcall(ExprFunc::Neg, x, s, e)
             }
             Tok::Op("+") => {
                 self.enter()?;
                 self.bump()?;
                 let x = self.unary()?;
-                self.depth -= 1;
+                self.leave();
                 Ok(x)
             }
             _ => self.power(),
@@ -407,7 +710,7 @@ impl<'a, 'e> Parser<'a, 'e> {
             Tok::Op("-") | Tok::Op("+") => self.unary_primary()?,
             _ => self.primary()?,
         };
-        self.depth -= 1;
+        self.leave();
         if neg {
             tcall(ExprFunc::Neg, x, s, e)
         } else {
@@ -427,7 +730,7 @@ impl<'a, 'e> Parser<'a, 'e> {
                 self.bump()?;
                 let x = self.add()?;
                 self.expect(Tok::RParen, "`)`")?;
-                self.depth -= 1;
+                self.leave();
                 Ok(x)
             }
             Tok::Ident(name) => {
@@ -435,10 +738,10 @@ impl<'a, 'e> Parser<'a, 'e> {
                 if self.tok == Tok::LParen {
                     self.enter()?;
                     let r = self.call(&name, s, e);
-                    self.depth -= 1;
+                    self.leave();
                     r
                 } else {
-                    self.name(&name, s, e).map(T::leaf)
+                    self.name(&name, s, e)
                 }
             }
             t => {
@@ -448,20 +751,38 @@ impl<'a, 'e> Parser<'a, 'e> {
         }
     }
 
-    /// A bare name: the constants `pi` and `e`, else a parameter,
-    /// evaluated now as numparam does after `inp_modify_exp`.
-    fn name(&mut self, name: &str, s: usize, e: usize) -> Result<Expr, BError> {
+    /// A bare name: a formal argument of the user function being
+    /// expanded, the constants `pi` and `e`, `temper` (the circuit
+    /// temperature, as the B source reads it), else a parameter,
+    /// evaluated now as numparam does after `inp_modify_exp` — with
+    /// the rules of `temper` and of the parameters that depend on it
+    /// (`ParamEnv::read_for_behav`).
+    fn name(&mut self, name: &str, s: usize, e: usize) -> Result<T, BError> {
+        if let Some(f) = &self.func
+            && let Some(k) = f.formals.iter().position(|a| **a == *name)
+        {
+            let a = f.args[k].clone();
+            self.charge(u64::from(a.n), s, e)?;
+            return Ok(a);
+        }
         match name {
-            "pi" => Ok(Expr::Num(std::f64::consts::PI)),
-            "e" => Ok(Expr::Num(std::f64::consts::E)),
-            "time" | "temper" | "hertz" => Err(berr(
+            "pi" => Ok(T::leaf(Expr::Num(std::f64::consts::PI))),
+            "e" => Ok(T::leaf(Expr::Num(std::f64::consts::E))),
+            "time" | "hertz" => Err(berr(
                 format!("`{name}` in a behavioural R/C/L is not supported yet"),
                 s,
                 e,
             )),
-            _ => match self.env.get(name) {
-                Some(v) => Ok(Expr::Num(v)),
-                None => Err(berr(format!("undefined parameter `{name}`"), s, e)),
+            _ => match self.env.read_for_behav(name, (self.span_of)(s, e)) {
+                Ok(v) if name == "temper" => Ok(T::leaf(Expr::Num(b_temper(v)))),
+                Ok(v) => Ok(T::leaf(Expr::Num(v))),
+                Err(None) => Err(BError {
+                    msg: String::new(),
+                    start: s,
+                    end: e,
+                    at: None,
+                }),
+                Err(Some(msg)) => Err(berr(msg, s, e)),
             },
         }
     }
@@ -482,36 +803,39 @@ impl<'a, 'e> Parser<'a, 'e> {
         Ok(String::from_utf8_lossy(&self.lx.s[st..self.lx.pos]).to_ascii_lowercase())
     }
 
-    fn call(&mut self, name: &str, s: usize, e: usize) -> Result<T, BError> {
-        // `self.tok` is the `(`.
-        if name == "v" || name == "i" {
-            let a = self.ref_name()?;
-            self.bump()?;
-            let r = if name == "v" {
-                if self.tok == Tok::Comma {
-                    let b = self.ref_name()?;
-                    self.bump()?;
-                    tbin(
-                        ExprOp::Minus,
-                        T::leaf(Expr::V(a)),
-                        T::leaf(Expr::V(b)),
-                        s,
-                        e,
-                    )?
-                } else {
-                    T::leaf(Expr::V(a))
-                }
+    /// `v(a)`, `v(a, b)`, `i(vx)`; `self.tok` is the `(`.
+    fn node_ref(&mut self, name: &str, s: usize, e: usize) -> Result<T, BError> {
+        let a = self.ref_name()?;
+        self.bump()?;
+        let r = if name == "v" {
+            if self.tok == Tok::Comma {
+                let b = self.ref_name()?;
+                self.bump()?;
+                tbin(
+                    ExprOp::Minus,
+                    T::leaf(Expr::V(a)),
+                    T::leaf(Expr::V(b)),
+                    s,
+                    e,
+                )?
             } else {
-                T::leaf(Expr::I(a))
-            };
-            self.expect(Tok::RParen, "`)`")?;
-            return Ok(r);
-        }
+                T::leaf(Expr::V(a))
+            }
+        } else {
+            T::leaf(Expr::I(a))
+        };
+        self.expect(Tok::RParen, "`)`")?;
+        Ok(r)
+    }
+
+    /// The comma-separated arguments up to the `)` (at most `max`;
+    /// `self.tok` is the `(`).
+    fn args(&mut self, max: usize, name: &str, s: usize, e: usize) -> Result<Vec<T>, BError> {
         self.bump()?;
         let mut args: Vec<T> = Vec::new();
         if self.tok != Tok::RParen {
             loop {
-                if args.len() >= 2 {
+                if args.len() >= max {
                     return Err(berr(format!("too many arguments to `{name}`"), s, e));
                 }
                 args.push(self.add()?);
@@ -523,57 +847,168 @@ impl<'a, 'e> Parser<'a, 'e> {
             }
         }
         self.expect(Tok::RParen, "`)`")?;
-        let argc = args.len();
-        let want = |n: usize| -> Result<(), BError> {
-            if argc == n {
-                Ok(())
-            } else {
-                Err(berr(format!("`{name}` takes {n} argument(s)"), s, e))
-            }
-        };
-        let f = match name {
-            "abs" => ExprFunc::Abs,
-            "acos" => ExprFunc::Acos,
-            "acosh" => ExprFunc::Acosh,
-            "asin" => ExprFunc::Asin,
-            "asinh" => ExprFunc::Asinh,
-            "atan" => ExprFunc::Atan,
-            "atanh" => ExprFunc::Atanh,
-            "cos" => ExprFunc::Cos,
-            "cosh" => ExprFunc::Cosh,
-            "exp" => ExprFunc::Exp,
-            // ngspice's `ln` and `log` are both the natural log
-            // (`PTlog`); `log10` is the 3f5's `log`.
-            "ln" | "log" => ExprFunc::Ln,
-            "log10" => ExprFunc::Log,
-            "sgn" => ExprFunc::Sgn,
-            "sin" => ExprFunc::Sin,
-            "sinh" => ExprFunc::Sinh,
-            "sqrt" => ExprFunc::Sqrt,
-            "tan" => ExprFunc::Tan,
-            "tanh" => ExprFunc::Tanh,
-            "u" => ExprFunc::U,
-            "uramp" => ExprFunc::Uramp,
-            "pow" | "pwr" | "min" | "max" => {
-                want(2)?;
-                let b = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
-                let a = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
-                return binary_func(name, a, b, s, e);
-            }
-            "ceil" | "floor" | "nint" | "u2" | "pwl" | "eq0" | "ne0" | "gt0" | "lt0" | "ge0"
-            | "le0" | "ddt" => {
-                return Err(berr(
-                    format!("`{name}()` in a behavioural R/C/L is not supported yet"),
-                    s,
-                    e,
-                ));
-            }
-            _ => return Err(berr(format!("unknown function `{name}`"), s, e)),
-        };
-        want(1)?;
-        let a = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
-        tcall(f, a, s, e)
+        Ok(args)
     }
+
+    /// A call; `self.tok` is the `(`. A user function (`.func`)
+    /// shadows a built-in one and is expanded in place, as ngspice
+    /// expands its body into the line before the rewriting.
+    fn call(&mut self, name: &str, s: usize, e: usize) -> Result<T, BError> {
+        if name == "v" || name == "i" {
+            return self.node_ref(name, s, e);
+        }
+        // A call inside a body resolves where the body was defined,
+        // then at the call site (as `pexpr` evaluates user functions).
+        let user = self
+            .func
+            .as_ref()
+            .and_then(|f| f.scope.find(name))
+            .or_else(|| self.env.funcs.and_then(|sc| sc.find(name)));
+        match user {
+            Some((f, sc)) => {
+                let args = self.args(f.formals.len().saturating_add(1), name, s, e)?;
+                self.expand(f, sc, args, s, e)
+            }
+            None => {
+                let args = self.args(2, name, s, e)?;
+                builtin(name, args, s, e)
+            }
+        }
+    }
+
+    /// The body of user function `f` (defined in `sc`) with its
+    /// formals bound to `args`, parsed with the B-source grammar —
+    /// the expanded text ngspice would parse. Errors inside the body
+    /// point there.
+    fn expand(
+        &mut self,
+        f: &'e UserFn<'e>,
+        sc: &'e FuncScope<'e>,
+        args: Vec<T>,
+        s: usize,
+        e: usize,
+    ) -> Result<T, BError> {
+        if f.recursive.get() {
+            // Reported where the function is defined.
+            return Err(BError {
+                msg: String::new(),
+                start: s,
+                end: e,
+                at: None,
+            });
+        }
+        if args.len() != f.formals.len() {
+            return Err(berr(
+                format!(
+                    "function `{}` takes {} argument(s), got {}",
+                    f.name,
+                    f.formals.len(),
+                    args.len()
+                ),
+                s,
+                e,
+            ));
+        }
+        let body = f.body_text();
+        if body.is_empty() {
+            return Err(berr(format!("function `{}` has no body", f.name), s, e));
+        }
+        self.charge(body.len() as u64 + 1, s, e)?;
+        let span_of = |a: usize, b: usize| f.span_of(a, b);
+        let mut sub = Parser {
+            lx: Lexer {
+                s: body.as_bytes(),
+                pos: 0,
+            },
+            tok: Tok::End,
+            start: 0,
+            end: 0,
+            env: self.env,
+            span_of: &span_of,
+            st: self.st,
+            func: Some(FnCtx {
+                formals: &f.formals,
+                args: &args,
+                scope: sc,
+            }),
+        };
+        let r = sub.whole();
+        r.map_err(|mut err| {
+            if err.at.is_none() && !err.msg.is_empty() {
+                err.at = Some(f.span_of(err.start, err.end));
+            }
+            err
+        })
+    }
+
+    /// The whole text as one expression.
+    fn whole(&mut self) -> Result<T, BError> {
+        self.bump()?;
+        let t = self.add()?;
+        if self.tok != Tok::End {
+            return Err(berr(
+                "unexpected text after the expression",
+                self.start,
+                self.end,
+            ));
+        }
+        Ok(t)
+    }
+}
+
+/// A built-in function of the B-source grammar applied to its
+/// arguments.
+fn builtin(name: &str, mut args: Vec<T>, s: usize, e: usize) -> Result<T, BError> {
+    let argc = args.len();
+    let want = |n: usize| -> Result<(), BError> {
+        if argc == n {
+            Ok(())
+        } else {
+            Err(berr(format!("`{name}` takes {n} argument(s)"), s, e))
+        }
+    };
+    let f = match name {
+        "abs" => ExprFunc::Abs,
+        "acos" => ExprFunc::Acos,
+        "acosh" => ExprFunc::Acosh,
+        "asin" => ExprFunc::Asin,
+        "asinh" => ExprFunc::Asinh,
+        "atan" => ExprFunc::Atan,
+        "atanh" => ExprFunc::Atanh,
+        "cos" => ExprFunc::Cos,
+        "cosh" => ExprFunc::Cosh,
+        "exp" => ExprFunc::Exp,
+        // ngspice's `ln` and `log` are both the natural log
+        // (`PTlog`); `log10` is the 3f5's `log`.
+        "ln" | "log" => ExprFunc::Ln,
+        "log10" => ExprFunc::Log,
+        "sgn" => ExprFunc::Sgn,
+        "sin" => ExprFunc::Sin,
+        "sinh" => ExprFunc::Sinh,
+        "sqrt" => ExprFunc::Sqrt,
+        "tan" => ExprFunc::Tan,
+        "tanh" => ExprFunc::Tanh,
+        "u" => ExprFunc::U,
+        "uramp" => ExprFunc::Uramp,
+        "pow" | "pwr" | "min" | "max" => {
+            want(2)?;
+            let b = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
+            let a = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
+            return binary_func(name, a, b, s, e);
+        }
+        "ceil" | "floor" | "nint" | "u2" | "pwl" | "eq0" | "ne0" | "gt0" | "lt0" | "ge0"
+        | "le0" | "ddt" => {
+            return Err(berr(
+                format!("`{name}()` in a behavioural R/C/L is not supported yet"),
+                s,
+                e,
+            ));
+        }
+        _ => return Err(berr(format!("unknown function `{name}`"), s, e)),
+    };
+    want(1)?;
+    let a = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
+    tcall(f, a, s, e)
 }
 
 /// `pow` (`PTpower`), `pwr` (`PTpwr`), `min`, `max` as 3f5 trees:
@@ -619,9 +1054,15 @@ fn binary_func(name: &str, a: T, b: T, s: usize, e: usize) -> Result<T, BError> 
 
 /// Translate an ngspice behavioural expression (the text inside the
 /// braces or quotes) into a B-source tree, evaluating its parameters
-/// in `env`. The result stays [`LIM_DEPTH`]/[`LIM_NODES`] below the
-/// B-source limits, so [`elements`] can wrap it.
-pub(crate) fn translate(text: &str, env: &ParamEnv) -> Result<Expr, BError> {
+/// in `env` and expanding its user functions. `span_of` maps byte
+/// ranges of `text` to spans. The result stays
+/// [`LIM_DEPTH`]/[`LIM_NODES`] below the B-source limits, so
+/// [`elements`] can wrap it.
+pub(crate) fn translate(
+    text: &str,
+    env: &ParamEnv,
+    span_of: &dyn Fn(usize, usize) -> Span,
+) -> Result<Expr, BError> {
     if text.len() > crate::pexpr::MAX_LEN {
         return Err(berr(
             format!(
@@ -632,6 +1073,9 @@ pub(crate) fn translate(text: &str, env: &ParamEnv) -> Result<Expr, BError> {
             1,
         ));
     }
+    let st = Shared {
+        depth: Cell::new(0),
+    };
     let mut p = Parser {
         lx: Lexer {
             s: text.as_bytes(),
@@ -641,14 +1085,27 @@ pub(crate) fn translate(text: &str, env: &ParamEnv) -> Result<Expr, BError> {
         start: 0,
         end: 0,
         env,
-        depth: 0,
+        span_of,
+        st: &st,
+        func: None,
     };
-    p.bump()?;
-    let t = p.add()?;
-    if p.tok != Tok::End {
-        return Err(berr("unexpected text after the expression", p.start, p.end));
+    p.whole().map(|t| t.e)
+}
+
+/// The temperature factor ngspice-47's B source applies to its value
+/// when `inp_compat` passes the R/C/L's `tc1`/`tc2` on (`ASRCload`,
+/// `spicelib/devices/asrc/asrcload.c`, Modified BSD): `f = 1 + tc1·Δ +
+/// tc2·Δ²` with `Δ = (T + CONSTCtoK) − 300.15` — the nominal
+/// temperature is fixed at 27 °C there, not `tnom` — inverted when
+/// `reciproctc=1` (R and C), then multiplied by the B source's own
+/// `m` (`reciprocm=0`). Exact at the fixed circuit temperature `t`.
+pub(crate) fn tc_factor(tc1: f64, tc2: f64, t: f64, reciprocal: bool, m: f64) -> f64 {
+    let d = (t + CTOK) - 300.15;
+    let mut f = 1.0 + tc1 * d + tc2 * d * d;
+    if reciprocal {
+        f = 1.0 / f;
     }
-    Ok(t.e)
+    f * m
 }
 
 /// One generated element.
@@ -672,26 +1129,43 @@ pub(crate) struct Behav<'a> {
     pub m: Option<f64>,
     /// A charge-form capacitor (`q=`).
     pub charge: bool,
+    /// The card's `tc1`, `tc2` (0 without them).
+    pub tc: (f64, f64),
+    /// The circuit temperature (°C) the `tc` factor is taken at.
+    pub temp: f64,
     pub span: Span,
+}
+
+/// `k·x`, or `x` when `k` is 1.
+fn scaled(k: f64, x: Expr) -> Expr {
+    if k == 1.0 {
+        x
+    } else {
+        bin(ExprOp::Times, Expr::Num(k), x)
+    }
 }
 
 /// The ngspice-47 rewriting (`inp_compat`), as elements.
 pub(crate) fn elements(b: Behav) -> Vec<Element> {
     let (name, n1, n2, span) = (b.name, b.n1, b.n2, b.span);
+    let (tc1, tc2) = b.tc;
+    // `reciproctc=1` on the B line of a capacitor, 0 on an inductor's.
+    let kc = tc_factor(tc1, tc2, b.temp, true, 1.0);
     match b.letter {
         'r' => {
-            // `b%s %s %s i = v(%s, %s)/(%s) … m=… reciprocm=0`: the
-            // B source's `m` multiplies the current.
-            let mut expr = bin(
-                ExprOp::Divide,
-                bin(ExprOp::Minus, Expr::V(n1.into()), Expr::V(n2.into())),
-                b.expr,
+            // `b%s %s %s i = v(%s, %s)/(%s) tc1=… tc2=… m=…
+            // reciproctc=1 reciprocm=0`: the B source divides the
+            // current by the temperature factor and multiplies it by
+            // its `m` (`tc_factor`).
+            let k = tc_factor(tc1, tc2, b.temp, true, b.m.unwrap_or(1.0));
+            let expr = scaled(
+                k,
+                bin(
+                    ExprOp::Divide,
+                    bin(ExprOp::Minus, Expr::V(n1.into()), Expr::V(n2.into())),
+                    b.expr,
+                ),
             );
-            if let Some(m) = b.m
-                && m != 1.0
-            {
-                expr = bin(ExprOp::Times, Expr::Num(m), expr);
-            }
             vec![el(
                 format!("b{name}"),
                 &[n1, n2],
@@ -727,7 +1201,7 @@ pub(crate) fn elements(b: Behav) -> Vec<Element> {
                     &["0", &int1],
                     Device::Behavioral {
                         kind: SourceKind::Current,
-                        expr: b.expr,
+                        expr: scaled(kc, b.expr),
                     },
                     span,
                 ),
@@ -797,10 +1271,13 @@ pub(crate) fn elements(b: Behav) -> Vec<Element> {
                     &[n1, n2],
                     Device::Behavioral {
                         kind: SourceKind::Current,
-                        expr: bin(
-                            ExprOp::Times,
-                            bin(ExprOp::Times, Expr::Num(1e6), Expr::I(meas)),
-                            b.expr,
+                        expr: scaled(
+                            kc,
+                            bin(
+                                ExprOp::Times,
+                                bin(ExprOp::Times, Expr::Num(1e6), Expr::I(meas)),
+                                b.expr,
+                            ),
                         ),
                     },
                     span,
@@ -834,10 +1311,13 @@ pub(crate) fn elements(b: Behav) -> Vec<Element> {
                     &[n2, n1],
                     Device::Behavioral {
                         kind: SourceKind::Voltage,
-                        expr: bin(
-                            ExprOp::Divide,
-                            bin(ExprOp::Times, Expr::V(int2), b.expr),
-                            Expr::Num(b.m.unwrap_or(1.0)),
+                        expr: scaled(
+                            tc_factor(tc1, tc2, b.temp, false, 1.0),
+                            bin(
+                                ExprOp::Divide,
+                                bin(ExprOp::Times, Expr::V(int2), b.expr),
+                                Expr::Num(b.m.unwrap_or(1.0)),
+                            ),
                         ),
                     },
                     span,
@@ -847,20 +1327,16 @@ pub(crate) fn elements(b: Behav) -> Vec<Element> {
     }
 }
 
-/// The value of a keyword parameter that must be one number.
-pub(crate) fn num(v: &ParamValue) -> Option<f64> {
-    match v {
-        ParamValue::Num(x) => Some(*x),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn nospan(s: usize, e: usize) -> Span {
+        Span::new(crate::span::FileId(0), s, e)
+    }
+
     fn tr(s: &str) -> Result<Expr, String> {
-        translate(s, &ParamEnv::default()).map_err(|e| e.msg)
+        translate(s, &ParamEnv::default(), &nospan).map_err(|e| e.msg)
     }
 
     fn num(e: &Expr) -> f64 {
@@ -934,7 +1410,7 @@ mod tests {
             ("1+time", "time"),
             ("floor(v(1))", "floor"),
             ("foo(v(1))", "unknown function"),
-            ("x+v(1)", "undefined parameter"),
+            ("x+v(1)", "unknown parameter"),
             ("min(v(1))", "2 argument"),
             ("(v(1)", "`)`"),
         ] {
@@ -962,7 +1438,8 @@ mod tests {
 
     /// Hostile input (principle 4): every bound is enforced while the
     /// tree is built, so these end fast with an error and never
-    /// overflow a small stack (the thread has the 2 MiB of a default spawned thread).
+    /// overflow a small stack (the thread has 1 MiB, half of a
+    /// default spawned thread).
     #[test]
     fn hostile_expressions_are_bounded() {
         let run = || {
@@ -999,13 +1476,41 @@ mod tests {
                 ),
             ];
             for (s, what) in cases {
-                let e = translate(&s, &ParamEnv::default()).unwrap_err();
+                let e = translate(&s, &ParamEnv::default(), &nospan).unwrap_err();
                 assert!(e.msg.contains(what), "{}: {}", &s[..20], e.msg);
                 assert!(e.start < s.len().max(1));
             }
         };
         std::thread::Builder::new()
-            .stack_size(2 * 1024 * 1024)
+            .stack_size(1024 * 1024)
+            .spawn(run)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// The deepest nesting accepted, of each kind, parses in a 1 MiB
+    /// thread (debug build included); one level more is refused.
+    #[test]
+    fn deepest_nesting_fits_a_1mib_stack() {
+        let run = || {
+            let p = ParamEnv::default();
+            let n = MAX_NEST - 1;
+            for (open, close) in [("(", ")"), ("abs(", ")"), ("-(", ")"), ("2^(", ")")] {
+                let levels = if open == "-(" { n / 2 } else { n };
+                let s = format!("{}v(a){}", open.repeat(levels), close.repeat(levels));
+                assert!(translate(&s, &p, &nospan).is_ok(), "{open} x {levels}");
+                let s = format!(
+                    "{}v(a){}",
+                    open.repeat(MAX_NEST + 1),
+                    close.repeat(MAX_NEST + 1)
+                );
+                let e = translate(&s, &p, &nospan).unwrap_err();
+                assert!(e.msg.contains("nested too deeply"), "{}", e.msg);
+            }
+        };
+        std::thread::Builder::new()
+            .stack_size(1024 * 1024)
             .spawn(run)
             .unwrap()
             .join()

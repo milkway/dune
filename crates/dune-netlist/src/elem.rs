@@ -228,7 +228,7 @@ pub(crate) fn parse_element_in(
     let letter = name.chars().next().unwrap_or('\0');
     // ngspice-47 rewrites an R/C/L whose value depends on the circuit
     // into B sources and helpers (`inp_compat`; `behav.rs`).
-    if crate::behav::wanted(card, letter) {
+    if crate::behav::wanted(card, letter, env) {
         return behavioral_rlc(&mut ctx, &name, letter, span);
     }
     single_element(ctx, name, letter, span, model_names, vdmos_models)
@@ -286,12 +286,14 @@ fn single_element(
     })
 }
 
-/// A behavioural R/C/L (`behav.rs`): the nodes, the expression in
-/// `{…}` or `'…'` after them (ngspice looks for the first `{` once
-/// quotes became braces, and refuses a card without one), then the
-/// keywords ngspice carries over — `tc1`, `tc2` (refused unless zero:
-/// Dune's B source has no temperature coefficients yet), `m` — and
-/// `noisy=1`/`noise=1` (refused: ngspice's extra noise subcircuit).
+/// A behavioural R/C/L (`behav.rs`): the nodes, the expression after
+/// them (ngspice takes the first `{` once quotes and bare values after
+/// `=` got braces, `behav::equation`, and refuses a card without
+/// one), then the keywords ngspice carries over, wherever they stand
+/// — `tc1`, `tc2` (the B source's
+/// temperature factor, folded in at the circuit temperature:
+/// `behav::tc_factor`), `m` — and `noisy=1`/`noise=1` (refused:
+/// ngspice's extra noise subcircuit).
 fn behavioral_rlc(ctx: &mut ElemCtx, name: &str, letter: char, span: Span) -> Vec<Element> {
     let card = ctx.card;
     let Some(n1) = ctx.node_req("first node") else {
@@ -303,76 +305,128 @@ fn behavioral_rlc(ctx: &mut ElemCtx, name: &str, letter: char, span: Span) -> Ve
     let text = &card.text;
     let at = crate::behav::after_nodes(text).unwrap_or(text.len());
     let whole = card.span_of(0, text.len());
-    let rest = &text[at..];
-    let Some(open_rel) = rest.find(['{', '\'']) else {
-        ctx.err(
-            card.span_of(at, text.len()),
-            "a behavioural R/C/L needs its expression in {…} or '…' (as in ngspice)",
-        );
-        return Vec::new();
-    };
-    let open = at + open_rel;
-    let close_ch = if text.as_bytes()[open] == b'{' {
-        '}'
-    } else {
-        '\''
-    };
-    let Some(close_rel) = text[open + 1..].find(close_ch) else {
-        ctx.err(
-            card.span_of(open, text.len()),
-            format!(
-                "`{}` without its closing `{close_ch}`",
-                &text[open..open + 1]
-            ),
-        );
-        return Vec::new();
-    };
-    let close = open + 1 + close_rel;
-    let expr = match crate::behav::translate(&text[open + 1..close], ctx.env) {
-        Ok(e) => e,
+    let eq = match crate::behav::equation(text, at) {
+        Ok(Some(eq)) => eq,
+        Ok(None) => {
+            ctx.err(
+                card.span_of(at, text.len()),
+                "a behavioural R/C/L needs its expression in {…} or '…' (as in ngspice)",
+            );
+            return Vec::new();
+        }
         Err(e) => {
-            ctx.err(card.span_of(open + 1 + e.start, open + 1 + e.end), e.msg);
+            ctx.err(card.span_of(at + e.start, at + e.end), e.msg);
             return Vec::new();
         }
     };
-    let charge = letter == 'c' && {
-        let before = text[at..open].trim();
-        before.ends_with('=') && before[..before.len() - 1].trim().eq_ignore_ascii_case("q")
+    let span_of = |s: usize, e: usize| card.span_of(eq.start + s, eq.start + e);
+    let expr = match crate::behav::translate(&text[eq.start..eq.end], ctx.env, &span_of) {
+        Ok(e) => e,
+        Err(e) => {
+            // An empty message was reported where it arose.
+            if !e.msg.is_empty() {
+                let at = e.at.unwrap_or_else(|| span_of(e.start, e.end));
+                ctx.err(at, e.msg);
+            }
+            return Vec::new();
+        }
     };
-    ctx.sc.seek(close + 1);
+    let own = match letter {
+        'r' => ["r", "resistance"],
+        'c' => ["c", "capacitance"],
+        _ => ["l", "inductance"],
+    };
+    let charge = letter == 'c' && eq.keyword.as_deref() == Some("q");
+    if let Some(kw) = &eq.keyword
+        && !own.contains(&kw.as_str())
+        && !charge
+    {
+        ctx.warn(
+            card.span_of(eq.lo, eq.hi),
+            format!(
+                "ngspice-47 takes the first `{{…}}` after the nodes as the behavioural value — \
+                 here the value of `{kw}=`, `{}` (a bare value after `=` gets braces first) — \
+                 and drops the rest; Dune does the same",
+                &text[eq.start..eq.end]
+            ),
+        );
+    }
+    // The keywords ngspice carries over are searched in the whole line
+    // after the nodes (`eval_tc`, `eval_m`: the first `tc1=`, `tc2=`,
+    // ` m=`); everything else is dropped unevaluated, as there.
+    ctx.sc.seek(at);
     let mut m = None;
+    let mut tc: (Option<f64>, Option<f64>) = (None, None);
+    let mut tc_span = None;
     let mut failed = false;
-    for p in ctx.keyword_params() {
-        let v = crate::behav::num(&p.value);
-        match (p.name.as_str(), v) {
-            ("tc1" | "tc2", Some(0.0)) => {}
+    while let Some(tok) = ctx.sc.next_tok() {
+        if tok.end > eq.lo && tok.start < eq.hi {
+            // The expression itself (positional).
+            ctx.sc.seek(eq.hi);
+            continue;
+        }
+        let pspan = ctx.sc.span(&tok);
+        let pname = tok.lc();
+        if !matches!(pname.as_str(), "tc1" | "tc2" | "m" | "noisy" | "noise") {
+            skip_assigned_value(&mut ctx.sc);
+            {
+                ctx.warn(
+                    pspan,
+                    format!("`{pname}` on a behavioural R/C/L is dropped, as ngspice drops it"),
+                );
+            }
+            continue;
+        }
+        let v = ctx.value_opt();
+        match (pname.as_str(), v) {
+            ("tc1" | "tc2", Some(x)) if x.is_finite() => {
+                let slot = if pname == "tc1" { &mut tc.0 } else { &mut tc.1 };
+                if slot.is_none() {
+                    *slot = Some(x);
+                    if x != 0.0 {
+                        tc_span.get_or_insert(pspan);
+                    }
+                }
+            }
             ("tc1" | "tc2", _) => {
                 ctx.err(
-                    p.span,
-                    format!(
-                        "{} on a behavioural R/C/L is not supported yet (the B source has no \
-                         temperature coefficients)",
-                        p.name
-                    ),
+                    pspan,
+                    format!("{pname} on a behavioural R/C/L needs one finite number"),
                 );
                 failed = true;
             }
-            ("m", Some(x)) => match ctx.own_mult(x, p.span) {
-                Some(x) => m = Some(x),
-                None => failed = true,
-            },
+            ("m", Some(x)) => {
+                if m.is_none() {
+                    match ctx.own_mult(x, pspan) {
+                        Some(x) => m = Some(x),
+                        None => failed = true,
+                    }
+                }
+            }
             ("noisy" | "noise", Some(0.0)) => {}
-            ("noisy" | "noise", _) => {
+            _ if pname.starts_with('n') => {
                 ctx.err(
-                    p.span,
+                    pspan,
                     "the noisy behavioural resistor (noisy=1) is not supported yet",
                 );
                 failed = true;
             }
-            (other, _) => ctx.warn(
-                p.span,
-                format!("`{other}` on a behavioural R/C/L is dropped, as ngspice drops it"),
-            ),
+            _ => {
+                ctx.err(
+                    pspan,
+                    format!("{pname} on a behavioural R/C/L needs a value"),
+                );
+                failed = true;
+            }
+        }
+        // A list (`tc1=1,2`) is not one number.
+        if ctx.value_opt().is_some() {
+            ctx.err(
+                pspan,
+                format!("{pname} on a behavioural R/C/L needs one finite number"),
+            );
+            failed = true;
+            while ctx.value_opt().is_some() {}
         }
     }
     if ctx.replaced_m {
@@ -385,6 +439,11 @@ fn behavioral_rlc(ctx: &mut ElemCtx, name: &str, letter: char, span: Span) -> Ve
     if failed {
         return Vec::new();
     }
+    // The factor is taken at the circuit temperature once, like
+    // `temper` (`parse.rs` `temper_checks`).
+    if let Some(at) = tc_span {
+        ctx.env.note_temperature_use(at);
+    }
     crate::behav::elements(crate::behav::Behav {
         letter,
         name,
@@ -393,8 +452,27 @@ fn behavioral_rlc(ctx: &mut ElemCtx, name: &str, letter: char, span: Span) -> Ve
         expr,
         m,
         charge,
+        tc: (tc.0.unwrap_or(0.0), tc.1.unwrap_or(0.0)),
+        temp: ctx.env.temperature(),
         span: span.to(whole),
     })
+}
+
+/// Skip the value of a keyword the behavioural rewriting drops
+/// (`name=value`, the value `{…}`, `'…'`, a number or a bare
+/// expression), without evaluating it; nothing for a flag.
+fn skip_assigned_value(sc: &mut Scanner) {
+    if !sc.at_assignment() {
+        return;
+    }
+    match sc.peek_tok() {
+        Some(t) if t.text.starts_with(['{', '\'']) => {
+            sc.next_tok();
+        }
+        _ => {
+            sc.assign_value();
+        }
+    }
 }
 
 type Parsed = Option<(Vec<String>, Device)>;

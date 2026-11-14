@@ -56,8 +56,9 @@ pub(crate) struct UserFn<'c> {
     pub body: Result<Expr, PError>,
     pub name_span: Span,
     card: &'c Card,
-    /// Byte offset of the body inside `card.text`.
+    /// Byte range of the body inside `card.text`.
     body_start: usize,
+    body_end: usize,
     /// Set when the function is part of a recursion (already reported).
     pub recursive: Cell<bool>,
 }
@@ -66,6 +67,11 @@ impl UserFn<'_> {
     /// Span of bytes `s..e` of the body text.
     pub fn span_of(&self, s: usize, e: usize) -> Span {
         self.card.span_of(self.body_start + s, self.body_start + e)
+    }
+
+    /// The body as written (empty when the definition has none).
+    pub fn body_text(&self) -> &str {
+        &self.card.text[self.body_start..self.body_end]
     }
 }
 
@@ -419,6 +425,7 @@ pub(crate) fn parse_def<'c>(card: &'c Card, diags: &mut Vec<Diagnostic>) -> Opti
         name_span,
         card,
         body_start: p,
+        body_end: end,
         recursive: Cell::new(false),
     })
 }

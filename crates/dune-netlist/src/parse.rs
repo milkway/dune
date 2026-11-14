@@ -528,9 +528,9 @@ fn temper_checks(nl: &Netlist, at: crate::span::Span, env: &ParamEnv, diags: &mu
             && sweeps.iter().any(|s| s.src.eq_ignore_ascii_case("temp"))
         {
             diags.push(Diagnostic::error(
-                "a .dc temp sweep cannot be combined with `temper`: Dune evaluates `temper` \
-                 once, when the netlist is read, and re-expanding the deck at every \
-                 temperature point is not supported yet",
+                "a .dc temp sweep cannot be combined with `temper` (or tc1/tc2 on a \
+                 behavioural R/C/L): Dune evaluates them once, when the netlist is read, and \
+                 re-expanding the deck at every temperature point is not supported yet",
                 *span,
             ));
         }
@@ -538,8 +538,9 @@ fn temper_checks(nl: &Netlist, at: crate::span::Span, env: &ParamEnv, diags: &mu
     let t = env.temperature();
     diags.push(Diagnostic::warning(
         format!(
-            "`temper` is evaluated once, at the circuit temperature {t} °C; changing the \
-             temperature after the netlist is read does not re-evaluate it"
+            "`temper` (and tc1/tc2 on a behavioural R/C/L) is evaluated once, at the circuit \
+             temperature {t} °C; changing the temperature after the netlist is read does not \
+             re-evaluate it"
         ),
         at,
     ));

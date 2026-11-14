@@ -149,6 +149,20 @@ impl<'c> Scanner<'c> {
         })
     }
 
+    /// Whether the separators before the next field hold an
+    /// assignment `=` (not `==`).
+    pub fn at_assignment(&self) -> bool {
+        let bytes = self.card.text.as_bytes();
+        let mut p = self.pos;
+        while p < bytes.len() && is_sep(bytes[p]) {
+            if bytes[p] == b'=' {
+                return bytes.get(p + 1) != Some(&b'=');
+            }
+            p += 1;
+        }
+        false
+    }
+
     /// Continue scanning from byte offset `pos` of the card text.
     pub fn seek(&mut self, pos: usize) {
         self.pos = pos.min(self.card.text.len());
