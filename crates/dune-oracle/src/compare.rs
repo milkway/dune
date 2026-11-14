@@ -259,7 +259,7 @@ fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotRepor
 
     let scale = is_scale(oracle);
     for (i, var) in oracle.variables.iter().enumerate() {
-        let Some(j) = candidate.variable_index(&var.name) else {
+        let Some(j) = paired_index(oracle, i, candidate) else {
             r.problems.push(format!("variable `{}` missing", var.name));
             continue;
         };
@@ -293,6 +293,26 @@ fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotRepor
         }
     }
     r
+}
+
+/// The candidate vector paired with oracle vector `i`: the one of the
+/// same name (case-insensitive) and the same rank among the vectors of
+/// that name. ngspice writes every branch of a multi-branch device
+/// under the instance name — the two `i(y1)` of a KSPICE TXL line, the
+/// `2k` of a CPL — in creation order, and Dune writes them alike.
+fn paired_index(oracle: &Plot, i: usize, candidate: &Plot) -> Option<usize> {
+    let name = &oracle.variables[i].name;
+    let rank = oracle.variables[..i]
+        .iter()
+        .filter(|v| v.name.eq_ignore_ascii_case(name))
+        .count();
+    candidate
+        .variables
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.name.eq_ignore_ascii_case(name))
+        .nth(rank)
+        .map(|(j, _)| j)
 }
 
 /// Relative ruler of the scale column (see [`compare_scale`]).
@@ -442,7 +462,7 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances, mode: TranMod
     // run. delta = 0 is tried first and kept when it passes.
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     for (i, var) in oracle.variables.iter().enumerate().skip(1) {
-        match candidate.variable_index(&var.name) {
+        match paired_index(oracle, i, candidate) {
             Some(j) => pairs.push((i, j)),
             None => r.problems.push(format!("variable `{}` missing", var.name)),
         }
