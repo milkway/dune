@@ -59,6 +59,13 @@
 #'     each evaluated on every plot of its analysis, as the tibble
 #'     [spice_measure()] returns (zero rows without `.measure` cards).
 #'     Failed measurements are rows with `error` set.
+#'   * `fourier`: the deck's `.four` cards, evaluated on the run's last
+#'     transient plot with the `nfreqs`, `nperiods`, `polydegree` and
+#'     `fourgridsize` of its `.options` card, as the tibble
+#'     [spice_fourier()] returns, `card` numbering the `.four` cards
+#'     (zero rows without `.four` cards). A vector that cannot be
+#'     analysed (no transient, an unknown vector, a run shorter than the
+#'     periods asked for) is a row with `error` set.
 #'
 #' @section Errors:
 #' Failures are signalled with [cli::cli_abort()] as conditions of class
@@ -117,10 +124,11 @@ spice_run <- function(deck, includes = NULL, options = NULL, tmax_divisor = NULL
   if (!isTRUE(out$ok)) {
     abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
-  new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements)
+  new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier)
 }
 
-new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements = NULL) {
+new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements = NULL,
+                             fourier = NULL) {
   plots <- lapply(raw_plots, new_spice_plot)
   labels <- make.unique(vapply(plots, `[[`, "", "plotname"))
   for (i in seq_along(plots)) plots[[i]]$label <- labels[[i]]
@@ -131,7 +139,8 @@ new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements 
       plots = plots,
       notes = as.character(notes),
       diagnostics = diagnostics,
-      measurements = measurements_tibble(measurements, labels)
+      measurements = measurements_tibble(measurements, labels),
+      fourier = fourier_tibble(fourier)
     ),
     class = "spice_result"
   )
@@ -353,6 +362,19 @@ print.spice_result <- function(x, ...) {
     m <- x$measurements
     shown <- ifelse(is.na(m$error), format(m$value, digits = 6), paste("failed:", m$error))
     out <- c(out, cli::format_inline("{nm} measurement{?s}:"), bullets("*", paste(m$name, "=", shown)))
+  }
+  f <- x$fourier
+  if (!is.null(f) && nrow(f) > 0L) {
+    # One line per analysed vector: its THD, or why it has no table.
+    f <- f[!duplicated(paste(f$card, f$vector, sep = "\r")), ]
+    shown <- ifelse(is.na(f$error),
+      paste0("THD = ", format(f$thd, digits = 6), " %"),
+      paste("failed:", f$error)
+    )
+    out <- c(
+      out, cli::format_inline("{nrow(f)} Fourier analys{?is/es}:"),
+      bullets("*", paste0(f$vector, ": ", shown))
+    )
   }
   nd <- nrow(x$diagnostics)
   if (nd > 0L) {

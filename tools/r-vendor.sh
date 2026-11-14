@@ -83,6 +83,11 @@ mkdir -p "$T"
 (cd "$ROOT/corpus" && tar $TARFLAGS -cf - \
   ORACLE \
   basic/acrc.cir \
+  four/four_sine.cir four/four_square.cir four/four_clip.cir four/four_rect.cir \
+  four/golden/four_sine.four four/golden/four_square.four \
+  four/golden/four_clip.four four/golden/four_rect.four \
+  four/golden/four_sine.raw four/golden/four_square.raw \
+  four/golden/four_clip.raw four/golden/four_rect.raw \
   golden/rc.raw golden/rca3040.raw \
   measure/meas_rlc.cir measure/golden/meas_rlc.raw measure/golden/meas_rlc.meas \
   pic \

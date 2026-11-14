@@ -37,6 +37,16 @@ NULL
   stop(class, " cannot be modified", call. = FALSE)
 }
 
+#' Fourier analysis of one plot (a list as `plot_to_r` makes; `scale`
+#' 1-based, 0 for none) at fundamental `freq`, for the `.print`-style
+#' expressions `vectors`, with `nfreqs`, `nperiods`, `polydegree` and
+#' `gridsize` already checked by the R side: `list(ok, message,
+#' fourier)`.
+#' @noRd
+`ffi_fourier` <- function(`plot`, `scale`, `freq`, `vectors`, `nfreqs`, `nperiods`, `polydegree`, `gridsize`) {
+  .Call(savvy_ffi_fourier__impl, `plot`, `scale`, `freq`, `vectors`, `nfreqs`, `nperiods`, `polydegree`, `gridsize`)
+}
+
 #' Measure one plot (a list as `plot_to_r` makes; `scale` 1-based,
 #' 0 for none) with `.measure` bodies `specs` named `names`:
 #' `list(ok, message, measurements)`.
@@ -109,8 +119,8 @@ NULL
 #' column-major matrix (one row per run, one column per parameter),
 #' `threads` 1 for the sequential path, 0 for one per core. Returns
 #' `list(ok, title, params, runs, diagnostics, kind, message)`; each
-#' run is `list(ok, plots, notes, measurements)` or `list(ok = FALSE, kind,
-#' message)`.
+#' run is `list(ok, plots, notes, measurements, fourier)` or
+#' `list(ok = FALSE, kind, message)`.
 #' @noRd
 `ffi_sweep_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `params`, `values`, `threads`) {
   .Call(savvy_ffi_sweep_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `params`, `values`, `threads`)

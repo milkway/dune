@@ -1,3 +1,16 @@
+# spice (development version)
+
+* `.four` cards (Fourier analysis and THD, ngspice-47 semantics) come
+  back in `res$fourier`: a long tibble with one row per harmonic of
+  each vector (`card`, `vector`, `harmonic`, `frequency`, `magnitude`,
+  `phase` in degrees, `norm_magnitude`, `norm_phase`, `thd` in
+  percent, `gridsize`, `polydegree`, `nperiods`, `error`). The deck's
+  `.options` `nfreqs`, `nperiods`, `polydegree` and `fourgridsize`
+  apply. A vector that cannot be analysed is a row with `error` set.
+  `spice_fourier()` analyses any transient plot the same way, as
+  `spice_measure()` measures one. Sweep runs and session reruns carry
+  their `fourier` too.
+
 # spice 0.1.0
 
 First release, aligned with Dune v0.1.0.

@@ -7,9 +7,11 @@ use std::path::Path;
 
 use dune_core::consts::CTOK;
 use dune_core::{
-    AlterValue, Circuit, Compat, MeasureError, Measurement, Method, Options, PSS_FREQ_PLOT,
-    PSS_TIME_PLOT, PssParams, Session, Solution, SweepParam, measure_all,
+    AlterValue, Circuit, Compat, FourError, FourParams, Fourier, MeasureError, Measurement, Method,
+    Options, OutExpr, PSS_FREQ_PLOT, PSS_TIME_PLOT, PssParams, Session, Solution, SweepParam,
+    four_all, measure_all,
 };
+use dune_netlist::ir::{Output, OutputKind};
 use dune_netlist::{IncludeLoader, ParseOutcome, Severity};
 use dune_raw::{Data, Plot, Rawfile};
 
@@ -165,8 +167,154 @@ pub struct RunOutput {
     /// The deck's `.measure` cards, each on every plot of its
     /// analysis (plot order, then card order).
     pub measures: Vec<MeasRow>,
+    /// The deck's `.four` cards on the run's last transient plot, one
+    /// row per harmonic (one row per failed vector).
+    pub fourier: Vec<FourRow>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<Diag>,
+}
+
+/// One harmonic of one `.four` vector as plain data (a row of the R
+/// tibble `res$fourier`). A vector without a table is one row with
+/// `error` set, `harmonic`/`gridsize`/`polydegree`/`nperiods` `None`
+/// and the numbers NaN.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FourRow {
+    /// 0-based position of the card among the deck's `.four` cards;
+    /// `None` for `spice_fourier()`.
+    pub card: Option<usize>,
+    pub vector: String,
+    /// 0 for DC.
+    pub harmonic: Option<usize>,
+    pub frequency: f64,
+    pub magnitude: f64,
+    /// Degrees.
+    pub phase: f64,
+    pub norm_magnitude: f64,
+    pub norm_phase: f64,
+    /// Percent; the vector's, repeated on each of its rows.
+    pub thd: f64,
+    pub gridsize: Option<usize>,
+    pub polydegree: Option<usize>,
+    pub nperiods: Option<usize>,
+    pub error: Option<String>,
+}
+
+impl FourRow {
+    /// The rows of one vector's outcome.
+    pub fn of(card: Option<usize>, vector: &str, r: &Result<Fourier, FourError>) -> Vec<FourRow> {
+        match r {
+            Ok(f) => f
+                .harmonics
+                .iter()
+                .enumerate()
+                .map(|(k, h)| FourRow {
+                    card,
+                    vector: vector.to_string(),
+                    harmonic: Some(k),
+                    frequency: h.freq,
+                    magnitude: h.mag,
+                    phase: h.phase,
+                    norm_magnitude: h.norm_mag,
+                    norm_phase: h.norm_phase,
+                    thd: f.thd,
+                    gridsize: Some(f.gridsize),
+                    polydegree: Some(f.polydegree),
+                    nperiods: Some(f.nperiods),
+                    error: None,
+                })
+                .collect(),
+            Err(e) => vec![FourRow {
+                card,
+                vector: vector.to_string(),
+                harmonic: None,
+                frequency: f64::NAN,
+                magnitude: f64::NAN,
+                phase: f64::NAN,
+                norm_magnitude: f64::NAN,
+                norm_phase: f64::NAN,
+                thd: f64::NAN,
+                gridsize: None,
+                polydegree: None,
+                nperiods: None,
+                error: Some(e.to_string()),
+            }],
+        }
+    }
+}
+
+/// The deck's `.four` cards (`outputs`, with the `.options`-derived
+/// `params`) on a run's plots, as rows; `card` numbers the `.four`
+/// cards alone, in deck order.
+fn deck_fourier(outputs: &[Output], solutions: &[Solution], params: &FourParams) -> Vec<FourRow> {
+    let ordinal: Vec<Option<usize>> = outputs
+        .iter()
+        .scan(0usize, |n, o| {
+            Some(matches!(o.kind, OutputKind::Four { .. }).then(|| {
+                *n += 1;
+                *n - 1
+            }))
+        })
+        .collect();
+    four_all(outputs, solutions, params)
+        .iter()
+        .flat_map(|o| FourRow::of(ordinal[o.card], &o.var, &o.result))
+        .collect()
+}
+
+/// `spice_fourier()`: the Fourier analysis of `vectors` (`.print`-style
+/// expressions, or `all`) of one plot (`scale` its 0-based scale index)
+/// at fundamental `fund`. Err is a message for a plot that is not a
+/// transient (or the time plot of a `.pss`) or a malformed expression;
+/// a vector that cannot be analysed is a row with `error` set.
+pub fn fourier_plot(
+    plot: Plot,
+    scale: Option<usize>,
+    fund: f64,
+    vectors: &[String],
+    params: &FourParams,
+) -> Result<Vec<FourRow>, String> {
+    if plot.name != "Transient Analysis" && plot.name != PSS_TIME_PLOT {
+        return Err(format!(
+            "plot \"{}\" is not a transient: fourier needs a .tran plot (or the time plot of a .pss)",
+            plot.name
+        ));
+    }
+    let mut exprs = Vec::with_capacity(vectors.len());
+    for v in vectors {
+        exprs.push(OutExpr::parse(v).map_err(|e| e.to_string())?);
+    }
+    let sol = Solution {
+        plotname: "Transient Analysis".to_string(),
+        variables: plot
+            .variables
+            .into_iter()
+            .map(|v| (v.name, v.vtype))
+            .collect(),
+        data: plot.data,
+        scale,
+    };
+    let mut rows = Vec::new();
+    for e in &exprs {
+        // `all`: every vector of the plot, the scale included (as
+        // `four_all` expands it).
+        let each: Vec<OutExpr> = match e {
+            OutExpr::All => sol
+                .variables
+                .iter()
+                .map(|(n, _)| OutExpr::Name(n.clone()))
+                .collect(),
+            _ => vec![e.clone()],
+        };
+        for e in each {
+            rows.extend(FourRow::of(
+                None,
+                &e.label(),
+                &sol.fourier(fund, &e, params),
+            ));
+        }
+    }
+    Ok(rows)
 }
 
 /// One measurement as plain data (a row of the R tibble).
@@ -462,6 +610,9 @@ fn render_diags(parsed: &ParseOutcome, diags: &[dune_netlist::Diagnostic]) -> Ve
 struct Prepared {
     netlist: dune_netlist::ir::Netlist,
     options: Options,
+    /// `nfreqs`, `nperiods`, `polydegree`, `fourgridsize` from the
+    /// deck's `.options` (what its `.four` cards use).
+    four: FourParams,
     diagnostics: Vec<Diag>,
 }
 
@@ -498,6 +649,7 @@ fn prepare(
     let mut options = Options::default();
     let mut opt_diags = Vec::new();
     options.apply(&parsed.netlist.options, &mut opt_diags);
+    let four = FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
     diagnostics.extend(render_diags(&parsed, &opt_diags));
     // Cannot fail: validated above on a fresh `Options`.
     apply_options(&mut options, user).map_err(|m| Failure::new("options", m))?;
@@ -505,6 +657,7 @@ fn prepare(
     Ok(Prepared {
         netlist: parsed.netlist,
         options,
+        four,
         diagnostics,
     })
 }
@@ -527,6 +680,7 @@ pub fn run(
     let Prepared {
         netlist,
         options,
+        four,
         mut diagnostics,
     } = prepare(source, user, tmax_divisor)?;
 
@@ -548,10 +702,12 @@ pub fn run(
     }
 
     let measures = deck_measures(&netlist.measures, &solutions);
+    let fourier = deck_fourier(&netlist.outputs, &solutions, &four);
 
     let title = netlist.title.clone();
     Ok(RunOutput {
         measures,
+        fourier,
         plots: to_plots(&title, &solutions),
         title,
         notes,
@@ -594,6 +750,7 @@ pub fn pss(
         netlist,
         options,
         mut diagnostics,
+        ..
     } = prepare(source, user, tmax_divisor)?;
     let (circuit, mut notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
         diagnostics: std::mem::take(&mut diagnostics),
@@ -607,6 +764,7 @@ pub fn pss(
     Ok(PssOutput {
         run: RunOutput {
             measures: Vec::new(),
+            fourier: Vec::new(),
             plots: to_plots(&title, &[pss.time, pss.spectrum]),
             title,
             notes,
@@ -628,6 +786,10 @@ pub struct LiveSession {
     notes: Vec<String>,
     diagnostics: Vec<Diag>,
     measures: Vec<dune_netlist::ir::Measure>,
+    /// The deck's output cards (its `.four` cards are evaluated on
+    /// every run) and the `.options` they read.
+    outputs: Vec<Output>,
+    four: FourParams,
 }
 
 /// A refused alteration (kind `alter`; the circuit is unchanged).
@@ -644,6 +806,7 @@ impl LiveSession {
         let Prepared {
             netlist,
             options,
+            four,
             mut diagnostics,
         } = prepare(source, user, tmax_divisor)?;
         let (circuit, notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
@@ -656,6 +819,8 @@ impl LiveSession {
             notes,
             diagnostics,
             measures: netlist.measures.clone(),
+            outputs: netlist.outputs.clone(),
+            four,
         })
     }
 
@@ -728,6 +893,7 @@ impl LiveSession {
         }
         Ok(RunOutput {
             measures: deck_measures(&self.measures, &solutions),
+            fourier: deck_fourier(&self.outputs, &solutions, &self.four),
             plots: to_plots(&self.title, &solutions),
             title: self.title.clone(),
             notes,
@@ -742,6 +908,8 @@ pub enum SweepRunOutput {
         plots: Vec<(Plot, Option<usize>)>,
         /// The deck's `.measure` cards on this run's plots.
         measures: Vec<MeasRow>,
+        /// The deck's `.four` cards on this run's plots.
+        fourier: Vec<FourRow>,
         notes: Vec<String>,
     },
     Failed {
@@ -781,6 +949,7 @@ pub fn sweep(
     let Prepared {
         netlist,
         options,
+        four,
         diagnostics,
     } = prepare(source, user, tmax_divisor)?;
     let runs = if threads == 1 {
@@ -802,6 +971,7 @@ pub fn sweep(
                         MeasRow::new(&c.name, c.analysis.keyword(), Some(m.plot), &m.result)
                     })
                     .collect(),
+                fourier: deck_fourier(&netlist.outputs, &o.solutions, &four),
                 notes: o.notes,
             },
             Err(e) => SweepRunOutput::Failed {

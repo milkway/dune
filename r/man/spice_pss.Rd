@@ -92,8 +92,10 @@ A \code{spice_pss}, which is also a \code{spice_result} (so
 \code{\link[=spice_plots]{spice_plots()}}, \code{\link[=spice_tidy]{spice_tidy()}} and \code{\link[=spice_measure]{spice_measure()}} on its plots
 work as for \code{\link[=spice_run]{spice_run()}}): a list with
 \itemize{
-\item \code{title}, \code{notes}, \code{diagnostics}, \code{measurements} (always zero rows:
-a deck's \code{.measure} cards do not apply to \code{.pss} plots) and
+\item \code{title}, \code{notes}, \code{diagnostics}, \code{measurements} and \code{fourier}
+(always zero rows: a deck's \code{.measure} and \code{.four} cards do not
+apply to \code{.pss} plots; \code{\link[=spice_fourier]{spice_fourier()}} analyses the time plot)
+and
 \code{plots} -- the two \code{spice_plot}s, \code{"Time Domain Periodic Steady State Analysis"} and \code{"Frequency Domain Periodic Steady State Analysis"} (ngspice's plot names) -- as in \code{\link[=spice_run]{spice_run()}};
 \item \code{time}: one period as a long tibble, \code{points + 1} equispaced
 instants from \code{t0} to \code{t0 + period} per variable: \code{time},

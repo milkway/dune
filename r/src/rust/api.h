@@ -1,3 +1,4 @@
+SEXP savvy_ffi_fourier__ffi(SEXP c_arg__plot, SEXP c_arg__scale, SEXP c_arg__freq, SEXP c_arg__vectors, SEXP c_arg__nfreqs, SEXP c_arg__nperiods, SEXP c_arg__polydegree, SEXP c_arg__gridsize);
 SEXP savvy_ffi_measure__ffi(SEXP c_arg__plot, SEXP c_arg__scale, SEXP c_arg__names, SEXP c_arg__specs);
 SEXP savvy_ffi_option_names__ffi(void);
 SEXP savvy_ffi_pic_extract__ffi(SEXP c_arg__src, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__snap);
