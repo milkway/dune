@@ -177,7 +177,7 @@ Reescrito, com motivo (linhas em `corpus/KNOWN_DIFFS.md`):
 |---|---|---|
 | `vdmos_dc` | `.dc` | famílias n/p, RD/RS/RG, LAMBDA, THETA, MTRIODE, inversão fraca, quase-saturação, RDS, M=2, diodo direto e ruptura |
 | `vdmos_temp` | `.dc` | temp=85 vs TNOM=25, todos os coeficientes de temperatura, TEMP/DTEMP, TEXP0, nós de temperatura sem `thermal` |
-| `vdmos_tran` | `.tran` | chaveamento com Cgd(vgd)/Cgs, diodo de roda livre (TT), canal P |
+| `vdmos_tran` | `.tran` | chaveamento com Cgd(vgd)/Cgs, canais N e P |
 | `vdmos_rr` | `.tran` | recuperação suave (VP, nó `qp`) contra a carga TT simples |
 | `vdmos_ac` | `.ac` | capacitâncias no ponto de operação, quase-saturação, canal P |
 | `vdmos_noise` | `.noise` | térmico de RD/RS/canal, flicker |

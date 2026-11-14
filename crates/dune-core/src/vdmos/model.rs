@@ -71,25 +71,33 @@ pub struct VdmosModel {
     pub texp0: Option<f64>,
     /// `TEXP1`: temperature exponent of `RQ`, default 0.3.
     pub texp1: f64,
-    /// `TRD1`/`TRD2`, `TRG1`/`TRG2`, `TRS1`/`TRS2`, `TRB1`/`TRB2`:
-    /// linear and quadratic temperature coefficients of `RD`, `RG`,
-    /// `RS` and `RB`; default 0.
+    /// `TRD1`: linear temperature coefficient of `RD` (used when
+    /// `TEXP0` is absent), default 0.
     pub trd1: f64,
+    /// `TRD2`: quadratic temperature coefficient of `RD`, default 0.
     pub trd2: f64,
+    /// `TRG1`: linear temperature coefficient of `RG`, default 0.
     pub trg1: f64,
+    /// `TRG2`: quadratic temperature coefficient of `RG`, default 0.
     pub trg2: f64,
+    /// `TRS1`: linear temperature coefficient of `RS`, default 0.
     pub trs1: f64,
+    /// `TRS2`: quadratic temperature coefficient of `RS`, default 0.
     pub trs2: f64,
+    /// `TRB1`: linear temperature coefficient of `RB`, default 0.
     pub trb1: f64,
+    /// `TRB2`: quadratic temperature coefficient of `RB`, default 0.
     pub trb2: f64,
     /// `SUBSHIFT`: shift of the weak-inversion curve along vgs,
     /// default 0.
     pub subshift: f64,
     /// `KSUBTHRES`: weak-inversion slope, default 0.1.
     pub ksubthres: f64,
-    /// `TKSUBTHRES1`/`TKSUBTHRES2`: temperature coefficients of
-    /// `KSUBTHRES`, default 0.
+    /// `TKSUBTHRES1`: linear temperature coefficient of `KSUBTHRES`,
+    /// default 0.
     pub tksubthres1: f64,
+    /// `TKSUBTHRES2`: quadratic temperature coefficient of
+    /// `KSUBTHRES`, default 0.
     pub tksubthres2: f64,
     /// `BV`: body-diode breakdown voltage (no breakdown when absent;
     /// the C's default 1e99 is never read without the flag).
@@ -125,9 +133,11 @@ pub struct VdmosModel {
     /// `FC`: forward-bias depletion coefficient, default 0.5
     /// (capped at 0.95).
     pub fc: f64,
-    /// `CGDMIN`, `CGDMAX`: the limits of the gate-drain capacitance,
-    /// default 2e-11 and 2e-9.
+    /// `CGDMIN`: the low limit of the gate-drain capacitance (deep
+    /// negative vgd), default 2e-11.
     pub cgdmin: f64,
+    /// `CGDMAX`: the high limit of the gate-drain capacitance, default
+    /// 2e-9.
     pub cgdmax: f64,
     /// `A`: shape parameter of `Cgd(vgd)`, default 1.
     pub a: f64,

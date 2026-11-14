@@ -13,5 +13,5 @@ rin2 in s2 10
 m2 0 0 s2 mt
 .model mr vdmos (kp=5 vto=3 cjo=200p tt=100n vp=0.5 rb=0.02 is=1e-10 n=1.2)
 .model mt vdmos (kp=5 vto=3 cjo=200p tt=100n rb=0.02 is=1e-10 n=1.2)
-.tran 2n 3u
+.tran 1n 3u
 .end
