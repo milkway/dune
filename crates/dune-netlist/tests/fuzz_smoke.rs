@@ -94,11 +94,19 @@ fn mutated_expressions_never_panic() {
     let mut seeds: Vec<Vec<u8>> = Vec::new();
     for e in std::fs::read_dir(&dir).expect("corpus present").flatten() {
         let p = e.path();
-        if p.file_name()
-            .is_some_and(|n| n.to_string_lossy().starts_with("bsrc_"))
-        {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+        // B sources, and the behavioural R/C/L that become B sources.
+        let kind = match name.as_deref() {
+            Some(n) if n.starts_with("bsrc_") => "b",
+            Some(n) if n.starts_with("behav_") => "rcl",
+            _ => "",
+        };
+        if !kind.is_empty() {
             let text = std::fs::read_to_string(&p).unwrap();
-            for line in text.lines().filter(|l| l.starts_with('b')) {
+            for line in text
+                .lines()
+                .filter(|l| l.chars().next().is_some_and(|c| kind.contains(c)))
+            {
                 seeds.push(line.as_bytes().to_vec());
             }
         }

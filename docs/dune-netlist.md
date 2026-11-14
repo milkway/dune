@@ -749,6 +749,20 @@ descarta. Num subcircuito multiplicado por um `m` de linha `X`: recusado
 (a ordem entre `inp_fix_subckt_multiplier` e `inp_compat` decide qual
 `m` vence; não sondado).
 
+**Entrada hostil.** Limites aplicados durante a construção da árvore,
+nó a nó (cada subárvore leva profundidade e contagem): texto ≤
+`pexpr::MAX_LEN` (64 KiB), parênteses/chamadas/sinais aninhados ≤ 100
+(`MAX_NEST`, a recursão do parser), profundidade ≤ `EXPR_MAX_DEPTH` − 4
+= 508 e nós ≤ `EXPR_MAX_NODES` − 8 = 9992 (a margem é do que
+`elements` põe em volta); `min`/`max`/`pwr` checam antes de clonar.
+Nenhuma árvore além dos limites é construída, percorrida ou destruída
+(a cadeia à esquerda `a+a+…` crescia um nível por termo). Teste
+`behav::tests::hostile_expressions_are_bounded` (cadeia de 1e6 termos,
+1e5 parênteses, 1e4 chamadas, cadeia de `^`, numa thread de 2 MiB — a
+recursão de 100 níveis passa de 1 MiB em debug); sementes de fuzz
+`behav_*.cir` no corpus do `parse_deck` e os cartões R/C/L dos decks
+`behav_*` no `fuzz_smoke`.
+
 Decks `regress/behav_{op,dc,ac,tran}` (goldens do ngspice-47, margens
 0,000); sondas `behav.cases`/`behav2.cases` em
 `.claude/scratch/dev-probes/s3`.

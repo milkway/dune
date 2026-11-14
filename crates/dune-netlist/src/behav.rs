@@ -214,12 +214,26 @@ impl Lexer<'_> {
     }
 }
 
-/// Number of nodes of a tree (bounded by the B-source limits).
-fn size(e: &Expr) -> usize {
-    match e {
-        Expr::Num(_) | Expr::V(_) | Expr::I(_) => 1,
-        Expr::Bin(_, a, b) => 1 + size(a) + size(b),
-        Expr::Call(_, a) => 1 + size(a),
+/// Deepest tree the translator builds: the B-source limit
+/// (`expr::MAX_DEPTH`) less the levels [`elements`] puts on top.
+const LIM_DEPTH: u32 = crate::expr::MAX_DEPTH - 4;
+/// Most nodes the translator builds: the B-source limit
+/// (`expr::MAX_NODES`) less what [`elements`] adds.
+const LIM_NODES: u32 = crate::expr::MAX_NODES - 8;
+
+/// A subtree with its depth and node count, carried while building so
+/// the limits are enforced at every node: no tree past them is ever
+/// built, walked or dropped (the left-associative loops would
+/// otherwise grow one level per term).
+struct T {
+    e: Expr,
+    d: u32,
+    n: u32,
+}
+
+impl T {
+    fn leaf(e: Expr) -> T {
+        T { e, d: 1, n: 1 }
     }
 }
 
@@ -240,6 +254,48 @@ fn call(f: ExprFunc, a: Expr) -> Expr {
     Expr::Call(f, Box::new(a))
 }
 
+/// Check the limits for a node of depth `d` and `n` nodes.
+fn fits(d: u32, n: u32, s: usize, e: usize) -> Result<(), BError> {
+    if d > LIM_DEPTH {
+        return Err(berr(
+            format!("expression nested too deeply (more than {LIM_DEPTH} levels)"),
+            s,
+            e,
+        ));
+    }
+    if n > LIM_NODES {
+        return Err(berr(
+            format!("expression too large (more than {LIM_NODES} nodes)"),
+            s,
+            e,
+        ));
+    }
+    Ok(())
+}
+
+/// A binary node, within the limits.
+fn tbin(op: ExprOp, a: T, b: T, s: usize, e: usize) -> Result<T, BError> {
+    let d = a.d.max(b.d) + 1;
+    let n = a.n.saturating_add(b.n).saturating_add(1);
+    fits(d, n, s, e)?;
+    Ok(T {
+        e: bin(op, a.e, b.e),
+        d,
+        n,
+    })
+}
+
+/// A function node, within the limits.
+fn tcall(f: ExprFunc, a: T, s: usize, e: usize) -> Result<T, BError> {
+    let (d, n) = (a.d + 1, a.n.saturating_add(1));
+    fits(d, n, s, e)?;
+    Ok(T {
+        e: call(f, a.e),
+        d,
+        n,
+    })
+}
+
 impl<'a, 'e> Parser<'a, 'e> {
     fn bump(&mut self) -> Result<(), BError> {
         let (t, s, e) = self.lx.next()?;
@@ -252,7 +308,13 @@ impl<'a, 'e> Parser<'a, 'e> {
     fn enter(&mut self) -> Result<(), BError> {
         self.depth += 1;
         if self.depth > MAX_NEST {
-            return Err(berr("expression nested too deeply", self.start, self.end));
+            return Err(berr(
+                format!(
+                    "expression nested too deeply (more than {MAX_NEST} parentheses, calls or signs)"
+                ),
+                self.start,
+                self.end,
+            ));
         }
         Ok(())
     }
@@ -265,7 +327,7 @@ impl<'a, 'e> Parser<'a, 'e> {
     }
 
     /// `exp: exp '+' exp | exp '-' exp` (left).
-    fn add(&mut self) -> Result<Expr, BError> {
+    fn add(&mut self) -> Result<T, BError> {
         let mut l = self.mul()?;
         loop {
             let op = match self.tok {
@@ -273,14 +335,15 @@ impl<'a, 'e> Parser<'a, 'e> {
                 Tok::Op("-") => ExprOp::Minus,
                 _ => return Ok(l),
             };
+            let (s, e) = (self.start, self.end);
             self.bump()?;
             let r = self.mul()?;
-            l = bin(op, l, r);
+            l = tbin(op, l, r, s, e)?;
         }
     }
 
     /// `'*'`, `'/'` (left).
-    fn mul(&mut self) -> Result<Expr, BError> {
+    fn mul(&mut self) -> Result<T, BError> {
         let mut l = self.unary()?;
         loop {
             let op = match self.tok {
@@ -288,29 +351,31 @@ impl<'a, 'e> Parser<'a, 'e> {
                 Tok::Op("/") => ExprOp::Divide,
                 _ => return Ok(l),
             };
+            let (s, e) = (self.start, self.end);
             self.bump()?;
             let r = self.unary()?;
-            l = bin(op, l, r);
+            l = tbin(op, l, r, s, e)?;
         }
     }
 
     /// `'-' exp %prec NEG`: looser than `^` (`-2^2 = -4`); a `+` sign
     /// is dropped.
-    fn unary(&mut self) -> Result<Expr, BError> {
+    fn unary(&mut self) -> Result<T, BError> {
         match self.tok {
             Tok::Op("-") => {
+                let (s, e) = (self.start, self.end);
                 self.enter()?;
                 self.bump()?;
-                let e = self.unary()?;
+                let x = self.unary()?;
                 self.depth -= 1;
-                Ok(call(ExprFunc::Neg, e))
+                tcall(ExprFunc::Neg, x, s, e)
             }
             Tok::Op("+") => {
                 self.enter()?;
                 self.bump()?;
-                let e = self.unary()?;
+                let x = self.unary()?;
                 self.depth -= 1;
-                Ok(e)
+                Ok(x)
             }
             _ => self.power(),
         }
@@ -318,38 +383,44 @@ impl<'a, 'e> Parser<'a, 'e> {
 
     /// `exp '^' exp` (`%left '^'`, `**` too): left-associative, its
     /// operands are primaries or signed ones.
-    fn power(&mut self) -> Result<Expr, BError> {
+    fn power(&mut self) -> Result<T, BError> {
         let mut l = self.primary()?;
         while self.tok == Tok::Op("^") {
+            let (s, e) = (self.start, self.end);
             self.bump()?;
             let r = match self.tok {
                 Tok::Op("-") | Tok::Op("+") => self.unary_primary()?,
                 _ => self.primary()?,
             };
-            l = bin(ExprOp::Power, l, r);
+            l = tbin(ExprOp::Power, l, r, s, e)?;
         }
         Ok(l)
     }
 
     /// A signed primary (the right operand of `^`).
-    fn unary_primary(&mut self) -> Result<Expr, BError> {
+    fn unary_primary(&mut self) -> Result<T, BError> {
         let neg = self.tok == Tok::Op("-");
+        let (s, e) = (self.start, self.end);
         self.enter()?;
         self.bump()?;
-        let e = match self.tok {
+        let x = match self.tok {
             Tok::Op("-") | Tok::Op("+") => self.unary_primary()?,
             _ => self.primary()?,
         };
         self.depth -= 1;
-        Ok(if neg { call(ExprFunc::Neg, e) } else { e })
+        if neg {
+            tcall(ExprFunc::Neg, x, s, e)
+        } else {
+            Ok(x)
+        }
     }
 
-    fn primary(&mut self) -> Result<Expr, BError> {
+    fn primary(&mut self) -> Result<T, BError> {
         let (s, e) = (self.start, self.end);
         match std::mem::replace(&mut self.tok, Tok::End) {
             Tok::Num(v) => {
                 self.bump()?;
-                Ok(Expr::Num(v))
+                Ok(T::leaf(Expr::Num(v)))
             }
             Tok::LParen => {
                 self.enter()?;
@@ -367,7 +438,7 @@ impl<'a, 'e> Parser<'a, 'e> {
                     self.depth -= 1;
                     r
                 } else {
-                    self.name(&name, s, e)
+                    self.name(&name, s, e).map(T::leaf)
                 }
             }
             t => {
@@ -411,7 +482,7 @@ impl<'a, 'e> Parser<'a, 'e> {
         Ok(String::from_utf8_lossy(&self.lx.s[st..self.lx.pos]).to_ascii_lowercase())
     }
 
-    fn call(&mut self, name: &str, s: usize, e: usize) -> Result<Expr, BError> {
+    fn call(&mut self, name: &str, s: usize, e: usize) -> Result<T, BError> {
         // `self.tok` is the `(`.
         if name == "v" || name == "i" {
             let a = self.ref_name()?;
@@ -420,20 +491,29 @@ impl<'a, 'e> Parser<'a, 'e> {
                 if self.tok == Tok::Comma {
                     let b = self.ref_name()?;
                     self.bump()?;
-                    bin(ExprOp::Minus, Expr::V(a), Expr::V(b))
+                    tbin(
+                        ExprOp::Minus,
+                        T::leaf(Expr::V(a)),
+                        T::leaf(Expr::V(b)),
+                        s,
+                        e,
+                    )?
                 } else {
-                    Expr::V(a)
+                    T::leaf(Expr::V(a))
                 }
             } else {
-                Expr::I(a)
+                T::leaf(Expr::I(a))
             };
             self.expect(Tok::RParen, "`)`")?;
             return Ok(r);
         }
         self.bump()?;
-        let mut args = Vec::new();
+        let mut args: Vec<T> = Vec::new();
         if self.tok != Tok::RParen {
             loop {
+                if args.len() >= 2 {
+                    return Err(berr(format!("too many arguments to `{name}`"), s, e));
+                }
                 args.push(self.add()?);
                 if self.tok == Tok::Comma {
                     self.bump()?;
@@ -450,10 +530,6 @@ impl<'a, 'e> Parser<'a, 'e> {
             } else {
                 Err(berr(format!("`{name}` takes {n} argument(s)"), s, e))
             }
-        };
-        let unary = |f: ExprFunc, args: &mut Vec<Expr>| -> Result<Expr, BError> {
-            want(1)?;
-            Ok(call(f, args.pop().unwrap_or(Expr::Num(0.0))))
         };
         let f = match name {
             "abs" => ExprFunc::Abs,
@@ -480,9 +556,9 @@ impl<'a, 'e> Parser<'a, 'e> {
             "uramp" => ExprFunc::Uramp,
             "pow" | "pwr" | "min" | "max" => {
                 want(2)?;
-                let b = args.pop().unwrap_or(Expr::Num(0.0));
-                let a = args.pop().unwrap_or(Expr::Num(0.0));
-                return self.binary_func(name, a, b, s, e);
+                let b = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
+                let a = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
+                return binary_func(name, a, b, s, e);
             }
             "ceil" | "floor" | "nint" | "u2" | "pwl" | "eq0" | "ne0" | "gt0" | "lt0" | "ge0"
             | "le0" | "ddt" => {
@@ -494,62 +570,67 @@ impl<'a, 'e> Parser<'a, 'e> {
             }
             _ => return Err(berr(format!("unknown function `{name}`"), s, e)),
         };
-        unary(f, &mut args)
+        want(1)?;
+        let a = args.pop().unwrap_or(T::leaf(Expr::Num(0.0)));
+        tcall(f, a, s, e)
     }
+}
 
-    /// `pow` (`PTpower`), `pwr` (`PTpwr`), `min`, `max` as 3f5 trees:
-    /// `pow(a,b) = a^b`; `pwr(a,b) = sgn(a)·|a|^b`;
-    /// `min(a,b) = a·u(b−a) + b·u(a−b)`, `max(a,b) = a·u(a−b) + b·u(b−a)`
-    /// (exact values away from ties and `a = 0`, see the docs).
-    fn binary_func(
-        &mut self,
-        name: &str,
-        a: Expr,
-        b: Expr,
-        s: usize,
-        e: usize,
-    ) -> Result<Expr, BError> {
-        let grow = 2 * (size(&a) + size(&b)) + 8;
-        if grow > crate::expr::MAX_NODES as usize {
-            return Err(berr(
-                format!("`{name}()` makes the expression too large"),
-                s,
-                e,
-            ));
+/// `pow` (`PTpower`), `pwr` (`PTpwr`), `min`, `max` as 3f5 trees:
+/// `pow(a,b) = a^b`; `pwr(a,b) = sgn(a)·|a|^b`;
+/// `min(a,b) = a·u(b−a) + b·u(a−b)`, `max(a,b) = a·u(a−b) + b·u(b−a)`
+/// (exact values away from ties and `a = 0`, see the docs). The
+/// limits are checked before anything is cloned.
+fn binary_func(name: &str, a: T, b: T, s: usize, e: usize) -> Result<T, BError> {
+    let (d, n) = (a.d.max(b.d), a.n.saturating_add(b.n));
+    let (dd, nn) = match name {
+        "pow" => (d + 1, n.saturating_add(1)),
+        "pwr" => (d + 2, n.saturating_add(a.n).saturating_add(3)),
+        _ => (d + 3, n.saturating_mul(2).saturating_add(7)),
+    };
+    fits(dd, nn, s, e)?;
+    let (a, b) = (a.e, b.e);
+    let e = match name {
+        "pow" => bin(ExprOp::Power, a, b),
+        "pwr" => bin(
+            ExprOp::Times,
+            call(ExprFunc::Sgn, a.clone()),
+            bin(ExprOp::Power, call(ExprFunc::Abs, a), b),
+        ),
+        _ => {
+            let (amb, bma) = (
+                bin(ExprOp::Minus, a.clone(), b.clone()),
+                bin(ExprOp::Minus, b.clone(), a.clone()),
+            );
+            let (ua, ub) = if name == "min" {
+                (call(ExprFunc::U, bma), call(ExprFunc::U, amb))
+            } else {
+                (call(ExprFunc::U, amb), call(ExprFunc::U, bma))
+            };
+            bin(
+                ExprOp::Plus,
+                bin(ExprOp::Times, a, ua),
+                bin(ExprOp::Times, b, ub),
+            )
         }
-        Ok(match name {
-            "pow" => bin(ExprOp::Power, a, b),
-            "pwr" => bin(
-                ExprOp::Times,
-                call(ExprFunc::Sgn, a.clone()),
-                bin(ExprOp::Power, call(ExprFunc::Abs, a), b),
-            ),
-            _ => {
-                let (amb, bma) = (
-                    bin(ExprOp::Minus, a.clone(), b.clone()),
-                    bin(ExprOp::Minus, b.clone(), a.clone()),
-                );
-                let (ua, ub) = if name == "min" {
-                    (call(ExprFunc::U, bma), call(ExprFunc::U, amb))
-                } else {
-                    (call(ExprFunc::U, amb), call(ExprFunc::U, bma))
-                };
-                bin(
-                    ExprOp::Plus,
-                    bin(ExprOp::Times, a, ua),
-                    bin(ExprOp::Times, b, ub),
-                )
-            }
-        })
-    }
+    };
+    Ok(T { e, d: dd, n: nn })
 }
 
 /// Translate an ngspice behavioural expression (the text inside the
 /// braces or quotes) into a B-source tree, evaluating its parameters
-/// in `env`.
+/// in `env`. The result stays [`LIM_DEPTH`]/[`LIM_NODES`] below the
+/// B-source limits, so [`elements`] can wrap it.
 pub(crate) fn translate(text: &str, env: &ParamEnv) -> Result<Expr, BError> {
     if text.len() > crate::pexpr::MAX_LEN {
-        return Err(berr("expression too long", 0, 1));
+        return Err(berr(
+            format!(
+                "expression too long (more than {} bytes)",
+                crate::pexpr::MAX_LEN
+            ),
+            0,
+            1,
+        ));
     }
     let mut p = Parser {
         lx: Lexer {
@@ -563,14 +644,11 @@ pub(crate) fn translate(text: &str, env: &ParamEnv) -> Result<Expr, BError> {
         depth: 0,
     };
     p.bump()?;
-    let e = p.add()?;
+    let t = p.add()?;
     if p.tok != Tok::End {
         return Err(berr("unexpected text after the expression", p.start, p.end));
     }
-    if size(&e) > crate::expr::MAX_NODES as usize {
-        return Err(berr("expression too large", 0, text.len()));
-    }
-    Ok(e)
+    Ok(t.e)
 }
 
 /// One generated element.
@@ -863,17 +941,6 @@ mod tests {
             let e = tr(s).unwrap_err();
             assert!(e.contains(what), "{s}: {e}");
         }
-        // Nesting and size are bounded.
-        let deep = format!("{}v(1){}", "(".repeat(200), ")".repeat(200));
-        assert!(tr(&deep).unwrap_err().contains("deeply"));
-        let mut s = "v(1)".to_string();
-        for _ in 0..20 {
-            s = format!("min({s},{s})");
-            if s.len() > 60_000 {
-                break;
-            }
-        }
-        assert!(tr(&s).is_err());
     }
 
     #[test]
@@ -891,5 +958,57 @@ mod tests {
             tr("log10(v(1))").unwrap(),
             call(ExprFunc::Log, Expr::V("1".into()))
         );
+    }
+
+    /// Hostile input (principle 4): every bound is enforced while the
+    /// tree is built, so these end fast with an error and never
+    /// overflow a small stack (the thread has the 2 MiB of a default spawned thread).
+    #[test]
+    fn hostile_expressions_are_bounded() {
+        let run = || {
+            let cases: Vec<(String, &str)> = vec![
+                // 1e6-term chain: refused by length (MAX_LEN).
+                ("1+".repeat(1_000_000) + "1", "too long"),
+                // Below MAX_LEN, a left-deep chain: refused by depth.
+                ("v(a)+".repeat(10_000) + "1", "nested too deeply"),
+                ("v(a)^".repeat(10_000) + "2", "nested too deeply"),
+                ("v(a)*2/".repeat(5_000) + "1", "nested too deeply"),
+                (
+                    format!("{}v(a){}", "(".repeat(100_000), ")".repeat(100_000)),
+                    "too long",
+                ),
+                (
+                    format!("{}v(a){}", "(".repeat(20_000), ")".repeat(20_000)),
+                    "nested too deeply",
+                ),
+                (
+                    format!("{}v(a){}", "abs(".repeat(10_000), ")".repeat(10_000)),
+                    "nested too deeply",
+                ),
+                ("-".repeat(30_000) + "v(a)", "nested too deeply"),
+                // Duplication by min/max: refused by node count.
+                (
+                    {
+                        let mut s = "v(a)+v(b)+v(c)".to_string();
+                        for _ in 0..12 {
+                            s = format!("min({s},{s})");
+                        }
+                        s
+                    },
+                    "",
+                ),
+            ];
+            for (s, what) in cases {
+                let e = translate(&s, &ParamEnv::default()).unwrap_err();
+                assert!(e.msg.contains(what), "{}: {}", &s[..20], e.msg);
+                assert!(e.start < s.len().max(1));
+            }
+        };
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(run)
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }
