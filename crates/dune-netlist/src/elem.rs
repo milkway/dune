@@ -769,7 +769,31 @@ fn behavioral(ctx: &mut ElemCtx) -> Parsed {
 /// `X`: `name N1 <N2 …> SUBNAM` — the last token is the subcircuit.
 fn subckt_call(ctx: &mut ElemCtx) -> Parsed {
     let mut names = Vec::new();
+    let text = ctx.card.text.as_bytes();
     while let Some(tok) = ctx.sc.next_tok() {
+        // `name=value` (or ngspice's `params:` keyword) passes
+        // subcircuit parameters, which do not exist yet; without this
+        // check the value would be taken for the subcircuit name.
+        let rest = &text[tok.end..];
+        let eq = rest
+            .iter()
+            .find(|b| !matches!(b, b' ' | b'\t'))
+            .is_some_and(|&b| b == b'=');
+        if eq || tok.eq_ic("params:") {
+            let span = ctx.sc.span(&tok);
+            ctx.err(
+                span,
+                format!(
+                    "subcircuit parameters on X lines (`{}`) are not supported yet",
+                    if eq {
+                        format!("{}=…", tok.lc())
+                    } else {
+                        tok.lc()
+                    }
+                ),
+            );
+            return None;
+        }
         names.push(tok.lc());
     }
     let Some(subname) = names.pop() else {
@@ -1231,6 +1255,24 @@ mod tests {
         let e = ok("X1 2 4 17 3 1 MULTI");
         assert_eq!(e.nodes, ["2", "4", "17", "3", "1"]);
         assert!(matches!(&e.device, Device::SubcktCall { subname } if subname == "multi"));
+    }
+
+    #[test]
+    fn subckt_call_with_parameters_is_a_precise_error() {
+        for (line, want) in [
+            ("X1 a b inv w=0.15 l = 1u", "`w=…`"),
+            ("x1 a b inv params: w=1", "`params:`"),
+        ] {
+            let (el, diags) = parse(line);
+            assert!(el.is_none(), "{line}");
+            assert_eq!(diags.len(), 1, "{line}: {diags:?}");
+            assert!(diags[0].message.contains("not supported yet"), "{line}");
+            assert!(
+                diags[0].message.contains(want),
+                "{line}: {}",
+                diags[0].message
+            );
+        }
     }
 
     #[test]
