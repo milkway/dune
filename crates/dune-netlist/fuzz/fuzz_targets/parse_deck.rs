@@ -60,6 +60,16 @@ fuzz_target!(|data: &[u8]| {
          x1 1 leaf {line}\nx2 2 leaf m=2 w={{{line}}}\nx3 3 leaf w=2\n.end\n"
     );
     let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), sub, &mut NoFs);
+    // User functions, conditionals and `temper` (Fase 8): the bytes as
+    // a function body and argument list, as an `.if` condition at the
+    // top level and per instance, and next to `temper` users.
+    let fase8 = format!(
+        "t\n.func f(x) {{{line}}}\n.func g({line}) {{x+f(x)}}\n.param p={{f(1)}}\n\
+         .if ({line})\nr1 1 0 {{f(temper)}}\n.elseif (p)\n.model rm r rsh={{temper}}\n.else\n\
+         r1 1 0 1k\n.endif\n.subckt s a k=1\n.func h(y) {{y*k+{line}}}\n.if ({line})\n\
+         r1 a 0 {{h(2)}}\n.endif\n.ends\nx1 2 s k={{{line}}}\nx2 3 s\n.end\n"
+    );
+    let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), fase8, &mut NoFs);
     let _ =
         dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), text.clone(), &mut NoFs);
     let _ = dune_netlist::parse_with_loader(
