@@ -19,13 +19,15 @@ periodic steady state of a driven circuit (:class:`PssResult`). Results are :cla
 holding :class:`Plot` objects (one per analysis plot), each with NumPy
 columns (:meth:`Plot.column`) and a polars frame (:meth:`Plot.df`). The deck's
 ``.measure`` cards come back in :attr:`Result.measurements`; :func:`measure`
-measures any plot directly. :mod:`spice.pic` extracts the netlist of an rpic
+measures any plot directly. The ``.four`` cards (harmonics and THD) come back
+in :attr:`Result.fourier`; :func:`fourier` analyses any transient plot. :mod:`spice.pic` extracts the netlist of an rpic
 figure (:func:`spice.pic.extract`, which :func:`simulate` runs) and draws it
 (:func:`spice.pic.render`).
 """
 
 from . import pic
 from ._errors import Diagnostic, ErrorKind, PssConvergenceError, Severity, SpiceError
+from ._fourier import FOURIER_SCHEMA, fourier
 from ._measure import MeasureAnalysis, Measurement, measure
 from ._pss import PSS_FREQ_PLOT, PSS_TIME_PLOT, PssResult, pss
 from ._result import Column, Plot, Result, Variable
@@ -35,6 +37,7 @@ from ._spice import __version__
 from ._sweep import SweepMode, SweepResult, sweep
 
 __all__ = [
+    "FOURIER_SCHEMA",
     "OPTION_NAMES",
     "PSS_FREQ_PLOT",
     "PSS_TIME_PLOT",
@@ -57,6 +60,7 @@ __all__ = [
     "Variable",
     "WarmStats",
     "__version__",
+    "fourier",
     "measure",
     "pic",
     "pss",

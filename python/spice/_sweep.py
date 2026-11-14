@@ -176,6 +176,7 @@ class SweepResult(Sequence[Result]):
                     "plots": r["plots"],
                     "notes": r["notes"],
                     "measurements": r["measurements"],
+                    "fourier": r["fourier"],
                     "diagnostics": [],
                 }
             )

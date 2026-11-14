@@ -26,9 +26,10 @@ class PssResult(Result):
     ``result[0]`` (:attr:`time`) and ``result[1]`` (:attr:`spectrum`) are the
     plots a ``.pss`` card gives in :func:`spice.simulate`, value for value;
     this class adds the period, where it starts and the shooting history.
-    :attr:`~spice.Result.measurements` is always empty (a deck's ``.measure``
-    cards do not apply to ``.pss`` plots; measure them with
-    :func:`spice.measure`).
+    :attr:`~spice.Result.measurements` and :attr:`~spice.Result.fourier` are
+    always empty (a deck's ``.measure`` and ``.four`` cards do not apply to
+    ``.pss`` plots; measure them with :func:`spice.measure`, analyse the time
+    plot with :func:`spice.fourier`).
     """
 
     __slots__ = ("period", "periods", "residuals", "t0")

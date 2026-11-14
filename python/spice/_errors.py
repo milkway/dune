@@ -11,7 +11,7 @@ Severity = Literal["error", "warning"]
 """Severity of a :class:`Diagnostic`."""
 
 ErrorKind = Literal[
-    "parse", "elaborate", "analysis", "pss", "measure", "alter", "pic", "internal"
+    "parse", "elaborate", "analysis", "pss", "measure", "fourier", "alter", "pic", "internal"
 ]
 """Stage at which a run failed (:attr:`SpiceError.kind`).
 
@@ -26,6 +26,8 @@ ErrorKind = Literal[
   :class:`PssConvergenceError`, carrying the residual history.
 * ``"measure"`` -- a :func:`spice.measure` specification is malformed, or
   the plot cannot be measured.
+* ``"fourier"`` -- a :func:`spice.fourier` expression is malformed, or the
+  plot is not a transient.
 * ``"alter"`` -- :meth:`Session.alter` refused a value (unknown element or
   parameter, a value out of range); the circuit is unchanged.
 * ``"pic"`` -- a pic figure yields no netlist or drawing (rpic rejects it,

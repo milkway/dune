@@ -35,6 +35,19 @@ def _measure(
     name: str,
 ) -> dict[str, Any]: ...
 
+def _fourier(
+    plotname: str,
+    variables: list[tuple[str, str]],
+    scale: int | None,
+    columns: list[Any],
+    freq: float,
+    vectors: list[str],
+    nfreqs: int,
+    nperiods: int,
+    polydegree: int,
+    gridsize: int,
+) -> dict[str, list[Any]]: ...
+
 def _pss(
     text: str | None,
     path: str | Path | None,

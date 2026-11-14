@@ -25,6 +25,9 @@ v2 = plot.column("v(2)")     # zero-copy, read-only numpy array
 - Every SPICE3f5 analysis: `.op`, `.dc`, `.tran`, `.ac`, `.pz`,
   `.noise`, `.disto`, `.tf`, `.sens` — plus the periodic steady state
   of driven circuits (`.pss`, shooting–Newton; `spice.pss()`).
+- Post-processing as in ngspice: `.measure` cards (`result.measurements`,
+  `spice.measure()`) and `.four` Fourier analysis with THD
+  (`result.fourier`, `spice.fourier()`).
 - All SPICE3f5 devices, including BJT (Gummel–Poon), MOS levels
   1/2/3/6, BSIM1/BSIM2, JFET, MESFET, switches and both
   transmission lines.
