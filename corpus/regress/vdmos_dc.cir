@@ -1,0 +1,23 @@
+VDMOS output families: n and p channel, quasi-saturation, body diode
+* Coverage: drain sweep from -0.8 V (body diode forward, through RB)
+* to 40 V (into the body-diode breakdown of m1, BV=38) at five gate
+* biases for an n-channel VDMOS with RD/RS/RG, LAMBDA, THETA,
+* MTRIODE and the weak-inversion blend (KSUBTHRES), a second one with
+* quasi-saturation (RQ/VQ), an RDS shunt and M=2, and a p-channel
+* device mirrored through E sources (PCHAN on the card). Written for
+* the Dune port of ngspice-47's vdmos model.
+vd d 0 dc 0
+vg g 0 dc 0
+m1 d g 0 mn
+vm d2 d dc 0
+m2 d2 g 0 mq m=2
+e1 dp 0 d 0 -1
+e2 gp 0 g 0 -1
+vmp dp2 dp dc 0
+m3 dp2 gp 0 mp
+.model mn vdmos (rd=0.1 rs=0.05 rg=2 kp=10 vto=2.8 lambda=0.01 theta=0.05
++ ksubthres=0.12 mtriode=1.5 bv=38 ibv=1e-4 nbv=1.4 rb=0.05 is=1e-12 n=1.05)
+.model mq vdmos (rd=0.05 rq=0.3 vq=4 kp=8 vto=3 rds=1e6 rb=0.08 subshift=0.05)
+.model mp vdmos pchan (rd=0.2 kp=5 vto=-2.5 lambda=0.02 rb=0.1 bv=60)
+.dc vd -0.8 40 0.2 vg 0 6 1.5
+.end

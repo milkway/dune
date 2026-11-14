@@ -22,7 +22,16 @@ use crate::subckt::{Scope, SubcktDef, expand};
 const MODEL_TYPES: &[&str] = &[
     "r", "c", "sw", "csw", "urc", "ltra", "d", "npn", "pnp", "njf", "pjf", "nmos", "pmos", "nmf",
     "pmf",
+    // ngspice-47's power MOSFET (`inpdomod.c`; `vdmosn`/`vdmosp` are
+    // the forms its front end rewrites `vdmos` into).
+    "vdmos", "vdmosn", "vdmosp",
 ];
+
+/// Whether a `.model` type token names ngspice's VDMOS
+/// (`inp_vdmos_model`: the type starts with `vdmos`).
+fn is_vdmos_type(t: &str) -> bool {
+    matches!(t, "vdmos" | "vdmosn" | "vdmosp")
+}
 
 #[derive(Debug)]
 pub struct ParseOutcome {
@@ -84,6 +93,8 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     // Pass A: model names (for `Q` substrate disambiguation) and
     // `.param` constants, skipping `.control` blocks.
     let mut model_names: HashSet<String> = HashSet::new();
+    // VDMOS model names: their `M` instances take 3 to 5 nodes.
+    let mut vdmos_models: HashSet<String> = HashSet::new();
     let mut env = ParamEnv::default();
     let mut in_control = false;
     for card in &cards {
@@ -99,6 +110,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 sc.next_tok();
                 if let Some(name) = sc.next_tok() {
                     model_names.insert(name.lc());
+                    if sc.next_tok().is_some_and(|t| is_vdmos_type(&t.lc())) {
+                        vdmos_models.insert(name.lc());
+                    }
                 }
             }
             ".param" => collect_params(card, &mut env, &mut all_diags),
@@ -218,7 +232,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     Some(def) => &mut def.scope,
                     None => &mut top,
                 };
-                if let Some(el) = parse_element(card, &mut all_diags, &model_names, &env) {
+                if let Some(el) =
+                    parse_element(card, &mut all_diags, &model_names, &vdmos_models, &env)
+                {
                     scope.elements.push(el);
                 }
             }

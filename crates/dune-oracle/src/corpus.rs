@@ -202,6 +202,11 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
     // names the M-cards reference.
     let mut mos_models: Vec<(String, u32)> = Vec::new();
     let mut mos_used: Vec<String> = Vec::new();
+    // ngspice VDMOS model names (implemented, no level), and the
+    // tokens of every M card: a VDMOS card has 3 to 5 nodes, so the
+    // model is resolved once every `.model` card is known.
+    let mut vdmos_models: Vec<String> = Vec::new();
+    let mut m_cards: Vec<Vec<String>> = Vec::new();
     let mut in_control = false;
     let mut in_mos_model = false;
     for line in text.lines().skip(1) {
@@ -228,6 +233,13 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
                 ".model" if !in_control => {
                     if lower
                         .split(|c: char| c.is_whitespace() || c == '(')
+                        .nth(2)
+                        .is_some_and(|t| t.starts_with("vdmos"))
+                    {
+                        let name = lower.split_whitespace().nth(1).unwrap_or("").to_string();
+                        vdmos_models.push(name);
+                    } else if lower
+                        .split(|c: char| c.is_whitespace() || c == '(')
                         .any(|t| t == "nmos" || t == "pmos")
                     {
                         in_mos_model = true;
@@ -250,16 +262,30 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
         }
         let letter = first.to_ascii_lowercase();
         if letter == 'm' {
-            // `Mxxx d g s b MNAME …`: the model is the 6th token.
-            if let Some(name) = line.split_whitespace().nth(5) {
-                let name = name.to_ascii_lowercase();
-                if !mos_used.contains(&name) {
-                    mos_used.push(name);
-                }
-            }
+            m_cards.push(
+                line.split_whitespace()
+                    .map(str::to_ascii_lowercase)
+                    .collect(),
+            );
         }
         if !devices.contains(&letter) {
             devices.push(letter);
+        }
+    }
+    for toks in &m_cards {
+        if toks
+            .iter()
+            .skip(4)
+            .take(3)
+            .any(|t| vdmos_models.contains(t))
+        {
+            continue;
+        }
+        // `Mxxx d g s b MNAME …`: the model is the 6th token.
+        if let Some(name) = toks.get(5)
+            && !mos_used.contains(name)
+        {
+            mos_used.push(name.clone());
         }
     }
     devices.sort_unstable();
@@ -404,6 +430,23 @@ mod tests {
         // devices; the title line is skipped.
         assert_eq!(d, vec!['q', 'r']);
         assert!(m.is_empty());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scan_resolves_vdmos_cards_of_three_to_five_nodes() {
+        let dir = std::env::temp_dir().join(format!("dune-oracle-vd-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("vd.cir");
+        fs::write(
+            &p,
+            "t\nm1 d g s pw\nm2 d g s tj tc pw thermal\nm3 d g s b n4\n\
+             .model pw vdmos(pchan kp=1)\n.model n4 nmos level=3\n.op\n.end\n",
+        )
+        .unwrap();
+        let (_, _, m) = scan_deck(&p).unwrap();
+        // The VDMOS cards need no level; m3 resolves to level 3.
+        assert_eq!(m, vec![3]);
         fs::remove_dir_all(&dir).ok();
     }
 

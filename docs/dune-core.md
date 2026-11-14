@@ -511,6 +511,15 @@ resultados espelhando o rawfile).
   medidos no ruído (PMOS→noiMod 1 falha a 17; KF=0 a 476).
   Resta do BSIM3: NQS, ACM, `.disto`/`.sens`.
 
+- **VDMOS** (`vdmos/` ← `vdmosload.c`, `vdmostemp.c`, `vdmosset.c`,
+  `vdmosacld.c`, `vdmospzld.c`, `vdmosnoi.c`, `vdmosdset.c`/
+  `vdmosdist.c`, `vdmosconv.c`, `vdmostrun.c` do **ngspice-47**,
+  contrato E oráculo): MOSFET de potência de 3 a 5 nós com diodo de
+  corpo (ruptura, recuperação suave `VP`), quase-saturação,
+  `Cgd(vgd)` e self-heating (`thermal`). Op/dc/ac/tran/noise/pz/disto;
+  sem `.sens` e sem SOA. Detalhes, mapa C→Rust e quirks portados em
+  `docs/vdmos.md`; sondas `regress/vdmos_*` (11, todas PASS).
+
 - **Chaves S/W** (`switch.rs` ← `swload.c`/`cswload.c` do
   **ngspice-47** — o 3f5 tem outra máquina, ver KNOWN_DIFFS):
   um tipo só, controlado por par de nós (S) ou pela corrente de

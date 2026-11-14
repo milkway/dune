@@ -1,0 +1,28 @@
+VDMOS self-heating small signal: electrothermal feedback in .ac
+* Coverage: vdmosacld.c's thermal stamps (gm of the temperature, the
+* power linearization and the thermal capacitance at jw) for an
+* instance at the circuit temperature and one with TEMP= (which also
+* sets the ambient of its own thermal network), the cases tied to a
+* 27 C sink; the IRFP240 card of ngspice-47's
+* examples/vdmos/self-heating.sp (thermal values changed). Written for
+* the Dune port of ngspice-47's vdmos model.
+m1 d g 0 tj tc irfp240 thermal
+m2 d2 g 0 tj2 tc2 irfp240 thermal temp=40
+vamb amb 0 dc 27
+rthk tc amb 2
+rthk2 tc2 amb 2
+vg g 0 dc 4.5 ac 1
+rl vdd d 10
+rl2 vdd d2 20
+vd vdd 0 dc 10
+.model irfp240 vdmos nchan
++ vto=4 kp=5.9 lambda=.001 theta=0.015 ksubthres=.27
++ rd=61m rs=18m rg=3 rds=1e7
++ cgdmax=2.45n cgdmin=10p a=0.3 cgs=1.2n
++ is=60p n=1.1 rb=14m xti=3
++ cjo=1.5n vj=0.8 m=0.5
++ tcvth=-0.0065 mu=-1.27 texp0=1.5
++ rthjc=0.5 cthj=1e-3 rthca=20
++ mtriode=0.8
+.ac dec 5 0.1 1meg
+.end

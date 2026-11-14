@@ -1,0 +1,26 @@
+VDMOS switching transient: gate charge, Cgd(vgd), n and p channel
+* Coverage: an n-channel VDMOS (RD/RS/RG, CGDMIN/CGDMAX/A tanh-atan
+* Cgd, CGS, CJO and TT body-diode charge) switches a resistive load
+* through a gate resistor (Miller plateau, vds crossing the Cgd knee),
+* and a p-channel high-side device swings its own load in antiphase.
+* (An inductive freewheel through a second body diode was dropped:
+* at TMAX <= 50 ps ngspice-47 itself stops with "timestep too small",
+* so the accuracy ruler cannot refine it; body-diode conduction and
+* recovery are in vdmos_rr.) Spice3 profile: the golden is ngspice's
+* trapezoidal run. Written for the Dune port of ngspice-47's vdmos model.
+.options compat=spice3
+vdd vdd 0 dc 20
+vg in 0 pulse(0 10 20n 10n 10n 200n 500n)
+rg in g 10
+m1 d g 0 mm
+rl vdd d 10
+vgp inp 0 pulse(20 10 20n 10n 10n 200n 500n)
+rgp inp gp 20
+m3 dp gp vdd mp
+rlp dp 0 20
+.model mm vdmos (rd=0.05 rs=0.02 rg=1 kp=10 vto=3 cgdmin=50p cgdmax=1n a=0.5
++ cgs=800p cjo=300p tt=20n rb=0.01)
+.model mp vdmos pchan (rd=0.1 kp=4 vto=-3 cgdmin=30p cgdmax=600p a=0.8 cgs=500p
++ cjo=200p)
+.tran 1n 1u
+.end

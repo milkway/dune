@@ -136,11 +136,14 @@ impl ElemCtx<'_> {
 
 /// Parse one element card. `model_names` is the deck-wide set of
 /// `.model` names, needed to tell a BJT's optional substrate node
-/// from its model name the same way `INP2Q` does.
+/// from its model name the same way `INP2Q` does; `vdmos_models` the
+/// subset whose type is ngspice's VDMOS, whose `M` instances take 3
+/// to 5 nodes (`INP2M`).
 pub(crate) fn parse_element(
     card: &Card,
     diags: &mut Vec<Diagnostic>,
     model_names: &HashSet<String>,
+    vdmos_models: &HashSet<String>,
     env: &ParamEnv,
 ) -> Option<Element> {
     let mut ctx = ElemCtx {
@@ -169,7 +172,7 @@ pub(crate) fn parse_element(
         'q' => bjt(&mut ctx, model_names)?,
         'j' => fet3(&mut ctx, true)?,
         'z' => fet3(&mut ctx, false)?,
-        'm' => mosfet(&mut ctx)?,
+        'm' => mosfet(&mut ctx, model_names, vdmos_models)?,
         's' => switch_v(&mut ctx)?,
         'w' => switch_i(&mut ctx)?,
         't' => tline_ideal(&mut ctx)?,
@@ -533,14 +536,46 @@ fn fet3(ctx: &mut ElemCtx, is_j: bool) -> Parsed {
     Some((nodes, device))
 }
 
-fn mosfet(ctx: &mut ElemCtx) -> Parsed {
-    let nodes = vec![
+/// `M`: `name ND NG NS NB MNAME …`, or for an ngspice VDMOS model
+/// `name ND NG NS <TJ <TC>> MNAME …` (`INP2M`: after the third node
+/// every token is looked up in the model table, and the first model
+/// name ends the node list; VDMOS takes 3 to 5 nodes, the other
+/// MOSFETs exactly 4). A token is taken as a 4th/5th node of a VDMOS
+/// instance only when the model name follows it, so a 4-terminal
+/// card keeps its 3f5 reading whatever its model table holds.
+fn mosfet(
+    ctx: &mut ElemCtx,
+    model_names: &HashSet<String>,
+    vdmos_models: &HashSet<String>,
+) -> Parsed {
+    let mut nodes = vec![
         ctx.node_req("drain node")?,
         ctx.node_req("gate node")?,
         ctx.node_req("source node")?,
-        ctx.node_req("bulk node")?,
     ];
-    let (model, _) = ctx.tok_req("model name")?;
+    let model_span;
+    let model = match ctx.sc.peek_tok() {
+        Some(t) if vdmos_models.contains(&t.lc()) => {
+            let (m, sp) = ctx.tok_req("model name")?;
+            model_span = sp;
+            m
+        }
+        _ => {
+            nodes.push(ctx.node_req("bulk node")?);
+            let mut probe = ctx.sc.clone();
+            let fifth = probe.next_tok().map(|t| t.lc());
+            let sixth = probe.next_tok().map(|t| t.lc());
+            if let (Some(f), Some(x)) = (&fifth, &sixth)
+                && !model_names.contains(f)
+                && vdmos_models.contains(x)
+            {
+                nodes.push(ctx.node_req("case temperature node")?);
+            }
+            let (m, sp) = ctx.tok_req("model name")?;
+            model_span = sp;
+            m
+        }
+    };
     let (lead, params) = ctx.tail_params();
     if let Some(l) = lead {
         // `M1 … MNAME 2u` is not 3f5 syntax; keep it as `l` would be
@@ -550,6 +585,22 @@ fn mosfet(ctx: &mut ElemCtx) -> Parsed {
             span,
             format!("unexpected bare number {l} after MOSFET model"),
         );
+    }
+    // ngspice-47's front end (`inp_vdmos_model`): an instance with the
+    // `thermal` flag needs exactly five nodes — drain, gate, source,
+    // junction and case temperature.
+    if vdmos_models.contains(&model)
+        && nodes.len() != 5
+        && params
+            .iter()
+            .any(|p| p.name == "thermal" && p.value == ParamValue::Flag)
+    {
+        ctx.err(
+            model_span,
+            "VDMOS instance with the `thermal` flag needs exactly 5 nodes: \
+             drain, gate, source, tjunction, tcase",
+        );
+        return None;
     }
     // `off` is a flag among the keyword params for MOSFETs; leave it
     // in `params` (the core treats it with the other instance params).
@@ -752,7 +803,12 @@ mod tests {
         let mut diags = Vec::new();
         let names: HashSet<String> = models.iter().map(|s| s.to_string()).collect();
         let env = ParamEnv::default();
-        let e = parse_element(&card, &mut diags, &names, &env);
+        let vd: HashSet<String> = models
+            .iter()
+            .filter(|s| s.starts_with("vd"))
+            .map(|s| s.to_string())
+            .collect();
+        let e = parse_element(&card, &mut diags, &names, &vd, &env);
         (e, diags)
     }
 
@@ -978,6 +1034,32 @@ mod tests {
             }
             d => panic!("{d:?}"),
         }
+    }
+
+    #[test]
+    fn vdmos_instances_take_three_to_five_nodes() {
+        // `vdm` is a VDMOS model (the helper marks names starting
+        // with `vd`), `nm` an ordinary MOS model.
+        let models = ["vdm", "nm"];
+        let (e, d) = parse_with_models("m1 d g s vdm m=2", &models);
+        let e = e.unwrap();
+        assert!(d.is_empty(), "{d:?}");
+        assert_eq!(e.nodes, ["d", "g", "s"]);
+        assert!(matches!(&e.device, Device::Mosfet { model, .. } if model == "vdm"));
+        let (e, _) = parse_with_models("m1 d g s tj tc vdm thermal", &models);
+        let e = e.unwrap();
+        assert_eq!(e.nodes, ["d", "g", "s", "tj", "tc"]);
+        let (e, _) = parse_with_models("m1 d g s tj vdm", &models);
+        assert_eq!(e.unwrap().nodes.len(), 4);
+        // A 4-terminal card reads as before.
+        let (e, _) = parse_with_models("m1 d g s b nm l=1u", &models);
+        let e = e.unwrap();
+        assert_eq!(e.nodes, ["d", "g", "s", "b"]);
+        assert!(matches!(&e.device, Device::Mosfet { model, .. } if model == "nm"));
+        // `thermal` needs the two temperature nodes.
+        let (e, d) = parse_with_models("m1 d g s vdm thermal", &models);
+        assert!(e.is_none());
+        assert!(d.iter().any(|d| d.message.contains("exactly 5 nodes")));
     }
 
     #[test]

@@ -1,0 +1,14 @@
+VDMOS pole-zero: common-source stage with Cgd feedback and body diode
+* Coverage: .pz of a resistively loaded n-channel VDMOS driven from a
+* source resistance (vdmospzld.c: Cgd/Cgs at s, RD/RS/RG, the body
+* diode's conductance and capacitance through RB). Written for the
+* Dune port of ngspice-47's vdmos model.
+vdd vdd 0 dc 15
+vin in 0 dc 3.6
+rsig in g 1k
+m1 d g 0 mm
+rl vdd d 20
+.model mm vdmos (rd=0.05 rs=0.02 rg=1.5 kp=10 vto=3 lambda=0.01 cgdmin=50p
++ cgdmax=1n a=0.5 cgs=800p cjo=300p tt=20n rb=0.01)
+.pz g 0 d 0 vol pz
+.end

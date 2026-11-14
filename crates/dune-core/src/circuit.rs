@@ -361,6 +361,34 @@ pub struct Bsim3 {
     pub ic: (f64, f64, f64),
 }
 
+/// An ngspice-47 VDMOS power MOSFET (`MXXX ND NG NS <TJ <TC>> MNAME
+/// <M=> <OFF> <IC=VDS,VGS> <ICVDS=> <ICVGS=> <TEMP=> <DTEMP=>
+/// <THERMAL>`, `vdmos.c`) with its model inline. Internal nodes are
+/// named like `VDMOSsetup`'s `CKTmkVolt` calls: `<name>#drain`,
+/// `#gate`, `#source` past `RD`/`RG`/`RS`, `#body_diode` past `RB`,
+/// `#qp` with soft recovery, and with self-heating `#tj`/`#tc` (when
+/// the card names no temperature nodes), the ambient-source branch
+/// `#vdevtemp` and its node `#ckttemp`.
+#[derive(Clone, Debug)]
+pub struct Vdmos {
+    pub name: String,
+    /// Drain, gate, source, then optionally the junction and case
+    /// temperature nodes (3 to 5 names; the temperature nodes only
+    /// carry the thermal network when `thermal` is set and the model
+    /// gives `RTHJC`).
+    pub nodes: Vec<String>,
+    pub model: crate::vdmos::VdmosModel,
+    /// `M`: parallel multiplier (1).
+    pub m: f64,
+    pub off: bool,
+    /// `IC=VDS,VGS` (also `ICVDS=`, `ICVGS=`).
+    pub ic: (f64, f64),
+    /// Instance temperature override, kelvin.
+    pub temp: Option<f64>,
+    /// `THERMAL`: the self-heating switch.
+    pub thermal: bool,
+}
+
 /// `DXXXXXXX N+ N- MNAME <AREA> <OFF>` with its model inline.
 #[derive(Clone, Debug)]
 pub struct Diode {
@@ -500,6 +528,7 @@ pub enum Spec {
     SwitchV(SwitchV),
     SwitchI(SwitchI),
     Asrc(Box<Asrc>),
+    Vdmos(Box<Vdmos>),
 }
 
 macro_rules! impl_into_spec {
@@ -587,6 +616,12 @@ impl From<Asrc> for Spec {
     }
 }
 
+impl From<Vdmos> for Spec {
+    fn from(s: Vdmos) -> Spec {
+        Spec::Vdmos(Box::new(s))
+    }
+}
+
 impl From<Tra> for Spec {
     fn from(s: Tra) -> Spec {
         Spec::Tra(Box::new(s))
@@ -623,6 +658,7 @@ impl Spec {
             Spec::SwitchV(s) => &s.name,
             Spec::SwitchI(s) => &s.name,
             Spec::Asrc(s) => &s.name,
+            Spec::Vdmos(s) => &s.name,
         }
     }
 }
@@ -848,6 +884,10 @@ fn normalize(spec: &mut Spec) {
             s.nodes.iter_mut().for_each(lc);
             lc(&mut s.ctrl);
         }
+        Spec::Vdmos(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
         Spec::Asrc(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -972,6 +1012,9 @@ impl Circuit {
         let mut state_base: Vec<usize> = Vec::with_capacity(self.specs.len());
         let mut state_ranges: Vec<(usize, usize)> = Vec::with_capacity(self.specs.len());
         let mut inductors: HashMap<String, (usize, f64)> = HashMap::new(); // name → (flux, L)
+        // Node → how many device terminals name it (VDMOS dangling
+        // temperature nodes).
+        let mut node_uses: HashMap<Var, usize> = HashMap::new();
         for spec in &self.specs {
             let first = st.total();
             state_base.push(match spec {
@@ -995,6 +1038,7 @@ impl Circuit {
                 Spec::Mes(_) => st.alloc(crate::mes::MES_NUM_STATES),
                 Spec::SwitchV(_) | Spec::SwitchI(_) => st.alloc(crate::switch::SW_NUM_STATES),
                 Spec::Asrc(s) => st.alloc(crate::asrc::num_states(&s.expr)),
+                Spec::Vdmos(_) => st.alloc(crate::vdmos::VDMOS_NUM_STATES),
                 _ => 0,
             });
             state_ranges.push((first, st.total()));
@@ -1026,9 +1070,17 @@ impl Circuit {
                 Spec::SwitchV(s) => &s.nodes,
                 Spec::SwitchI(s) => &s.nodes,
                 Spec::Asrc(s) => &s.nodes,
+                Spec::Vdmos(s) => &s.nodes,
             };
-            for n in node_names {
-                node(&mut vars, &mut node_ids, n);
+            for (k, n) in node_names.iter().enumerate() {
+                let var = node(&mut vars, &mut node_ids, n);
+                // The temperature nodes of a VDMOS are stamped only
+                // under self-heating.
+                let unstamped = matches!(spec, Spec::Vdmos(v)
+                    if k >= 3 && !(v.thermal && v.model.rthjc.is_some()));
+                if !unstamped {
+                    *node_uses.entry(var).or_insert(0) += 1;
+                }
             }
             // `INPgetTree` inserts the `v()` nodes while parsing the
             // card (after N+ N-); `ASRCsetup` then makes the branch of
@@ -1194,6 +1246,19 @@ impl Circuit {
                     }
                     if s.model.needs_prime(s.nrs) {
                         node(&mut vars, &mut node_ids, &format!("{}#source", s.name));
+                    }
+                }
+                // `VDMOSsetup`, in its order.
+                Spec::Vdmos(s) => {
+                    if !(3..=5).contains(&s.nodes.len()) {
+                        return Err(Error::Build(format!(
+                            "`{}`: a VDMOS takes 3 to 5 nodes, got {}",
+                            s.name,
+                            s.nodes.len()
+                        )));
+                    }
+                    for v in vdmos_internal(s) {
+                        node(&mut vars, &mut node_ids, &format!("{}#{v}", s.name));
                     }
                 }
                 _ => {}
@@ -1647,6 +1712,62 @@ impl Circuit {
                         ctrl,
                     )));
                 }
+                Spec::Vdmos(s) => {
+                    let at = |n: &str| get(&node_ids, n);
+                    let int = |suffix: &str| at(&format!("{}#{suffix}", s.name));
+                    let p = &s.model;
+                    let (d, g, so) = (at(&s.nodes[0]), at(&s.nodes[1]), at(&s.nodes[2]));
+                    let selfheat = s.thermal && p.rthjc.is_some();
+                    let named: Vec<Var> = s.nodes[3..].iter().map(|n| at(n)).collect();
+                    let mut v = crate::vdmos::VdmosVars {
+                        d,
+                        g,
+                        s: so,
+                        dp: if p.rd > 0.0 { int("drain") } else { d },
+                        gp: if p.rg > 0.0 { int("gate") } else { g },
+                        sp: if p.rs > 0.0 { int("source") } else { so },
+                        rp: if p.rb > 0.0 { int("body_diode") } else { so },
+                        qp: if p.revrec() { int("qp") } else { 0 },
+                        ..Default::default()
+                    };
+                    if selfheat {
+                        v.tj = named.first().copied().unwrap_or_else(|| int("tj"));
+                        v.tc = named.get(1).copied().unwrap_or_else(|| int("tc"));
+                        v.tp = int("ckttemp");
+                        v.br = int("vdevtemp");
+                    } else {
+                        for (k, &n) in named.iter().enumerate() {
+                            // A node some device stamps (another
+                            // device, or this one's d/g/s) is not
+                            // dangling.
+                            let used = node_uses.get(&n).copied().unwrap_or(0) > 0;
+                            if n != 0 && !used && !named[..k].contains(&n) {
+                                v.pins[k] = n;
+                            }
+                        }
+                    }
+                    let temp = self.instance_temp(&s.name, s.temp, opts);
+                    let dev = crate::vdmos::VdmosI::new(
+                        v,
+                        crate::vdmos::VdmosSetup {
+                            name: s.name.clone(),
+                            model: s.model.clone(),
+                            m: s.m,
+                            off: s.off,
+                            ic: s.ic,
+                            thermal: s.thermal,
+                            temp,
+                            temp_given: s.temp.is_some(),
+                            ckt_temp: opts.temp,
+                            default_tnom: opts.tnom,
+                            reltol: opts.reltol,
+                        },
+                        base,
+                        &mut notes,
+                    )
+                    .map_err(Error::Build)?;
+                    devices.push(Box::new(dev));
+                }
                 Spec::Asrc(s) => {
                     let pos = get(&node_ids, &s.nodes[0]);
                     let neg = get(&node_ids, &s.nodes[1]);
@@ -1889,6 +2010,42 @@ fn check_ports(mut ports: Vec<PortInfo>) -> Result<Vec<PortInfo>, Error> {
     }
     ports.sort_by_key(|p| p.num);
     Ok(ports)
+}
+
+/// The internal unknowns `VDMOSsetup` makes for a VDMOS instance, in
+/// its order (suffixes after `<name>#`).
+fn vdmos_internal(s: &Vdmos) -> Vec<&'static str> {
+    let p = &s.model;
+    let mut v = Vec::new();
+    if p.rd > 0.0 {
+        v.push("drain");
+    }
+    if p.rg > 0.0 {
+        v.push("gate");
+    }
+    if p.rs > 0.0 {
+        v.push("source");
+    }
+    if p.rb > 0.0 {
+        v.push("body_diode");
+    }
+    if s.thermal && p.rthjc.is_some() {
+        if s.nodes.len() < 4 {
+            v.push("tj");
+        }
+        if s.nodes.len() < 5 {
+            v.push("tc");
+        }
+        // `CKTmkCur(…, "VdevTemp")`: a branch equation, written to
+        // the rawfile as `v(<name>#VdevTemp)` — kept as a node-typed
+        // unknown, like the LTRA port currents.
+        v.push("vdevtemp");
+        v.push("ckttemp");
+    }
+    if p.revrec() {
+        v.push("qp");
+    }
+    v
 }
 
 /// Terminal and prime-node variables of a JFET/MESFET.
