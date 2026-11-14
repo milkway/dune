@@ -1,0 +1,30 @@
+m on X lines: semiconductors and controlled sources in a DC sweep
+* written for Dune (Fase 8 item 7, G6 of docs/pdk-parser.md): inside a
+* subcircuit called with m=, a diode, a Gummel-Poon BJT and a JFET
+* scale like m devices in parallel (Dune scales their area), a BSIM3
+* MOSFET takes m itself, a VCCS and a CCCS scale their gain and a DC
+* current source its value (probe s4 in .claude/scratch/g3-probes)
+.model dm d is=1e-14 rs=5 cjo=1p
+.model qm npn is=1e-15 bf=100 rb=50 re=2 rc=10
+.model jm njf vto=-2 beta=1e-4 lambda=0.01 rd=10 rs=10
+.model b3 nmos level=49 version=3.3 tox=4n vth0=0.4
+.subckt cell a b
+d1 a b dm
+q1 a b 0 qm
+j1 a 0 b jm
+m1 a b 0 0 b3 l=1u w=2u
+g1 a 0 b 0 1m
+vs b s 0
+rs s 0 1k
+f1 a 0 vs 0.5
+i1 a 0 10u
+.ends
+vin in 0 0
+va 1 0 2
+rb in 2 1k
+vb 3 0 2
+rb3 in 4 1k
+x1 1 2 cell m=3
+x2 3 4 cell
+.dc vin 0 1.5 0.05
+.end

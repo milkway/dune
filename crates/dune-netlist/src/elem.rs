@@ -23,7 +23,7 @@ pub(crate) struct ElemCtx<'a> {
     pub sc: Scanner<'a>,
     pub card: &'a Card,
     pub diags: &'a mut Vec<Diagnostic>,
-    pub env: &'a ParamEnv,
+    pub env: &'a ParamEnv<'a>,
 }
 
 impl ElemCtx<'_> {
@@ -230,7 +230,13 @@ fn two_terminal_rc(ctx: &mut ElemCtx, is_r: bool) -> Parsed {
     let mut model = None;
     if let Some(tok) = ctx.sc.peek_tok() {
         let lc = tok.lc();
-        if !is_keyword_param(&lc) {
+        // A token written `name=…` is a parameter whatever its name
+        // (`r1 a b 1k m=2`: ngspice's multiplier, probe `s4 m_r_own`).
+        let assigned = ctx.card.text.as_bytes()[tok.end..]
+            .iter()
+            .find(|b| !matches!(b, b' ' | b'\t'))
+            == Some(&b'=');
+        if !is_keyword_param(&lc) && !assigned {
             ctx.sc.next_tok();
             model = Some(lc);
         }
@@ -875,42 +881,14 @@ fn behavioral(ctx: &mut ElemCtx) -> Parsed {
     }
 }
 
-/// `X`: `name N1 <N2 …> SUBNAM` — the last token is the subcircuit.
+/// `X`: `name N1 <N2 …> SUBNAM [name=value …]` — the last token
+/// before the parameters is the subcircuit. The deck parser reads `X`
+/// cards with [`crate::subckt::parse_xcall`] (which keeps the actual
+/// parameters for the expansion); this shape is all an isolated card
+/// can give.
 fn subckt_call(ctx: &mut ElemCtx) -> Parsed {
-    let mut names = Vec::new();
-    let text = ctx.card.text.as_bytes();
-    while let Some(tok) = ctx.sc.next_tok() {
-        // `name=value` (or ngspice's `params:` keyword) passes
-        // subcircuit parameters, which do not exist yet; without this
-        // check the value would be taken for the subcircuit name.
-        let rest = &text[tok.end..];
-        let eq = rest
-            .iter()
-            .find(|b| !matches!(b, b' ' | b'\t'))
-            .is_some_and(|&b| b == b'=');
-        if eq || tok.eq_ic("params:") {
-            let span = ctx.sc.span(&tok);
-            ctx.err(
-                span,
-                format!(
-                    "subcircuit parameters on X lines (`{}`) are not supported yet",
-                    if eq {
-                        format!("{}=…", tok.lc())
-                    } else {
-                        tok.lc()
-                    }
-                ),
-            );
-            return None;
-        }
-        names.push(tok.lc());
-    }
-    let Some(subname) = names.pop() else {
-        let span = ctx.sc.here();
-        ctx.err(span, "subcircuit call needs nodes and a subcircuit name");
-        return None;
-    };
-    Some((names, Device::SubcktCall { subname }))
+    let x = crate::subckt::parse_xcall(ctx.card, ctx.diags)?;
+    Some((x.nodes, Device::SubcktCall { subname: x.subname }))
 }
 
 #[cfg(test)]
@@ -1449,20 +1427,13 @@ mod tests {
     }
 
     #[test]
-    fn subckt_call_with_parameters_is_a_precise_error() {
-        for (line, want) in [
-            ("X1 a b inv w=0.15 l = 1u", "`w=…`"),
-            ("x1 a b inv params: w=1", "`params:`"),
-        ] {
+    fn subckt_call_name_ends_before_the_parameters() {
+        for line in ["X1 a b inv w=0.15 l = 1u", "x1 a b inv params: w=1"] {
             let (el, diags) = parse(line);
-            assert!(el.is_none(), "{line}");
-            assert_eq!(diags.len(), 1, "{line}: {diags:?}");
-            assert!(diags[0].message.contains("not supported yet"), "{line}");
-            assert!(
-                diags[0].message.contains(want),
-                "{line}: {}",
-                diags[0].message
-            );
+            assert!(diags.is_empty(), "{line}: {diags:?}");
+            let el = el.unwrap();
+            assert_eq!(el.nodes, ["a", "b"], "{line}");
+            assert!(matches!(&el.device, Device::SubcktCall { subname } if subname == "inv"));
         }
     }
 

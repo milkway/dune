@@ -241,8 +241,8 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | S1 | `.lib arq seção` | só o trecho `.lib seção`…`.endl`; nome de seção case-insensitive; `.lib` aninhado no mesmo arquivo funciona; `.include` dentro da seção resolve relativo ao **arquivo que inclui**; seção não pedida nem é lida (lixo nela não dá erro); `.endl nome` divergente aceito; pedir a mesma seção 2× é inofensivo; seção inexistente é fatal (P01, P21, P22, P24) | erro; **igual desde 2026-11-14** (G1; `.endl` divergente é aviso) |
 | S2 | referência adiante entre `.param` | aceita (`a={b+1}` antes de `b=2` → 3) (P02) | erro; **igual desde 2026-11-14** (G2) |
 | S3 | redefinição | a **última** definição vale para todos os usos, inclusive anteriores (P03) | igual (coleta tudo antes); desde a G2 também para dependentes (`d={c}` com `c` redefinido depois vale o último) |
-| S4 | precedência em subcircuito | valor da linha `X` > padrão da linha `.subckt` = padrão via `.param` no corpo = `params:` > `.param` global de mesmo nome (sombreado) (P04, P18, P23) | erro |
-| S5 | `.param` local encadeado (`lw={w*g}`, `lw2={lw+1}`) | funciona, mistura global e da instância (P15) | erro |
+| S4 | precedência em subcircuito | valor da linha `X` > padrão da linha `.subckt` = padrão via `.param` no corpo = `params:` > `.param` global de mesmo nome (sombreado) (P04, P18, P23) | erro; **igual desde 2026-11-14** (G3; atuais avaliadas no escopo do chamado, escopo dinâmico — sondas `s1`–`s3` em `docs/dune-netlist.md`) |
+| S5 | `.param` local encadeado (`lw={w*g}`, `lw2={lw+1}`) | funciona, mistura global e da instância (P15) | erro; **igual desde 2026-11-14** (G3) |
 | S6 | `{…}` × `'…'` × nu | equivalentes; espaços livres; nomes case-insensitive; nome nu de parâmetro vale em `.model` e na instância (`rsh=rv`, `w=wv`) (P05b, P11, P19) | erro; **igual desde 2026-11-14** (G2) no escopo global — nome nu só depois de `nome=` |
 | S7 | precedência/associatividade | `^` e `**` **associam à esquerda** (`2^3^2 = 2**3**2 = 64`); menos unário mais fraco que `^` (`-2^2 = -4`) (P05, D_POW) | `^` à direita: 512; **igual desde 2026-11-14** (`**` desde a G2) |
 | S8 | funções | `pwr(-2,3)=8` (não preserva sinal), `pow(-2,3)=-8`, `pow(-2,0.5)` e `sqrt(-4)` → NaN → erro fatal "unknown parameter (nan)" **se usado**; `log` é **natural** (`log(100)=4,6052`), `log10`; `nint(2.5)=2`; `int` trunca; `7/2=3,5`; `limit(5,0,3)=8` (não é clamp; nenhum PDK usa); `!0=1`; booleanos valem 0/1 (P05) | sem funções; **igual desde 2026-11-14** (G2: as 34 funções do ngspice-47; NaN usado é erro com span; aridade errada é erro, o ngspice a lê errado) |
@@ -250,16 +250,16 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | S10 | ternário em linha `X` entre aspas (`lr='(d_sab==0) ? 2 : d_sab'`) | funciona (P17) | erro |
 | S11 | `agauss/gauss/aunif/unif` | **aleatórios a cada execução** sem semente fixa (duas rodadas: 0,9708 / 1,0276); `0*agauss(…)` = 0 (P06) | erro; desde a G2 lidas inteiras e avaliadas no **nominal** com um aviso por deck (decisão pendente, G8) |
 | S12 | `temper` | vale em `.model`, na instância e em `.param` local de subcircuito, com a temperatura do circuito (`.options temp`/`.temp`); em `.param` **global** é erro fatal "Undefined parameter [temper]" (P07, P07a–d) | erro; desde a G2 erro "not supported yet" onde é avaliado (G7) |
-| S13 | `.model` local dependente da instância | uma cópia por instância (`rsh={w*100}` → 100 e 300 Ω) (P08) | erro |
-| S14 | avaliação preguiçosa | parâmetro indefinido num subcircuito não instanciado ou num `.model` não usado **não** é erro; erro num `.param` global **é** fatal (P05e, P05f) | avalia tudo |
-| S15 | binning | `nome` casa `nome.<dígitos>`; só tipos BSIM3/BSIM4/HiSIM; bin se `lmin ≤ L ≤ lmax` e `wmin ≤ W ≤ wmax` **inclusivo nas duas pontas** com tolerância absoluta 1e-9 (código BSD `in_range`); a tabela é percorrida do último `.model` definido ao primeiro (a fronteira L=1 µm caiu no bin definido por último); L e W multiplicados por `scale`; W dividido por `nf` se `wnflag` (padrão 1 em `hs`/`spe`); faltando um dos quatro limites o bin é pulado; nenhum bin → "could not find a valid modelname" (P09, P09b, P09c) | erro |
-| S16 | `.option scale` | L/W dos bins e da instância BSIM4 × `scale`, AD/AS × `scale²`, PD/PS × `scale` (`b4par.c`); `lmin…wmax` **não** são escalados (P09b) | aviso "not implemented; ignored" |
+| S13 | `.model` local dependente da instância | uma cópia por instância (`rsh={w*100}` → 100 e 300 Ω) (P08) | erro; **igual desde 2026-11-14** (G3; instâncias com os mesmos valores compartilham a cópia) |
+| S14 | avaliação preguiçosa | parâmetro indefinido num subcircuito não instanciado ou num `.model` não usado **não** é erro; erro num `.param` global **é** fatal (P05e, P05f) | avalia tudo; **igual desde 2026-11-14** (G3, também `.model` de topo) |
+| S15 | binning | `nome` casa `nome.<dígitos>`; só tipos BSIM3/BSIM4/HiSIM; bin se `lmin ≤ L ≤ lmax` e `wmin ≤ W ≤ wmax` **inclusivo nas duas pontas** com tolerância absoluta 1e-9 (código BSD `in_range`); a tabela é percorrida do último `.model` definido ao primeiro (a fronteira L=1 µm caiu no bin definido por último); L e W multiplicados por `scale`; W dividido por `nf` se `wnflag` (padrão 1 em `hs`/`spe`); faltando um dos quatro limites o bin é pulado; nenhum bin → "could not find a valid modelname" (P09, P09b, P09c) | erro; **igual desde 2026-11-14** (G4, na expansão; `wnflag` padrão 0, modo normal) |
+| S16 | `.option scale` | L/W dos bins e da instância BSIM4 × `scale`, AD/AS × `scale²`, PD/PS × `scale` (`b4par.c`); `lmin…wmax` **não** são escalados (P09b) | aviso "not implemented; ignored"; **igual desde 2026-11-14** (G5: também MOS 1–3/BSIM3 e `l w` de R/C; não MOS6/BSIM1/2, sonda `s6`) |
 | S17 | `.if/.elseif/.else/.endif` | funciona no topo e em `.subckt`, condicionado a parâmetro da instância (P10) | erro |
-| S18 | `m` na linha `X` | multiplica o subcircuito (2 × 1 kΩ → 500 Ω), **exceto** se a linha `.subckt` declara `m=` — aí `m` vira parâmetro comum e o multiplicador some (`m=4` → 1 kΩ; em `hs` o ngspice avisa "m=xx on .subckt line will override multiplier m hierarchy!") (P13) | erro |
+| S18 | `m` na linha `X` | multiplica o subcircuito (2 × 1 kΩ → 500 Ω), **exceto** se a linha `.subckt` declara `m=` — aí `m` vira parâmetro comum e o multiplicador some (`m=4` → 1 kΩ; em `hs` o ngspice avisa "m=xx on .subckt line will override multiplier m hierarchy!") (P13) | erro; **igual desde 2026-11-14** (G6: o `m` do dispositivo é substituído; por tipo em `docs/dune-netlist.md`) |
 | S19 | `X` que nomeia um **modelo** | erro com modelo nível 1 ("unknown subckt"), plain e `hs` (P14); **aceito** com o modelo binado do gf180 (`xmn … nmos_3p3`), plain e `hs`, mas Vout(0,9 V) muda de 3,2103 (linha `M`) para 3,2093 (plain) / 3,2052 V (`hs`) — causa não isolada | erro |
 | S20 | `.include` indentado, `.inc`, aspas | aceitos (P12) | erro; **igual desde 2026-11-14** |
 | S21 | `.params` | sinônimo de `.param` (P20) | erro; **igual desde 2026-11-14** |
-| S22 | entrada hostil | ciclo de `.param` → erro "level depth greater 1000" (H1); **ciclo de `.include` → segfault** do ngspice (H2, rc=139); ciclo de `.lib` → erro espúrio "Missing second quote" (H3); 5000 parênteses → "Closing ) not found" (H4); cadeia de 20 000 `.param` → ok (H5); subcircuito recursivo → erro após ~22 níveis (H6) | H1: erro (por outra razão); H2: limite 16 ok; H6: limite 64 ok; desde 2026-11-14 H2/H3 são erro "cycle" com span |
+| S22 | entrada hostil | ciclo de `.param` → erro "level depth greater 1000" (H1); **ciclo de `.include` → segfault** do ngspice (H2, rc=139); ciclo de `.lib` → erro espúrio "Missing second quote" (H3); 5000 parênteses → "Closing ) not found" (H4); cadeia de 20 000 `.param` → ok (H5); subcircuito recursivo → erro após ~22 níveis (H6) | H1: erro (por outra razão); H2: limite 16 ok; H6: limite 64, desde a G3 erro na primeira repetição; desde 2026-11-14 H2/H3 são erro "cycle" com span |
 
 Versão do BSIM4 (`inpdomod.c`, BSD): `level=14|54` com `version` 4.0–4.5
 → `bsim4v5`, 4.6 → `bsim4v6`, 4.7 → `bsim4v7`, 4.8/"default" → `bsim4`
@@ -368,7 +368,18 @@ dentro dos subcircuitos de resistor/`_sab` do `sm141064.ngspice`
 IHP — `psp103va` (OSDI, fora de escopo).
 
 **G3 — Escopo e avaliação adiada: parâmetros de subcircuito, linha `X`,
-modelo por instância, preguiça.**
+modelo por instância, preguiça.** ✅ **Feito em 2026-11-14** (`subckt.rs`
++ `param.rs`; regras, sondas (~150, `.claude/scratch/g3-probes/`) e
+custos em `docs/dune-netlist.md`, seção "Parâmetros de subcircuito,
+binning e `m`"; decks `regress/subckt_param_{scope,model,tran}.cir`;
+diferenças no `KNOWN_DIFFS.md`). Sem mudança de API pública: o IR segue
+pós-avaliação, o corpo fica em cartões e é avaliado por instância na
+expansão. Achados além do previsto: as atuais da linha `X` são
+avaliadas **no escopo do chamado** (`w={l}` lê o `l` dele); o escopo
+é **dinâmico** (um subcircuito vê os parâmetros de quem o instancia);
+uma definição que nomeia a si mesma lê o escopo de fora; atual sem
+formal é ignorada (erro se o subcircuito não tem formal nenhuma).
+Texto do plano original:
 (a) inv: sky130 (padrões via `.param` no corpo, `X … w= l=`, 288 bins
 especializados por instância — `toxe={…sqrt(l*w*mult)}`), IHP (padrões na
 linha `.subckt`, `ng=`, `m=`); gf180 inv só precisa **guardar sem avaliar**
@@ -388,7 +399,9 @@ profundidade de substituição, bomba de expansão (o orçamento de trabalho de
 2²⁰ do `subckt.rs` precisa contar também as cópias de modelo por
 instância), subcircuito recursivo (já limitado a 64).
 
-**G4 — Binning.**
+**G4 — Binning.** ✅ **Feito em 2026-11-14**, na expansão (genérico por
+nível: o BSIM4 herda), deck `regress/bin_bsim3.cir`; os coeficientes
+`l*/w*/p*` do BSIM3 já eram aplicados pelo porte. Plano original:
 (a) inv: sky130 e gf180; full: idem. (b) S15. (c) ~250 linhas no
 `elaborate`; risco baixo-médio (tolerância absoluta 1e-9 m e ordem "último
 definido primeiro" decidem as fronteiras; `binunit=2` é coisa do BSIM4).
@@ -396,17 +409,52 @@ definido primeiro" decidem as fronteiras; `binunit=2` é coisa do BSIM4).
 nova. (e) número de bins por base limitado pelo orçamento de modelos; L/W
 não finitos ou ≤ 0 → diagnóstico.
 
-**G5 — `.option scale` (e `wnflag`).**
+**G5 — `.option scale` (e `wnflag`).** ✅ **Feito em 2026-11-14**
+**sem campo novo em `Options`**: o `dune-netlist` dobra o `scale` na
+geometria das instâncias durante a expansão (MOS 1–3, BSIM3/4: `l w` ×s,
+`ad as` ×s², `pd ps` ×s; `R`/`C`: `l w` ×s; sonda `s6`) e o núcleo
+para de avisar; `wnflag` só entra no binning. Muda o contrato do IR
+(geometria pós-`scale`), não assinaturas — commit separado, para o
+dono aprovar. Plano original:
 (a) inv: sky130; full: sky130. (b) S16. (c) ~150 linhas (MOS de todos os
 níveis, R, C, D nível 3, binning). (d) **[API]** campo novo em `Options`
 (público). (e) `scale` ≤ 0 ou não finito → erro.
 
-**G6 — `m` na linha `X` (multiplicador hierárquico).**
+**G6 — `m` na linha `X` (multiplicador hierárquico).** ✅ **Feito em
+2026-11-14** sem API nova (decks `regress/xmult_{rcl,semi}.cir`): `m`
+nativo onde o núcleo tem (BSIM3/BSIM4/VDMOS, VBIC), valor/ganho/área
+onde é equivalente, erro "not supported yet" com span em MOS 1–3/6,
+BSIM1/2, `R`/`C` por geometria e fonte `I` transiente. No ngspice o
+`m` do dispositivo é **substituído**, não multiplicado. Plano original:
 (a) inv: nenhum dos testbenches mínimos; full: sky130 (107 linhas `X` com
 `m=`), gf180 (subcircuitos com `m=1` na linha — o caso que **anula** o
 multiplicador). (b) S18. (c) ~300 linhas; risco médio: todo dispositivo
 precisa aceitar `m` (hoje só alguns). (d) **[API]** se as specs de dispositivo
 ganharem `m`. (e) produto de `m` aninhados finito e > 0.
+
+*Depois da G3/G4/G6* (os mesmos `tb/<pdk>/inv.cir`, `dune` em
+`--release`; `.claude/scratch/g3-probes/tbrun.py`, saídas em
+`tb-before/`, `tb-after1/`):
+
+| Classe | sky130 antes → depois | gf180 | IHP |
+|---|---|---|---|
+| `unknown parameter` | 4614 → 0 | 118 → 0 | — |
+| `.param inside .subckt is not supported yet` | 323 → 0 | 24 → 0 | — |
+| `subcircuit parameters on X lines` | 119 → 0 | 8 → 0 | 2 → 0 |
+| `v(…)` em valor (R comportamental, G11; estavam em subcircuitos não instanciados) | 24 → 0 | 4 → 0 | — |
+| `unknown model type psp103va` (idem, agora preguiçosos) | — | — | 24 → 0 |
+| `unknown device type` (`N`, OSDI) | — | — | 16 → 12 |
+| `.if/.else/.endif` em `.subckt` (G9) | — | — | 36 → 36 |
+| **total de erros do parser** | 5080 → 0 | 154 → 0 | 78 → 48 |
+
+Primeiro bloqueio de cada um, agora na **elaboração**: sky130 —
+`model xp.sky130_fd_pr__pfet_01v8__model.44: MOS level 54 is not
+implemented yet` (bins 44/71 escolhidos, os mesmos do ngspice); gf180 —
+`model pmos_3p3.8: MOS level 54` (bins `pmos_3p3.8`/`nmos_3p3.4`,
+conferidos contra o ngspice pelo resultado); IHP — `.if` dentro de
+`.subckt` (G9), depois OSDI. O inversor gf180 não instancia diodo; o
+diodo nível 3 continua aceito com nota e simulado como nível 1 (G11)
+onde for usado.
 
 **G7 — `temper`.**
 (a) inv: nenhum (aparece nos dispositivos de 20 V do sky130 e nos
@@ -463,7 +511,7 @@ a guardar quando G3 criar cópias por instância.
 
 ## 8. Defeitos do Dune atual achados de passagem
 
-Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1.
+Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1; o 4, com a G5.
 
 1. ✅ **`^` à direita em `{…}`**: `{2^3^2}` = 512 no Dune, 64 no ngspice-47
    (`param.rs` comenta "Right-associative, like ngspice", e o
@@ -479,8 +527,8 @@ Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1.
    such subcircuit `0.15`"); diagnóstico enganoso enquanto G3 não existe.
    *Corrigido*: erro "subcircuit parameters on X lines (`w=…`) are not
    supported yet" com o span do nome do parâmetro (também `params:`).
-4. **`.option scale` só avisa** e segue com geometria errada (deveria ser
-   erro até G5).
+4. ✅ **`.option scale` só avisa** e segue com geometria errada.
+   *Corrigido* com a G5 (2026-11-14).
 5. ✅ **Valor não finito em `.param`**: `.param z={1/0}` passa calado; o deck
    P05d termina em "resistor cannot have zero resistance" para um NaN.
    *Corrigido* como no ngspice-47 (sondas de 2026-11-14): definir ou

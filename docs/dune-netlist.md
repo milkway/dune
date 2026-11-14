@@ -89,11 +89,10 @@ Registradas também em `corpus/KNOWN_DIFFS.md` quando observáveis:
    a um elemento, `.model` ou cartão de controle e não é finito vira
    erro com o span — o ngspice-47 aborta nesse ponto ("unknown
    parameter (inf)") e roda normalmente se o parâmetro não é usado.
-   Diferenças: no `.model` o ngspice só avisa e segue com valor
-   mutilado, e num subcircuito não instanciado ele nem avalia (o Dune
-   avalia o corpo de todo subcircuito até a G3 do `docs/pdk-parser.md`).
-   Parâmetros na linha `X` (`x1 a b inv w=1u`, `params:`) e `.param`
-   dentro de `.subckt` ainda não existem (G3): erro preciso com span.
+   Diferença: num `.model` **usado** o ngspice só avisa e segue com
+   valor mutilado. Subcircuito nunca instanciado e `.model` não usado
+   não são avaliados, como no ngspice (G3, seção "Parâmetros de
+   subcircuito" abaixo).
 7. **Fonte `B`**: ver a seção própria abaixo (expressões com as
    extensões mínimas do ngspice onde o 3f5 rejeita ou mutila).
 
@@ -302,8 +301,8 @@ em `f64` (c2 store_*). Número literal fora de `{}` não muda.
   l_*). Texto depois de um valor que não começa outro `nome=` é erro
   (c5: o ngspice rejeita `.param b = a * 3`, mas numa linha com duas
   atribuições **descarta calado** o `* 3` e faz `b = a`). `.param s="…"`
-  (string) é erro. Um `.param` dentro de `.subckt` é erro "not
-  supported yet" (G3) e não vaza para o escopo global (antes vazava).
+  (string) é erro. Um `.param` dentro de `.subckt` pertence ao escopo
+  da instância (G3, seção seguinte) e não vaza para o global.
 - Resolução (`param::resolve`): **a última definição de um nome é a
   única que existe**, inclusive para usos anteriores (c5 r_last,
   r_last_dep; `.param c=1` / `.param c={c+1}` é ciclo, c5 r_self);
@@ -355,34 +354,184 @@ carga ~25):
 A memória dos casos grandes é do leitor (cartões ~6× o texto), não da
 resolução.
 
-### G3: onde entra o escopo de subcircuito
+## Parâmetros de subcircuito, binning e `m` (`subckt.rs`, `param.rs`)
 
-O IR público continua pós-avaliação (`ParamValue::Num`): a G2 não mudou
-tipo público nenhum, e a G3 não precisa mudar. O que a G3 deve guardar
-**sem avaliar** é o corpo do subcircuito como **cartões** (`deck::Card`,
-com spans) em vez de `Element`/`Model` já parseados: hoje o passo B
-parseia o corpo com o ambiente global e o `subckt::expand` só renomeia.
-Com a G3 o `SubcktDef` passa a carregar os cartões do corpo, os
-padrões da linha `.subckt` e as definições `.param` do corpo (mesmo
-`ParamDef`/`collect_params` de hoje), e a avaliação acontece **na
-expansão**, por instância: um `ParamEnv` filho com as atribuições da
-linha `X` sobre os padrões da linha `.subckt` e do corpo (S4: `X` >
-padrões > global sombreado), resolvido pelo mesmo `param::resolve`
-(referência adiante, último vence, ciclo) com consulta ao pai, e só
-então cada cartão do corpo é parseado (`parse_element`/`parse_model`
-com esse ambiente) — o que dá de graça a preguiça (S14: corpo de
-subcircuito nunca instanciado nem é parseado) e o `.model` por
-instância (S13). Para isso o `ParamEnv` precisa de um ponteiro para o
-ambiente pai na consulta (`lookup` hoje olha um mapa só) e o orçamento
-de 2²⁰ do `subckt.rs` precisa cobrar também os cartões parseados por
-instância.
+G3, G4 e G6 de `docs/pdk-parser.md` (2026-11-14). Mesma regra de
+proveniência da G2: contrato = comportamento observado do `ngspice` 47
+em sondas mais o manual; `src/frontend/numparam/` (LGPL) **não** foi
+aberto. Do código BSD foram lidos `frontend/inpcom.c`
+(`inp_fix_subckt_multiplier`), `frontend/subckt.c` (tradução de nomes
+de modelo, `model_name_match`), `spicelib/parser/inpgmod.c`
+(`INPgetModBin`, `in_range`), `inp2m.c`, `inpdomod.c` e os `*par.c` dos
+dispositivos (onde `scale` entra). As sondas — ~150 decks com a saída
+do ngspice — estão em `.claude/scratch/g3-probes/` (`probe3.py CASOS
+DIR` gera e roda; `dunerun.py DIR` roda os mesmos decks no Dune e
+compara; `sN.txt` são os casos, `sN/` decks e logs); `s1 dyn_scope` =
+caso `dyn_scope` de `s1.txt`. Cada teste de
+`tests/subckt_params.rs` cita a sua.
 
-O custo a vigiar é o sky130: 288 cartões de modelo de ~300 parâmetros
-por instância de MOS; reparsear o texto por instância é linear mas
-pode pesar — se pesar, compilar cada expressão do corpo uma vez
-(`pexpr::Expr` é `Clone` e independente do ambiente) e reavaliar por
-instância. `temper` (G7) entra no mesmo ponto: é um nome do ambiente da
-expansão, e uma varredura de temperatura reexpande.
+### Como ficou
+
+O IR público continua pós-avaliação e não mudou. No passo B o corpo de
+um `.subckt` é lido só **estruturalmente**: os padrões da linha
+`.subckt` e os `.param` do corpo viram `ParamDef` (as "formais", na
+ordem), os cartões de elemento ficam como `&Card`, as linhas `X` como
+`XCall` (nós, nome, atuais **não avaliadas**), os `.model` como
+`ModelCard` (cartão + chaves de binning lidas do texto). Erros de
+cartão do corpo ficam guardados e só são relatados se o subcircuito
+for instanciado. O `subckt::expand` avalia por instância:
+
+1. resolve o escopo da instância com `param::resolve_local`: formais e
+   depois as atuais da linha `X` (que portanto vencem), pelo mesmo
+   algoritmo do escopo global (último vence, referência adiante, ciclo
+   = erro), lendo os nomes que faltam no escopo **de quem chama**;
+2. parseia cada cartão de elemento do corpo nesse escopo
+   (`parse_element`), renomeia, resolve o modelo (com binning) e aplica
+   o multiplicador;
+3. um `.model` local só é avaliado quando um elemento da instância (ou
+   de uma instância que ela chama) o usa — uma cópia por instância,
+   `x1.nome`; instâncias que concordam nos valores de todos os nomes
+   que o cartão lê compartilham a mesma cópia (com o nome da
+   primeira).
+
+`.model` de topo: avaliado uma vez com os globais, diagnósticos
+guardados; só são relatados se algum elemento o usa, e um modelo de
+topo não usado que falhou some do netlist (um válido continua lá).
+
+### Regras observadas
+
+| Regra | ngspice-47 | Sonda |
+|---|---|---|
+| Precedência | linha `X` > padrão da linha `.subckt` = `.param` do corpo = `params:` > escopo de fora | P04, P23, `s1 undeclared_x_bodyparam` |
+| Ordem dentro do corpo | todas as formais formam um escopo: o **último** `.param`/padrão de um nome vence (o `.param w=2` do corpo vence o `w=1` da linha), referência adiante vale | `s1 body_redef`, `line_then_body`, `body_fwd`; `s2 body_param_after_elem_ref_glob` |
+| Atuais | avaliadas **no escopo da instância chamada**: `w={l}` lê o `l` do chamado, não o de quem chama; uma atual pode ler outra atual ou um `.param` do corpo | `s3 xcl_both`, `xcl_both_mid`, `xcl_actual_actual`, `xcl_actual_body` |
+| Autorreferência | uma definição que nomeia a si mesma (`.param w={w*2}`, `w={w*3}` na linha `X`) lê o valor do escopo de fora; sem valor lá, "unknown parameter"; `v={w}` + `w={v}` é ciclo | `s1 body_self`, `s3 x_self_nested`, `line_body_self`, `body_self_chain` |
+| Escopo dinâmico | nome que a instância não define é procurado na instância **que a chama**, depois nas de cima, depois no global — um subcircuito definido no topo vê os parâmetros de quem o instancia | `s1 dyn_scope`, `dyn_scope_body`, `lex_nested`; `s2 dyn_chain`, `dyn_default` |
+| Atual sem formal | ignorada calada se o subcircuito tem alguma formal (e não fica visível no corpo); **erro** "Mismatch: 0 formal but 1 actual params" se não tem nenhuma | `s2 count_more`, `s4 m_undecl_visible`, `s1 undeclared_x_noparams`, `x_glob_override` |
+| Maiúsculas, `params:`, brancos | nomes sem diferenciar maiúsculas; `params:` opcional nas duas linhas; `w = 2` vale | `s1 case_*`, `params_kw_x`, `port_eq_space`, `x_eq_space` |
+| Preguiça | subcircuito nunca instanciado: nada no corpo é avaliado nem parseado (lixo, ciclo, nome indefinido passam); instanciado: todo `.param` dele conta, usado ou não; `.model` não usado (local ou de topo) não é avaliado; usado com nome indefinido é erro | P05f, `s1 body_undef_unused`, `model_undef_*`; `s2 sub_unused_*`, `body_cycle*` |
+| Não finito | atual `{1/0}` só é erro onde chega a um cartão | `s2 x_value_nonfinite(_used)` |
+| Modelo por instância | `.model` local dependente de parâmetro da instância: uma cópia por instância | P08, `s1 model_local_inst` |
+| "Dado" | o valor chega ao cartão como texto: `ad={ad}` com `ad=0` continua escrito, logo dado | P23 |
+
+Diferenças: atual sem formal ignorada **com aviso**; `params: w` sem
+valor é erro "has no value" quando a instância é avaliada (o ngspice
+também falha, "Too few parameters", mesmo com `w=` na linha `X`).
+
+### Binning (G4)
+
+Feito na expansão, no IR, para qualquer nível: o BSIM4 (em porte
+paralelo) herda sem código novo. Regra (`INPgetModBin`, sondas P09 e
+`s5`): se nenhum modelo tem o nome exato, `nome` casa a família
+`nome.<dígitos>` (`nome.01` vale, `nome.a` não); só bina `M` com
+`nmos`/`pmos` de nível BSIM3 (8, 49), BSIM4 (14, 54) ou HiSIM (68, 73)
+e com os quatro limites `lmin lmax wmin wmax`; o elemento precisa ter
+`l` e `w`; `L·scale` e `W·scale` (`W/nf` com `wnflag` — da instância,
+ou `.option wnflag`; padrão 0, como o ngspice sem modo `hs`/`spe`)
+devem caber nos dois intervalos, **inclusivos** com tolerância
+**absoluta** de 1e-9; os limites não são escalados; o bin **definido
+por último** é tentado primeiro; nenhum bin → erro com o span do
+elemento ("could not find a valid model for …"). Uma família local ao
+subcircuito vence o modelo exato e a família globais (`s5 b_local_*`,
+o `subckt.c` renomeia a referência para `x1:nome`); o limite pode ser
+expressão (avaliada no escopo da instância; um limite que não avalia
+pula o bin, como o `parse_line`). O elemento passa a nomear o bin
+escolhido (`nch.2`, `x1.nch.71`) — o elaborador não sabe de binning.
+Os coeficientes `l*/w*/p*` do BSIM3 já eram aplicados pelo porte
+(`bsim3/temp.rs`, com `binunit`).
+
+### `m` na linha `X` (G6)
+
+Semântica do `inp_fix_subckt_multiplier` (modo normal, sem `hs`;
+sondas P13 e `s4`): todo subcircuito chamado com `m=` em **alguma**
+linha `X` do deck, e que não declara `m` (na linha nem num `.param` do
+corpo), ganha a formal `m=1`, e cada linha de dispositivo e `X` do
+corpo ganha `m={m}` no fim — o `m` próprio do dispositivo é
+**substituído**, não multiplicado (`m_r_own`: `r … m=2` com `x … m=3`
+dá R/3; `m_r_own_otherinst`: outra instância sem `m` leva m=1 e perde
+o `m=2`); um `X` aninhado recebe o `m` de quem chama, substituindo o
+seu (`m_nested_both`). `m` é visível nas expressões do corpo. Com
+`m` declarado é parâmetro comum, sem multiplicar. As letras `V E H A K
+N O P S T U W Y` e a fonte `B` de tensão ficam como estão. Por tipo no
+Dune:
+
+| Dispositivo | Como o `m` chega |
+|---|---|
+| BSIM3/BSIM4/VDMOS (`M`), VBIC (`Q` nível 4/9) | parâmetro `m` nativo |
+| `R`, `L` com valor | valor/m |
+| `C` com valor | valor·m |
+| `D`, `J`, `Z`, `Q` Gummel–Poon | `area`·m (ngspice multiplica também o `gmin` da junção: diferença de ~1e-5 relativo no `regress/xmult_semi`) |
+| `G`, `F` | ganho·m |
+| `I` DC/AC | valor·m |
+| `B` de corrente | `m·(expr)` |
+| `X` aninhado | atual `m` |
+| MOS 1–3/6, BSIM1/2; `R`/`C` só por geometria de modelo; `I` com forma transiente/distorção | erro "not supported yet" com o span do dispositivo (salvo m=1) |
+
+Diferenças: m ≤ 0 é erro (o ngspice simula: m=0 abre, m<0 inverte); o
+marcador é fechado sobre o grafo de chamadas em qualquer ordem — o
+ngspice marca numa passada em ordem de deck e um subcircuito aninhado
+definido **antes** de quem o chama falha com "Mismatch"
+(`m_nested_def_before`); subcircuitos aninhados (definidos dentro de
+outro) seguem a própria marcação — o ngspice só acrescenta `m={m}` até
+o primeiro `.ends`. Fora da G6: `m` no próprio cartão de `R/C/L/D/Q/J`
+fora de subcircuito multiplicado continua sem efeito no núcleo (nota
+"not in the 3f5"; o cartão `r1 a b 1k m=2` agora é lido como
+parâmetro, não como modelo `m`).
+
+### `.option scale` (G5)
+
+Aplicado na expansão, depois do binning (que escala L e W sozinho),
+onde o ngspice-47 o aplica (os `*par.c`; sondas `s6`): `l`, `w` de
+MOSFET de nível 1, 2, 3, BSIM3 e BSIM4 × `scale`, `ad`, `as` ×
+`scale²`, `pd`, `ps` × `scale`; `l`, `w` de `R` e `C` × `scale`. Não
+são escalados: MOS6, BSIM1/2, VDMOS, áreas de diodo/BJT/JFET, valores
+e qualquer parâmetro de modelo (`ld=0.1` continua 0,1 m,
+`sc_model_ld`); `scalm` não faz nada no ngspice-47 para esses níveis.
+O IR passa a carregar a geometria **já escalada** e o `scale` fica nas
+opções só como informação; o `dune-core` não avisa mais "option scale
+is not implemented". `scale` ≤ 0 ou não finito é erro com span. Deck
+`regress/scale_geom.cir`.
+
+### Entrada hostil e custo
+
+- Profundidade ≤ 64; subcircuito que instancia a si mesmo (direto ou
+  por outro) é erro na primeira repetição (o ngspice para após ~22
+  níveis, H6).
+- Orçamento único de 2²⁰ unidades: cada elemento emitido custa
+  1 + bytes do nome e dos nós / 64; cada instanciação, 1 + número de
+  definições do escopo; cada cartão parseado por instância,
+  1 + bytes/256; cada modelo avaliado, 1 + bytes/256 (1 se
+  compartilhado); cada seleção de bin, 1 + candidatos/64, mais 1 por
+  candidato cujos limites são expressões.
+- Ciclos entre escopos não existem por construção (o escopo de quem
+  chama está resolvido antes do chamado); ciclo dentro de um escopo é
+  o erro de sempre.
+- Cada diagnóstico distinto (span + mensagem) da expansão é relatado
+  uma vez — o mesmo erro em mil instâncias é uma linha —, até 1000.
+- Os dois *timeouts* do libFuzzer em `Expander::emit` (13 s e > 10 s
+  com os sanitizadores; 0,25 s e 0,8 s em release; entradas em
+  `tests/fixtures/fuzz/emit-timeout-{1,2}.bin`) eram decks do corpus
+  mutilados com subcircuitos recursivos em leque: a expansão ia até o
+  teto de 2²⁰ — 190 000 e 660 000 elementos com nomes de até 64
+  níveis, e um diagnóstico por caminho (665 000). Hoje: 0,9 ms e
+  0,14 ms (recusa da recursão, cobrança por byte, diagnóstico único).
+
+Medido em `--release` (`.claude/scratch/g3-probes/measure.py`, mínimo
+de 3; os PDK param na elaboração por falta do BSIM4):
+
+| Entrada | Antes | Depois |
+|---|---|---|
+| inversor sky130 por `.lib` (2 instâncias × 180/108 bins) | 0,13 s, 86 MB, 5080 erros | 0,10 s, 59 MB, limpo |
+| inversor gf180 | 0,01 s, 14 MB, 154 erros | 0,01 s, 14 MB, limpo |
+| 1000 nfet sky130 de mesma geometria | (para no parse) | 0,12 s, 62 MB |
+| 1000 nfet sky130 de geometrias distintas | (para no parse) | 0,19 s, 97 MB |
+| 20 000 nfet sky130, mesma / distintas | — | 1,1 s, 138 MB / 1,5 s, 526 MB |
+| sintético: 2000 instâncias, 200 bins de 300 parâmetros-expressão | (para no parse) | 0,18 s, 33 MB (1,3 s, 96 MB sem o compartilhamento) |
+| `dune-oracle --ci` inteiro | 82,67 G instruções | 82,56 G instruções |
+
+Reparsear o texto de um cartão de modelo por instância custa ~50 µs/KB;
+com o compartilhamento só as combinações distintas pagam, e não foi
+preciso compilar as expressões do corpo uma vez só.
 
 ## Expressões da fonte `B` (`expr.rs` ← `inpptree.c`)
 

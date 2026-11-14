@@ -229,7 +229,7 @@ fn recursive_subckt_terminates_with_an_error() {
     assert!(
         out.diags
             .iter()
-            .any(|d| d.message.contains("nested deeper")),
+            .any(|d| d.message.contains("instantiates itself (recursive)")),
         "{:?}",
         out.diags
     );

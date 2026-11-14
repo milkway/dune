@@ -1,0 +1,63 @@
+subcircuit parameters: precedence, scope and evaluation per instance
+* written for Dune (Fase 8 item 7, G3 of docs/pdk-parser.md); each
+* instance drives 1 mA into a resistor whose value shows the parameter
+* rule (probes P04, P15, P18, P23 and s1-s3 in .claude/scratch/g3-probes)
+.param w=7 g=3 l=9
+* X line > .subckt line default = body .param > global (P04)
+.subckt sline a w=1 l=2
+r1 a 0 {w*1000+l}
+.ends
+.subckt sbody a
+.param w=1 l=2
+r1 a 0 {w*1000+l}
+.ends
+.subckt sglob a
+r1 a 0 {w*1000}
+.ends
+* defaults read each other, the actuals and the globals, forward too
+.subckt sdef a w=1 lw={w*g} x={y+1} y={lw*2}
+.param lw2={lw+1}
+r1 a 0 {lw2*100+x}
+.ends
+* a name defined in terms of itself reads the enclosing scope
+.subckt sself a
+.param g={g*2}
+r1 a 0 {g*1000}
+.ends
+* actuals are evaluated in the called instance's scope (w={l} reads
+* the callee's l), nested calls pass values down, and an instance sees
+* the parameters of the instances calling it (dynamic scope)
+.subckt leaf a w=1 l=2
+r1 a 0 {w*1000+l}
+.ends
+.subckt mid a w=1 q=6
+x1 a leaf w={w*2}
+x2 a leaf w={l}
+x3 a leaf w={q} l={w}
+.ends
+.subckt dyn a
+r1 a 0 {q*1000}
+.ends
+.subckt outer a q=5
+x1 a dyn
+.ends
+x1 n1 sline w=5
+x2 n2 sbody W=5
+x3 n3 sglob
+x4 n4 sbody
+x5 n5 sdef w=2
+x6 n6 sself
+x7 n7 mid w=3
+x8 n8 outer
+x9 n9 sline l={w+1}
+i1 0 n1 1m
+i2 0 n2 1m
+i3 0 n3 1m
+i4 0 n4 1m
+i5 0 n5 1m
+i6 0 n6 1m
+i7 0 n7 1m
+i8 0 n8 1m
+i9 0 n9 1m
+.op
+.end
