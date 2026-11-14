@@ -1475,15 +1475,18 @@ impl Circuit {
                         node(&mut vars, &mut node_ids, &format!("{}#{v}", s.name));
                     }
                 }
-                // `TXLsetup`: `CKTmkCur(…, "branch1")`, `"branch2"`;
-                // ngspice writes both as `i(<name>)`.
+                // `TXLsetup`: `CKTmkCur(…, "branch1")`, `"branch2"`.
+                // ngspice writes both as `i(<name>)`; Dune numbers
+                // them — `i(<name>#1)`, `i(<name>#2)` — so every
+                // vector of a plot has its own name (D-0066).
                 Spec::Txl(s) => {
-                    let b1 = vars.push(s.name.clone(), VarKind::Branch);
-                    let b2 = vars.push(s.name.clone(), VarKind::Branch);
+                    let b1 = vars.push(format!("{}#1", s.name), VarKind::Branch);
+                    let b2 = vars.push(format!("{}#2", s.name), VarKind::Branch);
                     line_branches.insert(s.name.clone(), vec![b1, b2]);
                 }
                 // `CPLsetup`: `branch1_0 … branch1_{k-1}`, then the
-                // `branch2_*`.
+                // `branch2_*`; numbered `#1 … #2k` in that order, like
+                // the TXL pair (ngspice repeats `i(<name>)`).
                 Spec::Cpl(s) => {
                     let k = s.conductors().ok_or_else(|| {
                         Error::Build(format!(
@@ -1499,8 +1502,8 @@ impl Circuit {
                             crate::kspice::MAX_CPL_LINES
                         )));
                     }
-                    let br: Vec<Var> = (0..2 * k)
-                        .map(|_| vars.push(s.name.clone(), VarKind::Branch))
+                    let br: Vec<Var> = (1..=2 * k)
+                        .map(|n| vars.push(format!("{}#{n}", s.name), VarKind::Branch))
                         .collect();
                     line_branches.insert(s.name.clone(), br);
                 }

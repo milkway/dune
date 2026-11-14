@@ -198,3 +198,4 @@ uma divergência por tolerância larga (D-0006).
 | BSIM4: `GEOMOD` fora de 0–10 | `b4geo.c` avisa "GEO not matched" e deixa áreas/perímetros indefinidos | — | recusado com mensagem | — |
 | BSIM4: ruído `FNOIMOD 1` | densidade avaliada na frequência | — | lei de potência `coef/f^EF` com `coef` avaliado em 1 Hz (Ssi e Swi escalam com f^-EF) | arredondamento só (`bsim4_noise` 0,004); habilita o ruído transiente |
 | BSIM4: mensagens | `printf`/`fprintf` e `bsim4.out` | — | notas | — |
+| TXL/CPL: nomes das correntes de ramo | todos os ramos de uma linha saem com o MESMO nome: dois `i(y1)` no TXL, 2k `i(p1)` no CPL | não existe | numerados na ordem de criação: `i(y1#1)`, `i(y1#2)`, `i(p1#1)` … `i(p1#2k)` (D-0066) | nome repetido faz os pacotes R e Python perderem ou misturarem séries (medido); o oráculo pareia o r-ésimo repetido do ngspice com o `#r` do Dune |

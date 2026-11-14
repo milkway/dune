@@ -64,9 +64,11 @@ PXXX N1 … Nk GND1 M1 … Mk GND2 MNAME <LENGTH|LEN VALUE>
   pelos nós `txlnd1<nome>`, `txlnd2<nome>` e capacitores `txlcap1-4<nome>`
   ao primeiro nó de referência.
 - Saída: cada ramo do C (`branch1`, `branch2` do TXL; `branch1_m`,
-  `branch2_m` do CPL) sai como `i(<nome>)`, repetido, na ordem de
-  criação — é o que o ngspice escreve. O comparador do oráculo pareia
-  vetores homônimos pela ordem (`paired_index`).
+  `branch2_m` do CPL) sai numerado na ordem de criação: `i(<nome>#1)`,
+  `i(<nome>#2)`, … (D-0066). O ngspice escreve todos como `i(<nome>)`,
+  repetido; nome repetido fazia os pacotes R e Python perderem ou
+  misturarem séries. O comparador do oráculo pareia o r-ésimo repetido
+  do ngspice com o `#r` do Dune (`paired_index`).
 
 ## Parâmetros e defaults
 

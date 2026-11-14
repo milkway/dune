@@ -50,7 +50,9 @@ pub struct Element {
 /// them (3f5 keywords, lowercase); validation against each device's
 /// real parameter table is `dune-core`'s job when the device is
 /// implemented.
+// Non-exhaustive (D-0066): element kinds keep being added.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Device {
     /// `R`: `RXXXXXXX N1 N2 VALUE` / semiconductor form with MNAME.
     Resistor {

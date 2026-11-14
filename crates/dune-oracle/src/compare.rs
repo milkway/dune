@@ -287,7 +287,7 @@ fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotRepor
     }
 
     for var in &candidate.variables {
-        if oracle.variable_index(&var.name).is_none() {
+        if oracle.variable_index(&var.name).is_none() && !numbered_repeat(oracle, &var.name) {
             r.notes
                 .push(format!("extra variable `{}` in candidate", var.name));
         }
@@ -295,24 +295,38 @@ fn compare_plots(oracle: &Plot, candidate: &Plot, tol: &Tolerances) -> PlotRepor
     r
 }
 
-/// The candidate vector paired with oracle vector `i`: the one of the
-/// same name (case-insensitive) and the same rank among the vectors of
-/// that name. ngspice writes every branch of a multi-branch device
-/// under the instance name — the two `i(y1)` of a KSPICE TXL line, the
-/// `2k` of a CPL — in creation order, and Dune writes them alike.
+/// The candidate vector paired with oracle vector `i`. Normally the
+/// one of the same name (case-insensitive). ngspice writes every
+/// branch of a multi-branch device under the instance name — the two
+/// `i(y1)` of a KSPICE TXL line, the `2k` of a CPL — in creation
+/// order; Dune numbers them `i(y1#1)`, `i(y1#2)`, … in the same order
+/// (D-0066), so the `r`-th repeat of `i(name)` in the oracle pairs
+/// with the candidate's `i(name#r)`.
 fn paired_index(oracle: &Plot, i: usize, candidate: &Plot) -> Option<usize> {
     let name = &oracle.variables[i].name;
-    let rank = oracle.variables[..i]
-        .iter()
-        .filter(|v| v.name.eq_ignore_ascii_case(name))
-        .count();
-    candidate
-        .variables
-        .iter()
-        .enumerate()
-        .filter(|(_, v)| v.name.eq_ignore_ascii_case(name))
-        .nth(rank)
-        .map(|(j, _)| j)
+    let same = |v: &&dune_raw::Variable| v.name.eq_ignore_ascii_case(name);
+    let repeats = oracle.variables.iter().filter(same).count();
+    if repeats < 2 {
+        return candidate.variable_index(name);
+    }
+    let rank = oracle.variables[..i].iter().filter(same).count() + 1;
+    let inner = name.strip_suffix(')')?;
+    candidate.variable_index(&format!("{inner}#{rank})"))
+}
+
+/// Whether candidate vector `name` is one of Dune's numbered branches
+/// (`i(y1#2)`) of a device ngspice writes under one repeated name
+/// (`i(y1)`): paired by [`paired_index`], not an extra vector.
+fn numbered_repeat(oracle: &Plot, name: &str) -> bool {
+    let Some((head, tail)) = name.rsplit_once('#') else {
+        return false;
+    };
+    let Some(digits) = tail.strip_suffix(')') else {
+        return false;
+    };
+    !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && oracle.variable_index(&format!("{head})")).is_some()
 }
 
 /// Relative ruler of the scale column (see [`compare_scale`]).
@@ -616,7 +630,7 @@ fn compare_tran(oracle: &Plot, candidate: &Plot, tol: &Tolerances, mode: TranMod
         ));
     }
     for var in &candidate.variables {
-        if oracle.variable_index(&var.name).is_none() {
+        if oracle.variable_index(&var.name).is_none() && !numbered_repeat(oracle, &var.name) {
             r.notes
                 .push(format!("extra variable `{}` in candidate", var.name));
         }
