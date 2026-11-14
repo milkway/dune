@@ -1034,9 +1034,11 @@ fn behavioural_rcl_rewritten_as_ngspice() {
 fn behavioural_rcl_refusals_are_spanned() {
     for (card, what) in [
         ("r1 1 0 r=1k*v(1)", "{…} or '…'"),
-        ("r1 1 0 r='1k*v(1)' tc1=0.01", "tc1"),
+        // tc1/tc2 and `temper` evaluate since the integration with
+        // G7 (tests/temper.rs); a tc that is not one number does not.
+        ("r1 1 0 r='1k*v(1)' tc1=1,2", "tc1"),
         ("r1 1 0 r='1k*v(1)' noisy=1", "noisy"),
-        ("r1 1 0 r='1k*(1+temper)+0*v(1)'", "temper"),
+        ("r1 1 0 r='1k*(1+time)+0*v(1)'", "time"),
         ("r1 1 0 r='v(1)>0 ? 1k : 2k'", "comparisons"),
         (
             ".subckt s a\nr1 a 0 r='1k*v(a)'\n.ends\nx1 1 s m=2",
