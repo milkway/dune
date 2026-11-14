@@ -846,12 +846,20 @@ pub struct Circuit {
     /// no `DTEMP`; a device without an entry has `DTEMP = 0`.
     pub(crate) dtemp: HashMap<String, f64>,
     /// Instance name → the ngspice-47 parallel multiplier `m` of an
-    /// R, C, L or D card (`RESm`, `CAPm`, `INDm`, `DIOm`), recorded
-    /// by the netlist front end: `G = m/R`, `C·m`, `L/m`, and the
-    /// diode's currents, conductances and charges times `m` with the
-    /// breakdown matched as `M·IBV` (`diotemp.c`). The 3f5 has no
-    /// `m`; a device without an entry has `m = 1`.
+    /// R, C, L, D, Gummel–Poon Q, J or Z card (`RESm`, `CAPm`,
+    /// `INDm`, `DIOm`, `BJTm`, `JFETm`, `MESm`), recorded by the
+    /// netlist front end: `G = m/R`, `C·m`, `L/m`, the diode's
+    /// currents, conductances and charges times `m` with the
+    /// breakdown matched as `M·IBV` (`diotemp.c`), and the Q/J/Z
+    /// stamps times `m` (`bjtload.c`, `jfetload.c`, `mesload.c`).
+    /// The 3f5 has no `m`; a device without an entry has `m = 1`.
     pub(crate) mult: HashMap<String, f64>,
+    /// Instance name → the ngspice-47 diode extension of a `D` card
+    /// whose model or instance uses parameters beyond the 3f5
+    /// (`LEVEL=3`, `JSW`, `CJSW`, `ISR`, `IKF`, `JTUN`, `TLEV`…, `PJ`,
+    /// `W`, `L`…; [`crate::dioext`]), recorded by the elaborator. A
+    /// diode without an entry runs the 3f5 path.
+    pub(crate) dio_ext: HashMap<String, crate::dioext::DioExtInst>,
     /// A `.noise` analysis is part of the deck (ngspice's
     /// `noiseAnalGiven`, read by `BSIM4setup`).
     pub(crate) noise_job: bool,
@@ -1567,15 +1575,18 @@ impl Circuit {
                     let temp = self.instance_temp(&s.name, s.temp, opts);
                     let bt = crate::bjt::BjtTemp::new(&s.name, &s.model, temp, opts.tnom);
                     notes.extend(bt.notes.iter().cloned());
-                    devices.push(Box::new(crate::bjt::BjtI::new(
-                        [col, bse, emi, sub],
-                        primes,
-                        bt,
-                        s.area,
-                        s.off,
-                        s.ic,
-                        base,
-                    )));
+                    devices.push(Box::new(
+                        crate::bjt::BjtI::new(
+                            [col, bse, emi, sub],
+                            primes,
+                            bt,
+                            s.area,
+                            s.off,
+                            s.ic,
+                            base,
+                        )
+                        .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Mos1(s) => {
                     let d = get(&node_ids, &s.nodes[0]);
@@ -2185,15 +2196,28 @@ impl Circuit {
                     };
                     let temp = self.instance_temp(&s.name, s.temp, opts);
                     let mult = self.instance_mult(&s.name);
-                    let t = DiodeTemp::new(
-                        &s.name,
-                        &s.model,
-                        s.area,
-                        mult,
-                        temp,
-                        opts.tnom,
-                        opts.reltol,
-                    );
+                    let ext = self.dio_ext.get(&s.name.to_ascii_lowercase()).cloned();
+                    let t = match &ext {
+                        Some(x) => DiodeTemp::new_ext(
+                            &s.name,
+                            &s.model,
+                            s.area,
+                            mult,
+                            temp,
+                            opts.tnom,
+                            opts.reltol,
+                            x,
+                        ),
+                        None => DiodeTemp::new(
+                            &s.name,
+                            &s.model,
+                            s.area,
+                            mult,
+                            temp,
+                            opts.tnom,
+                            opts.reltol,
+                        ),
+                    };
                     notes.extend(t.notes.iter().cloned());
                     devices.push(Box::new(crate::diode::DiodeI::new(
                         pos,
@@ -2207,6 +2231,7 @@ impl Circuit {
                         crate::diode::DiodeSensBase {
                             name: s.name.clone(),
                             model: s.model.clone(),
+                            ext,
                             temp,
                             m: mult,
                             default_tnom: opts.tnom,
@@ -2220,17 +2245,19 @@ impl Circuit {
                     let temp = self.instance_temp(&s.name, s.temp, opts);
                     let t = crate::jfet::JfetTemp::new(&s.name, &s.model, temp, opts.tnom);
                     notes.extend(t.notes.iter().cloned());
-                    devices.push(Box::new(crate::jfet::JfetI::new(
-                        nodes, primes, t, s.area, s.off, s.ic, base,
-                    )));
+                    devices.push(Box::new(
+                        crate::jfet::JfetI::new(nodes, primes, t, s.area, s.off, s.ic, base)
+                            .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Mes(s) => {
                     let (nodes, primes) =
                         fet3_vars(&node_ids, &s.name, &s.nodes, s.model.rd, s.model.rs);
                     let t = crate::mes::MesTemp::new(&s.model);
-                    devices.push(Box::new(crate::mes::MesI::new(
-                        nodes, primes, t, s.area, s.off, s.ic, base,
-                    )));
+                    devices.push(Box::new(
+                        crate::mes::MesI::new(nodes, primes, t, s.area, s.off, s.ic, base)
+                            .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Ltra(s) => {
                     let n = [
@@ -2491,7 +2518,17 @@ fn fet3_vars(
     ([d, g, s], [dp, sp])
 }
 
+/// The branch an `F`/`H` card senses: a V source, as in the 3f5, or
+/// — as ngspice-47's `CKTfndBranch` allows, and its behavioural-L
+/// rewriting needs (`fLxxx … bLxxx -1`) — a voltage-type B source.
 fn ctrl_branch(branches: &HashMap<String, Var>, name: &str, ctrl: &str) -> Result<Var, Error> {
+    if ctrl.starts_with('b') {
+        return branches.get(ctrl).copied().ok_or_else(|| {
+            Error::Build(format!(
+                "`{name}`: controlling source `{ctrl}` must be a voltage-type B source"
+            ))
+        });
+    }
     if !ctrl.starts_with('v') {
         return Err(Error::Build(format!(
             "`{name}`: controlling source `{ctrl}` must be a voltage source"

@@ -1,0 +1,19 @@
+A device's own m= on Gummel-Poon Q and J pole-zero stamps
+* written for Dune: a common-emitter stage (Q, m=2) driving a JFET
+* source follower (m=3); ngspice-47 multiplies every pz stamp by m
+* (bjtpzld.c, jfetpzld.c) on top of the area
+vcc 1 0 dc 12
+vin 2 0 dc 0.7
+rsig 2 3 1k
+q1 4 3 5 0 qn 1.5 m=2
+re1 5 0 10
+rl 1 4 4.7k
+j1 1 4 6 jn m=3
+rs 6 0 2k
+cl 6 0 1p
+.pz 3 0 6 0 vol pz
+.model qn npn is=1e-15 bf=120 br=2 vaf=60 rb=150 rbm=40 irb=1m
++ rc=25 re=4 cje=1.2p vje=0.8 mje=0.4 cjc=0.6p vjc=0.7 mjc=0.35
++ xcjc=0.6 tf=0.25n tr=8n cjs=0.3p
+.model jn njf vto=-2 beta=1.3e-3 lambda=0.01 rd=20 rs=15 cgs=3p cgd=1.5p
+.end

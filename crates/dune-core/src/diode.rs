@@ -87,8 +87,16 @@ pub(crate) struct DiodeTemp {
     /// `vt = CONSTKoverQ·T` (`DIOdSetup` uses it in breakdown).
     pub vt: f64,
     pub vte: f64,
+    /// `NBV·vt`, the breakdown-region thermal voltage (`N·vt` on the
+    /// 3f5 path, where `NBV` is not a parameter).
+    pub vtebrk: f64,
     pub vcrit: f64,
     pub brkdwn: Option<f64>,
+    /// The ngspice-47 extension (sidewall, recombination,
+    /// tunnelling, knees, level-3 parasitics, `TLEV`/`TLEVC`), when
+    /// the card needs it ([`crate::dioext`]); `None` keeps the 3f5
+    /// path.
+    pub ext: Option<Box<crate::dioext::DioExtT>>,
     /// `DIOtJctCap·area` is applied at load; store per-area value.
     pub t_jct_cap: f64,
     pub t_dep_cap: f64,
@@ -232,8 +240,10 @@ impl DiodeTemp {
             gspr,
             vt,
             vte,
+            vtebrk: vte,
             vcrit,
             brkdwn,
+            ext: None,
             t_jct_cap,
             t_dep_cap,
             t_f1,
@@ -242,6 +252,72 @@ impl DiodeTemp {
             m,
             vj: model.vj,
             tt: model.tt,
+            notes,
+        }
+    }
+}
+
+impl DiodeTemp {
+    /// The ngspice-47 temperature pass for a card that uses the
+    /// extension ([`crate::dioext::temp_update`]): `card_area` is the
+    /// instance `AREA` (positional or `area=`), `mult` its `m`. The
+    /// 3f5 clamps of `M`, `EG` and `FC` still apply (Dune's contract;
+    /// ngspice-47 has none).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_ext(
+        name: &str,
+        model: &DiodeModel,
+        card_area: f64,
+        mult: f64,
+        temp: f64,
+        default_tnom: f64,
+        reltol: f64,
+        x: &crate::dioext::DioExtInst,
+    ) -> Self {
+        // The clamps and their notes, from the 3f5 pass.
+        let base3 = DiodeTemp::new(name, model, 1.0, 1.0, temp, default_tnom, reltol);
+        let mut notes: Vec<String> = base3
+            .notes
+            .iter()
+            .filter(|n| n.contains("limited to"))
+            .cloned()
+            .collect();
+        let b = crate::dioext::DioBase3f5 {
+            is: model.is,
+            rs: model.rs,
+            n: model.n,
+            tt: model.tt,
+            cjo: model.cjo,
+            vj: model.vj,
+            m: base3.m,
+            eg: model.eg.max(0.1),
+            xti: model.xti,
+            fc: model.fc.min(0.95),
+            bv: model.bv,
+            ibv: model.ibv,
+            tnom: model.tnom.unwrap_or(default_tnom),
+        };
+        let (area, pj, cover) = crate::dioext::setup_geometry(x, card_area, mult);
+        let t = crate::dioext::temp_update(
+            name, &b, &x.model, area, pj, cover, mult, temp, reltol, &mut notes,
+        );
+        DiodeTemp {
+            csat: t.csat,
+            gspr: t.gspr,
+            vt: t.vt,
+            vte: t.vte,
+            vtebrk: t.vtebrk,
+            vcrit: t.vcrit,
+            brkdwn: t.brkdwn,
+            t_jct_cap: t.ext.jct_cap,
+            t_dep_cap: t.ext.dep_cap,
+            t_f1: t.ext.f1,
+            f2: t.ext.f2,
+            f3: t.ext.f3,
+            m: t.ext.grading,
+            vj: t.ext.jct_pot,
+            tt: t.tt,
+            ext: Some(Box::new(t.ext)),
             notes,
         }
     }
@@ -281,6 +357,8 @@ pub(crate) struct DiodeI {
 pub(crate) struct DiodeSensBase {
     pub name: String,
     pub model: DiodeModel,
+    /// The ngspice-47 extension of the card, if any.
+    pub ext: Option<crate::dioext::DioExtInst>,
     pub temp: f64,
     pub m: f64,
     pub default_tnom: f64,
@@ -450,10 +528,11 @@ impl crate::devices::Device for DiodeI {
                 // Per-iteration junction limiting (`DEVpnjlim`, with
                 // the separate breakdown-region branch).
                 let vd_old = ctx.states.get(0, st + VOLTAGE);
+                let vtebrk = self.t.vtebrk;
                 match self.t.brkdwn {
-                    Some(bv) if vd < f64::min(0.0, -bv + 10.0 * vte) => {
+                    Some(bv) if vd < f64::min(0.0, -bv + 10.0 * vtebrk) => {
                         let vdtemp =
-                            pnjlim(-(vd + bv), -(vd_old + bv), vte, self.t.vcrit, &mut check);
+                            pnjlim(-(vd + bv), -(vd_old + bv), vtebrk, self.t.vcrit, &mut check);
                         vd = -(vdtemp + bv);
                     }
                     _ => {
@@ -466,7 +545,11 @@ impl crate::devices::Device for DiodeI {
 
         // DC current and conductance by region.
         let (cd0, gd0);
-        if vd >= -3.0 * vte {
+        if let Some(x) = &self.t.ext {
+            let (c, g) = x.current(vd, csat, vte, self.t.vtebrk, self.t.brkdwn);
+            cd0 = c + ctx.gmin * vd;
+            gd0 = g + ctx.gmin;
+        } else if vd >= -3.0 * vte {
             let evd = f64::exp(vd / vte);
             cd0 = csat * (evd - 1.0) + ctx.gmin * vd;
             gd0 = csat * evd / vte + ctx.gmin;
@@ -493,7 +576,13 @@ impl crate::devices::Device for DiodeI {
             let czero = self.t.t_jct_cap * self.area * self.cap_mult;
             #[allow(clippy::needless_late_init)] // mirrors dioload.c
             let capd;
-            if vd < self.t.t_dep_cap {
+            if let Some(x) = &self.t.ext {
+                // `dioload.c` (ngspice-47): diffusion + bottom and
+                // sidewall depletion + level-3 overlap.
+                let (qdep, cdep) = x.depletion(vd);
+                ctx.states.set(0, st + CAP_CHARGE, self.t.tt * cd + qdep);
+                capd = self.t.tt * gd + cdep;
+            } else if vd < self.t.t_dep_cap {
                 let arg = 1.0 - vd / self.t.vj;
                 let sarg = f64::exp(-self.t.m * f64::ln(arg));
                 ctx.states.set(
@@ -612,15 +701,27 @@ impl crate::devices::Device for DiodeI {
             _ => return,
         }
         let b = &self.sens;
-        let t = DiodeTemp::new(
-            &b.name,
-            &b.model,
-            self.area,
-            b.m,
-            b.temp,
-            b.default_tnom,
-            b.reltol,
-        );
+        let t = match &b.ext {
+            Some(x) => DiodeTemp::new_ext(
+                &b.name,
+                &b.model,
+                self.area,
+                b.m,
+                b.temp,
+                b.default_tnom,
+                b.reltol,
+                x,
+            ),
+            None => DiodeTemp::new(
+                &b.name,
+                &b.model,
+                self.area,
+                b.m,
+                b.temp,
+                b.default_tnom,
+                b.reltol,
+            ),
+        };
         // Keep the setup-time capacitance/charge parameters.
         self.t.csat = t.csat;
         self.t.gspr = t.gspr;
@@ -628,6 +729,14 @@ impl crate::devices::Device for DiodeI {
         self.t.vte = t.vte;
         self.t.vcrit = t.vcrit;
         self.t.brkdwn = t.brkdwn;
+        if let (Some(old), Some(new)) = (&mut self.t.ext, t.ext) {
+            // Keep the setup-time capacitances, as above.
+            let (jc, sc, cover) = (old.jct_cap, old.sw_cap, old.cover);
+            **old = *new;
+            old.jct_cap = jc;
+            old.sw_cap = sc;
+            old.cover = cover;
+        }
     }
 
     /// `DIOnoise` (ngspice): thermal on RS, shot on the junction
@@ -676,6 +785,12 @@ impl crate::devices::Device for DiodeI {
     /// `DIOdSetup` (`dev/dio/diodset.c`): the 2nd/3rd-order Taylor
     /// coefficients at the operating point in `CKTrhsOld`.
     fn disto_setup(&mut self, ctx: &DistoSetupCtx) -> Result<(), &'static str> {
+        if self.t.ext.is_some() {
+            return Err(
+                "a diode with ngspice-47 model extensions (level 3, sidewall, ISR, IKF, tunnelling \
+                 or TLEV/TLEVC parameters) is not supported in .disto yet",
+            );
+        }
         let csat = self.t.csat;
         let vt = self.t.vt;
         let vte = self.t.vte;

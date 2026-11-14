@@ -1,0 +1,21 @@
+Title: keyword values on r cards (r= and resistance=, instance tc1/tc2)
+Date: Sat Nov 14 17:11:44  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 6
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(5)	voltage
+	5	v(6)	voltage
+Values:
+0		2.000000000000000e+00
+	1.000000000000000e+00
+	2.000000000000000e+00
+	2.470580000000000e+00
+	2.920000000000000e+00
+	2.045999999999999e+00

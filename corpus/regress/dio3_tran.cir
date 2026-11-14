@@ -1,0 +1,18 @@
+ngspice-47 diode extensions in a switching transient
+* written for Dune: a pulsed diode with transit time (TT, TTT1),
+* sidewall current and capacitance, ISR and an IKF knee, at
+* .temp 50, in compat=spice3 so the accuracy ruler can refine it; the
+* sidewall has the bottom's PHP and MJSW: dioload.c charges it with the
+* bottom's tF1 past FCS*PHP, a charge jump that stalls ngspice-47 and
+* Dune alike at TMAX = 12.5 ps (docs/diode.md)
+.options compat=spice3
+.temp 50
+.model dx d is=1e-14 n=1.05 rs=20 tt=5n ttt1=1e-3 cjo=5p vj=0.75 m=0.45 jsw=1e-13 ns=1.2 cjsw=2p php=0.75 mjsw=0.45 isr=1e-12 nr=2 ikf=20m
+v1 1 0 pulse(-5 5 10n 1n 1n 40n 100n)
+r1 1 2 200
+d1 2 0 dx pj=2
+r2 1 3 1k
+c3 3 0 2p
+d2 0 3 dx pj=1 m=2
+.tran 0.5n 200n
+.end

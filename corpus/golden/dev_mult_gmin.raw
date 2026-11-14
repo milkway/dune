@@ -1,0 +1,23 @@
+Title: a device's own m= on cut-off gummel-poon q, j and z junctions
+Date: Sat Nov 14 16:00:03  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 7
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(5)	voltage
+	5	v(6)	voltage
+	6	v(7)	voltage
+Values:
+0		-2.499999949575177e-01
+	-2.499999549172127e-01
+	-4.999999799037402e-01
+	-2.499999900148865e-01
+	-4.999999800037216e-01
+	-2.499999900148865e-01
+	-9.999999600009304e-01

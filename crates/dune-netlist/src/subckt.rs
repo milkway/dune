@@ -1085,7 +1085,7 @@ impl<'c> Expander<'_, 'c> {
                         return;
                     }
                     let mut ds = Vec::new();
-                    let el = frame.env.with_temper(ParamEnv::temper_for_card(card), || {
+                    let els = frame.env.with_temper(ParamEnv::temper_for_card(card), || {
                         parse_element_in(
                             card,
                             &mut ds,
@@ -1096,7 +1096,12 @@ impl<'c> Expander<'_, 'c> {
                         )
                     });
                     self.report_all(ds);
-                    if let Some(el) = el {
+                    for (k, el) in els.into_iter().enumerate() {
+                        // A behavioural R/C/L becomes up to six
+                        // elements: charge the extra ones.
+                        if k > 0 && !self.charge(1, card.span()) {
+                            return;
+                        }
                         self.finish_element(
                             el,
                             Some(&frame),
@@ -1151,12 +1156,13 @@ fn own_multiplier(el: &Element) -> Option<(Result<f64, String>, Span)> {
 /// it (`s4`: the device's own `m` is replaced, not multiplied), or
 /// the card's own `m` elsewhere (probes `fix-probes/m.cases`).
 /// Devices whose Dune model carries ngspice's multiplier get the
-/// parameter `m` — R, C, L and D (read by the elaborator; for the
-/// diode the multiplier also enters the breakdown match as `M·IBV`,
-/// which an area cannot express, probe `d_m_bv`), the BSIM3/BSIM4/
-/// VDMOS MOSFETs and VBIC; the others get the equivalent existing
-/// parameter — `area·m` (J, Z, Gummel–Poon Q; the positional area,
-/// else `area=`), gain·m (G, F), value·m (DC/AC current source,
+/// parameter `m` — R, C, L, D, J, Z and the Gummel–Poon Q (read by
+/// the elaborator; for the diode the multiplier also enters the
+/// breakdown match as `M·IBV`, which an area cannot express, probe
+/// `d_m_bv`; for Q, J and Z it multiplies the stamps, junction `gmin`
+/// included, which an area does not, probe `q_m_gmin`), the
+/// BSIM3/BSIM4/VDMOS MOSFETs and VBIC; the others get the equivalent
+/// existing parameter — gain·m (G, F), value·m (DC/AC current source,
 /// current-type B source). `Err` names what cannot express a
 /// multiplier other than 1. ngspice skips the lines of
 /// `V E H A K N O P S T U W Y` and voltage-type `B`.
@@ -1172,56 +1178,30 @@ fn apply_multiplier(el: &mut Element, m: f64, model: Option<&ModelRef>) -> Resul
             span,
         });
     }
-    fn scale_kw(params: &mut [Param], kw: &str, f: impl Fn(f64) -> f64) -> bool {
-        let mut hit = false;
-        for p in params.iter_mut().filter(|p| p.name == kw) {
-            if let ParamValue::Num(v) = &mut p.value {
-                *v = f(*v);
-                hit = true;
-            }
-        }
-        hit
-    }
-    /// `area·m`: the positional area wins over `area=` in the
-    /// elaborator (`INP2J`/`INP2Q`/`INP2Z` set it after the keywords).
-    fn scale_area(area: &mut Option<f64>, params: &mut [Param], m: f64) {
-        match area {
-            Some(a) => *a *= m,
-            None => {
-                if !scale_kw(params, "area", |a| a * m) {
-                    *area = Some(m);
-                }
-            }
-        }
-    }
     let span = el.span;
     let one = m == 1.0;
     match &mut el.device {
         Device::Resistor { params, .. }
         | Device::Capacitor { params, .. }
         | Device::Inductor { params, .. }
-        | Device::Diode { params, .. } => {
+        | Device::Diode { params, .. }
+        | Device::Jfet { params, .. }
+        | Device::Mesfet { params, .. } => {
             if one {
                 drop_m(params);
             } else {
                 set_m(params, m, span);
             }
         }
-        Device::Jfet { area, params, .. } | Device::Mesfet { area, params, .. } => {
-            drop_m(params);
-            if !one {
-                scale_area(area, params, m);
-            }
-        }
-        Device::Bjt { area, params, .. } => {
+        Device::Bjt { params, .. } => {
+            // VBIC (levels 4/9) reads `m` natively; the Gummel–Poon
+            // BJT gets it through the elaborator's multiplier channel
+            // (stamps times `m`, as `bjtload.c`).
             let level = model.map(|r| (r.level + 0.5).floor()).unwrap_or(1.0);
-            if level == 4.0 || level == 9.0 {
-                set_m(params, m, span);
-            } else {
+            if one && level != 4.0 && level != 9.0 {
                 drop_m(params);
-                if !one {
-                    scale_area(area, params, m);
-                }
+            } else {
+                set_m(params, m, span);
             }
         }
         Device::Mosfet { params, .. } => {
@@ -1250,13 +1230,12 @@ fn apply_multiplier(el: &mut Element, m: f64, model: Option<&ModelRef>) -> Resul
             dc,
             ac,
             tran,
-            distof1,
-            distof2,
             ..
         } => {
             if !one {
-                if tran.is_some() || distof1.is_some() || distof2.is_some() {
-                    return Err("a current source with a transient or distortion spec".into());
+                if let Some(t) = tran {
+                    crate::elem::scale_isrc_tran(t, m)
+                        .map_err(|what| format!("a current source with {what}"))?;
                 }
                 if let Some(v) = dc {
                     *v *= m;

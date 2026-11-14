@@ -1263,12 +1263,45 @@ quatro dispositivos, e `elaborate.rs::set_mult` o grava em
   (`DiodeI::cap_mult`; uma perturbação `.sens` de `m` não a move, como
   no `diosetup.c`). O `gmin` do diodo não escala nos dois.
 
-`J`, `Z` e `Q` Gummel–Poon seguem pelo `area`·m na IR: o ngspice
-multiplica as estampas inteiras e com elas o `gmin` das junções, que a
-área não carrega. Medido: só pesa com o `gmin` dominando a junção; um
-porte fiel sem API pública é possível (o mesmo canal, multiplicando as
-estampas de carga/AC/pz/ruído/disto desses três) e ficou de fora.
-Decks `regress/dev_mult_{op,dc,ac,tran}`.
+`J`, `Z` e `Q` Gummel–Poon (2026-11-14, segunda passada): o mesmo
+canal leva o `m` a `BjtI`/`JfetI`/`MesI` (`with_mult`), que fazem o que
+o ngspice-47 faz, e a área fica como está:
+
+- **load, AC e pz**: toda estampa (matriz e RHS) ·m, termo a termo
+  como no C (`m * (expr)`; `bjtload.c`, `bjtacld.c`, `bjtpzld.c`,
+  `jfetload.c`, `jfetacld.c`, `jfetpzld.c`, `mesload.c`, `mesacl.c`,
+  `mespzld.c`) — com elas o `gmin` das junções, que a área não
+  carregava. Os estados (cargas, correntes) ficam por dispositivo: o
+  `trunc` e o teste de convergência leem os mesmos números que o C.
+- **ruído**: condutâncias das resistências série e do canal ·m, shot
+  de Ic/Ib ·m, e o 1/f como `m·KF·|I|^AF` com a corrente **por
+  dispositivo** (`bjtnoise.c`, `jfetnoi.c`, `mesnoise.c`; no JFET
+  `NLEV=3` o `β` leva `area·m`). Com AF ≠ 1 isso difere do
+  `KF·|m·I|^AF` que o `area`·m dava.
+- **`.disto`**: os `*dset.c` multiplicam correntes de saturação,
+  resistências e cargas por `m` onde o 3f5 usa a área: o Dune roda o
+  seu `disto_setup` com `area·m` (o mesmo de antes).
+
+Fidelidade (portado literalmente, ngspice-47):
+
+- `mespzld.c` escreve três estampas diagonais sem parênteses —
+  `m * ggd+ggs`, `m * gdpr+gds+ggd`, `m * gspr+gds+gm+ggs` — e só o
+  primeiro termo leva o `m` (o `mesacl.c` e o `mesload.c` têm os
+  parênteses). Portado (`fet3_pz(…, mes_slip = true)`); medido:
+  `regress/dev_mult_pz_mes` passa com a falha e FALHA a 322 réguas sem
+  ela. Parece deslize do ngspice.
+- A magnitude `DISTOF` de uma fonte `I` com `m` não é multiplicada
+  (`CKTdisto` lê `ISRCdF1mag` sem o `m`, embora o `isrcload.c` e o
+  `isrcacld.c` multipliquem DC, transiente e AC; sonda `s1/isrc_d`).
+
+Fonte `I` com forma de onda e `m` (antes "not supported yet"): o
+`isrcload.c` estampa `m·valor(t)`, e o parser multiplica os níveis
+de `PULSE`/`SIN`/`EXP`/`SFFM` e os valores do `PWL`, dos quais nenhum
+default depende (`elem.rs::scale_isrc_tran`). `TRNOISE`/`TRRANDOM`
+seguem recusados.
+
+Decks `regress/dev_mult_{op,dc,ac,tran}` e, desta passada,
+`dev_mult_{gmin,noise,pz,pz_mes,disto,isrc_tran}`.
 
 ## Ruptura do diodo (2026-11-08)
 

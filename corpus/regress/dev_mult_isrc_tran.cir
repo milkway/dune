@@ -1,0 +1,24 @@
+A device's own m= on current-source waveforms and a BJT in a transient
+* written for Dune: isrcload.c stamps m*value(t), so the levels of
+* PULSE, SIN, EXP, SFFM and the PWL values carry m (probe isrc_m in
+* .claude/scratch/dev-probes/s1); a Gummel-Poon Q with m=2 switched by
+* the pulse (bjtload.c multiplies its stamps and charges' companions)
+.options compat=spice3
+.model qn npn is=1e-15 bf=100 rb=100 rc=10 cje=2p cjc=1p tf=1n tr=20n
+i1 0 1 pulse(0 1m 1u 1u 1u 3u 10u) m=2
+r1 1 0 1k
+c1 1 0 1n
+i2 0 2 sin(0.5m 1m 100k) m=3
+r2 2 0 1k
+i3 0 3 pwl(0 0 2u 1m 8u -1m) m=2
+r3 3 0 1k
+i4 0 4 exp(0 1m 1u 1u 6u 2u) m=2
+r4 4 0 1k
+i5 0 5 sffm(0 1m 100k 2 20k) m=2
+r5 5 0 1k
+vcc 6 0 5
+rcq 6 7 2k
+rbq 1 8 1k
+q1 7 8 0 qn m=2
+.tran 0.02u 12u
+.end

@@ -1,0 +1,15 @@
+A MESFET with its own m= in a pole-zero analysis
+* written for Dune: mespzld.c (ngspice-47) multiplies the pz stamps
+* by m, but three diagonal ones lack parentheses - m*ggd+ggs,
+* m*gdpr+gds+ggd, m*gspr+gds+gm+ggs - so only their first term is
+* multiplied; Dune ports the slip literally (docs/dune-core.md)
+vdd 1 0 dc 5
+vin 2 0 dc -0.5
+rsig 2 3 1k
+z1 4 3 0 mz area=1.5 m=3
+rl 1 4 1k
+cl 4 0 0.2p
+.pz 3 0 4 0 vol pz
+.model mz nmf vto=-1.5 beta=2.5e-3 b=0.3 alpha=2 lambda=0.05
++ rd=20 rs=15 cgs=0.5p cgd=0.1p pb=0.8
+.end

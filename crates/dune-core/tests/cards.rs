@@ -179,6 +179,31 @@ fn keepopinfo_dumps_the_operating_point_first() {
 }
 
 #[test]
+fn own_multiplier_of_q_j_z_is_m_devices_in_parallel() {
+    // bjtload.c/jfetload.c/mesload.c multiply every stamp by m, the
+    // junction gmin included: a cut-off junction fed 1 pA reads the
+    // same with m=2 as with two devices in parallel (dev-probes
+    // s1/qjz q_m_gmin: -0.25 V, where area=2 reads -0.5 V).
+    let models = ".model qm npn is=1e-20 rb=10\n.model jm njf is=1e-20 rd=5\n\
+                  .model zm nmf is=1e-20 rs=5\n";
+    for (dev, card) in [("q", "qm"), ("j", "jm"), ("z", "zm")] {
+        let one = format!("{dev}1 0 1 0 {card} m=2\ni1 1 0 1p\n");
+        let two = format!("{dev}1 0 1 0 {card}\n{dev}2 0 1 0 {card}\ni1 1 0 1p\n");
+        let area = format!("{dev}1 0 1 0 {card} area=2\ni1 1 0 1p\n");
+        let v = |body: &str| {
+            let (p, _) = run(&format!("m\n{models}{body}.op\n.end\n"));
+            real(&p[0], "v(1)")[0]
+        };
+        // Within the Newton tolerance (the iterates differ).
+        let near = |a: f64, b: f64| (a - b).abs() <= 1e-5 * b.abs();
+        let (m, par, a) = (v(&one), v(&two), v(&area));
+        assert!(near(m, par), "{dev}: m=2 {m} vs parallel {par}");
+        assert!(near(m, -0.25), "{dev}: {m}");
+        assert!(near(a, -0.5), "{dev}: area {a}");
+    }
+}
+
+#[test]
 fn own_multiplier_scales_resistors_by_value_and_geometry() {
     // ngspice-47 `G = m/R` (fix-probes r_m, r_m_geom): 1k/2 ∥ 1k/4,
     // then RSH·L/W = 1k by geometry over m=4; no "ignored" note.
@@ -215,5 +240,61 @@ fn temp_card_sets_the_circuit_temperature() {
             "t\nv1 1 0 1\nr1 1 0 rm 1k\n.model rm r tc1=0.01\n{order}\n.op\n.end\n"
         ));
         assert!(close(real(&p[0], "i(v1)")[0], -1.0 / 2000.0), "{order}");
+    }
+}
+
+/// ngspice-47 diode extensions (`docs/diode.md`): the refused
+/// parameters err by name, only when an instance uses the model.
+#[test]
+fn diode_extensions_refused_by_name() {
+    for (model, inst, what) in [
+        ("level=2", "", "level 2"),
+        ("level=4", "", "level 4"),
+        ("rsw=10", "", "RSW"),
+        ("vp=0.5 tt=1n", "", "VP"),
+        ("tlevc=2", "", "TLEVC=2"),
+        ("tlev=3", "", "TLEV=3"),
+        ("cond=1", "", "output-only"),
+        ("jsw=1e-12", " thermal", "self-heating"),
+    ] {
+        let deck = format!("t\n.model dm d {model}\nd1 1 0 dm{inst}\ni1 0 1 1m\n.op\n.end\n");
+        let parsed = dune_netlist::parse_str("d.cir", &deck);
+        let err = match Circuit::from_netlist(&parsed.netlist) {
+            Ok(_) => panic!("{model}{inst}: accepted"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains(what), "{model}{inst}: {err}");
+    }
+    // Unused, a refused card is no error (PDK libraries).
+    let (p, _) =
+        run("t\n.model dm d rsw=10\n.model ok d jsw=1e-12\nd1 1 0 ok pj=2\ni1 0 1 1m\n.op\n.end\n");
+    assert!(real(&p[0], "v(1)")[0] > 0.5);
+    // Inert as in the C: SOA limits, rth0 without a thermal node, vp
+    // with TT = 0.
+    let (p, _) = run("t\n.model dm d bv_max=10 rth0=100 vp=0.5\nd1 1 0 dm\ni1 0 1 1m\n.op\n.end\n");
+    let (q, _) = run("t\n.model dm d\nd1 1 0 dm\ni1 0 1 1m\n.op\n.end\n");
+    assert!(close(real(&p[0], "v(1)")[0], real(&q[0], "v(1)")[0]));
+}
+
+/// ngspice-47 keyword values (probes `kw.cases`, dev-probes s3): `r=`,
+/// `c=`, `l=` alias `resistance=` …, win over the positional value;
+/// instance `tc1`/`tc2` on R replace the model's; on C/L a nonzero one
+/// is refused.
+#[test]
+fn rlc_keyword_values() {
+    let (p, _) = run("t\nr1 1 0 3k r=2k\ni1 0 1 1m\n.op\n.end\n");
+    assert!(close(real(&p[0], "v(1)")[0], 2.0));
+    let (p, _) = run("t\n.temp 50\nr1 1 0 r=2k tc1=0.01\ni1 0 1 1m\n.op\n.end\n");
+    assert!((real(&p[0], "v(1)")[0] - 2.46).abs() < 1e-9);
+    for card in ["c1 1 0 1u tc1=0.01", "l1 1 0 1m tc2=1e-4"] {
+        let deck = format!("t\n{card}\nr1 1 0 1k\ni1 0 1 1m\n.op\n.end\n");
+        let parsed = dune_netlist::parse_str("k.cir", &deck);
+        let err = Circuit::from_netlist(&parsed.netlist)
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            err.is_some_and(|e| e.contains("temperature coefficient")),
+            "{card}"
+        );
     }
 }

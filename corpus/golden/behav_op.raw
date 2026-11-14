@@ -1,0 +1,33 @@
+Title: behavioural resistors at the operating point
+Date: Sat Nov 14 16:50:50  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 12
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(5)	voltage
+	5	v(6)	voltage
+	6	v(7)	voltage
+	7	v(8)	voltage
+	8	v(9)	voltage
+	9	v(10)	voltage
+	10	v(11)	voltage
+	11	i(vs)	current
+Values:
+0		2.000000000000000e+00
+	1.333333333333333e+00
+	1.127016653792583e+00
+	1.999999999939725e+00
+	4.000000000000000e+00
+	1.670518677994480e+00
+	1.117287381878822e-01
+	1.168936078053046e-01
+	1.000000000000000e+00
+	1.100000000000000e+00
+	3.333333333333334e+00
+	-1.000000000000000e-02

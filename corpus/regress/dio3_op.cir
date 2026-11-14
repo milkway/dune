@@ -1,0 +1,48 @@
+ngspice-47 diode extensions at the operating point (levels 1 and 3)
+* written for Dune: the parameters a 3f5 card lacks, which ngspice-47
+* applies to every diode - sidewall current JSW/NS with PJ, ISR/NR
+* recombination, IKF/IKR/IKP knees, JTUN/JTUNSW tunnelling, NBV, TRS -
+* and LEVEL=3 geometry: area and perimeter from W/L/XW (with M and
+* .option scale), the level-3 breakdown current IBV*AREA*M; each
+* diode is fed by its own current source (probes dio3.cases in
+* .claude/scratch/dev-probes/s2)
+.option scale=1e-6
+.model d1m d is=1e-14 n=1.2 rs=10 jsw=1e-12 pj=4
+.model d2m d is=1e-14 jsw=1e-12 ns=1.6 n=1.2
+.model d3m d is=1e-14 isr=1e-10 nr=2.2 m=0.4 vj=0.7
+.model d4m d is=1e-14 ikf=1m jsw=1e-12 ikp=1u
+.model d5m d is=1e-10 ikr=1n
+.model d6m d is=1e-14 jtun=1e-12 jtunsw=2e-12 ntun=20 xtitun=2 keg=0.9
+.model d7m d is=1e-14 n=1.1 bv=5 ibv=1m nbv=2 jsw=1e-11
+.model d8m d is=1e-14 rs=100 trs=5e-3 trs2=1e-5 tref=50 tnom=50
+.model d9m d level=3 js=1e-3 jsw=1e-9 xw=0.1 rs=2e-9 bv=6 ibv=1e3
+i1 0 1 1m
+d1 1 0 d1m
+i2 0 2 1m
+d2 2 0 d2m pj=8
+i3 0 3 7.9p
+d3 0 3 d2m pj=8
+i4 0 4 1u
+d4 4 0 d3m
+i5 0 5 1p
+d5 0 5 d3m
+i6 0 6 10m
+d6 6 0 d4m pj=4
+i7 0 7 0.09n
+d7 0 7 d5m
+i8 0 8 1n
+d8 0 8 d6m pj=3
+i9 0 9 3m
+d9 0 9 d7m pj=2 m=3
+i10 0 10 10m
+d10 10 0 d8m dtemp=40
+i11 0 11 1u
+d11 11 0 d9m w=10 l=5
+i12 0 12 1u
+d12 12 0 d9m w=10 l=5 m=2
+i13 0 13 1u
+d13 13 0 d9m area=1e-10 pj=4e-5
+i14 0 14 1m
+d14 0 14 d9m area=1e-10 pj=4e-5
+.op
+.end

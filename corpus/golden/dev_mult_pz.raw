@@ -1,0 +1,31 @@
+Title: a device's own m= on gummel-poon q and j pole-zero stamps
+Date: Sat Nov 14 16:05:43  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 11
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(pole(4))	voltage
+	4	v(pole(5))	voltage
+	5	v(pole(6))	voltage
+	6	v(zero(1))	voltage
+	7	v(zero(2))	voltage
+	8	v(zero(3))	voltage
+	9	v(zero(4))	voltage
+	10	v(zero(5))	voltage
+Values:
+0		-3.545967254544879e+11,0.000000000000000e+00
+	-1.616393798963185e+11,0.000000000000000e+00
+	-7.040566638694525e+10,0.000000000000000e+00
+	-1.651071453610251e+09,0.000000000000000e+00
+	-1.107723276203505e+09,0.000000000000000e+00
+	-4.829741060057678e+07,0.000000000000000e+00
+	-2.999703914558381e+11,0.000000000000000e+00
+	-7.744047512724590e+10,0.000000000000000e+00
+	-1.158690358056492e+10,0.000000000000000e+00
+	-1.293662867020164e+09,0.000000000000000e+00
+	8.317961716597466e+09,0.000000000000000e+00

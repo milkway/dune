@@ -377,7 +377,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
             _ => match stack.last_mut() {
                 Some(def) => def.items.push((def.conds.guard(), BodyItem::Elem(card))),
                 None => {
-                    if let Some(el) = env.with_temper(ParamEnv::temper_for_card(card), || {
+                    for el in env.with_temper(ParamEnv::temper_for_card(card), || {
                         parse_element(card, &mut all_diags, &model_names, &vdmos_models, &env)
                     }) {
                         top.items.push(TopItem::Elem(el));

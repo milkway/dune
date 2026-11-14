@@ -495,9 +495,12 @@ span do `.if`. Prioridade baixa: o IHP não é alvo de BSIM4.
 precisa ser entendida antes); (c) ~100; (d) não. Opcional.
 
 **G11 — Modelos além do BSIM4** (não é parser, mas decide o "full"):
-diodo nível 3 com geometria e parâmetros de parede (os três PDKs; hoje o
-Dune ignora `level` com nota e não tem `jsw`, `cjsw`…); resistor/capacitor
-comportamental com `v()` (sky130 104, gf180 149 — Fase 8 item 6); modelos
+✅ diodo nível 3 com geometria e parâmetros de parede (os três PDKs;
+feito em 2026-11-14, `docs/diode.md`: diodos do sky130 da biblioteca
+contra o ngspice-47 em ≤ 4e-4 do máximo); resistor/capacitor
+comportamental com `v()` (sky130 104, gf180 149 — Fase 8 item 6; a
+reescrita do ngspice está feita desde 2026-11-14, `docs/dune-netlist.md`,
+mas os usos reais dependem de `temper` — G7 — e de `tc1`/`tc2`); modelos
 `r`/`c` semicondutores completos; BSIM3v32 (sky130 células especiais);
 `bsim4v6` (`version=4.62`/`4.6`); VBIC nível 9 (IHP, item 4); PSP/OSDI
 (IHP, fora de escopo).
@@ -548,8 +551,11 @@ Os itens 1, 2, 3 e 5 foram corrigidos em 2026-11-14 junto com a G1; o 4, com a G
    repassar um não finito entre `.param` não é erro (`{1/z}` volta a 0
    e roda), o `{…}` não finito que chega a elemento, `.model` ou cartão
    de controle é erro com span.
-6. **Diodo `level=3`**: aceito com notas, simulado como nível 1 (sem
+6. ✅ **Diodo `level=3`**: aceito com notas, simulado como nível 1 (sem
    geometria nem parede) — resultado errado silencioso até G11.
+   *Corrigido* em 2026-11-14: o diodo do ngspice-47 inteiro (nível 3,
+   parede, `ISR`, tunelamento, joelhos, `TLEV`/`TLEVC`; `docs/diode.md`),
+   recusando por nome `RSW`, `VP` e self-heating.
 
 Nenhum travamento nem pânico com entrada real.
 

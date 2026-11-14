@@ -366,6 +366,13 @@ pub(crate) struct BjtI {
     emit_p: Var,
     t: BjtTemp,
     area: f64,
+    /// ngspice-47's parallel multiplier `m` (`BJTm`): every load, AC
+    /// and pz stamp times `m` (`bjtload.c`, `bjtacld.c`,
+    /// `bjtpzld.c` — the junction `gmin` with them), the noise sources
+    /// as `bjtnoise.c`, and `.disto` with `area·m` (`bjtdset.c`
+    /// scales the saturation currents, resistances and charges by
+    /// `m`). 1 in the 3f5.
+    m: f64,
     off: bool,
     ic_vbe: f64,
     ic_vce: f64,
@@ -515,6 +522,7 @@ impl BjtI {
             emit_p: primes[2],
             t,
             area,
+            m: 1.0,
             off,
             ic_vbe: ic.0,
             ic_vce: ic.1,
@@ -523,6 +531,12 @@ impl BjtI {
             s: [TRASH; 23],
             d: BjtDistoCoeffs::default(),
         }
+    }
+
+    /// Set ngspice-47's parallel multiplier `m` (`BJTm`).
+    pub(crate) fn with_mult(mut self, m: f64) -> Self {
+        self.m = m;
+        self
     }
 }
 
@@ -580,22 +594,31 @@ impl crate::devices::Device for BjtI {
         let st = self.st;
         // `bjtnoise.c` (ngspice-47): the three resistors at the
         // instance temperature.
+        // The multiplier `m` as `bjtnoise.c` applies it: conductances
+        // and shot currents times `m`, flicker `m·KF·|Ib|^AF` with the
+        // per-device `Ib`.
         let temp = self.t.temp;
-        let rc = ctx.thermal_at(self.col_p, self.col, self.t.col_conduct * self.area, temp);
-        let rb = ctx.thermal_at(self.base_p, self.base, ctx.states.get(0, st + GX), temp);
+        let m = self.m;
+        let rc = ctx.thermal_at(
+            self.col_p,
+            self.col,
+            self.t.col_conduct * self.area * m,
+            temp,
+        );
+        let rb = ctx.thermal_at(self.base_p, self.base, ctx.states.get(0, st + GX) * m, temp);
         let re = ctx.thermal_at(
             self.emit_p,
             self.emit,
-            self.t.emit_conduct * self.area,
+            self.t.emit_conduct * self.area * m,
             temp,
         );
-        let ic = ctx.shot(self.col_p, self.emit_p, ctx.states.get(0, st + CC));
-        let ib = ctx.shot(self.base_p, self.emit_p, ctx.states.get(0, st + CB));
+        let ic = ctx.shot(self.col_p, self.emit_p, ctx.states.get(0, st + CC) * m);
+        let ib = ctx.shot(self.base_p, self.emit_p, ctx.states.get(0, st + CB) * m);
         let cb = ctx.states.get(0, st + CB);
         let flicker = ctx.flicker(
             self.base_p,
             self.emit_p,
-            self.t.kf * f64::exp(self.t.af * f64::ln(f64::max(cb.abs(), N_MINLOG))),
+            m * self.t.kf * f64::exp(self.t.af * f64::ln(f64::max(cb.abs(), N_MINLOG))),
             1.0,
         );
         let total = rc + rb + re + ic + ib + flicker;
@@ -634,6 +657,7 @@ impl crate::devices::Device for BjtI {
 
     #[allow(clippy::too_many_lines)]
     fn load(&mut self, ctx: &mut LoadCtx) {
+        let m = self.m;
         let t = &self.t;
         let typ = t.type_;
         let vt = t.vt;
@@ -1059,36 +1083,36 @@ impl crate::devices::Device for BjtI {
         let ceqbe = typ * (cc + cb - vbe * (gm + go + gpi) + vbc * (go - geqcb));
         let ceqbc = typ * (-cc + vbe * (gm + go) - vbc * (gmu + go));
 
-        ctx.add_rhs(self.base, -ceqbx);
-        ctx.add_rhs(self.col_p, ceqcs + ceqbx + ceqbc);
-        ctx.add_rhs(self.base_p, -ceqbe - ceqbc);
-        ctx.add_rhs(self.emit_p, ceqbe);
-        ctx.add_rhs(self.subst, -ceqcs);
+        ctx.add_rhs(self.base, m * (-ceqbx));
+        ctx.add_rhs(self.col_p, m * (ceqcs + ceqbx + ceqbc));
+        ctx.add_rhs(self.base_p, m * (-ceqbe - ceqbc));
+        ctx.add_rhs(self.emit_p, m * (ceqbe));
+        ctx.add_rhs(self.subst, m * (-ceqcs));
 
         // Load the Y matrix.
-        ctx.add(self.s[COL_COL], gcpr);
-        ctx.add(self.s[BASE_BASE], gx + geqbx);
-        ctx.add(self.s[EMIT_EMIT], gepr);
-        ctx.add(self.s[COLP_COLP], gmu + go + gcpr + gccs + geqbx);
-        ctx.add(self.s[BASEP_BASEP], gx + gpi + gmu + geqcb);
-        ctx.add(self.s[EMITP_EMITP], gpi + gepr + gm + go);
-        ctx.add(self.s[COL_COLP], -gcpr);
-        ctx.add(self.s[BASE_BASEP], -gx);
-        ctx.add(self.s[EMIT_EMITP], -gepr);
-        ctx.add(self.s[COLP_COL], -gcpr);
-        ctx.add(self.s[COLP_BASEP], -gmu + gm);
-        ctx.add(self.s[COLP_EMITP], -gm - go);
-        ctx.add(self.s[BASEP_BASE], -gx);
-        ctx.add(self.s[BASEP_COLP], -gmu - geqcb);
-        ctx.add(self.s[BASEP_EMITP], -gpi);
-        ctx.add(self.s[EMITP_EMIT], -gepr);
-        ctx.add(self.s[EMITP_COLP], -go + geqcb);
-        ctx.add(self.s[EMITP_BASEP], -gpi - gm - geqcb);
-        ctx.add(self.s[SUBST_SUBST], gccs);
-        ctx.add(self.s[COLP_SUBST], -gccs);
-        ctx.add(self.s[SUBST_COLP], -gccs);
-        ctx.add(self.s[BASE_COLP], -geqbx);
-        ctx.add(self.s[COLP_BASE], -geqbx);
+        ctx.add(self.s[COL_COL], m * (gcpr));
+        ctx.add(self.s[BASE_BASE], m * (gx + geqbx));
+        ctx.add(self.s[EMIT_EMIT], m * (gepr));
+        ctx.add(self.s[COLP_COLP], m * (gmu + go + gcpr + gccs + geqbx));
+        ctx.add(self.s[BASEP_BASEP], m * (gx + gpi + gmu + geqcb));
+        ctx.add(self.s[EMITP_EMITP], m * (gpi + gepr + gm + go));
+        ctx.add(self.s[COL_COLP], m * (-gcpr));
+        ctx.add(self.s[BASE_BASEP], m * (-gx));
+        ctx.add(self.s[EMIT_EMITP], m * (-gepr));
+        ctx.add(self.s[COLP_COL], m * (-gcpr));
+        ctx.add(self.s[COLP_BASEP], m * (-gmu + gm));
+        ctx.add(self.s[COLP_EMITP], m * (-gm - go));
+        ctx.add(self.s[BASEP_BASE], m * (-gx));
+        ctx.add(self.s[BASEP_COLP], m * (-gmu - geqcb));
+        ctx.add(self.s[BASEP_EMITP], m * (-gpi));
+        ctx.add(self.s[EMITP_EMIT], m * (-gepr));
+        ctx.add(self.s[EMITP_COLP], m * (-go + geqcb));
+        ctx.add(self.s[EMITP_BASEP], m * (-gpi - gm - geqcb));
+        ctx.add(self.s[SUBST_SUBST], m * (gccs));
+        ctx.add(self.s[COLP_SUBST], m * (-gccs));
+        ctx.add(self.s[SUBST_COLP], m * (-gccs));
+        ctx.add(self.s[BASE_COLP], m * (-geqbx));
+        ctx.add(self.s[COLP_BASE], m * (-geqbx));
     }
 
     fn trunc(&self, t: &crate::integ::TerrCtx, time_step: &mut f64) {
@@ -1099,6 +1123,7 @@ impl crate::devices::Device for BjtI {
 
     /// `BJTacLoad`.
     fn load_ac(&mut self, ctx: &mut AcCtx) {
+        let m = self.m;
         let st = self.st;
         let gcpr = self.t.col_conduct * self.area;
         let gepr = self.t.emit_conduct * self.area;
@@ -1121,39 +1146,39 @@ impl crate::devices::Device for BjtI {
         let xccs = ctx.states.get(0, st + CQCS) * ctx.omega;
         let xcmcb = ctx.states.get(0, st + CEXBC) * ctx.omega;
 
-        ctx.add_g(self.s[COL_COL], gcpr);
-        ctx.add_g(self.s[BASE_BASE], gx);
-        ctx.add_b(self.s[BASE_BASE], xcbx);
-        ctx.add_g(self.s[EMIT_EMIT], gepr);
-        ctx.add_g(self.s[COLP_COLP], gmu + go + gcpr);
-        ctx.add_b(self.s[COLP_COLP], xcmu + xccs + xcbx);
-        ctx.add_g(self.s[BASEP_BASEP], gx + gpi + gmu);
-        ctx.add_b(self.s[BASEP_BASEP], xcpi + xcmu + xcmcb);
-        ctx.add_g(self.s[EMITP_EMITP], gpi + gepr + gm + go);
-        ctx.add_b(self.s[EMITP_EMITP], xcpi + xgm);
-        ctx.add_g(self.s[COL_COLP], -gcpr);
-        ctx.add_g(self.s[BASE_BASEP], -gx);
-        ctx.add_g(self.s[EMIT_EMITP], -gepr);
-        ctx.add_g(self.s[COLP_COL], -gcpr);
-        ctx.add_g(self.s[COLP_BASEP], -gmu + gm);
-        ctx.add_b(self.s[COLP_BASEP], -xcmu + xgm);
-        ctx.add_g(self.s[COLP_EMITP], -gm - go);
-        ctx.add_b(self.s[COLP_EMITP], -xgm);
-        ctx.add_g(self.s[BASEP_BASE], -gx);
-        ctx.add_g(self.s[BASEP_COLP], -gmu);
-        ctx.add_b(self.s[BASEP_COLP], -xcmu - xcmcb);
-        ctx.add_g(self.s[BASEP_EMITP], -gpi);
-        ctx.add_b(self.s[BASEP_EMITP], -xcpi);
-        ctx.add_g(self.s[EMITP_EMIT], -gepr);
-        ctx.add_g(self.s[EMITP_COLP], -go);
-        ctx.add_b(self.s[EMITP_COLP], xcmcb);
-        ctx.add_g(self.s[EMITP_BASEP], -gpi - gm);
-        ctx.add_b(self.s[EMITP_BASEP], -xcpi - xgm - xcmcb);
-        ctx.add_b(self.s[SUBST_SUBST], xccs);
-        ctx.add_b(self.s[COLP_SUBST], -xccs);
-        ctx.add_b(self.s[SUBST_COLP], -xccs);
-        ctx.add_b(self.s[BASE_COLP], -xcbx);
-        ctx.add_b(self.s[COLP_BASE], -xcbx);
+        ctx.add_g(self.s[COL_COL], m * (gcpr));
+        ctx.add_g(self.s[BASE_BASE], m * (gx));
+        ctx.add_b(self.s[BASE_BASE], m * (xcbx));
+        ctx.add_g(self.s[EMIT_EMIT], m * (gepr));
+        ctx.add_g(self.s[COLP_COLP], m * (gmu + go + gcpr));
+        ctx.add_b(self.s[COLP_COLP], m * (xcmu + xccs + xcbx));
+        ctx.add_g(self.s[BASEP_BASEP], m * (gx + gpi + gmu));
+        ctx.add_b(self.s[BASEP_BASEP], m * (xcpi + xcmu + xcmcb));
+        ctx.add_g(self.s[EMITP_EMITP], m * (gpi + gepr + gm + go));
+        ctx.add_b(self.s[EMITP_EMITP], m * (xcpi + xgm));
+        ctx.add_g(self.s[COL_COLP], m * (-gcpr));
+        ctx.add_g(self.s[BASE_BASEP], m * (-gx));
+        ctx.add_g(self.s[EMIT_EMITP], m * (-gepr));
+        ctx.add_g(self.s[COLP_COL], m * (-gcpr));
+        ctx.add_g(self.s[COLP_BASEP], m * (-gmu + gm));
+        ctx.add_b(self.s[COLP_BASEP], m * (-xcmu + xgm));
+        ctx.add_g(self.s[COLP_EMITP], m * (-gm - go));
+        ctx.add_b(self.s[COLP_EMITP], m * (-xgm));
+        ctx.add_g(self.s[BASEP_BASE], m * (-gx));
+        ctx.add_g(self.s[BASEP_COLP], m * (-gmu));
+        ctx.add_b(self.s[BASEP_COLP], m * (-xcmu - xcmcb));
+        ctx.add_g(self.s[BASEP_EMITP], m * (-gpi));
+        ctx.add_b(self.s[BASEP_EMITP], m * (-xcpi));
+        ctx.add_g(self.s[EMITP_EMIT], m * (-gepr));
+        ctx.add_g(self.s[EMITP_COLP], m * (-go));
+        ctx.add_b(self.s[EMITP_COLP], m * (xcmcb));
+        ctx.add_g(self.s[EMITP_BASEP], m * (-gpi - gm));
+        ctx.add_b(self.s[EMITP_BASEP], m * (-xcpi - xgm - xcmcb));
+        ctx.add_b(self.s[SUBST_SUBST], m * (xccs));
+        ctx.add_b(self.s[COLP_SUBST], m * (-xccs));
+        ctx.add_b(self.s[SUBST_COLP], m * (-xccs));
+        ctx.add_b(self.s[BASE_COLP], m * (-xcbx));
+        ctx.add_b(self.s[COLP_BASE], m * (-xcbx));
     }
 
     /// `BJTpzLoad` (`bjtpzld.c`): the AC stamps with `s` in place of
@@ -1166,6 +1191,7 @@ impl crate::devices::Device for BjtI {
     /// the collector', as everywhere in the Dune BJT (ngspice's
     /// `substCon` is the same node for the vertical default).
     fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
+        let m = self.m;
         let st = self.st;
         let gcpr = self.t.col_conduct * self.area;
         let gepr = self.t.emit_conduct * self.area;
@@ -1181,39 +1207,39 @@ impl crate::devices::Device for BjtI {
         let xccs = ctx.states.get(0, st + CQCS);
         let xcmcb = ctx.states.get(0, st + CEXBC);
 
-        ctx.add_g(self.s[COL_COL], gcpr);
-        ctx.add_g(self.s[BASE_BASE], gx);
-        ctx.add_cap(self.s[BASE_BASE], xcbx);
-        ctx.add_g(self.s[EMIT_EMIT], gepr);
-        ctx.add_g(self.s[COLP_COLP], gmu + go + gcpr);
-        ctx.add_cap(self.s[COLP_COLP], xcmu + xccs + xcbx);
-        ctx.add_g(self.s[BASEP_BASEP], gx + gpi + gmu);
-        ctx.add_cap(self.s[BASEP_BASEP], xcpi + xcmu + xcmcb);
-        ctx.add_g(self.s[EMITP_EMITP], gpi + gepr + gm + go);
-        ctx.add_cap(self.s[EMITP_EMITP], xcpi + xgm);
-        ctx.add_g(self.s[COL_COLP], -gcpr);
-        ctx.add_g(self.s[BASE_BASEP], -gx);
-        ctx.add_g(self.s[EMIT_EMITP], -gepr);
-        ctx.add_g(self.s[COLP_COL], -gcpr);
-        ctx.add_g(self.s[COLP_BASEP], -gmu + gm);
-        ctx.add_cap(self.s[COLP_BASEP], -xcmu + xgm);
-        ctx.add_g(self.s[COLP_EMITP], -gm - go);
-        ctx.add_cap(self.s[COLP_EMITP], -xgm);
-        ctx.add_g(self.s[BASEP_BASE], -gx);
-        ctx.add_g(self.s[BASEP_COLP], -gmu);
-        ctx.add_cap(self.s[BASEP_COLP], -xcmu - xcmcb);
-        ctx.add_g(self.s[BASEP_EMITP], -gpi);
-        ctx.add_cap(self.s[BASEP_EMITP], -xcpi);
-        ctx.add_g(self.s[EMITP_EMIT], -gepr);
-        ctx.add_g(self.s[EMITP_COLP], -go);
-        ctx.add_cap(self.s[EMITP_COLP], xcmcb);
-        ctx.add_g(self.s[EMITP_BASEP], -gpi - gm);
-        ctx.add_cap(self.s[EMITP_BASEP], -xcpi - xgm - xcmcb);
-        ctx.add_cap(self.s[SUBST_SUBST], xccs);
-        ctx.add_cap(self.s[COLP_SUBST], -xccs);
-        ctx.add_cap(self.s[SUBST_COLP], -xccs);
-        ctx.add_cap(self.s[BASE_COLP], -xcbx);
-        ctx.add_cap(self.s[COLP_BASE], -xcbx);
+        ctx.add_g(self.s[COL_COL], m * (gcpr));
+        ctx.add_g(self.s[BASE_BASE], m * (gx));
+        ctx.add_cap(self.s[BASE_BASE], m * (xcbx));
+        ctx.add_g(self.s[EMIT_EMIT], m * (gepr));
+        ctx.add_g(self.s[COLP_COLP], m * (gmu + go + gcpr));
+        ctx.add_cap(self.s[COLP_COLP], m * (xcmu + xccs + xcbx));
+        ctx.add_g(self.s[BASEP_BASEP], m * (gx + gpi + gmu));
+        ctx.add_cap(self.s[BASEP_BASEP], m * (xcpi + xcmu + xcmcb));
+        ctx.add_g(self.s[EMITP_EMITP], m * (gpi + gepr + gm + go));
+        ctx.add_cap(self.s[EMITP_EMITP], m * (xcpi + xgm));
+        ctx.add_g(self.s[COL_COLP], m * (-gcpr));
+        ctx.add_g(self.s[BASE_BASEP], m * (-gx));
+        ctx.add_g(self.s[EMIT_EMITP], m * (-gepr));
+        ctx.add_g(self.s[COLP_COL], m * (-gcpr));
+        ctx.add_g(self.s[COLP_BASEP], m * (-gmu + gm));
+        ctx.add_cap(self.s[COLP_BASEP], m * (-xcmu + xgm));
+        ctx.add_g(self.s[COLP_EMITP], m * (-gm - go));
+        ctx.add_cap(self.s[COLP_EMITP], m * (-xgm));
+        ctx.add_g(self.s[BASEP_BASE], m * (-gx));
+        ctx.add_g(self.s[BASEP_COLP], m * (-gmu));
+        ctx.add_cap(self.s[BASEP_COLP], m * (-xcmu - xcmcb));
+        ctx.add_g(self.s[BASEP_EMITP], m * (-gpi));
+        ctx.add_cap(self.s[BASEP_EMITP], m * (-xcpi));
+        ctx.add_g(self.s[EMITP_EMIT], m * (-gepr));
+        ctx.add_g(self.s[EMITP_COLP], m * (-go));
+        ctx.add_cap(self.s[EMITP_COLP], m * (xcmcb));
+        ctx.add_g(self.s[EMITP_BASEP], m * (-gpi - gm));
+        ctx.add_cap(self.s[EMITP_BASEP], m * (-xcpi - xgm - xcmcb));
+        ctx.add_cap(self.s[SUBST_SUBST], m * (xccs));
+        ctx.add_cap(self.s[COLP_SUBST], m * (-xccs));
+        ctx.add_cap(self.s[SUBST_COLP], m * (-xccs));
+        ctx.add_cap(self.s[BASE_COLP], m * (-xcbx));
+        ctx.add_cap(self.s[COLP_BASE], m * (-xcbx));
         Ok(())
     }
 
@@ -1233,7 +1259,9 @@ impl crate::devices::Device for BjtI {
         let sol = ctx.sol;
         let gmin = ctx.gmin;
         let typ = t.type_;
-        let area = self.area;
+        // `bjtdset.c` multiplies by `BJTm` where the 3f5 multiplies
+        // by the area.
+        let area = self.area * self.m;
         let vt = t.vt;
 
         let d_p = Dderivs::var_p();

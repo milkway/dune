@@ -679,14 +679,16 @@ nenhuma linha `X` multiplica — age pelo mesmo caminho
 | `C` (valor ou geometria) | `C·m` | parâmetro `m` (`CapacitorI`) |
 | `L` | `L/m`; o `K` lê o `L` sem dividir (`muttemp.c`) | parâmetro `m` (`InductorI`; sonda `l_m_k`) |
 | `D` | correntes, condutâncias e cargas ·m; joelho da ruptura casado como `IS·AREA·M` contra `M·IBV`; 1/f com `|I/m|` | parâmetro `m` (`DiodeTemp`; o `area`·m de antes errava a ruptura em `vt·ln m` — 18 mV em `d_m_bv`) |
-| `J`, `Z`, `Q` Gummel–Poon | estampas ·m, inclusive o `gmin` da junção | `area`·m (posicional, senão `area=`, senão m) |
+| `J`, `Z`, `Q` Gummel–Poon | estampas ·m, inclusive o `gmin` da junção; ruído ·m (1/f `m·KF·|I|^AF`); `.disto` com `area·m` | parâmetro `m` (`BjtI`/`JfetI`/`MesI` multiplicam as estampas; a área fica como está) |
 | `G`, `F` | ganho·m | ganho·m |
 | `I` DC/AC | valor·m | valor·m |
+| `I` com `PULSE`/`SIN`/`EXP`/`PWL`/`SFFM` | `m·valor(t)` | níveis da forma ·m (`V1 V2`, `VO VA`, valores do `PWL`; sonda `s1/isrc_m`) |
+| `I` com `DISTOF1/2` | magnitude **sem** m (`CKTdisto` lê `ISRCdF1mag`; sonda `s1/isrc_d`) | idem (literal) |
 | `B` de corrente | valor·m | `m·(expr)` |
 | `B` de tensão | valor·m (só o `m` próprio; a linha `X` não chega nele) | `m·(expr)` (sonda `bv_m`, `bv_sub_own`) |
 | `X` aninhado | atual `m` | atual `m` |
 | `V`, `E`, `H` | "unknown parameter (m)" | erro com span (o `E`/`H` aceitava qualquer palavra-chave calado) |
-| MOS 1–3/6, BSIM1/2; `I` com forma transiente/distorção | multiplica | erro "not supported yet" com o span (salvo m=1) |
+| MOS 1–3/6, BSIM1/2; `I` com `TRNOISE`/`TRRANDOM` | multiplica | erro "not supported yet" com o span (salvo m=1) |
 
 Diferenças: m ≤ 0 é erro (o ngspice simula: m=0 abre, m<0 inverte;
 sondas `r_m_zero`, `r_m_neg`); o marcador é fechado sobre o grafo de
@@ -694,11 +696,22 @@ chamadas em qualquer ordem — o ngspice marca numa passada em ordem de
 deck e um subcircuito aninhado definido **antes** de quem o chama falha
 com "Mismatch" (`m_nested_def_before`); subcircuitos aninhados
 (definidos dentro de outro) seguem a própria marcação — o ngspice só
-acrescenta `m={m}` até o primeiro `.ends`. O `gmin` de `J`/`Q` não
-escala com o `area`·m: só pesa quando o `gmin` domina a junção
-(`q_m_gmin`, junção cortada com `IS=1e-20`: −0,25 V no ngspice, −0,5 V
-no Dune); com polarização normal a diferença fica dentro da tolerância
-do Newton (`q_m` contra `q_area` no próprio ngspice: 2,8e-6 relativo).
+acrescenta `m={m}` até o primeiro `.ends`. Desde 2026-11-14 o `gmin`
+de `J`/`Z`/`Q` escala com o `m` como no ngspice (`q_m_gmin`, junção
+cortada com `IS=1e-20`: −0,25 V nos dois; antes o `area`·m dava −0,5 V
+no Dune; sondas `s1/qjz.cases` em `.claude/scratch/dev-probes`).
+
+Por que MOS 1–3/6 e BSIM1/2 seguem recusando (lido no C do ngspice-47):
+no MOS1/2/3 o `m` não é multiplicador de estampa — entra na física
+(`DrainSatCur = m·tSatCur`, `Beta·m`, sobreposições `·m·W`/`·m·L`,
+áreas de junção ·m, e o 1/f com `|cd/m|`), em ~12 pontos por modelo;
+no MOS6 só o `mos6load.c` multiplica as estampas (o `mos6acld.c` e o
+`mos6pzld.c` ignoram o `m` — inconsistente); no BSIM1/2 load, AC, pz e
+ruído multiplicam estampa a estampa (limpo), mas o `.disto` do BSIM1
+(`b1dset.c`) escala a geometria — porte possível sem API pública,
+deixado para depois. `TRNOISE`/`TRRANDOM` com m ≠ 1: o sorteio
+poisson do `TRRANDOM` não é linear nos argumentos e o ruído
+transiente do Dune não reproduz a sequência do ngspice para conferir.
 
 `area=` como palavra-chave vale no `D` (antes "unknown parameter") e
 no `Q` Gummel–Poon (antes ignorado calado); o valor posicional vence o
@@ -842,6 +855,121 @@ determinístico (`tests/fuzz_smoke.rs`) muta os cartões B das sondas
 
 `dune_netlist::parse_expr(texto)` expõe o mesmo parser (expressão
 inteira; texto sobrando é erro).
+
+## R, C e L comportamentais (`behav.rs` ← `inp_compat` do ngspice-47)
+
+O ngspice-47 reescreve no front end (`src/frontend/inpcom.c`,
+`inp_compat`, Modified BSD) um R, C ou L cujo valor lê o circuito.
+Critério (`b_transformation_wanted`): o texto depois do nome e dos dois
+nós contém `v(`, `i(` ou as palavras `time`, `temper`, `hertz` (não
+precedidas de letra/dígito/`_`), ou, num capacitor, `q=`. A expressão é
+o que vem entre o primeiro `{` (ou `'`, que o ngspice converte em `{`)
+e o fecho; sem delimitador o ngspice para com "{...} or '...' around
+equation's right hand side are missing!" — no Dune, erro com o span. A
+forma posicional (`r1 a b '…'`) e a de palavra-chave (`r=`, `c=`,
+`l=`) são a mesma coisa para ele. O Dune faz a mesma reescrita, com a
+mesma topologia e os mesmos nomes (vetores e nós internos iguais aos do
+rawfile do ngspice; dentro de subcircuito a expansão dá `b.x1.brx`,
+`x1.c1_int1`…, como lá):
+
+| cartão | gerado (ngspice e Dune) |
+|---|---|
+| `Rxxx n1 n2 r={eq}` | `bRxxx n1 n2 i = v(n1,n2)/(eq)`, com o `m` multiplicando a corrente (`reciprocm=0`) |
+| `Cxxx n1 n2 c={eq}` | `gCxxx Cxxx_int1 0 n2 n1 1e9`, `rCxxx Cxxx_int1 0 1e-9`, `cCxxx Cxxx_int1 Cxxx_int2 1e-6`, `vcurrmeasCxxx Cxxx_int2 0 0`, `rCxxxpar n2 n1 1e15`, `bCxxx n1 n2 i = 1e6*i(vcurrmeasCxxx)*(eq)` |
+| `Cxxx n1 n2 q={eq}` | `gCxxx n1 n2 Cxxx_int1 0 m`, `lCxxx Cxxx_int1 0 1`, `bCxxx 0 Cxxx_int1 i = (eq)` |
+| `Lxxx n1 n2 l={eq}` | `fLxxx Lxxx_int2 0 bLxxx -1`, `lLxxx Lxxx_int2 0 1`, `bLxxx n2 n1 v = v(Lxxx_int2)*(eq)/m` |
+
+Os cartões geram elementos direto (`elem.rs::behavioral_rlc`), não
+texto; o `F` do L sente a fonte `B` de tensão, o que o núcleo passou a
+aceitar (`circuit.rs::ctrl_branch`; o 3f5 só aceitava fonte `V`, o
+`CKTfndBranch` do ngspice aceita qualquer ramo). Cada elemento extra
+(até cinco) é cobrado do orçamento da expansão.
+
+**A expressão.** O ngspice entrega a linha `B` ao numparam com cada nome
+de parâmetro entre chaves (`inp_modify_exp`) e a analisa com a gramática
+da fonte B dele (`inpptree-parser.y`): `^` e `**` associam **à
+esquerda**, o menos unário fica **abaixo** de `^` (`-2^2 = -4`,
+`2^3^2 = 64`; sondas `r_unaryneg`, `r_powassoc`). A gramática da fonte
+`B` do Dune é a do 3f5 (`^` à direita; `KNOWN_DIFFS.md`), então a
+expressão de um R/C/L comportamental **não** passa pelo parser do 3f5:
+`behav.rs::translate` a analisa com as regras do ngspice, avalia os
+parâmetros no escopo do cartão (como o numparam) e monta a árvore
+`ir::Expr` com a estrutura do ngspice — ou seja, um `^` num R/C/L
+comportamental vale o que vale no ngspice, ao contrário de um `^` escrito
+numa fonte `B` do próprio deck. Funções:
+
+- com par no 3f5 (mesmo valor no domínio comum): `abs acos acosh asin
+  asinh atan atanh cos cosh exp sgn sin sinh sqrt tan tanh u uramp`;
+  `ln` **e** `log` são o logaritmo natural no ngspice (`PTlog`) →
+  `ln` do 3f5; `log10` → `log` do 3f5. Diferem fora do domínio: o
+  ngspice dá `HUGE` para `ln`/`log`/`sqrt` de negativo (o 3f5 usa `|x|`)
+  e satura `exp` acima de 227,96 em 1e99;
+- reescritas exatas (valores iguais, salvo onde dito): `pow(a,b)` e
+  `a^b`/`a**b` → `^` do 3f5 (igual para `a ≥ 0` e para expoente inteiro;
+  com `a < 0` e expoente não inteiro o ngspice dá 0 e o 3f5 `|a|^b`;
+  `pow(0,b<0)` dá 0 no ngspice); `pwr(a,b)` → `sgn(a)·|a|^b` (no
+  `a = 0` o ngspice dá `0^b`, o Dune 0); `min(a,b)` →
+  `a·u(b−a) + b·u(a−b)`, `max(a,b)` → `a·u(a−b) + b·u(b−a)` (valor
+  exato, inclusive no empate; a derivada no empate exato é a média das
+  duas, no ngspice a de um dos lados);
+- recusadas com o span: `?:`, comparações e operadores lógicos;
+  `ceil floor nint u2 pwl eq0 ne0 gt0 lt0 ge0 le0 ddt`; `time`,
+  `temper`, `hertz` (a fonte `B` do Dune não tem tempo nem temperatura —
+  G7); função desconhecida; parâmetro indefinido.
+
+**Palavras-chave.** `m` como no ngspice (`eval_m`/`eval_mvalue`). No
+capacitor por capacitância o ngspice escreve o ganho do `G` como
+`"%se9"` com o `m` formatado em `"%15.8e"`: sem `m=` sai `1e9`, com
+`m=2` sai `"2.00000000e+00e9"`, que lê **2** — o capacitor encolhe 1e9
+vezes e some do circuito (sonda `c_ac_m`: |v| = 1000 Ω puro). Portado
+literalmente (`regress/behav_ac`, `c2`). `tc1`/`tc2` diferentes de zero:
+recusados (a fonte `B` do Dune não tem coeficientes de temperatura); zero
+passa. `noisy=1`/`noise=1` (o subcircuito de ruído extra do ngspice):
+recusado. Outras palavras-chave: aviso, e descartadas como o ngspice
+descarta. Num subcircuito multiplicado por um `m` de linha `X`: recusado
+(a ordem entre `inp_fix_subckt_multiplier` e `inp_compat` decide qual
+`m` vence; não sondado).
+
+**Entrada hostil.** Limites aplicados durante a construção da árvore,
+nó a nó (cada subárvore leva profundidade e contagem): texto ≤
+`pexpr::MAX_LEN` (64 KiB), parênteses/chamadas/sinais aninhados ≤ 100
+(`MAX_NEST`, a recursão do parser), profundidade ≤ `EXPR_MAX_DEPTH` − 4
+= 508 e nós ≤ `EXPR_MAX_NODES` − 8 = 9992 (a margem é do que
+`elements` põe em volta); `min`/`max`/`pwr` checam antes de clonar.
+Nenhuma árvore além dos limites é construída, percorrida ou destruída
+(a cadeia à esquerda `a+a+…` crescia um nível por termo). Teste
+`behav::tests::hostile_expressions_are_bounded` (cadeia de 1e6 termos,
+1e5 parênteses, 1e4 chamadas, cadeia de `^`, numa thread de 2 MiB — a
+recursão de 100 níveis passa de 1 MiB em debug); sementes de fuzz
+`behav_*.cir` no corpus do `parse_deck` e os cartões R/C/L dos decks
+`behav_*` no `fuzz_smoke`.
+
+Decks `regress/behav_{op,dc,ac,tran}` (goldens do ngspice-47, margens
+0,000); sondas `behav.cases`/`behav2.cases` em
+`.claude/scratch/dev-probes/s3`.
+
+**PDKs.** Os 24 usos do sky130 (`res_high_po_*`, `res_xhigh_po*`,
+`cap_var_*`, `nfet_20v0*` e parentes) e os 4 do gf180
+(`nmos/pmos_10p0_asym`, `nplus_u` …) continuam sem rodar, agora por
+outros motivos: todos dependem de `.param` com `temper` (G7, recusado no
+parser de parâmetros) e os resistores do sky130 trazem `tc1`/`tc2`
+diferentes de zero (bancada `.claude/scratch/dev-probes/s3/
+sky130_behav_dc.cir`: "`temper` in parameter expressions is not
+supported yet", depois "tc1 on a behavioural R/C/L is not supported
+yet"). As funções que eles usam (`min`, `max`, `pow`, `pwr`, `**`,
+`abs`, `log`, `cosh`, `tanh`, `exp`, `sqrt`) já são aceitas.
+
+## Valores por palavra-chave em R, C e L
+
+O ngspice-47 aceita `r=` (sinônimo de `resistance=`), `c=`
+(`capacitance=`) e `l=` (`inductance=`) com valor numérico; o
+`INPdevParse` os aplica depois do valor posicional, então a palavra-chave
+vence (`r1 a b 3k r=2k` dá 2 kΩ; sondas `kw.cases` em
+`.claude/scratch/dev-probes/s3`). O Dune faz igual (antes: "resistor has
+no value" para `r=`, `c=` e `l=`, e o valor posicional ficava). `tc1`/`tc2` de instância num R substituem os do
+modelo (`restemp.c`); num C ou L, diferentes de zero, são recusados (o
+núcleo não tem temperatura nesses dois; antes eram ignorados com nota).
+Num C, `l=`/`w=` seguem sendo a geometria. Decks `regress/rlc_kw_{op,ac}`.
 
 ## Pendências conhecidas
 
