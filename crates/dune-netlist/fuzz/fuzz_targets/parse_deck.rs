@@ -39,6 +39,15 @@ fuzz_target!(|data: &[u8]| {
     let _ = dune_netlist::parse_expr(&text);
     let card = format!("t\nb1 1 0 v={}\n.end\n", text.replace(['\n', '\r'], " "));
     let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), card, &mut NoFs);
+    // Parameter expressions (`pexpr.rs`): the bytes as a `.param`
+    // body, inside `{…}` as a global value and an element value, and
+    // as a bare value after `=` on a `.model`.
+    let line = text.replace(['\n', '\r'], " ");
+    let params = format!(
+        "t\n.param p=2\n.param {line}\n.param q={{{line}}}\nr1 1 0 {{{line}}}\n\
+         .model m r rsh={line}\nv1 2 0 {{q}}\n.end\n"
+    );
+    let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), params, &mut NoFs);
     let _ =
         dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), text.clone(), &mut NoFs);
     let _ = dune_netlist::parse_with_loader(

@@ -1,0 +1,24 @@
+parameter expression functions of ngspice-47
+* written for Dune (G2 of docs/pdk-parser.md); each function was probed
+* in ngspice-47 (docs/dune-netlist.md, probe c3). log is natural,
+* pwr raises the magnitude, nint rounds half to even.
+.param x=2 mc=0
+v1 1 0 {sqrt(x) + abs(-2.5) + min(3,1) + max(3,4) + sqr(3)}
+r1 1 0 1k
+v2 2 0 {pow(-2,3) + pwr(-2,3) + pwr(-8,1/3) + pow(x,0.5)}
+r2 2 0 1k
+v3 3 0 {exp(1) + log(100) + ln(x) + log10(1000)}
+r3 3 0 1k
+v4 4 0 {floor(-2.5) + ceil(-2.5)*10 + int(-2.7)*100 + nint(2.5)*1000 + nint(-2.5)*1e4 + nint(3.5)*1e5}
+r4 4 0 1k
+v5 5 0 {sgn(-3) + sgn(0)*10 + ternary_fcn(x>1, 7, 9)*100}
+r5 5 0 1k
+v6 6 0 {sin(1) + cos(1) + tan(1) + asin(0.5) + acos(0.5) + atan(x)}
+r6 6 0 1k
+v7 7 0 {sinh(1) + cosh(1) + tanh(1) + asinh(1) + acosh(x) + atanh(0.5)}
+r7 7 0 1k
+* sky130's Monte Carlo switch: random terms multiplied by zero
+v8 8 0 {1.5 + mc*agauss(0, 0.1, 3) + mc*aunif(1, 0.5) + 0*gauss(1, 0.1, 1)}
+r8 8 0 1k
+.op
+.end

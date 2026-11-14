@@ -134,6 +134,57 @@ fn mutated_expressions_never_panic() {
     }
 }
 
+/// Parameter expressions (`.param`, `{…}`, `'…'`, bare after `=`):
+/// PDK-shaped seeds mutated with the language's alphabet, on `.param`
+/// cards, element and model values.
+#[test]
+fn mutated_parameter_expressions_never_panic() {
+    let seeds: &[&str] = &[
+        ".param a=1 b='a*2' c={b+1}, d=max(a, b) e=agauss(1,0.1,3)",
+        ".param mc=0 x={ mc*agauss(0, 1e-9, 3) + sqrt(abs(-2))*1.5u }",
+        ".param p=(1>0) ? 2 : 3 q='p==2 && !0 || p!=3 ? -2^2 : 2**-1'",
+        "r1 1 0 rm l={ max(1u, 2*p) } w='1u*(p>1?2:1)' m=p",
+        ".model rm r rsh=p*2 tc1 = 'p<>3' tc2={\"-p/2\"} dw=pwr(-2,3)",
+        "v1 1 0 dc { nint(2.5)+int(-2.7)+floor(1.1k)%7+ternary_fcn(1,2,3) }",
+        ".param z={1/0} y={1/z} t={temper} f={nosuch(1)} g={1?0?1:2:3}",
+    ];
+    let mut rng = Rng(0x9a7a_5eed_e4e5_0001);
+    let alphabet: &[u8] = b"(){}'\"+-*/%^!=<>&|?:,. \t0123456789eEkKmMuUxagsqrtpwbin_$;";
+    for round in 0..3000 {
+        let mut bytes = seeds[round % seeds.len()].as_bytes().to_vec();
+        for _ in 0..1 + rng.below(6) {
+            match rng.below(4) {
+                0 if !bytes.is_empty() => {
+                    let i = rng.below(bytes.len());
+                    bytes[i] = alphabet[rng.below(alphabet.len())];
+                }
+                1 => {
+                    let i = rng.below(bytes.len() + 1);
+                    let j = rng.below(alphabet.len());
+                    bytes.splice(i..i, alphabet[j..].iter().copied().take(1 + rng.below(4)));
+                }
+                2 if bytes.len() > 2 => {
+                    let i = rng.below(bytes.len());
+                    bytes.truncate(i);
+                }
+                _ => {
+                    if !bytes.is_empty() {
+                        let i = rng.below(bytes.len());
+                        let len = rng.below(32).min(bytes.len() - i);
+                        let slice: Vec<u8> = bytes[i..i + len].to_vec();
+                        let at = rng.below(bytes.len() + 1);
+                        bytes.splice(at..at, slice);
+                    }
+                }
+            }
+        }
+        let card = String::from_utf8_lossy(&bytes).into_owned();
+        parse(format!(
+            "t\n.param p=2 mc=0\n{card}\nv9 9 0 {{p}}\n.model rx r rsh=p\n.end\n"
+        ));
+    }
+}
+
 #[test]
 fn pure_noise_never_panics() {
     let mut rng = Rng(0xdead_beef_0bad_f00d);
@@ -151,8 +202,26 @@ fn pathological_shapes_terminate() {
         "t\n.param x={}1\nr1 1 0 {{x}}\n.end\n",
         "-".repeat(500)
     ));
-    // Expression over the length cap.
-    parse(format!("t\n.param x={}\n.end\n", "1+".repeat(400)));
+    // Expression over the length cap (64 KiB), and just under it.
+    parse(format!("t\n.param x={{{}1}}\n.end\n", "1+".repeat(40_000)));
+    parse(format!("t\n.param x={{{}1}}\nr1 1 0 {{x}}\n.end\n", "1+".repeat(30_000)));
+    // Parameter-expression nesting at and past the bound, through
+    // every construct that recurses; quotes and braces as groups.
+    for expr in [
+        format!("{}1{}", "(".repeat(5000), ")".repeat(5000)),
+        format!("{}1{}", "{".repeat(5000), "}".repeat(5000)),
+        format!("{}1", "!".repeat(5000)),
+        format!("{}3", "1?2:".repeat(5000)),
+        format!("{}1{}", "abs(".repeat(3000), ")".repeat(3000)),
+        format!("{}1{}", "'(".repeat(2000), ")'".repeat(2000)),
+        vec!["2"; 20_000].join("^"),
+        vec!["x"; 20_000].join("+"),
+    ] {
+        parse(format!("t\n.param x=1\n.param y={{{expr}}}\nr1 1 0 {{{expr}}}\n.end\n"));
+    }
+    // Unclosed delimiters swallowing the rest of a long card.
+    parse(format!("t\nr1 1 0 {}\n.end\n", "{".repeat(50_000)));
+    parse(format!("t\n.param {}\n.end\n", "a='".repeat(20_000)));
     // Thousands of continuations.
     parse(format!("t\nr1 1 0 1k\n{}", "+ 1\n".repeat(5000)));
     // A card with a huge number and absurd exponent.

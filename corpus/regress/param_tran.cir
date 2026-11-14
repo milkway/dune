@@ -1,0 +1,10 @@
+parameter expressions in sources, elements and the .tran card
+* written for Dune (G2 of docs/pdk-parser.md); values substituted the
+* way ngspice-47 substitutes them (%.15e text, probes c7 and c9)
+.param vdd=1.8 tr={20p*5} pw='2n - tr' per={2*(pw+2*tr)}
+.param rval={ 2k/2 } cval=1p tstop={2*per} tstep={tstop/400}
+vin 1 0 pulse(0 {vdd} 0 {tr} {tr} {pw} {per})
+r1 1 2 {rval}
+c1 2 0 {cval*(1+0.5*(vdd>1))}
+.tran {tstep} {tstop}
+.end

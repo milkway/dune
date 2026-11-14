@@ -1,0 +1,31 @@
+parameter definitions and the forms of a parameter value
+* written for Dune (G2 of docs/pdk-parser.md); behaviour probed in
+* ngspice-47 (docs/dune-netlist.md, probes c4, c5, c6, c10)
+* forward reference: a is defined from b, defined later
+.param a={b+1}
+* several per line, comma, quotes, braces with blanks, continuation
+.param b=2, c='a*2' d={ c + 1 }
++ e=max(a, 4) f=1mil g=2a
+* last definition wins, also for uses that come before it
+.param h=1
+.param k={h*10}
+.param h=5
+.PARAM RV = 7 wv=2
+v1 1 0 {a}
+r1 1 0 1k
+v2 2 0 { d + e*10 }
+r2 2 0 1k
+v3 3 0 '(f + g*1e15)*1e3'
+r3 3 0 1k
+v4 4 0 dc=k
+r4 4 0 1k
+* bare names and expressions as .model and instance values; double
+* quotes vanish from card expressions (sky130 writes dw = {"…"})
+.model rm r rsh={"rv*2-"wv/2} tc1=rv*0
+v5 5 0 1
+r5 5 0 rm l=10 w=wv
+.model rq r(rsh = ' rv * 3 ' )
+v6 6 0 1
+r6 6 0 rq l=1 w=wv
+.op
+.end

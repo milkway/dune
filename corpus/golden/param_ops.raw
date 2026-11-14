@@ -1,0 +1,37 @@
+Title: parameter expression operators: precedence, signs, ternary, logic
+Date: Sat Nov 14 10:26:48  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 14
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(5)	voltage
+	5	v(6)	voltage
+	6	v(7)	voltage
+	7	i(v7)	current
+	8	i(v6)	current
+	9	i(v5)	current
+	10	i(v4)	current
+	11	i(v3)	current
+	12	i(v2)	current
+	13	i(v1)	current
+Values:
+0		1.200000000000000e+01
+	8.500000000000000e+00
+	9.500000000000000e+00
+	1.000000000000000e+00
+	2.500000000000000e+01
+	1.001000000000000e+03
+	2.001000000000000e+03
+	-2.001000000000000e+00
+	-1.001000000000000e+00
+	-2.500000000000000e-02
+	-1.000000000000000e-03
+	-9.500000000000000e-03
+	-8.500000000000001e-03
+	-1.200000000000000e-02

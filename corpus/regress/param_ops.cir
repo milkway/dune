@@ -1,0 +1,29 @@
+parameter expression operators: precedence, signs, ternary, logic
+* written for Dune (G2 of docs/pdk-parser.md); each value was probed in
+* ngspice-47 (docs/dune-netlist.md, probes c1, c2 and c8)
+.param a=2
+* + - * / left-associative: 14 - 2 = 12
+v1 1 0 {2+3*4-8/2/2}
+r1 1 0 1k
+* unary minus looser than ^ at the start, -2 a literal after an
+* operator, ** = ^: -4 + 12 + 0.5
+v2 2 0 {-2^2 + 3*-2^2 + 2**-1}
+r2 2 0 1k
+* ^ raises the magnitude of the base, % is fmod: 8 + 1.5
+v3 3 0 {(-2)^3 + 7.5%2}
+r3 3 0 1k
+* comparisons are one left-associative level below + -, && binds
+* tighter than ||: (2==1)<3 is 1
+v4 4 0 { 1+1==2 && 2==1<3 || 0 }
+r4 4 0 1k
+* ?: is right-associative and loosest: 5 + 2*10
+v5 5 0 {(0?2:0?4:5) + (1+1?2:3)*10}
+r5 5 0 1k
+* ! binds tightest: (!2)^0 = 1, !5 = 0, 3>2>1 = 0
+v6 6 0 {!2^0 + !5*10 + (3>2>1)*100 + (1<>2)*1000}
+r6 6 0 1k
+* a quoted expression with blanks; a negative literal after ^
+v7 7 0 ' (a > 1) ? a*1k + a^-2*4 : (-a) '
+r7 7 0 1k
+.op
+.end
