@@ -32,8 +32,9 @@ produz diagnóstico com span, nunca pânico, nunca loop infinito.
   de coleta de nomes de `.model`, como `inppas1.c`).
 - **Cartões ponto** (`dot.rs` ← `inp2dot.c`): despacho por igualdade
   exata do keyword; `.ic`/`.nodeset` leem `v(n)=val` como os tokens
-  `v n val`; `.noise` idem para `v(out,ref)`; `.temp` e `.width`
-  recebem os mesmos avisos de obsoleto do C; `.print/.plot/.save/
+  `v n val`; `.noise` idem para `v(out,ref)`; `.width` recebe o
+  mesmo aviso de obsoleto do C; `.temp` segue o ngspice-47 (seção
+  abaixo); `.print/.plot/.save/
   .four` são parseados para a IR (no 3f5 viviam no frontend,
   `fte/dotcards.c`); o `.four` exige frequência positiva e finita
   (erro com span) e é executado pela camada `four` do `dune-core`
@@ -95,6 +96,36 @@ Registradas também em `corpus/KNOWN_DIFFS.md` quando observáveis:
    subcircuito" abaixo).
 7. **Fonte `B`**: ver a seção própria abaixo (expressões com as
    extensões mínimas do ngspice onde o 3f5 rejeita ou mutila).
+
+## Cartão `.temp` (`dot.rs::dot_temp` ← `inp_spsource` do ngspice-47)
+
+O 3f5 ignorava o cartão ("Warning: .TEMP card obsolete - use .options
+TEMP and TNOM", `inp2dot.c`; o `spice.txt` nem o lista). O ngspice-47
+o aplica (`frontend/inp.c`, Modified BSD), e o Dune segue o observado
+(sondas `temp*.cases` em `.claude/scratch/fix-probes/`):
+
+- `.temp T`, `.temp=T` e `.temp = T` são o mesmo cartão; o valor vira a
+  opção `temp` (°C) **depois** de todos os `.options`, então ganha de
+  `.options temp=` em qualquer posição (`t_opt_card`, `t_card_opt`), e o
+  último `.temp` vence (`t_last`). Na IR: um `Param` `temp` no fim de
+  `Netlist::options`, com o span do cartão.
+- Expressões `{…}`/`'…'` valem (`t_expr`, `t_quote`); nome solto não
+  (`t_param_bare`).
+- O resto da linha precisa ser **um** número de `strtod`: sem sufixo de
+  escala (`0.127k`), sem lista (`77 127`, `77, 127`). Fora disso o
+  ngspice avisa "Could not set temperature to …" e roda a 27 °C,
+  passando por cima de `.options temp` (`t_multi`, `t_multi_opt`,
+  `t_text`); o Dune faz o mesmo com aviso com span que diz que lista
+  não é varrida (nem o ngspice reroda por temperatura).
+- `TNOM`, `TEMP=`/`DTEMP=` de instância e `.dc temp` mantêm o sentido
+  (`t_tnom`, `t_itemp`, `t_dtemp`, `t_dc`: a varredura manda durante o
+  `.dc` e o `.temp` volta depois).
+- Recusados (o ngspice segue): cartão vazio (`strtod("")` dá 0 °C,
+  `t_empty`), valor não finito (`inf` faz o op falhar em todos os
+  degraus, `t_inf`) e `.temp` dentro de `.subckt` (o ngspice o aplica ao
+  circuito inteiro quando o subcircuito é instanciado e o ignora quando
+  não é, `t_subckt`, `t_sub_unused`): erro com span pedindo o nível de
+  topo.
 
 ## Bibliotecas `.lib` (`deck.rs` ← `expand_section_ref` do ngspice-47)
 

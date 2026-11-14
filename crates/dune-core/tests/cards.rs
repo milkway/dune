@@ -177,3 +177,15 @@ fn keepopinfo_dumps_the_operating_point_first() {
     assert_eq!(names, ["AC Operating Point", "AC Analysis"]);
     assert!(close(real(&p[0], "v(2)")[0], 0.5));
 }
+
+#[test]
+fn temp_card_sets_the_circuit_temperature() {
+    // `.temp` wins over `.options temp` wherever it stands
+    // (fix-probes t_opt_card, t_card_opt): factor 1 + 0.01·100.
+    for order in [".options temp=77\n.temp 127", ".temp 127\n.options temp=77"] {
+        let (p, _) = run(&format!(
+            "t\nv1 1 0 1\nr1 1 0 rm 1k\n.model rm r tc1=0.01\n{order}\n.op\n.end\n"
+        ));
+        assert!(close(real(&p[0], "i(v1)")[0], -1.0 / 2000.0), "{order}");
+    }
+}

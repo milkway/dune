@@ -583,7 +583,7 @@ c1 2 0 1n
 d1 2 0 dm
 .model dm d is=1e-14
 .options reltol=1e-4
-.temp 27
+.width in=80
 .op
 .ac dec 5 1k 1meg
 .tran 0.2u 10u
@@ -599,7 +599,8 @@ fn session_run_is_the_fresh_run_of_the_altered_deck() {
         s.run().unwrap().to_json(),
         run(RC_AMP, &SimOptions::default()).unwrap()
     );
-    // `.temp` is obsolete: the warning rides along on every run.
+    // `.width` without `out=` is inert: the warning rides along on
+    // every run.
     assert!(!s.run().unwrap().diagnostics.is_empty());
 
     s.alter("R1", "", AlterValue::Num(2048.0)).unwrap();

@@ -765,3 +765,60 @@ fn option_scale_folds_into_the_geometry_s6() {
     let e = errors(&parse(".option scale=0\nr1 1 0 1"));
     assert!(e[0].contains("must be a positive number"), "{e:?}");
 }
+
+#[test]
+fn temp_card_sets_the_temperature() {
+    // fix-probes temp*.cases: the last `.temp` wins over every
+    // `.options temp`, with or without `=`, expressions allowed.
+    let temp = |deck: &str| {
+        let out = parse(deck);
+        assert!(errors(&out).is_empty(), "{deck}: {:?}", out.diags);
+        let warned = out.diags.iter().any(|d| d.severity == Severity::Warning);
+        let t = out
+            .netlist
+            .options
+            .iter()
+            .rev()
+            .find(|p| p.name == "temp")
+            .map(|p| p.value.clone());
+        (t, warned)
+    };
+    let num = |v: f64| (Some(ParamValue::Num(v)), false);
+    assert_eq!(temp("r1 1 0 1"), (None, false));
+    assert_eq!(temp(".temp 127\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".temp=127\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".TEMP = 1.27e2\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".temp 77\n.temp 127\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".options temp=77\n.temp 127\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".temp 127\n.options temp=77\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".param t=100\n.temp {t+27}\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".param t=127\n.temp 't'\nr1 1 0 1"), num(127.0));
+    assert_eq!(temp(".temp -300\nr1 1 0 1"), num(-300.0));
+    assert_eq!(temp(".temp 0x10\nr1 1 0 1"), num(16.0));
+    // Not one plain number: ngspice warns and uses 27 °C.
+    let fallback = (Some(ParamValue::Num(27.0)), true);
+    for card in [
+        ".temp 77 127",
+        ".temp 77, 127",
+        ".temp 0.127k",
+        ".temp hot",
+        ".param a=1\n.temp {a} 127",
+        ".options temp=77\n.temp 0 50",
+    ] {
+        assert_eq!(temp(&format!("{card}\nr1 1 0 1")), fallback, "{card}");
+    }
+    // Refused: empty, non-finite, inside a subcircuit.
+    for (deck, what) in [
+        (".temp\nr1 1 0 1", "needs a temperature"),
+        (".temp =\nr1 1 0 1", "needs a temperature"),
+        (".temp inf\nr1 1 0 1", "not a finite"),
+        (".temp 1e999\nr1 1 0 1", "not a finite"),
+        (
+            ".subckt s a\n.temp 50\nr1 a 0 1\n.ends\nx1 1 s",
+            "top level",
+        ),
+    ] {
+        let e = errors(&parse(deck));
+        assert!(e.iter().any(|m| m.contains(what)), "{deck}: {e:?}");
+    }
+}

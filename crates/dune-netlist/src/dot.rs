@@ -59,12 +59,16 @@ impl DotCtx<'_> {
 
 /// Parse one non-structural dot card into `nl`. Returns `false` when
 /// the keyword is not recognized here.
+/// `temp` collects the value of the last `.temp` card (see
+/// [`dot_temp`]); the caller appends it to the options after the
+/// whole deck is read.
 pub(crate) fn parse_dot(
     keyword: &str,
     card: &Card,
     diags: &mut Vec<Diagnostic>,
     env: &ParamEnv,
     nl: &mut Netlist,
+    temp: &mut Option<Param>,
 ) -> bool {
     let mut ctx = DotCtx { card, diags, env };
     let span = card.span();
@@ -99,10 +103,136 @@ pub(crate) fn parse_dot(
                 nl.measures.push(m);
             }
         }
-        ".temp" => ctx.warn(span, ".temp card obsolete - use .options temp and tnom"),
+        ".temp" => {
+            if let Some(p) = dot_temp(&mut ctx) {
+                *temp = Some(p);
+            }
+        }
         _ => return false,
     }
     true
+}
+
+/// `.temp T` / `.temp=T`: the circuit temperature in °C, as
+/// ngspice-47 reads the card (`inp_spsource`, `frontend/inp.c`,
+/// Modified BSD; probes `fix-probes/temp*.cases`). The 3f5 ignored it
+/// with "Warning: .TEMP card obsolete - use .options TEMP and TNOM"
+/// (`inp2dot.c`); ngspice takes the rest of the line after an
+/// optional `=` (parameter expressions already substituted) and sets
+/// the `temp` option after the circuit is built, so the card wins
+/// over `.options temp=` wherever that stands (`t_opt_card`,
+/// `t_card_opt`) and the last `.temp` wins (`t_last`). The value
+/// must be exactly one number for `strtod` — no SPICE scale suffix
+/// (`t_suffix_k`) and no list (`t_multi`): otherwise ngspice warns
+/// "Could not set temperature to …" and uses 27 °C, overriding
+/// `.options temp` (`t_multi_opt`), which Dune reproduces with a
+/// warning — a list is never swept. Refused here, where ngspice goes
+/// on: an empty card (ngspice's `strtod("")` makes it 0 °C,
+/// `t_empty`) and a non-finite value (`t_inf`: ngspice fails every
+/// operating-point step).
+fn dot_temp(ctx: &mut DotCtx) -> Option<Param> {
+    let card = ctx.card;
+    let span = card.span();
+    let text = card.text.as_str();
+    let b = text.as_bytes();
+    let blank = |c: u8| c == b' ' || c == b'\t';
+    let mut p = 0;
+    while p < b.len() && blank(b[p]) {
+        p += 1;
+    }
+    p = (p + ".temp".len()).min(b.len());
+    while p < b.len() && blank(b[p]) {
+        p += 1;
+    }
+    if p < b.len() && b[p] == b'=' {
+        p += 1;
+        while p < b.len() && blank(b[p]) {
+            p += 1;
+        }
+    }
+    let rest = text[p..].trim_end();
+    if rest.is_empty() {
+        ctx.err(span, ".temp needs a temperature in °C");
+        return None;
+    }
+    let rest_span = card.span_of(p, p + rest.len());
+    let value = if rest.starts_with('{') || rest.starts_with('\'') {
+        let mut sc = Scanner::new(card);
+        sc.seek(p);
+        let tok = sc.next_tok()?;
+        let tail = text[tok.end..].trim();
+        let base = tok.start;
+        match ctx
+            .env
+            .eval_value(tok.text, &|s, e| card.span_of(base + s, base + e))
+        {
+            Ok(v) if tail.is_empty() => Some(v),
+            Ok(_) => None,
+            Err(diag) => {
+                ctx.diags.extend(diag);
+                return None;
+            }
+        }
+    } else {
+        strtod_whole(rest)
+    };
+    let value = match value {
+        Some(v) if v.is_finite() => v,
+        Some(v) => {
+            ctx.err(rest_span, format!(".temp {v} is not a finite temperature"));
+            return None;
+        }
+        None => {
+            let list = rest
+                .split([' ', '\t', ','])
+                .filter(|s| !s.is_empty())
+                .count()
+                > 1;
+            ctx.warn(
+                rest_span,
+                format!(
+                    "could not set the temperature to `{rest}`: ngspice-47 reads one plain \
+                     number here and falls back to 27 °C{}",
+                    if list {
+                        " (a temperature list is not swept; use .dc temp or one run per value)"
+                    } else {
+                        ""
+                    }
+                ),
+            );
+            27.0
+        }
+    };
+    Some(Param {
+        name: "temp".to_string(),
+        value: ParamValue::Num(value),
+        span,
+    })
+}
+
+/// The whole of `s` read as one C `strtod` number: decimal with an
+/// optional exponent (`f64::from_str`, which takes `inf` and `nan`
+/// as `strtod` does) or a hexadecimal integer `0x…` (`t_hex`).
+fn strtod_whole(s: &str) -> Option<f64> {
+    if let Ok(v) = s.parse::<f64>() {
+        return Some(v);
+    }
+    let (neg, body) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let hex = body
+        .strip_prefix("0x")
+        .or_else(|| body.strip_prefix("0X"))?;
+    if hex.is_empty() {
+        return None;
+    }
+    let mut v = 0.0_f64;
+    for c in hex.chars() {
+        v = v * 16.0 + f64::from(c.to_digit(16)?);
+    }
+    Some(if neg { -v } else { v })
 }
 
 fn variation(tok: &str) -> Option<Variation> {

@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::deck::{self, Card, Deck, IncludeLoader};
 use crate::diag::Diagnostic;
 use crate::elem::{ElemCtx, parse_element};
-use crate::ir::{Model, Netlist, ParamValue};
+use crate::ir::{Model, Netlist, Param, ParamValue};
 use crate::param::{ParamDef, ParamEnv};
 use crate::scan::Scanner;
 use crate::span::SourceMap;
@@ -141,6 +141,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     let mut in_control = false;
     let mut saw_end = false;
     let mut after_end = 0usize;
+    // The last `.temp` card: set after every `.options` (ngspice-47
+    // applies it once the circuit exists, `frontend/inp.c`).
+    let mut temp_card: Option<Param> = None;
 
     for card in &cards {
         let kw = first_keyword(card);
@@ -238,11 +241,25 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
             }
             k if k.starts_with('.') => {
                 if !stack.is_empty() {
-                    all_diags.push(Diagnostic::error(
-                        format!("{k} is not allowed inside .subckt"),
-                        span,
-                    ));
-                } else if !crate::dot::parse_dot(k, card, &mut all_diags, &env, &mut nl) {
+                    let msg = if k == ".temp" {
+                        // ngspice-47 sets the circuit temperature from
+                        // it when the subcircuit is instantiated
+                        // (probes `t_subckt`, `t_sub_unused`).
+                        ".temp inside .subckt is not supported; ngspice-47 applies it to the \
+                         whole circuit when the subcircuit is used: move it to the top level"
+                            .to_string()
+                    } else {
+                        format!("{k} is not allowed inside .subckt")
+                    };
+                    all_diags.push(Diagnostic::error(msg, span));
+                } else if !crate::dot::parse_dot(
+                    k,
+                    card,
+                    &mut all_diags,
+                    &env,
+                    &mut nl,
+                    &mut temp_card,
+                ) {
                     all_diags.push(Diagnostic::error(
                         format!("unknown control card `{k}`"),
                         span,
@@ -290,6 +307,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
         )));
     }
 
+    nl.options.extend(temp_card);
     crate::subckt::mark_multiplied(&mut top);
     let option = |name: &str| {
         nl.options

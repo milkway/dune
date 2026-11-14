@@ -1175,6 +1175,11 @@ porque o consumidor é outro crate (`dune-wasm`).
 - **Ruído do R** e **`.sens` do R**: ver as seções de ruído e de
   `.sens` acima (contratos com arquivo/linha; sondas
   `regress/rnoisetemp`, `regress/sens_rtemp`).
+- **Cartão `.temp`** (2026-11-14): o parser o entrega como a opção
+  `temp` no fim de `Netlist::options` (detalhes e sondas em
+  `docs/dune-netlist.md`); o núcleo não muda — `Options::temp` vem
+  dele como de um `.options temp=` que viesse por último. Decks
+  `regress/temp_card_{op,dc,list}`.
 
 ## Ruptura do diodo (2026-11-08)
 

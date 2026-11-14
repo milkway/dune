@@ -1,0 +1,23 @@
+.temp card: the circuit temperature of the whole deck
+* written for Dune: ngspice-47 applies `.temp` (the 3f5 ignored it as
+* obsolete); it wins over `.options temp` wherever that stands, while
+* TNOM and the instance TEMP=/DTEMP= keep their meaning (probes
+* temp*.cases in .claude/scratch/fix-probes)
+.options temp=77
+.model rm r tc1=1e-3 tc2=1e-6
+.model dm d is=1e-14 rs=5
+.model qm npn is=1e-15 bf=100 rb=20
+i1 0 1 1m
+r1 1 0 rm 1k
+i2 0 2 1m
+d1 2 0 dm
+i3 0 3 1m
+d2 3 0 dm dtemp=10
+i4 0 4 1m
+d3 4 0 dm temp=50
+vc 5 0 2
+ib 0 6 10u
+q1 5 6 0 qm
+.temp 127
+.op
+.end
