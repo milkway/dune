@@ -43,7 +43,7 @@ impl DotCtx<'_> {
         let span = sc.span(&tok);
         let text = tok.lc();
         sc.next_tok();
-        match self.env.eval_brace(&text) {
+        match self.env.eval_use(&text) {
             Ok(v) => Some(v),
             Err(e) => {
                 self.err(span, e);
