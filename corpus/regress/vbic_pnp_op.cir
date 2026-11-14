@@ -1,0 +1,18 @@
+VBIC pnp self-heating operating point that ngspice-47 gets wrong, pinned
+* Coverage: the self-heating stamps of vbicload.c for a pnp, ported as
+* written (docs/vbic.md, Fidelidade): the Ith row of the thermal node
+* takes the polarity-normalised branch voltages as if they were node
+* voltages (no VBICtype factor), so the operating point of a pnp with
+* RTH > 0 is not the solution of the device equations: this one warms by
+* ~8.5 K where its dissipation (~0.6 mW into RTH = 300 K/W) gives
+* ~0.2 K. (A pnp with excess phase, TD > 0, has the same kind of slip
+* in its xf stamps, but there the iteration lands on path-dependent
+* points: ngspice's .dc sweep of it does not finish, so it has no deck.)
+* Written for the Dune port of ngspice-47's vbic model.
+vcp cp 0 dc -0.2
+ibp bp 0 dc 50u
+q1 cp bp 0 0 dtp ph
+.model ph pnp (level=4 is=5e-17 ibei=5e-19 iben=2e-15 ibci=1e-17 ibcn=1e-15
++ vef=30 ver=4 ikf=20e-3 rcx=3 rci=15 rbx=15 rbi=50 re=1 rth=300 xre=1)
+.op
+.end

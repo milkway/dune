@@ -62,6 +62,7 @@ mod tf;
 mod tra;
 mod tran;
 mod trnoise;
+mod vbic;
 mod vdmos;
 
 pub use ac::{Ac, AcSweep};
@@ -74,8 +75,8 @@ pub use bsim3::Bsim3Model;
 pub use circuit::Bsim3;
 pub use circuit::{
     Asrc, Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra,
-    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vccs, Vcvs,
-    Vdmos, Vsource,
+    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vbic, Vccs,
+    Vcvs, Vdmos, Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
@@ -114,4 +115,5 @@ pub use sweep::{SweepOutput, SweepParam, SweepRun, sweep};
 pub use switch::{CswModel, SwModel};
 pub use tf::{OutputVar, Tf};
 pub use tran::Tran;
+pub use vbic::VbicModel;
 pub use vdmos::{VdmosModel, VdmosSoa};

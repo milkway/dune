@@ -1,0 +1,30 @@
+VBIC Gummel plot: npn and pnp, ideal/non-ideal junctions, knee, substrate
+* Coverage: base-emitter sweep at fixed collector bias of a level-4 npn
+* VBIC with all ohmic resistances (RCX/RCI/RBX/RBI/RE/RS/RBP), ideal and
+* non-ideal B-E and B-C currents (IBEI/NEI, IBEN/NEN, IBCI/NCI,
+* IBCN/NCN, WBE splitting IBEI between Vbei and Vbex), Early voltages,
+* high injection (IKF/NKF, IKR), Kull's epi resistance (VO/GAMM/HRCF)
+* and the parasitic substrate transistor; a level-9 pnp with the SGP
+* charge (QBM=1) mirrored through an E source; a third device on three
+* nodes (substrate and thermal node tied to ground by INP2Q). Written
+* for the Dune port of ngspice-47's vbic model.
+vb b 0 dc 0.6
+vc c 0 dc 2
+vs s 0 dc 0
+q1 c b 0 s nv
+ebp bp 0 b 0 -1
+vcp cp 0 dc -2
+vsp sp 0 dc 1
+q2 cp bp 0 sp pv
+vc3 c3 0 dc 1
+q3 c3 b 0 nv area=2 m=1.5
+.model nv npn (level=4 is=1e-16 nf=1.0 nr=1.0 ibei=1e-18 nei=1 iben=1e-15 nen=2
++ ibci=2e-17 nci=1.01 ibcn=5e-15 ncn=2 vef=50 ver=5 ikf=5e-3 ikr=5e-4 nkf=0.5
++ rcx=10 rci=50 vo=1.5 gamm=2e-11 hrcf=1 rbx=20 rbi=80 re=2 rs=40 rbp=100
++ isp=1e-17 wsp=1 nfp=1 ibeip=1e-19 ibenp=1e-16 ibcip=1e-18 ncip=1 ibcnp=1e-15
++ ncnp=2 ikp=1e-4 wbe=0.9)
+.model pv pnp (level=9 is=5e-17 ibei=5e-19 iben=2e-15 ibci=1e-17 ibcn=1e-15
++ vef=30 ver=4 ikf=2e-3 rcx=15 rci=80 vo=1 gamm=1e-11 rbx=30 rbi=100 re=3 qbm=1
++ isp=1e-17 ibcip=1e-18 ikp=1e-4)
+.dc vb 0.3 1.1 0.01
+.end

@@ -1,0 +1,24 @@
+VBIC noise: seven resistors, four shot sources, two flicker sources
+* Coverage: .noise of a common-emitter npn stage whose card has every
+* resistance (thermal noise of RCX, RCI, RBX, RBI, RE, RBP and RS at the
+* instance temperature: the device has DTEMP=10), shot noise of Iciei,
+* Ibe, Ibep and Iccp (the parasitic transistor biased through a
+* collector near saturation), and the B-E and parasitic B-E flicker
+* noise KFN*|I/M|^AFN/f^BFN with M=2. As in vbicnoise.c, the RBP source
+* sits across the emitter resistance (emitEI to emit) and the RS and
+* ICCP sources are left out of the density total while their integrals
+* count. Written for the Dune port of ngspice-47's vbic model.
+vcc vcc 0 dc 3
+vin in 0 dc 0.8 ac 1
+rs in b 100
+q1 c b e s nn m=2 dtemp=10
+vs s 0 dc 0
+re e 0 10
+rc vcc c 2k
+.model nn npn (level=4 is=1e-16 ibei=1e-18 iben=1e-15 ibci=2e-17 ibcn=5e-15
++ vef=50 ver=5 ikf=5e-3 ikr=5e-4 rcx=10 rci=50 vo=1.5 gamm=2e-11 hrcf=1 rbx=20
++ rbi=80 re=2 rs=40 rbp=100 isp=1e-16 wsp=1 ibeip=1e-17 ibenp=1e-15
++ ibcip=1e-17 ibcnp=1e-15 ikp=1e-3 cje=50f cjc=30f cjep=10f cjcp=80f tf=10p
++ kfn=1e-12 afn=1.2 bfn=1.1)
+.noise v(c) vin dec 10 10 10g 5
+.end

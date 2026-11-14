@@ -520,6 +520,18 @@ resultados espelhando o rawfile).
   sem `.sens` e sem SOA. Detalhes, mapa C→Rust e quirks portados em
   `docs/vdmos.md`; sondas `regress/vdmos_*` (11, todas PASS).
 
+- **VBIC** (`vbic/` ← `vbicload.c` — o `vbic_4T_et_cf_fj` traduzido
+  mecanicamente —, `vbictemp.c`, `vbicsetup.c`, `vbicmpar.c`,
+  `vbicacld.c`, `vbicpzld.c`, `vbicnoise.c`, `vbicconv.c`,
+  `vbictrunc.c`, `vbicgetic.c` do **ngspice-47**, contrato E oráculo):
+  bipolar VBIC 1.2 de 3 a 5 nós (`LEVEL=4`/`9` num cartão npn/pnp) com
+  quase-saturação de Kull, avalanche fraca, transistor parasita de
+  substrato, ruptura B-E, excesso de fase (`TD`, nós `xf1`/`xf2`) e
+  self-heating pelo 5º nó (`RTH`/`CTH`). Op/dc/ac/tran/noise/pz; sem
+  `.disto`/`.sens` (o C não tem) e sem SOA. Detalhes, mapa C→Rust e
+  quirks portados (estampas de pnp sem `VBICtype`) em `docs/vbic.md`;
+  sondas `regress/vbic_*` (13, todas PASS).
+
 - **Chaves S/W** (`switch.rs` ← `swload.c`/`cswload.c` do
   **ngspice-47** — o 3f5 tem outra máquina, ver KNOWN_DIFFS):
   um tipo só, controlado por par de nós (S) ou pela corrente de

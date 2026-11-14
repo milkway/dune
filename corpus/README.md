@@ -115,6 +115,8 @@ licença completos estão no `NOTICE` da raiz do repositório):
   `examples/vdmos/self-heating.sp` do ngspice-47 (valores térmicos e
   dissipador alterados, anotado nos decks); os demais `regress/vdmos_*`
   foram escritos para o Dune.
+- `regress/vbic_*.cir`: escritos para o Dune (cartões próprios, sem
+  modelo de fabricante).
 - `pss/osc_colpitts.cir`: circuito e cartão `.pss` do exemplo
   `examples/pss/colpitt_osc_pss.cir` do ngspice-47 (anotado no deck).
 - `regress/ltra_*_gear.cir`, `mosamp2_fine.cir`, `schmitt_fine.cir`,

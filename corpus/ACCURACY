@@ -7,3 +7,4 @@ ltra_1_gear|unmeasured|already runs at the refined step; gated against ngspice i
 ltra_3_gear|unmeasured|already runs at the refined step; gated against ngspice in the golden check
 tra_pulse|0.25|measured 0.18, close to the default cap
 uic_getic|0.25|measured 0.17, close to the default cap
+vbic_uic|0.4|measured 0.316 at TSTEP 0.5 ns: a UIC start sets only the junction voltages, the internal nodes (collCI, baseBI) start at 0 V, and that first-step transient does not shrink with TMAX (0.538 at TSTEP 0.25 ns, the same with q1 alone)

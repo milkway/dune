@@ -1,0 +1,19 @@
+Title: vbic pnp self-heating operating point that ngspice-47 gets wrong, pinned
+Date: Sat Nov 14 08:45:37  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 5
+No. Points: 1       
+Variables:
+	0	v(cp)	voltage
+	1	v(bp)	voltage
+	2	v(dtp)	voltage
+	3	v(q1#collCI)	voltage
+	4	i(vcp)	current
+Values:
+0		-2.000000000000000e-01
+	-8.265821467913052e-01
+	8.538186968003711e+00
+	-1.458889333667830e-01
+	3.006170369272808e-03

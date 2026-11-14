@@ -1,0 +1,26 @@
+VBIC parasitic transistor, reverse mode and B-E breakdown
+* Coverage: one collector sweep driving three npn devices. q1 is pushed
+* from forward active into hard saturation, where the parasitic
+* substrate pnp (ISP, WSP, NFP, IKP, its junction currents IBEIP/IBENP,
+* IBCIP/NCIP, IBCNP/NCNP and base resistance RBP) takes current into the
+* substrate through RS. q2 runs in the reverse mode (emitter swept up,
+* collector grounded): separate reverse saturation current ISRR with
+* NR, reverse knee IKR. q3's emitter is lifted by an E source until the
+* B-E junction breaks down (VBBE, NBBE, IBBE). Written for the Dune port
+* of ngspice-47's vbic model.
+vc c 0 dc 1
+vb b 0 dc 0.85
+vs s 0 dc 0
+q1 c b 0 s np
+e2 e2 0 c 0 1
+vb2 b2 0 dc 0.8
+q2 0 b2 e2 s np
+e3 e3 0 c 0 3
+vc3 c3 0 dc 1
+q3 c3 0 e3 s np
+.model np npn (level=4 is=1e-16 nr=1.02 isrr=2.5 ibei=1e-18 iben=1e-15 ibci=5e-17
++ ibcn=1e-15 vef=50 ver=5 ikf=10e-3 ikr=1e-3 rcx=10 rci=30 rbx=20 rbi=60 re=2
++ rs=50 rbp=200 isp=5e-17 wsp=0.8 nfp=1.02 ikp=2e-4 ibeip=1e-19 ibenp=1e-17
++ ibcip=2e-18 ncip=1.02 ibcnp=1e-16 ncnp=2 vbbe=3 nbbe=4 ibbe=1e-7)
+.dc vc 1.5 -0.6 -0.02
+.end

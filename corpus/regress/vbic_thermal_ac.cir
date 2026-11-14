@@ -1,0 +1,26 @@
+VBIC self-heating small signal: the thermal pole of a common-emitter stage
+* Coverage: .ac of an npn common-emitter stage with self-heating on: the
+* small-signal pass keeps every Vrth derivative of the currents and of
+* the dissipated power, the thermal capacitance and the charges'
+* temperature derivatives (VBICcapqbeth...), so the output conductance
+* steps at the RTH*CTH pole (about 530 Hz) before the junction
+* capacitances roll the gain off; the thermal node is driven through a
+* resistor to ground as well. Written for the Dune port of ngspice-47's
+* vbic model.
+vcc vcc 0 dc 10
+vin in 0 dc 0.83 ac 1
+rs in b 50
+q1 c b e s dt nh
+vs s 0 dc 0
+re e 0 2
+rl vcc c 200
+rth2 dt 0 2k
+vac c2 0 dc 6 ac 1
+vin2 in2 0 dc 0.8
+q2 c2 in2 0 0 dt2 nh
+.model nh npn (level=4 is=1e-16 ibei=1e-18 iben=1e-15 ibci=2e-17 ibcn=5e-15
++ vef=50 ver=5 ikf=50e-3 rcx=2 rci=10 rbx=10 rbi=40 re=0.5 rs=20 rbp=50
++ isp=1e-17 ibcip=1e-18 cje=200f cjc=100f cjep=20f cjcp=200f tf=20p tr=2n
++ qco=1e-15 rth=300 cth=1u xre=1 xrci=1.5 xrbi=1 xis=3 xii=3)
+.ac dec 10 1 10g
+.end

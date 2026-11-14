@@ -481,9 +481,12 @@ fn diode(ctx: &mut ElemCtx) -> Parsed {
     ))
 }
 
-/// `Q`: `name NC NB NE <NS> MNAME …`. Whether the 4th name is the
-/// substrate node or the model is decided by looking the token up in
-/// the model table, exactly like `INP2Q`.
+/// `Q`: `name NC NB NE <NS <NT>> MNAME …`. Whether the 4th name is
+/// the substrate node or the model is decided by looking the token up
+/// in the model table, exactly like `INP2Q`; a 5th node (ngspice's
+/// VBIC thermal node) is taken only when a model name follows it, so
+/// a 4-node card keeps its reading whatever the model table holds.
+/// Whether the model accepts five nodes is the elaborator's check.
 fn bjt(ctx: &mut ElemCtx, model_names: &HashSet<String>) -> Parsed {
     let mut nodes = vec![
         ctx.node_req("collector node")?,
@@ -495,6 +498,15 @@ fn bjt(ctx: &mut ElemCtx, model_names: &HashSet<String>) -> Parsed {
         tok4
     } else {
         nodes.push(tok4);
+        let mut probe = ctx.sc.clone();
+        let fifth = probe.next_tok().map(|t| t.lc());
+        let sixth = probe.next_tok().map(|t| t.lc());
+        if let (Some(f), Some(x)) = (&fifth, &sixth)
+            && !model_names.contains(f)
+            && model_names.contains(x)
+        {
+            nodes.push(ctx.node_req("thermal node")?);
+        }
         ctx.tok_req("model name")?.0
     };
     let (area, off, params) = ctx.junction_tail();
@@ -1121,6 +1133,21 @@ mod tests {
             &e.device,
             Device::Bjt { model, area: Some(a), .. } if model == "mod1" && *a == 1.5
         ));
+    }
+
+    #[test]
+    fn bjt_fifth_node_only_before_a_model_name() {
+        // VBIC thermal node: five nodes, then the model.
+        let (e, _) = parse_with_models("q1 c b e s dt vb area=2", &["vb"]);
+        let e = e.unwrap();
+        assert_eq!(e.nodes, ["c", "b", "e", "s", "dt"]);
+        assert!(matches!(&e.device, Device::Bjt { model, .. } if model == "vb"));
+        // A 5th token that is not followed by a model name is the
+        // model (and an unknown one is the elaborator's error).
+        let (e, _) = parse_with_models("q2 c b e s nomodel 2", &["vb"]);
+        let e = e.unwrap();
+        assert_eq!(e.nodes, ["c", "b", "e", "s"]);
+        assert!(matches!(&e.device, Device::Bjt { model, .. } if model == "nomodel"));
     }
 
     #[test]

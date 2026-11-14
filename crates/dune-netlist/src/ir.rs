@@ -101,7 +101,8 @@ pub enum Device {
         off: bool,
         params: Vec<Param>,
     },
-    /// `Q`: 3 or 4 nodes (optional substrate) + model.
+    /// `Q`: 3 to 5 nodes (optional substrate, then the thermal node of
+    /// ngspice's VBIC) + model.
     Bjt {
         model: Ident,
         area: Option<f64>,
