@@ -389,6 +389,36 @@ pub struct Vdmos {
     pub thermal: bool,
 }
 
+/// An ngspice-47 VBIC bipolar transistor (`QXXX NC NB NE <NS <NT>>
+/// MNAME <AREA> <OFF> <IC=VBE,VCE> <ICVBE=> <ICVCE=> <AREA=> <M=>
+/// <TEMP=> <DTEMP=>`, `vbic.c`, model `LEVEL=4` or `9`) with its
+/// model inline. Internal nodes are named like `VBICsetup`'s
+/// `CKTmkVolt` calls: `<name>#collector`, `#base`, `#emitter`,
+/// `#substrate` past nonzero `RCX`/`RBX`/`RE`/`RS`, then `#collCI`,
+/// `#baseBP`, `#baseBI`, and `#xf1`/`#xf2` with excess phase.
+#[derive(Clone, Debug)]
+pub struct Vbic {
+    pub name: String,
+    /// Collector, base, emitter, substrate and thermal node; the
+    /// card's missing ones are ground (`INP2Q` ties them to it). The
+    /// thermal node carries the self-heating network only when the
+    /// model turns self-heating on (`RTH > 0` given).
+    pub nodes: [String; 5],
+    pub model: crate::vbic::VbicModel,
+    /// `AREA` (1).
+    pub area: f64,
+    /// `M`: parallel multiplier (1).
+    pub m: f64,
+    pub off: bool,
+    /// `IC=VBE,VCE` (also `ICVBE=`, `ICVCE=`).
+    pub ic: (f64, f64),
+    /// `TEMP=`, kelvin (the circuit temperature when absent).
+    pub temp: Option<f64>,
+    /// `DTEMP=`: added to the temperature, `TEMP=` given or not
+    /// (`VBICtemp`), kelvin difference (0).
+    pub dtemp: f64,
+}
+
 /// `DXXXXXXX N+ N- MNAME <AREA> <OFF>` with its model inline.
 #[derive(Clone, Debug)]
 pub struct Diode {
@@ -532,6 +562,7 @@ pub enum Spec {
     SwitchI(SwitchI),
     Asrc(Box<Asrc>),
     Vdmos(Box<Vdmos>),
+    Vbic(Box<Vbic>),
 }
 
 macro_rules! impl_into_spec {
@@ -625,6 +656,12 @@ impl From<Vdmos> for Spec {
     }
 }
 
+impl From<Vbic> for Spec {
+    fn from(s: Vbic) -> Spec {
+        Spec::Vbic(Box::new(s))
+    }
+}
+
 impl From<Tra> for Spec {
     fn from(s: Tra) -> Spec {
         Spec::Tra(Box::new(s))
@@ -662,6 +699,7 @@ impl Spec {
             Spec::SwitchI(s) => &s.name,
             Spec::Asrc(s) => &s.name,
             Spec::Vdmos(s) => &s.name,
+            Spec::Vbic(s) => &s.name,
         }
     }
 }
@@ -891,6 +929,10 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Vbic(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
         Spec::Asrc(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -910,14 +952,16 @@ pub(crate) struct Vars {
 /// Whether a node unknown is written to the output plots. ngspice's
 /// default save list (`outitf.c`, `beginPlot`) drops the device-
 /// internal nodes by suffix — `#internal`, `#source`, `#drain`,
-/// `#collector`, `#emitter`, `#base` — and keeps every other node,
+/// `#collector`, `#collCX`, `#emitter`, `#base` — and keeps every
+/// other node (VBIC's `#collCI`, `#substrate`, `#xf1` among them),
 /// including the LTRA port-current equations `o1#i1`/`o1#i2`.
 pub(crate) fn saved_node(name: &str) -> bool {
-    const HIDDEN: [&str; 6] = [
+    const HIDDEN: [&str; 7] = [
         "#internal",
         "#source",
         "#drain",
         "#collector",
+        "#collCX",
         "#emitter",
         "#base",
     ];
@@ -1042,6 +1086,7 @@ impl Circuit {
                 Spec::SwitchV(_) | Spec::SwitchI(_) => st.alloc(crate::switch::SW_NUM_STATES),
                 Spec::Asrc(s) => st.alloc(crate::asrc::num_states(&s.expr)),
                 Spec::Vdmos(_) => st.alloc(crate::vdmos::VDMOS_NUM_STATES),
+                Spec::Vbic(_) => st.alloc(crate::vbic::VBIC_NUM_STATES),
                 _ => 0,
             });
             state_ranges.push((first, st.total()));
@@ -1074,13 +1119,15 @@ impl Circuit {
                 Spec::SwitchI(s) => &s.nodes,
                 Spec::Asrc(s) => &s.nodes,
                 Spec::Vdmos(s) => &s.nodes,
+                Spec::Vbic(s) => &s.nodes,
             };
             for (k, n) in node_names.iter().enumerate() {
                 let var = node(&mut vars, &mut node_ids, n);
                 // The temperature nodes of a VDMOS are stamped only
                 // under self-heating.
                 let unstamped = matches!(spec, Spec::Vdmos(v)
-                    if k >= 3 && !(v.thermal && v.model.rthjc.is_some()));
+                    if k >= 3 && !(v.thermal && v.model.rthjc.is_some()))
+                    || matches!(spec, Spec::Vbic(q) if k == 4 && !q.model.selfheat());
                 if !unstamped {
                     *node_uses.entry(var).or_insert(0) += 1;
                 }
@@ -1261,6 +1308,12 @@ impl Circuit {
                         )));
                     }
                     for v in vdmos_internal(s) {
+                        node(&mut vars, &mut node_ids, &format!("{}#{v}", s.name));
+                    }
+                }
+                // `VBICsetup`, in its order.
+                Spec::Vbic(s) => {
+                    for v in vbic_internal(s) {
                         node(&mut vars, &mut node_ids, &format!("{}#{v}", s.name));
                     }
                 }
@@ -1771,6 +1824,67 @@ impl Circuit {
                     .map_err(Error::Build)?;
                     devices.push(Box::new(dev));
                 }
+                Spec::Vbic(s) => {
+                    let at = |n: &str| get(&node_ids, n);
+                    let int = |suffix: &str| at(&format!("{}#{suffix}", s.name));
+                    let p = &s.model;
+                    let [c, b, e, sb, t] = [
+                        at(&s.nodes[0]),
+                        at(&s.nodes[1]),
+                        at(&s.nodes[2]),
+                        at(&s.nodes[3]),
+                        at(&s.nodes[4]),
+                    ];
+                    let prime = |k: usize, suffix: &str, outer: Var| {
+                        if p.p(k) == 0.0 { outer } else { int(suffix) }
+                    };
+                    let excess = p.excess_phase();
+                    let mut v = crate::vbic::VbicVars {
+                        coll: c,
+                        base: b,
+                        emit: e,
+                        subs: sb,
+                        temp: t,
+                        coll_cx: prime(crate::vbic::P_RCX, "collector", c),
+                        base_bx: prime(crate::vbic::P_RBX, "base", b),
+                        emit_ei: prime(crate::vbic::P_RE, "emitter", e),
+                        subs_si: prime(crate::vbic::P_RS, "substrate", sb),
+                        coll_ci: int("collCI"),
+                        base_bp: int("baseBP"),
+                        base_bi: int("baseBI"),
+                        xf1: if excess { int("xf1") } else { 0 },
+                        xf2: if excess { int("xf2") } else { 0 },
+                        pin: 0,
+                    };
+                    // A named thermal node nothing stamps (no
+                    // self-heating, no other device on it).
+                    if !p.selfheat() && t != 0 && node_uses.get(&t).copied().unwrap_or(0) == 0 {
+                        v.pin = t;
+                    }
+                    let temp = s.temp.unwrap_or(opts.temp) + s.dtemp;
+                    // `vbicnoise.c`: `TEMP - CKTtemp` when `TEMP` was
+                    // given (`VBICtemp` then includes `DTEMP`), else
+                    // `DTEMP`.
+                    let noise_dtemp = if s.temp.is_some() {
+                        temp - opts.temp
+                    } else {
+                        s.dtemp
+                    };
+                    let dev = crate::vbic::VbicI::new(
+                        v,
+                        crate::vbic::VbicSetup {
+                            model: s.model.clone(),
+                            area: s.area,
+                            m: s.m,
+                            off: s.off,
+                            ic: s.ic,
+                            temp,
+                            noise_dtemp,
+                        },
+                        base,
+                    );
+                    devices.push(Box::new(dev));
+                }
                 Spec::Asrc(s) => {
                     let pos = get(&node_ids, &s.nodes[0]);
                     let neg = get(&node_ids, &s.nodes[1]);
@@ -2047,6 +2161,31 @@ fn vdmos_internal(s: &Vdmos) -> Vec<&'static str> {
     }
     if p.revrec() {
         v.push("qp");
+    }
+    v
+}
+
+/// The internal unknowns `VBICsetup` makes for a VBIC instance, in
+/// its order (suffixes after `<name>#`): the four prime nodes past a
+/// nonzero `RCX`/`RBX`/`RE`/`RS`, the three always-present internal
+/// nodes, and the excess-phase pair.
+fn vbic_internal(s: &Vbic) -> Vec<&'static str> {
+    use crate::vbic::{P_RBX, P_RCX, P_RE, P_RS};
+    let p = &s.model;
+    let mut v = Vec::new();
+    for (k, suffix) in [
+        (P_RCX, "collector"),
+        (P_RBX, "base"),
+        (P_RE, "emitter"),
+        (P_RS, "substrate"),
+    ] {
+        if p.p(k) != 0.0 {
+            v.push(suffix);
+        }
+    }
+    v.extend(["collCI", "baseBP", "baseBI"]);
+    if p.excess_phase() {
+        v.extend(["xf1", "xf2"]);
     }
     v
 }

@@ -27,6 +27,7 @@ mod model;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use model::limitlog;
 use model::{OXIDE_CAP_FACTOR, VdmosTemp};
 pub use model::{VdmosModel, VdmosSoa};
 
