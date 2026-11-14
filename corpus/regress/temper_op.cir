@@ -1,0 +1,27 @@
+temper in models, device values and parameters at .options temp=50
+* written for Dune (Fase 8, G7 of docs/pdk-parser.md); positions probed
+* in ngspice-47 (docs/dune-netlist.md, probes t1/t2): a model value, a
+* device's positional and keyword values, a .param chain that depends
+* on temper, a subcircuit-local .param and a subcircuit-line default,
+* and a .func body reaching a device value.
+.options temp=50
+.param p={temper*2} q={p+1}
+.func tk(x) {x*(temper+273.15)}
+.model rm r rsh={temper}
+r1 1 0 rm l=2 w=1
+i1 0 1 1m
+r2 2 0 {q*10}
+i2 0 2 1m
+.model dm d is=1e-14
+d3 3 0 dm area={temper/25}
+i3 0 3 1m
+.subckt cell a t0={temper}
+.param t2={temper*3}
+r1 a 0 {t2+t0}
+.ends
+x4 4 cell
+i4 0 4 1m
+r5 5 0 {tk(2)}
+i5 0 5 1m
+.op
+.end

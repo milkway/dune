@@ -1,0 +1,32 @@
+user functions (.func) in parameters, values, models and subcircuits
+* written for Dune (Fase 8, .func); every rule was probed in ngspice-47
+* (docs/dune-netlist.md, probes f1/f2): forms with and without `=`,
+* the .param synonym, calls before the definition, a body calling a
+* later function, formals shadowing parameters, a user function
+* shadowing a built-in, the last redefinition winning, lexical scope
+* inside a subcircuit and a body reading the caller's parameters.
+.param k=5 x=100
+.func sq(x) {x*x}
+.func lin(a, b) = a*k + b
+.param cube(x) = 'x*sq(x)'
+.func twice(x) {half(x)*4}
+.func half(x) {x/2}
+.func sqrt(x) {x*2}
+.func g(x) {x+1}
+.func g(x) {x+2}
+.param p={lin(2, 1) + sq(3)}
+v1 1 0 {p}
+r1 1 0 1k
+v2 2 0 {cube(2) + twice(3) + sqrt(4) + g(1)}
+r2 2 0 1k
+.model rm r rsh={sq(10)}
+r3 3 0 rm l=2 w=1
+i3 0 3 1m
+.subckt cell a w=1
+.func scale(v) {v*w}
+r1 a 0 {scale(sq(2))*1k}
+.ends
+x1 4 cell w=3
+i4 0 4 1m
+.op
+.end

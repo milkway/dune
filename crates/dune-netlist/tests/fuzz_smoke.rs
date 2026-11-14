@@ -147,6 +147,12 @@ fn mutated_parameter_expressions_never_panic() {
         ".model rm r rsh=p*2 tc1 = 'p<>3' tc2={\"-p/2\"} dw=pwr(-2,3)",
         "v1 1 0 dc { nint(2.5)+int(-2.7)+floor(1.1k)%7+ternary_fcn(1,2,3) }",
         ".param z={1/0} y={1/z} t={temper} f={nosuch(1)} g={1?0?1:2:3}",
+        // Fase 8: user functions, conditionals, temper.
+        ".func f(x, y) {x*y+g(x)}\n.func g(a) = a^2\n.param h(t) = 't+f(t,1)' q={f(2,3)}",
+        ".func r(x) {r(x)+s(x)}\n.func s(x) {r(x)}\nr2 2 0 {r(1)+sqrt(f(1,2))}",
+        ".if (p==2)\nr3 3 0 {temper*p}\n.elseif (f(p,1))\n.model rm r rsh={temper}\n.else\n.endif",
+        ".subckt s a k=1\n.func w(x) {x*k}\n.if (k>0)\nr1 a 0 {w(temper)}\n.endif\n.ends\nx1 1 s k=2",
+        ".temp 50\n.param tp={temper} tq={tp*2}\nr4 4 0 {tq}\nv4 5 0 {tp}\n.dc temp 0 1 1",
     ];
     let mut rng = Rng(0x9a7a_5eed_e4e5_0001);
     let alphabet: &[u8] = b"(){}'\"+-*/%^!=<>&|?:,. \t0123456789eEkKmMuUxagsqrtpwbin_$;";

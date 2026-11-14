@@ -139,7 +139,7 @@ do testbench, "full" = biblioteca inteira.
 | `$` de fim de linha, `//` | 0 | 0 | 0 | — |
 | cartão-ponto em maiúsculas (`.LIB`, `.PARAM`) | 4 / 5 | 0 / 66 | 0 / 112 | sim (case-insensitive) |
 | `.control` | 0 | 0 | 0 | — |
-| `.func` | 0 | 0 | 0 | — |
+| `.func` | 0 | 0 | 0 | sim (Fase 8, `docs/dune-netlist.md` "Funções do usuário") |
 | `.params` (sinônimo) | 0 | 0 | 0 / 41 | **não** |
 | maior linha física | 298 | 148 / 264 | 210 / 621 | ok |
 | maior cartão lógico (bytes) | 344 942 / 1 260 574 (`parameters/montecarlo.spice`, um `.param` com milhares de `+`) | 8204 | 15 155 | ok (medido, §7) |
@@ -195,7 +195,7 @@ nenhuma; o do sky130 só `agauss` e `sqrt`; o do IHP só `max`.
 | padrão via `.param` no corpo (padrão sky130) | sim (`sky130_fd_pr__nfet_01v8`: `.param l=1 w=1 ad=0 … mult=1 nf=1.0`) | — | — | **não** |
 | `X` com `nome=valor` | 117 / 689 | 8 / 30 | 0 / 2 | **não** (último token vira nome do subcircuito) |
 | `.model` dentro de `.subckt` dependente de parâmetro da instância | sim: os 288 bins do inversor (`toxe = {…/sqrt(l*w*mult)}`) | não | sim (IHP) | modelo local sim, dependente **não** |
-| `.if/.elseif/.else/.endif` | 0 | 0 | 36 / 177 (todos em `.subckt`, por parâmetro da instância) | **não** |
+| `.if/.elseif/.else/.endif` | 0 | 0 | 36 / 177 (todos em `.subckt`, por parâmetro da instância) | **sim** (G9, Fase 8) |
 | letras de elemento (full) | x 780, r 513, c 345, m 128, d 58, q 6, l 6 | r 70, c 37, x 30, d 25, m 23, q 10 | n 69, c 42, r 39, d 30, l 10, q 8, x 2 | `N` não existe |
 
 Parâmetros nas linhas `X` (sky130 inv): `l` 116, `mult` 113, `ad/as/pd/ps`
@@ -249,12 +249,12 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | S9 | sufixos em expressão | `2k*3=6000`; **`1mil` = 1e-3** (não 25,4e-6 como no leitor de números do 3f5) (P05 e21) | `mil`=25,4e-6; **igual desde 2026-11-14** dentro de expressões (fora delas segue o `INPevaluate` do 3f5) |
 | S10 | ternário em linha `X` entre aspas (`lr='(d_sab==0) ? 2 : d_sab'`) | funciona (P17) | erro |
 | S11 | `agauss/gauss/aunif/unif` | **aleatórios a cada execução** sem semente fixa (duas rodadas: 0,9708 / 1,0276); `0*agauss(…)` = 0 (P06) | erro; desde a G2 lidas inteiras e avaliadas no **nominal** com um aviso por deck (decisão pendente, G8) |
-| S12 | `temper` | vale em `.model`, na instância e em `.param` local de subcircuito, com a temperatura do circuito (`.options temp`/`.temp`); em `.param` **global** é erro fatal "Undefined parameter [temper]" (P07, P07a–d) | erro; desde a G2 erro "not supported yet" onde é avaliado (G7) |
+| S12 | `temper` | vale em `.model`, na instância e em `.param` local de subcircuito, com a temperatura do circuito (`.options temp`/`.temp`); em `.param` **global** é erro fatal "Undefined parameter [temper]" (P07, P07a–d) | erro; desde a G2 erro "not supported yet" onde é avaliado; **desde 2026-11-14 como o ngspice** (G7: valor onde ele dá valor — o `.param` global que nomeia `temper` também vale, sondas `g9-probes t1 t_glob`; o P07 o usava fora das posições que o ngspice reescreve —, erro onde ele erra; `.dc temp` com `temper` recusado) |
 | S13 | `.model` local dependente da instância | uma cópia por instância (`rsh={w*100}` → 100 e 300 Ω) (P08) | erro; **igual desde 2026-11-14** (G3; instâncias com os mesmos valores compartilham a cópia) |
 | S14 | avaliação preguiçosa | parâmetro indefinido num subcircuito não instanciado ou num `.model` não usado **não** é erro; erro num `.param` global **é** fatal (P05e, P05f) | avalia tudo; **igual desde 2026-11-14** (G3, também `.model` de topo) |
 | S15 | binning | `nome` casa `nome.<dígitos>`; só tipos BSIM3/BSIM4/HiSIM; bin se `lmin ≤ L ≤ lmax` e `wmin ≤ W ≤ wmax` **inclusivo nas duas pontas** com tolerância absoluta 1e-9 (código BSD `in_range`); a tabela é percorrida do último `.model` definido ao primeiro (a fronteira L=1 µm caiu no bin definido por último); L e W multiplicados por `scale`; W dividido por `nf` se `wnflag` (padrão 1 em `hs`/`spe`); faltando um dos quatro limites o bin é pulado; nenhum bin → "could not find a valid modelname" (P09, P09b, P09c) | erro; **igual desde 2026-11-14** (G4, na expansão; `wnflag` padrão 0, modo normal) |
 | S16 | `.option scale` | L/W dos bins e da instância BSIM4 × `scale`, AD/AS × `scale²`, PD/PS × `scale` (`b4par.c`); `lmin…wmax` **não** são escalados (P09b) | aviso "not implemented; ignored"; **igual desde 2026-11-14** (G5: também MOS 1–3/BSIM3 e `l w` de R/C; não MOS6/BSIM1/2, sonda `s6`) |
-| S17 | `.if/.elseif/.else/.endif` | funciona no topo e em `.subckt`, condicionado a parâmetro da instância (P10) | erro |
+| S17 | `.if/.elseif/.else/.endif` | funciona no topo e em `.subckt`, condicionado a parâmetro da instância (P10) | erro; **igual desde 2026-11-14** (G9; regras e desvios em `docs/dune-netlist.md` "Condicionais") |
 | S18 | `m` na linha `X` | multiplica o subcircuito (2 × 1 kΩ → 500 Ω), **exceto** se a linha `.subckt` declara `m=` — aí `m` vira parâmetro comum e o multiplicador some (`m=4` → 1 kΩ; em `hs` o ngspice avisa "m=xx on .subckt line will override multiplier m hierarchy!") (P13) | erro; **igual desde 2026-11-14** (G6: o `m` do dispositivo é substituído; por tipo em `docs/dune-netlist.md`) |
 | S19 | `X` que nomeia um **modelo** | erro com modelo nível 1 ("unknown subckt"), plain e `hs` (P14); **aceito** com o modelo binado do gf180 (`xmn … nmos_3p3`), plain e `hs`, mas Vout(0,9 V) muda de 3,2103 (linha `M`) para 3,2093 (plain) / 3,2052 V (`hs`) — causa não isolada | erro |
 | S20 | `.include` indentado, `.inc`, aspas | aceitos (P12) | erro; **igual desde 2026-11-14** |
@@ -456,7 +456,17 @@ conferidos contra o ngspice pelo resultado); IHP — `.if` dentro de
 diodo nível 3 continua aceito com nota e simulado como nível 1 (G11)
 onde for usado.
 
-**G7 — `temper`.**
+**G7 — `temper`.** ✔ **Feito em 2026-11-14** (regras em
+`docs/dune-netlist.md` "`temper`", sondas `g9-probes t1/t2`). Censo
+(`temper_census.py`, cartões lógicos): gf180 — 24 ocorrências em 4
+`.param` locais de subcircuito (`r_temp` dos resistores) e 4 em linhas
+`r`; sky130 (repositório `skywater-pdk-libs-sky130_fd_pr`) — 147 em
+`.param` locais e 93 em linhas `r`, 19 arquivos (dispositivos de 20 V,
+RF, varactores); o `sky130A` do open_pdks que o inversor usa não tem
+nenhum. Todas essas formas avaliam agora; mas todo consumidor é um
+resistor comportamental `r='…v(a,b)…'` (G11), então nenhum caso real
+simula ainda: o resistor `nplus_u` do gf180 a 85 °C para no `v(…)`
+(o único erro restante; o `r_temp` com `temper` avalia).
 (a) inv: nenhum (aparece nos dispositivos de 20 V do sky130 e nos
 resistores do gf180); full: os três. (b) S12. (c) ~150 linhas; risco
 médio: um deck com varredura de temperatura (sweep/sessão) precisa
@@ -472,7 +482,10 @@ de oráculo sem desligar a chave). (b) S11. (c) ~100 linhas. (d) **[API]**
 (média) por padrão, Monte Carlo com semente explícita opcional — desvio a
 registrar em `KNOWN_DIFFS`. (e) nada novo.
 
-**G9 — Condicionais `.if/.elseif/.else/.endif`.**
+**G9 — Condicionais `.if/.elseif/.else/.endif`.** ✔ **Feito em
+2026-11-14** (`cond.rs`, sondas `g9-probes i1–i5`): o inversor IHP
+cai de 48 para 2 erros de parser — as duas linhas `N` (OSDI/PSP) que
+os ramos escolhidos instanciam, fora de escopo.
 (a) inv: IHP; full: IHP. (b) S17. (c) ~300 linhas, por instância; risco
 médio. (d) não. (e) aninhamento limitado; `.endif` faltando = erro com o
 span do `.if`. Prioridade baixa: o IHP não é alvo de BSIM4.

@@ -354,10 +354,191 @@ a política do Dune é decisão pendente do dono (G8). O avaliador já tem
 o modo sorteado (`RandomPolicy::Seeded`, gerador SplitMix64 + Box–Muller,
 fórmulas do manual: `agauss` = nom + avar/sigma·N(0,1), `gauss` relativo,
 `aunif`/`unif` uniformes em ±var, `limit` = nom ± avar), alcançável só
-nos testes. `temper` é lido como nome; sem um `.param temper` definido,
-avaliá-lo é erro "not supported yet" (G7: precisa reexpandir quando a
-temperatura muda, e no ngspice ele só vale em certas posições — erro em
-`.param` global e em `v1 1 0 {temper}`, valor em `r={temper}`, P07/c4).
+nos testes. `temper`: seção própria, abaixo.
+
+### `temper` (G7)
+
+Fase 8 (2026-11-14). No ngspice-47 o `temper` não é um parâmetro do
+`numparam`: o `inpcom.c` (Modified BSD; lidos `inp_fix_temper_in_param`
+e `inp_temper_compat`) transforma um `.param` que o nomeia em `.func`
+sem argumentos e troca os usos dele, **no mesmo nível de subcircuito**,
+por chamadas; depois, nas linhas `.model` e nas de dispositivo que não
+começam por `V I E G F H B`, reescreve os `{…}` que contêm `temper`
+para o parser da fonte B, que os reavalia a cada temperatura. Em
+qualquer outro lugar o `numparam` responde "Undefined parameter
+[temper]". Sondas: `.claude/scratch/g9-probes/t1.txt` e `t2.txt`
+(testes em `tests/temper.rs`; decks `regress/temper_op.cir` e
+`temper_dc.cir`).
+
+| Posição | ngspice-47 | Sonda |
+|---|---|---|
+| valor de `.model` (`{…}`, `'…'`, nu) | a temperatura do circuito | `t1 t_model*`, `t_case` |
+| valor de dispositivo R, C, L, D, Q, J, M… (posicional ou palavra-chave) | idem | `t_r_pos*`, `t_c_pos`, `t_diode_area`, `t_mos_w`, `t2 t_l_val` |
+| `V`, `I` (posicional, `dc`), `E G F H`; `K` | erro | `t_v_pos`, `t_v_dc`, `t_i_pos`, `t2 t_k` |
+| `.param` global ou do corpo | vale; quem o usa num dispositivo/modelo do mesmo nível também; uma cadeia (`q={p*2}`) também | `t_glob(_unused)`, `t_sub_local*`, `t2 t_chain*`, `t_tparam_model` |
+| … usado noutro nível (global dentro de subcircuito, corpo num subcircuito chamado) | erro | `t2 t_tparam_in_sub`, `t_sub_local_nested_use` |
+| … usado em `V`, linha `X`, cartão de controle | erro | `t2 t_tparam_v`, `t_tparam_x_actual`, `t_tparam_tran` |
+| padrão da linha `.subckt` | vale (num `V` do corpo, erro) | `t_sub_default*`, `t2 t_sub_default_expr`, `t_sub_default_v` |
+| atual da linha `X` | erro | `t_sub_actual` |
+| corpo de `.func` chamado de dispositivo | vale | `t_func`, `t_func_kw` |
+| … chamado de um `.param` | erro (o `.param` não nomeia `temper`, o `numparam` o avalia) | `t_func_glob` |
+| cartões de controle (`.tran`, `.options temp=`), condição de `.if` | erro | `t_tran_card`, `t_options_temp`, `t_if_temper` |
+| fonte `B` (`v=temper`) | variável da própria fonte B | `t_bsrc*` |
+| `.param temper=99` | ignorado calado; `temper` continua a temperatura | `t_user_param*` |
+
+Temperatura: a do circuito — último `.temp` em vigor (respeita `.if`),
+senão o último `.options temp` (em qualquer posição, também dentro de
+ramo não tomado), senão 27 °C (`t_opt50_*`, `t_temp75_*`,
+`t_temp_and_opt`, `t2`); o `temp=` de uma instância **não** muda o
+`temper` (`t_inst_temp`); `tnom` não entra (`t_model_tnom`). Numa
+varredura `.dc temp` o ngspice reavalia (`t2 t_dc_sweep_model`: 1 mΩ,
+50, 100 Ω).
+
+Como ficou: o escopo global é resolvido a 27 °C; uma pré-passada
+silenciosa pelo topo acha a temperatura do circuito (`.if` avaliados,
+`.temp`/`.options` lidos pelo `dot.rs`); se ela não é 27 e algum
+`.param` global depende de `temper`, o escopo é resolvido de novo. Cada
+avaliação sabe onde está (`TemperUse`: modelo/dispositivo, `.param`,
+proibido com o motivo), um nome que depende de `temper` fica marcado no
+seu escopo e só é lido daquele escopo; a leitura vinda de corpo de
+`.func` dentro de um `.param` é recusada como no ngspice. Erros sempre
+com span e dizendo por quê.
+
+**Varredura de temperatura.** O parser roda uma vez, antes do motor; o
+`Circuit` não guarda o texto do deck para reexpandir, então não há
+como reavaliar `temper` por ponto sem API nova. Um `.dc temp` num deck
+que **usa** `temper` (num dispositivo ou modelo; um `.param` que
+ninguém usa não conta) é erro com o span do `.dc`, e todo deck que usa
+`temper` recebe um aviso de que ele foi avaliado uma vez, a T °C — vale
+também para uma troca de `temp` depois do parse (as opções de motor do
+wasm/R/Python). Uma solução completa precisaria de uma API que
+reexpanda o netlist por temperatura: por exemplo
+`dune_netlist::parse_*_at(…, temperature)` (ou uma opção no
+`parse_with_loader`) e, no `dune-core`, um laço de `.dc temp` que, em
+vez de só trocar `CKTtemp`, reconstrua o `Circuit` a partir do texto
+guardado (o `Session` já reconstrói circuitos; faltaria a temperatura
+como entrada do parser). Não feito: é mudança de API pública.
+
+Diferenças (linhas no `KNOWN_DIFFS.md`): `.param temper=…` é erro (o
+ngspice o ignora); com padrão `t={temper}` na linha `.subckt` e
+`t=5` na linha `X`, o ngspice-47 usa **27** (o padrão vence a atual —
+provável efeito da reescrita, `t2 t_sub_default_override`), o Dune usa
+5; valor posicional de área de `Q`/`J`/`D` com `temper` vale no Dune (o
+ngspice recusa a reescrita no `Q`, `t2 t_q_area`); fonte `B` com
+`temper` segue sem suporte (a linguagem da fonte B é a do 3f5); `r=`
+como sinônimo de `resistance=` (o ngspice aceita, `t1 t_inst_kw`) não
+existe no Dune — à parte do `temper`.
+
+### Funções do usuário (`.func`, `func.rs`)
+
+Fase 8 (2026-11-14). No ngspice-47 o `.func` é uma **expansão textual
+de macro** feita antes do avaliador de parâmetros, em
+`frontend/inpcom.c` (Modified BSD; lido: `inp_get_func_from_line`,
+`inp_grab_func`, `inp_expand_macro_in_str`, `inp_expand_macros_in_deck`
+e a reescrita `.param f(x) = …` → `.func` em
+`inp_fix_macro_param_func_paren_io`); o `numparam` não foi aberto. O
+Dune **avalia** a chamada em vez de reescrever o texto
+(`pexpr::Expr::eval_in`): o argumento chega como `f64`, o corpo é
+compilado uma vez, e as regras observáveis da expansão foram sondadas
+(`.claude/scratch/g9-probes/f1.txt`, `f2.txt`; testes em
+`tests/func.rs`, deck `regress/func_op.cir` e `func_dc.cir`):
+
+| Regra | ngspice-47 | Sonda |
+|---|---|---|
+| Formas | `.func f(x) {corpo}`, `.func f(x) = {corpo}`, `= corpo`, `corpo` nu (o resto da linha, com brancos), `'corpo'`; `f (x)` com branco; continuação `+`; `.param f(x) = corpo` é o mesmo `.func` (o primeiro token depois de `.param` tem `(`) | `f1 f_brace`, `f_eq`, `f_eq_bare`, `f_bare`, `f_quote`, `f_space_name`, `f_body_two_tokens`, `f_continuation`, `f_params_kw` |
+| Aridade | zero ou mais formais; contagem errada na chamada é erro fatal; `.func f {2}` (sem parênteses), `f(x,)`, `f(x {…}` são erro fatal | `f_zero`, `f_arity_*`, `f_noargs_def`, `f_comma_empty`, `f_unbalanced` |
+| Onde chama | `{…}`, `'…'`, valor nu depois de `=`, `.param` (com ou sem chaves), `.model`, linha `.subckt` e linha `X`, corpo de outro `.func` (em qualquer ordem), argumentos aninhados; `k` sem parênteses é parâmetro, não chamada | `f_in_*`, `f_kw_bare`, `f_in_func(_fwd)`, `f_nested_call`, `f_zero_noparen_use` |
+| Ordem | as funções de um nível são colhidas antes de expandir: chamada antes da definição vale | `f_after_use`, `f2 f_local_redef_after` |
+| Redefinição | a última vence (inclusive com outra aridade) | `f_redef`, `f_redef_arity(_old)` |
+| Sombra | formal sombreia `.param`; `.func` sombreia função embutida (`sqrt`, `min` com 3 argumentos); `.param f` e `.func f` convivem | `f_shadow_param`, `f_shadow_builtin(_arity)`, `f_name_is_param` |
+| Nomes do corpo | todo nome que não é formal é lido **onde a chamada está** (o texto vai para lá): `.param` global definido depois, parâmetro da instância que chama | `f_glob_param(_after)`, `f_param_uses_func_fwd`, `f_local_sees_inst_param`, `f2 f_glob_param_shadow_inst` |
+| Escopo | léxico por nível de `.subckt`: a função de um corpo vale nele e nos subcircuitos definidos dentro dele, não fora nem num subcircuito que ele só instancia; a interna sombreia a externa | `f_local*`, `f2 f_top_calls_top_shadowed` |
+| Chamada dentro de um corpo | resolve onde o corpo foi definido; se não achar, onde o texto foi parar (uma função global pode chamar uma que só existe dentro do subcircuito que a chama) | `f2 f_top_calls_local` |
+| Preguiça | corpo nunca chamado não é avaliado (nome indefinido, sintaxe ruim passam); subcircuito não instanciado idem | `f_undef_in_body_unused`, `f_syntax_unused`, `f_local_unused_sub` |
+| Recursão | *segfault* (rc −11), mesmo sem uso | `f_recursive`, `f_mutual`, `f_recursive_unused` |
+| `temper`, aleatórias | `temper` no corpo vale a temperatura num valor de elemento; `agauss` no corpo sorteia | `f_temper`, `f_random`, `f2 f_random_func_note` |
+| Fonte `B` | a expansão alcança a linha `B` (`v=f(3)`, `v=f(v(2))`) | `f_bsrc*` |
+
+No Dune, além disso:
+
+- **Funções aleatórias** no corpo valem o nominal, como fora dele
+  (decisão G8). O ngspice transforma internamente um `.param` com
+  `agauss` em `.func` para que cada uso sorteie de novo
+  (`inp_fix_agauss_in_param`); como o Dune avalia no nominal, essa
+  distinção não existe aqui.
+- **Erros dentro do corpo** apontam para o corpo (span no `.func`) e
+  dizem `(in function `f`)`; aridade e função desconhecida apontam para
+  a chamada.
+- **Recursão** (direta ou mútua, no mesmo nível) é erro com o span da
+  chamada que fecha o ciclo, assim que o nível termina de ser lido — no
+  topo sempre, num subcircuito só se ele for instanciado. Um ciclo que
+  só aparece pelo recurso da chamada no lugar da expansão (global →
+  local → global) para no limite de profundidade.
+- **Limites** (`pexpr.rs`): ≤ 256 chamadas aninhadas por avaliação;
+  orçamento de 2²⁴ passos (operações + nomes resolvidos dentro de
+  corpos, e o cálculo de dependências pelos corpos) por deck — uma
+  cadeia em que cada função chama a anterior duas vezes (2⁶⁰ chamadas)
+  para com erro em ~0,5 s; ≤ 1000 formais. O avaliador continua sem
+  recursão (pilha de quadros no heap).
+- **Dependências:** um `.param` que chama uma função depende dos nomes
+  que o corpo lê (transitivamente), para a ordem de avaliação e para a
+  detecção de ciclo; um `.model` local que chama uma função do usuário
+  não é compartilhado entre instâncias.
+
+Diferenças (linhas no `KNOWN_DIFFS.md`): formal repetido (`f(x,x)`, o
+ngspice usa o primeiro) é erro; corpo vazio (`.func f(x)`, aceito
+calado) é erro quando chamado; recursão é erro, não *segfault*; o corpo
+é uma expressão por si — `{3*-x}` é recusado como em qualquer
+expressão (o ngspice substitui o texto e lê `3*-2`); `.func` em fonte
+`B` é erro "not supported yet" (a linguagem da fonte B é a do 3f5).
+
+### Condicionais (`.if`/`.elseif`/`.else`/`.endif`, `cond.rs`)
+
+G9 de `docs/pdk-parser.md` (2026-11-14): o IHP SG13G2 escolhe a linha
+do dispositivo dentro do `.subckt` por parâmetro da instância
+(`rfmode`, `as`, `ng` par/ímpar). No ngspice-47 quem avalia é o
+`numparam` (LGPL, não aberto); do `inpcom.c` só se leu que a linha
+`.if(expr)` vira `.if{expr}` antes de chegar lá. Regras por sondas
+(`.claude/scratch/g9-probes/i1.txt`–`i5.txt`; testes em
+`tests/cond.rs`; decks `regress/if_subckt_op.cir` e `if_dc.cir`):
+
+| Regra | ngspice-47 | Sonda |
+|---|---|---|
+| Condição | expressão de parâmetros **entre parênteses**, verdadeira se ≠ 0; `.if(a==1)` colado, brancos dentro, `=` sozinho compara, `&&`/`||`/`?:`, funções e `.func`; continuação `+` | `i1 i_top_*`, `i_glued`, `i_spaces`, `i_single_eq`, `i_value*`, `i_logic*`, `i_func_cond`, `i_udf_cond`, `i_continuation`, `i2 i_cond_ternary`, `i_cond_nested_parens` |
+| Sem parênteses | `.if a==1`, `.if {a==1}`, `.if 'a==1'`, `.if` e `.elseif a==2` são fatais ("Bad syntax"); `.if ()` e `.if (1+)` também | `i_noparen`, `i_brace`, `i_quote`, `i_no_cond`, `i_empty_cond`, `i_bad_cond`, `i2 i_elseif_noparen` |
+| O que lê | no topo, os `.param` globais (inclusive definidos depois); no `.subckt`, o escopo da instância (linha `X`, padrões, `.param` do corpo, escopo de quem chama, `m`) — cada instância escolhe o seu ramo; no topo não vê parâmetro de subcircuito | `i_fwd_param`, `i_sub_param2`, `i_sub_body_param`, `i2 i_sub_dyn`, `i_cond_m`, `i_sub_param_cond_top`, `i_sub_cond_fwd_body` |
+| Cadeias e aninhamento | `.elseif` em qualquer número, `.else`, aninhamento (21 níveis testados) | `i_elseif*`, `i_nested*`, `i2 i_deep` |
+| `.else if (c)` | é um `.else` **comum**: o texto depois de `.else` é ignorado, a condição nunca é lida | `i5 i_else_if_false_cond`, `i_else_if_then_else` |
+| Avaliação | **toda** condição de um escopo que existe é avaliada — também no ramo não tomado e depois do tomado (nome indefinido lá é fatal) | `i_undef_untaken_elseif`, `i2 i_nested_untaken_undef`, `i_taken_then_elseif_bad` |
+| Condicional | elementos, linhas `X`, `.model` (de topo e local, por instância), `.temp`, cartões de análise | `i_top_*`, `i2 i_x_top_false`, `i3 i_model_top_a/b`, `i1 i_sub_model`, `i4 i_d_temp_*`, `i3 i_op_card_false` |
+| **Não** condicional | `.param` (topo e corpo: o último vence, dentro ou fora de ramo), `.func`, `.include`/`.lib` (lidos antes), `.options` (o último vence), definições `.subckt` (as duas existem; a primeira vence) e o corpo de um `.subckt` escrito dentro de um ramo | `i_param_in_branch(_false)`, `i_sub_param_in_branch`, `i_func_in`, `i_include_in`, `i4 i_d_options_*`, `i2 i_subckt_def_false`, `i_sub_nested_subckt_false` |
+| Onde | topo, corpo de `.subckt`, seção de `.lib`; um bloco não atravessa `.ends` | `i2 i_lib_if`, `i1 i_sub_cross` |
+| Preguiça | subcircuito não instanciado: condições não lidas | `i_sub_undef_unused` |
+| Desbalanceado | `.endif`/`.else` soltos, `.else` repetido, `.elseif` depois de `.else` são erro; `.if` sem `.endif` é fechado calado no fim do deck ou do `.subckt` | `i_endif_alone`, `i_else_alone`, `i_else_twice`, `i_elseif_after_else`, `i_unclosed`, `i_sub_unclosed` |
+| Texto sobrando | ignorado depois de `.endif`, `.else` e da condição | `i_trailing_endif`, `i_trailing_else`, `i_cond_trailing` |
+
+Como ficou: a estrutura de blocos de cada escopo é lida uma vez (lista
+plana de ramos em ordem de cartão, pais antes dos filhos, pilha de
+blocos abertos — nada recursivo); cada cartão condicional guarda o ramo
+mais interno que o contém. No topo, as condições são avaliadas ao ler
+(os globais já estão resolvidos) e os cartões de ramo não tomado são
+pulados, menos `.subckt`/`.ends`, `.options`, `.control` e `.end`. No
+`.subckt`, `subckt::expand` avalia as condições por instância
+(`Conds::evaluate`, uma unidade do orçamento da expansão por ramo) e
+filtra elementos, `X` e `.model` locais; a busca do modelo local pega a
+**última definição ativa** do nome (e só bins ativos). O IR público não
+mudou.
+
+Diferenças (linhas no `KNOWN_DIFFS.md`), todas em entradas que o
+ngspice aceita calado ou lê errado: `.if` sem `.endif`, texto depois de
+`.endif`/`.else`/da condição e `.else if` são erro com span (a mensagem
+do `.else if` diz que é um `.else`); condição não finita (`(1/0)`, que
+o ngspice trata como falsa) é erro; num ramo não tomado o Dune não olha
+os cartões — o ngspice ainda substitui os `{…}` deles e um nome
+indefinido ali é fatal (`i3 i_sub_param_body_after`,
+`i_top_untaken_bad_elem`; lixo sem chaves passa nos dois,
+`i_top_untaken_garbage`). Limites: ≤ 256 blocos aninhados por escopo
+(erro com span; 10 000 aninhados dão um erro, em tempo linear).
 
 ### Entrada hostil e medidas
 

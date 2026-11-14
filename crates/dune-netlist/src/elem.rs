@@ -987,7 +987,26 @@ fn behavioral(ctx: &mut ElemCtx) -> Parsed {
                 let span = ctx
                     .card
                     .span_of(start + e.start, start + e.end.max(e.start + 1));
-                ctx.err(span, e.message);
+                // ngspice expands `.func` calls in B-source lines too
+                // (probes `f1 f_bsrc*`); the B-source language here is
+                // the 3f5's and has no user functions yet.
+                let name = e
+                    .message
+                    .strip_prefix("no such function `")
+                    .and_then(|r| r.strip_suffix('`'))
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let user =
+                    !name.is_empty() && ctx.env.funcs.is_some_and(|fs| fs.find(&name).is_some());
+                let message = if user {
+                    format!(
+                        "user function `{name}` (.func) in a B-source expression is not supported \
+                         yet"
+                    )
+                } else {
+                    e.message
+                };
+                ctx.err(span, message);
                 failed = true;
                 break;
             }

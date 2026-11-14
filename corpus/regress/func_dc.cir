@@ -1,0 +1,18 @@
+user functions (.func) giving a subcircuit's element values per instance
+* written for Dune (Fase 8, .func; probes f1/f2 in ngspice-47): a
+* top-level function reads the instance parameter `rho` at the call
+* site, a local one shadows a top-level name, and the call-site
+* fallback finds a function defined only inside the subcircuit.
+.func rpar(a, b) {a*b/(a+b)}
+.func rgeom(len) {rho*len}
+.func trim(x) {low(x)*0.9}
+.subckt div in out rho=1k
+.func low(x) {x*2}
+r1 in out {rgeom(2)}
+r2 out 0 {rpar(rgeom(4), trim(500))}
+.ends
+v1 1 0 1
+x1 1 2 div rho=2k
+x2 1 3 div
+.dc v1 0 2 0.5
+.end

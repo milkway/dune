@@ -10,7 +10,7 @@
 // from `simulate`/`simulatePic`; nothing is hand-written.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -603,11 +603,11 @@ function displayDeck(deck) {
 }
 
 /** Simulate on the display grid, falling back to the deck's own run. */
-function simulateDisplay(deck, faithful = () => simulate(deck)) {
+function simulateDisplay(deck, faithful = () => simulate(deck), opts = undefined) {
   const dense = displayDeck(deck);
   if (dense !== deck) {
     try {
-      return simulate(dense);
+      return simulate(dense, opts);
     } catch {
       // A grid the deck does not survive (step-kill corner cases):
       // the deck's own grid, then.
@@ -684,13 +684,60 @@ const analysesOf = (deck) => {
   return seen;
 };
 
+/**
+ * The files a corpus deck pulls in with `.include`/`.inc` or
+ * `.lib FILE SECTION` (a one-argument `.lib NAME` opens a section and
+ * reads nothing), followed transitively, keyed the way the wasm loader
+ * asks for them: the deck is `deck.cir` at the root, and a relative
+ * name resolves against the directory of the file that names it
+ * (`dune-netlist` `deck.rs`, `resolve`). Both the joined spelling and
+ * its normalized form are keys, so `./x` and `a/../x` resolve too.
+ * Only files inside the deck's own directory tree are offered.
+ */
+function deckIncludes(rel, deck) {
+  const base = dirname(join(CORPUS, rel));
+  const includes = {};
+  const queue = [['', deck]];
+  const seen = new Set();
+  while (queue.length) {
+    const [from, text] = queue.shift();
+    for (const m of text.matchAll(/^[ \t]*\.(include|inc|lib)[ \t]+("[^"]*"|'[^']*'|\S+)([ \t]+\S+)?/gim)) {
+      if (m[1].toLowerCase() === 'lib' && !m[3]) continue; // a section, not a file
+      const name = m[2].replace(/^["']|["']$/g, '');
+      if (name.startsWith('/')) continue;
+      const joined = from ? `${from}/${name}` : name;
+      const norm = posix.normalize(joined);
+      if (norm.startsWith('..')) continue;
+      let body;
+      try {
+        body = read(join(base, norm));
+      } catch {
+        continue; // missing: the deck's own diagnostic says so
+      }
+      includes[joined] = body;
+      includes[norm] = body;
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        queue.push([posix.dirname(norm) === '.' ? '' : posix.dirname(norm), body]);
+      }
+    }
+  }
+  return includes;
+}
+
 function exampleHtml(rel, groupId) {
   const deck = read(join(CORPUS, rel));
   const stem = rel.split('/').pop().replace(/\.cir$/, '');
   const id = `${groupId}-${slug(stem)}`;
   stats.total++;
   const pills = analysesOf(deck).map((a) => `<span class="pill">.${a}</span>`).join('');
-  const results = runResults(deck, stem, () => simulateDisplay(deck));
+  // Decks that read library files get them through the wasm loader's
+  // in-memory map, as the pic figures do (D-0064 (6)).
+  const includes = deckIncludes(rel, deck);
+  const opts = Object.keys(includes).length ? { includes } : undefined;
+  const results = runResults(deck, stem, () =>
+    simulateDisplay(deck, () => simulate(deck, opts), opts),
+  );
   return {
     id,
     stem,

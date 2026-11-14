@@ -31,11 +31,13 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use crate::cond::{Activity, Conds};
 use crate::deck::Card;
 use crate::diag::{Diagnostic, Severity};
 use crate::elem::parse_element_in;
+use crate::func::{FuncScope, FuncTable};
 use crate::ir::{Device, Element, Expr, ExprOp, Model, Param, ParamValue, SourceKind};
-use crate::param::{self, ParamDef, ParamEnv};
+use crate::param::{self, ParamDef, ParamEnv, TemperUse};
 use crate::scan::Scanner;
 use crate::span::Span;
 
@@ -76,6 +78,8 @@ pub(crate) struct ModelCard<'c> {
     pub name: String,
     pub mtype: String,
     keys: [Option<KeyVal>; 5],
+    /// The `.if` branch holding the card (local cards only).
+    pub guard: Option<u32>,
     /// For a local card: the names its values read, deduplicated, or
     /// `None` when some value does not parse (no sharing then).
     free: Option<Vec<Box<str>>>,
@@ -94,7 +98,7 @@ impl<'c> ModelCard<'c> {
     /// Read a `.model` card's name, type and binning keys; `local`
     /// (a card inside a subcircuit) also collects the names its values
     /// read, so instances agreeing on them can share one evaluation.
-    pub fn new(card: &'c Card, local: bool) -> Self {
+    pub fn new(card: &'c Card, local: bool, user_fns: &HashSet<String>) -> Self {
         let mut sc = Scanner::new(card);
         sc.next_tok(); // `.model`
         let name = sc.next_tok().map(|t| t.lc()).unwrap_or_default();
@@ -121,7 +125,7 @@ impl<'c> ModelCard<'c> {
                     break;
                 };
                 if let (KeyVal::Text(s, e), Some(names)) = (v, free.as_mut()) {
-                    match param::value_vars(&card.text[s..e]) {
+                    match param::value_vars(&card.text[s..e], user_fns) {
                         Some(vs) => names.extend(vs),
                         None => free = None,
                     }
@@ -141,6 +145,7 @@ impl<'c> ModelCard<'c> {
             name,
             mtype,
             keys,
+            guard: None,
             free,
         }
     }
@@ -198,8 +203,9 @@ fn bin_base(name: &str) -> Option<&str> {
 /// Exact and binned model names of one scope, by index.
 #[derive(Debug, Default)]
 pub(crate) struct ModelIndex {
-    /// Name → last definition with that name.
-    exact: HashMap<String, usize>,
+    /// Name → its definitions, in order (the last one in effect wins;
+    /// `.if` branches can hold several).
+    exact: HashMap<String, Vec<usize>>,
     /// Bin base → its bins, in definition order.
     families: HashMap<String, Vec<usize>>,
 }
@@ -208,7 +214,7 @@ impl ModelIndex {
     fn build<'a>(names: impl Iterator<Item = &'a str>) -> Self {
         let mut ix = ModelIndex::default();
         for (i, n) in names.enumerate() {
-            ix.exact.insert(n.to_string(), i);
+            ix.exact.entry(n.to_string()).or_default().push(i);
             if let Some(b) = bin_base(n) {
                 ix.families.entry(b.to_string()).or_default().push(i);
             }
@@ -229,10 +235,16 @@ pub(crate) struct SubcktDef<'c> {
     pub ports: Vec<String>,
     /// `.subckt` line defaults, then body `.param`s, in card order.
     pub formals: Vec<ParamDef<'c>>,
-    pub items: Vec<BodyItem<'c>>,
+    /// Element and `X` cards, each with the `.if` branch holding it.
+    pub items: Vec<(Option<u32>, BodyItem<'c>)>,
     pub models: Vec<ModelCard<'c>>,
     pub model_index: ModelIndex,
     pub subckts: Vec<SubcktDef<'c>>,
+    /// The body's user functions (`.func`), seen by the body and by
+    /// the subcircuits defined inside it.
+    pub funcs: FuncTable<'c>,
+    /// The body's `.if` blocks, evaluated per instance.
+    pub conds: Conds<'c>,
     /// Problems found while reading the body, reported when (and
     /// only if) the subcircuit is instantiated.
     pub deferred: Vec<Diagnostic>,
@@ -251,6 +263,7 @@ impl SubcktDef<'_> {
     /// Fill `model_index` once the body is complete.
     pub fn finish(&mut self) {
         self.model_index = ModelIndex::build(self.models.iter().map(|m| m.name.as_str()));
+        self.funcs.check_recursion(&mut self.deferred);
     }
 }
 
@@ -323,6 +336,9 @@ pub(crate) fn parse_xcall<'c>(card: &'c Card, diags: &mut Vec<Diagnostic>) -> Op
     if let Some(p) = params_at {
         crate::parse::collect_assignments(card, p, &mut actuals, diags);
     }
+    for a in &mut actuals {
+        a.temper_ok = false;
+    }
     Some(XCall {
         name,
         nodes: names,
@@ -391,7 +407,7 @@ pub(crate) fn mark_multiplied(top: &mut TopScope) {
     }
     fn walk_calls(defs: &[SubcktDef], f: &mut dyn FnMut(&XCall)) {
         for d in defs {
-            for i in &d.items {
+            for (_, i) in &d.items {
                 if let BodyItem::X(x) = i {
                     f(x);
                 }
@@ -410,7 +426,7 @@ pub(crate) fn mark_multiplied(top: &mut TopScope) {
             if !d.multiplied && names.contains(&d.name) && !d.declares_m() {
                 d.multiplied = true;
                 changed = true;
-                for i in &d.items {
+                for (_, i) in &d.items {
                     if let BodyItem::X(x) = i {
                         names.insert(x.subname.clone());
                     }
@@ -428,6 +444,10 @@ struct Frame<'a, 'c> {
     parent: Option<&'a Frame<'a, 'c>>,
     def: &'c SubcktDef<'c>,
     env: &'a ParamEnv<'a>,
+    /// The user functions visible in the body (lexical).
+    funcs: &'a FuncScope<'a>,
+    /// The body's `.if` branches in effect for this instance.
+    active: &'a Activity,
     path: &'a str,
     node_map: &'a HashMap<String, String>,
     /// The instance's multiplier when the subcircuit is multiplied.
@@ -688,15 +708,27 @@ impl<'c> Expander<'_, 'c> {
     ) -> Option<ModelRef> {
         let mut fr = frame;
         while let Some(f) = fr {
-            if let Some(&i) = f.def.model_index.exact.get(name) {
+            let on = |i: &usize| f.active.on(f.def.models[*i].guard);
+            if let Some(&i) = f
+                .def
+                .model_index
+                .exact
+                .get(name)
+                .and_then(|v| v.iter().rev().find(|i| on(i)))
+            {
                 return self.emit_local(f, i);
             }
-            if let Some(fam) = f.def.model_index.families.get(name) {
+            if let Some(fam) = f.def.model_index.families.get(name)
+                && fam.iter().any(on)
+            {
                 // ngspice renames the reference to the instance's
                 // family (`subckt.c` `model_name_match`) and bins
                 // among the instance's cards only (`s5 b_local_*`).
-                let cands: Vec<(usize, &ModelCard)> =
-                    fam.iter().map(|&i| (i, &f.def.models[i])).collect();
+                let cands: Vec<(usize, &ModelCard)> = fam
+                    .iter()
+                    .filter(|i| on(i))
+                    .map(|&i| (i, &f.def.models[i]))
+                    .collect();
                 return match self.select_bin(el, &cands, f.env, name) {
                     Some(i) => self.emit_local(f, i),
                     None => Some(ModelRef {
@@ -709,7 +741,7 @@ impl<'c> Expander<'_, 'c> {
             fr = f.parent;
         }
         let top = self.top;
-        if let Some(&i) = self.global_index.exact.get(name) {
+        if let Some(&i) = self.global_index.exact.get(name).and_then(|v| v.last()) {
             self.global_used[i] = true;
             return top.models[i]
                 .model
@@ -786,7 +818,8 @@ impl<'c> Expander<'_, 'c> {
             if !card.static_keys() && !self.charge(1, el.span) {
                 return None;
             }
-            if let Some([lmin, lmax, wmin, wmax]) = card.bin_limits(env)
+            if let Some([lmin, lmax, wmin, wmax]) =
+                env.with_temper(TemperUse::Device, || card.bin_limits(env))
                 && in_range(l, lmin, lmax)
                 && in_range(w, wmin, wmax)
             {
@@ -835,7 +868,9 @@ impl<'c> Expander<'_, 'c> {
             return None;
         }
         let mut ds = Vec::new();
-        let model = crate::parse::parse_model(mc.card, &mut ds, f.env);
+        let model = f.env.with_temper(TemperUse::Device, || {
+            crate::parse::parse_model(mc.card, &mut ds, f.env)
+        });
         self.report_all(ds);
         let mut model = model?;
         model.name = format!("{}.{}", f.path, model.name);
@@ -869,12 +904,15 @@ impl<'c> Expander<'_, 'c> {
             return;
         }
         // Innermost definition wins: the calling instances' local
-        // definitions, then the top level.
+        // definitions, then the top level. The functions the body sees
+        // are those of where the definition is written.
         let mut def = None;
+        let mut container = caller_env.root().funcs;
         let mut fr = caller;
         while let Some(f) = fr {
             if let Some(d) = f.def.subckts.iter().find(|d| d.name == call.subname) {
                 def = Some(d);
+                container = Some(f.funcs);
                 break;
             }
             fr = f.parent;
@@ -927,6 +965,7 @@ impl<'c> Expander<'_, 'c> {
                 card: def.card,
                 value_start: 0,
                 value: "1",
+                temper_ok: true,
             });
         }
         defs.extend(def.formals.iter().cloned());
@@ -969,13 +1008,28 @@ impl<'c> Expander<'_, 'c> {
                 card: call.card,
                 value_start: 0,
                 value: "m",
+                temper_ok: true,
             });
         }
         if !self.charge(defs.len(), call.span) {
             return;
         }
+        let funcs = FuncScope {
+            table: &def.funcs,
+            parent: container,
+        };
         let mut ds = Vec::new();
-        let env = param::resolve_local(&defs, caller_env, &mut ds);
+        let env = param::resolve_local(&defs, caller_env, Some(&funcs), &mut ds);
+        self.report_all(ds);
+        // The instance's `.if` branches (`g9-probes i_sub_param2`:
+        // two instances, two branches).
+        if !self.charge(def.conds.len(), call.span) {
+            return;
+        }
+        let mut ds = Vec::new();
+        let active = env.with_temper(TemperUse::Forbidden("an .if condition"), || {
+            def.conds.evaluate(&env, &mut |d| ds.push(d))
+        });
         self.report_all(ds);
 
         let mult = if def.multiplied {
@@ -1011,14 +1065,19 @@ impl<'c> Expander<'_, 'c> {
             parent: caller,
             def,
             env: &env,
+            funcs: &funcs,
+            active: &active,
             path: &inst_path,
             node_map: &inner_nodes,
             mult,
             emitted: RefCell::new(HashMap::new()),
         };
-        for item in &def.items {
+        for (guard, item) in &def.items {
             if self.overflowed {
                 return;
+            }
+            if !active.on(*guard) {
+                continue;
             }
             match item {
                 BodyItem::Elem(card) => {
@@ -1026,14 +1085,16 @@ impl<'c> Expander<'_, 'c> {
                         return;
                     }
                     let mut ds = Vec::new();
-                    let el = parse_element_in(
-                        card,
-                        &mut ds,
-                        self.ctx.model_names,
-                        self.ctx.vdmos_models,
-                        frame.env,
-                        frame.mult.is_some(),
-                    );
+                    let el = frame.env.with_temper(ParamEnv::temper_for_card(card), || {
+                        parse_element_in(
+                            card,
+                            &mut ds,
+                            self.ctx.model_names,
+                            self.ctx.vdmos_models,
+                            frame.env,
+                            frame.mult.is_some(),
+                        )
+                    });
                     self.report_all(ds);
                     if let Some(el) = el {
                         self.finish_element(
