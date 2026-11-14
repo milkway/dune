@@ -709,3 +709,21 @@ fn x_line_multiplier_per_device_kind_s4() {
         parse(".model nm nmos level=1\n.subckt s a\nm1 a a 0 0 nm l=1u w=1u\n.ends\nx1 1 s m=1");
     assert!(errors(&out).is_empty(), "{:?}", out.diags);
 }
+
+#[test]
+fn instances_agreeing_on_a_model_share_it() {
+    // A local model depending on `w` only: x1 and x3 agree (w=2), x2
+    // differs; `g` is global. Two copies, named after the first user.
+    let nl = clean(
+        ".param g=1\n.subckt s a w=1 k=0\n.model rm r rsh={w*100*g}\nr1 a 0 rm l=1 w=1\n.ends\n\
+         x1 1 s w=2\nx2 2 s w=3\nx3 3 s w=2 k=5",
+    );
+    let model = |n: &str| match &element(&nl, n).device {
+        Device::Resistor { model, .. } => model.clone().unwrap(),
+        d => panic!("{d:?}"),
+    };
+    assert_eq!(model("r.x1.r1"), "x1.rm");
+    assert_eq!(model("r.x2.r1"), "x2.rm");
+    assert_eq!(model("r.x3.r1"), "x1.rm");
+    assert_eq!(nl.models.len(), 2);
+}

@@ -235,6 +235,14 @@ impl<'p> ParamEnv<'p> {
     }
 }
 
+/// The names a card value token reads (as [`ParamEnv::eval_value`]
+/// would parse it), or `None` if it does not parse.
+pub(crate) fn value_vars(token: &str) -> Option<Vec<Box<str>>> {
+    let (inner, _) = delimited(token).ok()?;
+    let expr = pexpr::parse(&inner.replace('"', " ")).ok()?;
+    Some(expr.vars().iter().map(|v| v.name.clone()).collect())
+}
+
 /// Strip `{…}` or `'…'` from a value token; a bare token is its own
 /// expression. Returns the inner text and its offset in `token`.
 fn delimited(token: &str) -> Result<(&str, usize), String> {

@@ -214,7 +214,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 }
             }
             ".model" => match stack.last_mut() {
-                Some(def) => def.models.push(ModelCard::new(card)),
+                Some(def) => def.models.push(ModelCard::new(card, true)),
                 None => {
                     // Evaluated now with the global parameters; its
                     // diagnostics only count if an element uses it
@@ -222,7 +222,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     let mut diags = Vec::new();
                     let model = parse_model(card, &mut diags, &env);
                     top.models.push(GlobalModel {
-                        card: ModelCard::new(card),
+                        card: ModelCard::new(card, false),
                         model,
                         diags,
                     });

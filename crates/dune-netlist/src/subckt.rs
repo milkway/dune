@@ -76,6 +76,9 @@ pub(crate) struct ModelCard<'c> {
     pub name: String,
     pub mtype: String,
     keys: [Option<KeyVal>; 5],
+    /// For a local card: the names its values read, deduplicated, or
+    /// `None` when some value does not parse (no sharing then).
+    free: Option<Vec<Box<str>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -88,12 +91,16 @@ enum KeyVal {
 const KEY_NAMES: [&str; 5] = ["level", "lmin", "lmax", "wmin", "wmax"];
 
 impl<'c> ModelCard<'c> {
-    pub fn new(card: &'c Card) -> Self {
+    /// Read a `.model` card's name, type and binning keys; `local`
+    /// (a card inside a subcircuit) also collects the names its values
+    /// read, so instances agreeing on them can share one evaluation.
+    pub fn new(card: &'c Card, local: bool) -> Self {
         let mut sc = Scanner::new(card);
         sc.next_tok(); // `.model`
         let name = sc.next_tok().map(|t| t.lc()).unwrap_or_default();
         let mtype = sc.next_tok().map(|t| t.lc()).unwrap_or_default();
         let mut keys = [None; 5];
+        let mut free: Option<Vec<Box<str>>> = local.then(Vec::new);
         while let Some(tok) = sc.next_tok() {
             let k = KEY_NAMES.iter().position(|n| tok.eq_ic(n));
             let mut first = true;
@@ -113,18 +120,37 @@ impl<'c> ModelCard<'c> {
                 } else {
                     break;
                 };
+                if let (KeyVal::Text(s, e), Some(names)) = (v, free.as_mut()) {
+                    match param::value_vars(&card.text[s..e]) {
+                        Some(vs) => names.extend(vs),
+                        None => free = None,
+                    }
+                }
                 if first && let Some(k) = k {
                     keys[k] = Some(v);
                 }
                 first = false;
             }
         }
+        if let Some(names) = free.as_mut() {
+            names.sort_unstable();
+            names.dedup();
+        }
         ModelCard {
             card,
             name,
             mtype,
             keys,
+            free,
         }
+    }
+
+    /// Whether every binning key present is a plain number (selection
+    /// then costs no evaluation).
+    fn static_keys(&self) -> bool {
+        self.keys
+            .iter()
+            .all(|k| !matches!(k, Some(KeyVal::Text(..))))
     }
 
     /// A binning key evaluated in `env`; `None` when absent or when
@@ -456,6 +482,7 @@ pub(crate) fn expand(
         top,
         global_index: ModelIndex::build(top.models.iter().map(|m| m.card.name.as_str())),
         global_used: vec![false; top.models.len()],
+        shared: HashMap::new(),
         ctx,
     };
     let empty = HashMap::new();
@@ -504,6 +531,9 @@ struct Expander<'a, 'c> {
     top: &'c TopScope<'c>,
     global_index: ModelIndex,
     global_used: Vec<bool>,
+    /// Local models evaluated so far, by card and the values of the
+    /// names the card reads.
+    shared: HashMap<Vec<u64>, ModelRef>,
     ctx: &'a ExpandCtx<'a>,
 }
 
@@ -728,8 +758,13 @@ impl<'c> Expander<'_, 'c> {
         let in_range = |v: f64, lo: f64, hi: f64| {
             (v - lo).abs() < 1e-9 || (v - hi).abs() < 1e-9 || (lo < v && v < hi)
         };
+        // A bin whose keys are plain numbers costs a comparison; one
+        // whose keys are expressions costs their evaluation.
+        if !self.charge(1 + cands.len() / 64, el.span) {
+            return None;
+        }
         for &(i, card) in cands.iter().rev() {
-            if !self.charge(1, el.span) {
+            if !card.static_keys() && !self.charge(1, el.span) {
                 return None;
             }
             if let Some([lmin, lmax, wmin, wmax]) = card.bin_limits(env)
@@ -758,6 +793,25 @@ impl<'c> Expander<'_, 'c> {
             return Some(r.clone());
         }
         let mc = &f.def.models[i];
+        // Instances that agree on every name the card reads share one
+        // evaluated copy (named after the first of them): a 1000-device
+        // array of one geometry evaluates a 300-parameter PDK bin once.
+        let key = mc.free.as_ref().and_then(|names| {
+            let mut k = Vec::with_capacity(names.len() + 1);
+            k.push(std::ptr::from_ref(mc.card) as usize as u64);
+            for n in names {
+                k.push(f.env.get(n)?.to_bits());
+            }
+            Some(k)
+        });
+        if let Some(r) = key.as_ref().and_then(|k| self.shared.get(k)) {
+            let r = r.clone();
+            if !self.charge(1, mc.card.span()) {
+                return None;
+            }
+            f.emitted.borrow_mut().insert(i, r.clone());
+            return Some(r);
+        }
         if !self.charge(1 + mc.card.text.len() / 256, mc.card.span()) {
             return None;
         }
@@ -769,6 +823,9 @@ impl<'c> Expander<'_, 'c> {
         let r = ModelRef::of(model.name.clone(), &model);
         self.models.push(model);
         f.emitted.borrow_mut().insert(i, r.clone());
+        if let Some(k) = key {
+            self.shared.insert(k, r.clone());
+        }
         Some(r)
     }
 
