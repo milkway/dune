@@ -160,6 +160,22 @@ upstream file headers.
       Hough"); the card handling follows spicelib/parser/inp2y.c and
       inp2p.c.
 
+  crates/dune-core/src/dioext.rs (diode extensions and LEVEL=3)
+      spicelib/devices/dio/: diosetup.c, diotemp.c, dioload.c
+      ("Copyright 1990 Regents of the University of California.
+      Author: 1985 Thomas L. Quarles. Modified: 2000 AlansFixes.
+      Modified by Paolo Nenzi 2003, Dietmar Warning 2012 and Arpad
+      Buermen 2025"). The per-stamp device multiplier `m` of the BJT,
+      JFET and MESFET follows the ngspice revisions of their load,
+      AC, pole-zero, noise and distortion routines.
+
+  crates/dune-netlist/src/behav.rs (behavioural R, C and L)
+      The rewriting into B sources follows frontend/inpcom.c
+      (`inp_compat`; "Copyright 1990 Regents of the University of
+      California. Author: 1985 Wayne A. Christopher") and the B-source
+      grammar of spicelib/parser/inpptree-parser.y; the temperature
+      factor follows spicelib/devices/asrc/asrcload.c.
+
   crates/dune-core/src/four.rs, crates/dune-cli/src/four.rs (`.four`)
       frontend/fourier.c ("Copyright 1990 Regents of the University of
       California. Author: 1985 Wayne A. Christopher, U. C. Berkeley
