@@ -41,6 +41,13 @@ produz diagnóstico com span, nunca pânico, nunca loop infinito.
   do upstream usam `.print pz all`).
 - **`.ends nome` divergente é aviso, não erro**: `ltra_3.cir` do
   upstream traz `.ends lump` fechando `.subckt rlclump`.
+- **Linhas KSPICE do ngspice-47** (`elem.rs::txl`, `cpl`): `Y N1 GND1
+  N2 GND2 MNAME <LEN v>` guarda os quatro nós e separa `len` (o que o
+  `INP2Y` lê) de `length` (o que o `INP2P` lê quando o modelo é CPL);
+  `P` conta os tokens até `length`/`len`, como o `INP2P`, e exige `2k +
+  3` nomes (`k` entradas, referência, `k` saídas, referência, modelo)
+  com `1 ≤ k ≤ 8`; lixo depois do modelo ou do comprimento é erro (o C o
+  ignora). Tipos de modelo `txl` e `cpl` (`docs/kspice-lines.md`).
 - Parâmetros de modelo podem ser flags (o LTRA tem `nocontrol`,
   `steplimit`, `quadinterp`); a validação por tabela de cada modelo é
   do `dune-core`.

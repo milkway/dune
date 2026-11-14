@@ -532,6 +532,20 @@ resultados espelhando o rawfile).
   quirks portados (estampas de pnp sem `VBICtype`) em `docs/vbic.md`;
   sondas `regress/vbic_*` (13, todas PASS).
 
+- **Linhas KSPICE TXL e CPL** (`kspice/` ← `txlsetup.c`/`txlload.c`,
+  `cplsetup.c`/`cplload.c`, `inp2y.c`/`inp2p.c` do **ngspice-47**,
+  contrato E oráculo): a linha única com perdas `Y` (aproximações de
+  Padé da admitância e da propagação, convolução recursiva, história em
+  picossegundos inteiros) e as linhas acopladas `P` de até 8 condutores
+  (decomposição modal por Jacobi, ajustes polinomiais e de Padé por
+  entrada). Op/dc/tf/tran nas duas; `.ac`/`.noise` no TXL pela carga
+  transiente a `h = 0` (o `DEVacLoad` do C), recusados no CPL (sem
+  porta AC). Todo o estado global do C (tabela de nós, `time`
+  compartilhado, free lists, estáticas de setup) vira estado por
+  instância; a carga baixa o `TMAX` (`Device::max_step`). Detalhes,
+  mapa C→Rust e quirks portados em `docs/kspice-lines.md`; sondas
+  `regress/txl_*`, `cpl_*` (11, todas PASS).
+
 - **Chaves S/W** (`switch.rs` ← `swload.c`/`cswload.c` do
   **ngspice-47** — o 3f5 tem outra máquina, ver KNOWN_DIFFS):
   um tipo só, controlado por par de nós (S) ou pela corrente de
