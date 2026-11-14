@@ -1,0 +1,49 @@
+Behavioural R/C/L with temper, tc1/tc2 and user functions at the operating point
+* written for Dune: ngspice-47 rewrites an R/C/L whose value reads
+* temper (directly, through a .param that depends on it, or through a
+* .func) into B sources (inp_compat), the B source reads temper as the
+* circuit temperature and applies tc1/tc2 as 1/(1+tc1*dT+tc2*dT^2),
+* dT = T - 27 (probes b1, b2 in .claude/scratch/behav-probes/)
+.temp 85
+.param pt={temper*10} k=3
+.func g(x) {x*(1+0.1*v(5))}
+.func h(y) {y*2}
+* temper only: a B source, no thermal noise, same value
+r1 1 0 {temper*k}
+i1 0 1 1m
+* temper with v(): the PDK form
+r2 2 0 r='1k*(1+temper/100)*(1+0.1*v(2))'
+i2 0 2 1m
+* through a parameter that depends on temper
+r3 3 0 {pt}
+i3 0 3 1m
+* tc1/tc2 and m on a behavioural R
+r4 4 0 r={1k*(1+0.1*v(4))} tc1=0.01 tc2=1e-4 m=2
+i4 0 4 1m
+* user functions, one with v() in its body
+r5 5 0 r={h(g(250))}
+i5 0 5 1m
+* a subcircuit-local parameter that depends on temper (gf180 r_temp)
+.subckt rr a b w=1 r_tc1=1.36e-3 r_tc2=6.5e-7 r_temp='1+r_tc1*(temper-25)+r_tc2*(temper-25)*(temper-25)'
+rb a b r='r_temp*1k/w*(1+0.01*abs(v(a,b)))'
+.ends
+x1 6 0 rr w=2
+i6 0 6 1m
+* C and L whose value reads only temper: rewritten, internal nodes
+c1 7 0 {temper*1e-12}
+r7 7 0 1k
+i7 0 7 1m
+l1 8 0 {temper*1e-6}
+r8 8 9 1k
+v8 9 0 1
+* the gf180 ppolyf_u form: a bare keyword value before r='...' gets
+* braces first and becomes the expression (7 ohms here; probes b3);
+* tc1 counts before the expression too
+.model rbody r
+.param rl=7
+r10 10 0 rbody l=rl w=2 r='1k*(1+0.01*abs(v(10)))'
+i10 0 10 1m
+r11 11 0 tc1=0.01 r={1k*(1+0.01*abs(v(11)))}
+i11 0 11 1m
+.op
+.end

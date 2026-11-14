@@ -1,0 +1,23 @@
+Behavioural C and L with temper and tc1/tc2 in a transient
+* written for Dune: ngspice-47 rewrites C/L whose value reads temper
+* or v() into its G/R/C/V/B (capacitance), G/L/B (charge) and F/L/B
+* (inductance) helpers (inp_compat); tc1/tc2 divide the capacitance
+* and the charge and multiply the inductance, at dT = T - 27 (probes
+* b1 c_tc_85, b2 c_charge_tc, l_m_tc, c_tparam_tran in
+* .claude/scratch/behav-probes/)
+.options temp=60
+.param cc={1p*(1+temper/100)}
+i1 0 1 pulse(0 1m 0 1n 1n 10n 20n)
+c1 1 0 {cc}
+r1 1 0 1k
+i2 0 2 pulse(0 1m 0 1n 1n 10n 20n)
+c2 2 0 q={1p*v(2)+0.1p*v(2)*v(2)} tc1=0.01 tc2=1e-4
+r2 2 0 1k
+i3 0 3 pulse(0 1m 0 1n 1n 10n 20n)
+c3 3 0 c={1p*(1+0.1*v(3))*(1+temper/1000)} tc1=0.01
+r3 3 0 1k
+i4 0 4 pulse(0 1m 0 1n 1n 10n 20n)
+l4 4 0 l={1u*(1+0.1*v(4))} tc1=0.01 m=2
+r4 4 0 1k
+.tran 0.1n 40n
+.end

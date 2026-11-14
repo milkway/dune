@@ -1,0 +1,12 @@
+Behavioural R and C with temper and tc1 in a small-signal sweep
+* written for Dune: the B sources ngspice-47 makes of R/C cards that
+* read temper or v() (inp_compat), linearised at the operating point,
+* with the tc1 factor taken at the circuit temperature (probes b1
+* r_tc_85, b2 r_ac_tc in .claude/scratch/behav-probes/)
+.temp 85
+v1 1 0 dc 1 ac 1
+r1 1 2 r={1k*(1+temper/100)*(1+0.1*v(1,2))}
+r2 2 0 r={2k*(1+0.05*v(2))} tc1=0.01 tc2=1e-5
+c2 2 0 c={1n*(1+0.1*v(2))} tc1=0.005
+.ac dec 5 1k 10meg
+.end
