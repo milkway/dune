@@ -76,7 +76,10 @@ dune-core     four::FourParams::from_options(&[Param], &mut diags)
               Solution::fourier(fund, &OutExpr, &params)
               four_all(&[Output], &[Solution], &params) -> Vec<FourOutcome>
         │
-        └── dune-cli   formato de saída do ngspice (four.rs, só aqui)
+        ├── dune-cli   formato de saída do ngspice (four.rs, só aqui)
+        ├── dune-py    Result.fourier / spice.fourier() → polars
+        ├── dune-r     res$fourier / spice_fourier() → tibble
+        └── dune-wasm  fourier em simulate*/Session.run
 ```
 
 `Fourier { fund, thd, gridsize, polydegree, nperiods, harmonics }`,
@@ -85,6 +88,58 @@ usa o **último** plot de transiente; `all` expande para todo vetor
 do plot, escala incluída (como o `ft_evaluate`). Falhas
 (`FourError`): `NoTransient`, `UnknownVector`, `LengthMismatch`,
 `SpanTooShort`, `Interpolate`, `BadFrequency`, `TooLarge`.
+
+## Bindings (D-0061)
+
+Um número, uma fonte: as tabelas dos três bindings são os `f64` do
+`four_all`/`Solution::fourier`, sem nada recalculado em R, Python ou JS.
+Forma comum, **uma linha por harmônico** de cada vetor: `card`,
+`vector`, `harmonic` (0 = DC), `frequency`, `magnitude`, `phase` (graus),
+`norm_magnitude`, `norm_phase`, `thd` (%, repetido em toda linha do
+vetor), `gridsize`, `polydegree`, `nperiods`, `error`.
+
+- **Cartões do deck**: `res$fourier` (R), `Result.fourier` (Python,
+  `polars.DataFrame` com os dtypes de `spice.FOURIER_SCHEMA`) e o array
+  `fourier` do resultado do `dune-sim` (wasm), ao lado das medidas — em
+  `spice_run`/`simulate`, nas rodadas de sweep e nas reexecuções de
+  sessão (vazio no `.pss`, como as medidas). Os parâmetros vêm do
+  `.options` do deck pelo `FourParams::from_options` (os avisos dele
+  entram nos `diagnostics`). Os quatro nomes **não** entram nas listas
+  fechadas `OPTION_NAMES` dos bindings: o `.options` do deck já chega ao
+  `.four` (o `Options::apply` os ignora em silêncio e o
+  `FourParams::from_options` os lê); só não há override pelo argumento
+  `options` — quem quer outros valores chama `spice_fourier()` /
+  `spice.fourier()`.
+- `card` numera **só os cartões `.four`**, em ordem de deck (o
+  `FourOutcome::card` do motor é o índice em `outputs`, que inclui
+  `.print`/`.save`): 1, 2, … no R; 0, 1, … no Python e no wasm (como o
+  `plot` das medidas em cada um).
+- **Chamada direta**: `spice_fourier(plot, freq, vectors, nfreqs = 10,
+  nperiods = 1, polydegree = 1, gridsize = 200)` e `spice.fourier(plot,
+  freq, vectors, *, nfreqs=10, nperiods=1, polydegree=1, gridsize=200)`,
+  no molde de `spice_measure()`/`spice.measure()`: recebem um plot de
+  `.tran` (ou o plot de tempo do `.pss`, analisado como transiente),
+  aceitam expressões do `.print` (`v(a,b)`, `i(v1)`) e `all`; `card` é
+  `NA`/`null`. O wasm não tem chamada direta (também não tem `measure`).
+- **Falha é linha, não condição**: um vetor sem tabela (sem transiente,
+  vetor desconhecido, janela curta, `TooLarge`) vira **uma** linha com
+  `error` (a mensagem do `FourError`) e o resto `NA` (R), `nan`/`null`
+  (Python: números `nan`, inteiros `null`) ou `null` (wasm, onde `error`
+  só existe na falha, como nas medidas). Argumento malformado é erro:
+  `spice_error_input` / `TypeError`/`ValueError`; plot que não é
+  transiente ou expressão inválida, `spice_error_fourier` /
+  `SpiceError(kind="fourier")`.
+- No R a transformada roda pelo `engine::compute` (D-0043: `sin`,
+  `cos`, `hypot`, `atan2` no Windows dependem do modo x87 da thread).
+- Testes espelhados (`r/tests/testthat/test-fourier.R`,
+  `python/tests/test_fourier.py`, `crates/dune-wasm/src/tests.rs`): a
+  chamada direta dá, bit a bit, as linhas dos cartões nos quatro decks de
+  `corpus/four/`; sobre o plot do próprio ngspice (golden `.raw`) as
+  tabelas batem com as do ngspice (magnitude < 1e-10 da fundamental,
+  fase < 1e-6° onde `norm_magnitude > 1e-3`, THD nos 6 dígitos do
+  cabeçalho; medido: ≤ 2,3e-12 e 7e-9°); linhas de falha. O
+  `tools/r-vendor.sh` leva `corpus/four` (decks, tabelas e rawfiles,
+  ~220 kB) para o tarball.
 
 ## Saída do CLI (`crates/dune-cli/src/four.rs`)
 
