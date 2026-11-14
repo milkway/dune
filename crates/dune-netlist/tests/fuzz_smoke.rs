@@ -247,3 +247,27 @@ fn mutated_library_decks_never_panic() {
         let _ = parse_with_loader(Path::new("self.lib"), text.clone(), &mut SelfFs(text));
     }
 }
+
+/// libFuzzer timeout of 2026-11-14 (13 s before the reader charged
+/// every entry into a file or section): `.lib`/`.inc` lines naming
+/// the input itself under new spellings fan out within the nesting
+/// limit while splicing next to nothing. Served the way the fuzz
+/// target serves it.
+#[test]
+fn fuzz_timeout_lib_fan_out_is_fast() {
+    struct FuzzFs(String);
+    impl dune_netlist::IncludeLoader for FuzzFs {
+        fn load(&mut self, path: &Path, limit: u64) -> Result<String, String> {
+            if path.components().count() > 4 || self.0.len() as u64 > limit {
+                return Err("refused under fuzzing".into());
+            }
+            Ok(self.0.clone())
+        }
+    }
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fuzz/lib-fanout-timeout.bin");
+    let text = String::from_utf8_lossy(&std::fs::read(path).unwrap()).into_owned();
+    let t = std::time::Instant::now();
+    let _ = parse_with_loader(Path::new("fuzz.lib"), text.clone(), &mut FuzzFs(text));
+    assert!(t.elapsed().as_secs() < 5, "{:?}", t.elapsed());
+}

@@ -25,13 +25,15 @@
 //! - `$` and `;` preceded by whitespace start an end-of-line comment
 //!   (ngspice superset; the C only knows whole-line comments);
 //! - trailing `\r` is stripped (DOS decks);
-//! - `.include`/`.lib` nesting, cycles, bytes read and bytes spliced
+//! - `.include`/`.lib` nesting, cycles, bytes read, bytes walked, entries
+//!   and reader diagnostics
 //!   are bounded so hostile decks cannot hang or exhaust memory
 //!   (principle 4 of `CLAUDE.md`); ngspice-47 segfaults on an
 //!   `.include` cycle.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::diag::Diagnostic;
 use crate::span::{FileId, SourceMap, Span};
@@ -41,10 +43,21 @@ const MAX_NESTING: usize = 16;
 /// Cap on the bytes the loader hands over for one deck (each file is
 /// read once, so this bounds distinct source text).
 const MAX_READ_BYTES: usize = 256 << 20;
-/// Cap on the bytes spliced into the deck: a section requested over
-/// and over is read once but spliced each time, and nesting can
-/// multiply that.
-const MAX_SPLICED_BYTES: usize = 256 << 20;
+/// Cap on the bytes VISITED: every entry into a file or section
+/// (`.include`, `.lib`, the root deck) charges the whole byte length of
+/// what it walks — directives, comments and blank lines included —
+/// whether the file was already read or not. A file read once but
+/// entered over and over, or a fan-out of directive-only sections,
+/// stops here.
+const MAX_VISITED_BYTES: usize = 256 << 20;
+/// Cap on the number of entries into files and sections, so that
+/// entries costing almost no bytes (an empty section, a one-directive
+/// file) cannot multiply within the nesting limit either. The sky130
+/// inverter testbench needs 170.
+const MAX_ENTRIES: usize = 100_000;
+/// Cap on the diagnostics the reader itself produces: past it, reading
+/// stops with one final error.
+const MAX_READER_DIAGS: usize = 1000;
 
 /// Loads the text of a file named by `.include` or `.lib`. The default
 /// implementation reads the file system; a WASM host can supply its
@@ -180,19 +193,24 @@ pub fn read_with_loader(name: &Path, text: String, loader: &mut dyn IncludeLoade
         physical: Vec::new(),
         diags: Vec::new(),
         read_bytes: 0,
-        spliced_bytes: 0,
+        visited_bytes: 0,
+        entries: 0,
         aborted: false,
         loader,
         files: HashMap::new(),
+        failed: HashMap::new(),
+        lines: HashMap::new(),
         sections: HashMap::new(),
         stack: Vec::new(),
     };
     r.read_bytes = text.len();
+    r.visited_bytes = text.len();
+    r.entries = 1;
     match r.sources.add(name.to_path_buf(), text) {
         Some(file) => {
             r.files.insert(normalize(name), file);
             r.stack.push((normalize(name), None));
-            let lines = line_ranges(&r.sources.file(file).text);
+            let lines = r.lines_of(file);
             r.splice(file, name, &lines, 0, false);
         }
         None => r
@@ -215,7 +233,10 @@ struct Section {
     /// The `.lib NAME` line.
     head: Span,
     /// Body lines (byte ranges into the library file).
-    body: Vec<(usize, usize)>,
+    body: Rc<[(usize, usize)]>,
+    /// Bytes from the `.lib NAME` line to the `.endl` (or to the end
+    /// of the file): what one entry into the section charges.
+    bytes: usize,
     /// The closing `.endl` line and the name it carries, if any.
     end: Option<(Span, Option<String>)>,
 }
@@ -230,13 +251,20 @@ struct Reader<'a> {
     diags: Vec<Diagnostic>,
     /// Bytes handed over by the loader (each file is read once).
     read_bytes: usize,
-    /// Bytes of physical lines spliced into the deck.
-    spliced_bytes: usize,
+    /// Bytes walked so far, charged per entry ([`MAX_VISITED_BYTES`]).
+    visited_bytes: usize,
+    /// Entries into files and sections so far ([`MAX_ENTRIES`]).
+    entries: usize,
     /// Set once a budget is exhausted: reading stops everywhere.
     aborted: bool,
     loader: &'a mut dyn IncludeLoader,
     /// Every file read so far, by lexically normalized path.
     files: HashMap<PathBuf, FileId>,
+    /// Loader failures, by normalized path: asked once, reported each
+    /// time the path is named.
+    failed: HashMap<PathBuf, String>,
+    /// Non-blank line ranges of each file, computed once.
+    lines: HashMap<FileId, Rc<[(usize, usize)]>>,
     /// Section index of each library file, built on first use.
     sections: HashMap<FileId, Vec<Section>>,
     /// Files and sections being spliced right now (cycle detection).
@@ -290,34 +318,31 @@ impl Reader<'_> {
                 let args = match directive_args(&line, kw_end) {
                     Ok(args) => args,
                     Err((msg, a, b)) => {
-                        self.diags
-                            .push(Diagnostic::error(msg, Span::new(file, s + a, s + b)));
+                        self.report(Diagnostic::error(msg, Span::new(file, s + a, s + b)));
                         continue;
                     }
                 };
                 let arg_span = |a: &Arg| Span::new(file, s + a.start, s + a.end);
                 match d {
                     Directive::Include => match args.first() {
-                        None => self
-                            .diags
-                            .push(Diagnostic::error(".include filename missing", src)),
+                        None => self.report(Diagnostic::error(".include filename missing", src)),
                         Some(a) => {
                             let target = resolve(path, &a.text);
                             self.include(&target, arg_span(a), src, depth);
                         }
                     },
                     Directive::Lib => match args.as_slice() {
-                        [] => self.diags.push(Diagnostic::error(
+                        [] => self.report(Diagnostic::error(
                             ".lib needs a library file and a section name",
                             src,
                         )),
-                        [_] if in_section => self.diags.push(Diagnostic::error(
+                        [_] if in_section => self.report(Diagnostic::error(
                             "`.lib NAME` inside a library section: sections do not nest \
                              (this one ends at the first `.endl`, as in ngspice)",
                             src,
                         )),
                         [a] => {
-                            self.diags.push(Diagnostic::error(
+                            self.report(Diagnostic::error(
                                 format!(
                                     "`.lib {}` opens a library section, which only a file \
                                      read with `.lib FILE SECTION` may define; to read a \
@@ -330,7 +355,7 @@ impl Reader<'_> {
                         }
                         [f, sec, rest @ ..] => {
                             if let Some(extra) = rest.first() {
-                                self.diags.push(Diagnostic::warning(
+                                self.report(Diagnostic::warning(
                                     "text after the .lib section name ignored",
                                     arg_span(extra),
                                 ));
@@ -339,9 +364,7 @@ impl Reader<'_> {
                             self.lib(&target, arg_span(f), &sec.text, arg_span(sec), src, depth);
                         }
                     },
-                    Directive::Endl => self
-                        .diags
-                        .push(Diagnostic::error(".endl without .lib", src)),
+                    Directive::Endl => self.report(Diagnostic::error(".endl without .lib", src)),
                 }
                 continue;
             }
@@ -358,6 +381,15 @@ impl Reader<'_> {
         // it is never stripped.
         let is_title = depth == 0 && self.physical.is_empty();
         if !is_title {
+            // Whole-line comments never become cards (`finish` would
+            // drop them, and they do not break continuations): don't
+            // keep them.
+            if matches!(
+                text[s..e].trim_start().as_bytes().first(),
+                Some(b'*' | b'#' | b'$')
+            ) {
+                return;
+            }
             let cut = inline_comment_start(&text[s..e]);
             e = s + cut;
             while e > s && matches!(text.as_bytes()[e - 1], b' ' | b'\t') {
@@ -365,18 +397,6 @@ impl Reader<'_> {
             }
         }
         if text[s..e].trim().is_empty() {
-            return;
-        }
-        self.spliced_bytes = self.spliced_bytes.saturating_add(e - s + 1);
-        if self.spliced_bytes > MAX_SPLICED_BYTES {
-            self.abort(
-                format!(
-                    "deck grows past {} MiB of spliced source text \
-                     (.include/.lib repeated too often?); giving up",
-                    MAX_SPLICED_BYTES >> 20
-                ),
-                Span::new(file, s, e),
-            );
             return;
         }
         let line = text[s..e].to_string();
@@ -393,6 +413,62 @@ impl Reader<'_> {
         }
     }
 
+    /// Record a reader diagnostic; past [`MAX_READER_DIAGS`] reading
+    /// stops with a final error at the same place.
+    fn report(&mut self, d: Diagnostic) {
+        if self.aborted {
+            return;
+        }
+        let span = d.span;
+        self.diags.push(d);
+        if self.diags.len() >= MAX_READER_DIAGS {
+            let msg = format!(
+                "more than {MAX_READER_DIAGS} problems reading .include/.lib files; giving up"
+            );
+            self.aborted = true;
+            self.diags.push(match span {
+                Some(span) => Diagnostic::error(msg, span),
+                None => Diagnostic::global_error(msg),
+            });
+        }
+    }
+
+    /// Charge one entry of `bytes` into a file or section against the
+    /// work budgets; false once reading must stop.
+    fn enter(&mut self, bytes: usize, src: Span) -> bool {
+        self.entries += 1;
+        self.visited_bytes = self.visited_bytes.saturating_add(bytes);
+        if self.entries > MAX_ENTRIES {
+            self.abort(
+                format!(
+                    "more than {MAX_ENTRIES} .include/.lib entries \
+                     (a file or section requested too often?); giving up"
+                ),
+                src,
+            );
+        } else if self.visited_bytes > MAX_VISITED_BYTES {
+            self.abort(
+                format!(
+                    "more than {} MiB of source text walked through .include/.lib \
+                     (a file or section requested too often?); giving up",
+                    MAX_VISITED_BYTES >> 20
+                ),
+                src,
+            );
+        }
+        !self.aborted
+    }
+
+    /// The cached non-blank line ranges of `file`.
+    fn lines_of(&mut self, file: FileId) -> Rc<[(usize, usize)]> {
+        if let Some(l) = self.lines.get(&file) {
+            return l.clone();
+        }
+        let l: Rc<[(usize, usize)]> = line_ranges(&self.sources.file(file).text).into();
+        self.lines.insert(file, l.clone());
+        l
+    }
+
     /// Nesting and cycle checks shared by `.include` and `.lib`.
     fn may_enter(&mut self, key: &StackKey, what: &str, src: Span, depth: usize) -> bool {
         if self.stack.contains(key) {
@@ -400,14 +476,14 @@ impl Reader<'_> {
                 Some(sec) => format!("section `{sec}` of {}", key.0.display()),
                 None => key.0.display().to_string(),
             };
-            self.diags.push(Diagnostic::error(
+            self.report(Diagnostic::error(
                 format!("{what} cycle: {target} is already being read"),
                 src,
             ));
             return false;
         }
         if depth >= MAX_NESTING {
-            self.diags.push(Diagnostic::error(
+            self.report(Diagnostic::error(
                 format!(".include/.lib nested deeper than {MAX_NESTING} levels"),
                 src,
             ));
@@ -423,14 +499,18 @@ impl Reader<'_> {
         if let Some(&id) = self.files.get(&key) {
             return Some(id);
         }
+        if let Some(e) = self.failed.get(&key) {
+            let msg = format!("cannot open {what} file {}: {e}", path.display());
+            self.report(Diagnostic::error(msg, at));
+            return None;
+        }
         let budget = MAX_READ_BYTES.saturating_sub(self.read_bytes);
         let text = match self.loader.load(path, budget as u64) {
             Ok(text) => text,
             Err(e) => {
-                self.diags.push(Diagnostic::error(
-                    format!("cannot open {what} file {}: {e}", path.display()),
-                    at,
-                ));
+                let msg = format!("cannot open {what} file {}: {e}", path.display());
+                self.failed.insert(key, e);
+                self.report(Diagnostic::error(msg, at));
                 return None;
             }
         };
@@ -447,8 +527,7 @@ impl Reader<'_> {
         }
         self.read_bytes += text.len();
         let Some(id) = self.sources.add(path.to_path_buf(), text) else {
-            self.diags
-                .push(Diagnostic::error("source file too large", at));
+            self.report(Diagnostic::error("source file too large", at));
             return None;
         };
         self.files.insert(key, id);
@@ -464,7 +543,10 @@ impl Reader<'_> {
         let Some(file) = self.open(path, ".include", at) else {
             return;
         };
-        let lines = line_ranges(&self.sources.file(file).text);
+        if !self.enter(self.sources.file(file).text.len(), src) {
+            return;
+        }
+        let lines = self.lines_of(file);
         self.stack.push(key);
         self.splice(file, path, &lines, depth + 1, false);
         self.stack.pop();
@@ -489,13 +571,15 @@ impl Reader<'_> {
         let Some(file) = self.open(path, "library", at) else {
             return;
         };
-        let index = self
-            .sections
-            .entry(file)
-            .or_insert_with(|| index_sections(file, &self.sources.file(file).text));
+        if !self.sections.contains_key(&file) {
+            let lines = self.lines_of(file);
+            let index = index_sections(file, &self.sources.file(file).text, &lines);
+            self.sections.insert(file, index);
+        }
+        let index = &self.sections[&file];
         // ngspice takes the first definition of a name.
         let Some(sec) = index.iter().find(|s| s.name == name) else {
-            self.diags.push(Diagnostic::error(
+            self.report(Diagnostic::error(
                 format!(
                     "section `{section}` not found in library file {}",
                     path.display()
@@ -506,10 +590,11 @@ impl Reader<'_> {
         };
         let head = sec.head;
         let body = sec.body.clone();
+        let bytes = sec.bytes;
         let end = sec.end.clone();
         match end {
             None => {
-                self.diags.push(Diagnostic::error(
+                self.report(Diagnostic::error(
                     format!("library section `{section}` is never closed by `.endl`"),
                     head,
                 ));
@@ -518,12 +603,15 @@ impl Reader<'_> {
             Some((end_span, Some(closing))) if closing != name => {
                 // ngspice accepts any name on `.endl` (and so do
                 // upstream `.ends`); worth a warning, not an error.
-                self.diags.push(Diagnostic::warning(
+                self.report(Diagnostic::warning(
                     format!(".endl {closing} closes .lib section {name}"),
                     end_span,
                 ));
             }
             Some(_) => {}
+        }
+        if !self.enter(bytes, src) {
+            return;
         }
         self.stack.push(key);
         self.splice(file, path, &body, depth + 1, true);
@@ -610,10 +698,11 @@ fn line_ranges(text: &str) -> Vec<(usize, usize)> {
 /// linear pass. Lines outside sections are ignored, as in ngspice
 /// (only section bodies are ever spliced); inside a section the first
 /// `.endl` closes it.
-fn index_sections(file: FileId, text: &str) -> Vec<Section> {
+fn index_sections(file: FileId, text: &str, lines: &[(usize, usize)]) -> Vec<Section> {
     let mut out: Vec<Section> = Vec::new();
+    let mut bodies: Vec<Vec<(usize, usize)>> = Vec::new();
     let mut open = false;
-    for (s, e) in line_ranges(text) {
+    for &(s, e) in lines {
         let line = &text[s..e];
         let directive = directive_of(line);
         if !open {
@@ -624,9 +713,11 @@ fn index_sections(file: FileId, text: &str) -> Vec<Section> {
                 out.push(Section {
                     name: name.text.to_ascii_lowercase(),
                     head: Span::new(file, s, e),
-                    body: Vec::new(),
+                    body: Rc::from(Vec::new()),
+                    bytes: text.len() - s,
                     end: None,
                 });
+                bodies.push(Vec::new());
                 open = true;
             }
             continue;
@@ -640,10 +731,14 @@ fn index_sections(file: FileId, text: &str) -> Vec<Section> {
                 .and_then(|a| a.into_iter().next())
                 .map(|a| a.text.to_ascii_lowercase());
             sec.end = Some((Span::new(file, s, e), closing));
+            sec.bytes = e - sec.head.start as usize;
             open = false;
-        } else {
-            sec.body.push((s, e));
+        } else if let Some(body) = bodies.last_mut() {
+            body.push((s, e));
         }
+    }
+    for (sec, body) in out.iter_mut().zip(bodies) {
+        sec.body = body.into();
     }
     out
 }
@@ -1013,10 +1108,17 @@ mod tests {
         assert_eq!(texts(&d), ["r1 1 0 1", "r2 1 0 1"]);
     }
 
+    /// Errors and the time the read took.
+    fn timed(deck: &str, l: &mut MapLoader) -> (Deck, std::time::Duration) {
+        let t = std::time::Instant::now();
+        let d = read_map(deck, l);
+        (d, t.elapsed())
+    }
+
     #[test]
-    fn spliced_bytes_are_bounded() {
+    fn walked_bytes_are_bounded() {
         // A 256 KiB section requested 2000 times is read once, but
-        // splicing it every time would build a 500 MiB deck.
+        // walking it every time would build a 500 MiB deck.
         let big = format!("r1 1 0 1 {}\n", "x".repeat(64 << 10));
         let lib = format!(".lib t\n{big}{big}{big}{big}.endl\n");
         let deck = format!("t\n{}", ".lib m.lib t\n".repeat(2000));
@@ -1024,11 +1126,76 @@ mod tests {
             files: vec![("m.lib", lib)],
             loads: Vec::new(),
         };
-        let d = read_map(&deck, &mut l);
+        let (d, dt) = timed(&deck, &mut l);
         let e = errors(&d);
         assert_eq!(e.len(), 1, "{e:?}");
-        assert!(e[0].contains("spliced source text"), "{e:?}");
+        assert!(e[0].contains("MiB of source text walked"), "{e:?}");
+        assert!(d.diags[0].span.is_some());
         assert_eq!(l.loads.len(), 1);
+        assert!(dt.as_secs() < 10, "{dt:?}");
+    }
+
+    #[test]
+    fn comment_only_file_entered_over_and_over_is_bounded() {
+        // Nothing in it reaches the deck, yet every entry walks 1 MiB.
+        let comments = "* only a comment line, nothing to splice\n".repeat(1 << 20 >> 6);
+        let comments = comments.repeat(2); // ~ 2.6 MiB
+        let deck = format!("t\n{}", ".include c.inc\n".repeat(5000));
+        let mut l = MapLoader {
+            files: vec![("c.inc", comments)],
+            loads: Vec::new(),
+        };
+        let (d, dt) = timed(&deck, &mut l);
+        let e = errors(&d);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains("MiB of source text walked"), "{e:?}");
+        assert!(dt.as_secs() < 10, "{dt:?}");
+        // A file of blank lines costs no bytes to walk: the entry cap
+        // stops it.
+        let deck = format!("t\n{}", ".inc e.inc\n".repeat(MAX_ENTRIES + 10));
+        let mut l = MapLoader::new(&[("e.inc", "\n\n")]);
+        let (d, dt) = timed(&deck, &mut l);
+        let e = errors(&d);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains(".include/.lib entries"), "{e:?}");
+        assert!(dt.as_secs() < 10, "{dt:?}");
+    }
+
+    #[test]
+    fn directive_only_fan_out_is_bounded() {
+        // Section sK requests s(K+1) four times, 15 levels deep: 4^15
+        // (> 1e9) entries unbounded, none of them a card.
+        let mut lib = String::new();
+        for k in 0..15 {
+            lib.push_str(&format!(".lib s{k}\n"));
+            for _ in 0..4 {
+                lib.push_str(&format!(".lib m.lib s{}\n", k + 1));
+            }
+            lib.push_str(".endl\n");
+        }
+        lib.push_str(".lib s15\n* leaf\n.endl\n");
+        let mut l = MapLoader {
+            files: vec![("m.lib", lib)],
+            loads: Vec::new(),
+        };
+        let (d, dt) = timed("t\n.lib m.lib s0\n", &mut l);
+        let e = errors(&d);
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains(".include/.lib entries"), "{e:?}");
+        assert!(d.diags[0].span.is_some());
+        assert!(d.cards.is_empty());
+        assert_eq!(l.loads.len(), 1);
+        assert!(dt.as_secs() < 10, "{dt:?}");
+    }
+
+    #[test]
+    fn reader_diagnostics_are_capped_and_failed_opens_cached() {
+        let deck = format!("t\n{}", ".include missing.inc\n".repeat(5000));
+        let mut l = MapLoader::new(&[]);
+        let d = read_map(&deck, &mut l);
+        assert_eq!(d.diags.len(), MAX_READER_DIAGS + 1);
+        assert!(d.diags.last().unwrap().message.contains("giving up"));
+        assert_eq!(l.loads, ["missing.inc"]);
     }
 
     #[test]
