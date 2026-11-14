@@ -39,10 +39,22 @@
 
 use std::cell::Cell;
 
+use crate::func::{FuncScope, UserFn};
+use crate::span::Span;
+
 /// Longest accepted expression text (the open PDKs reach 613 bytes).
 pub(crate) const MAX_LEN: usize = 64 * 1024;
 /// Deepest accepted nesting of parentheses, calls, signs and `!`.
 pub(crate) const MAX_NEST: usize = 100;
+/// Deepest accepted chain of user-function (`.func`) calls in one
+/// evaluation. Recursion is refused when the functions are defined
+/// (`func.rs`); this bounds the evaluator's frame stack regardless.
+pub(crate) const MAX_CALL_DEPTH: usize = 256;
+/// Work (operations plus names resolved inside user-function bodies)
+/// one deck may spend, all evaluations together: a chain of functions
+/// that each call the next twice doubles the work per level, so the
+/// budget, not the depth, is what stops it.
+pub(crate) const MAX_FN_WORK: u64 = 1 << 24;
 
 /// A parse or evaluation failure, with a byte range inside the
 /// expression text it came from.
@@ -51,14 +63,38 @@ pub(crate) struct PError {
     pub msg: String,
     pub start: usize,
     pub end: usize,
+    /// Where the problem is when it is not inside the expression text
+    /// itself: in the body of a user function it called.
+    pub at: Option<Span>,
 }
 
 impl PError {
-    fn new(msg: impl Into<String>, start: usize, end: usize) -> Self {
+    pub(crate) fn new(msg: impl Into<String>, start: usize, end: usize) -> Self {
         PError {
             msg: msg.into(),
             start,
             end: end.max(start),
+            at: None,
+        }
+    }
+
+    /// An error whose diagnostic was already reported (a failed
+    /// definition it depends on): callers stay silent.
+    pub(crate) fn silenced(start: usize, end: usize) -> Self {
+        PError::new(String::new(), start, end)
+    }
+
+    /// The same error seen from a call into function `f`: placed in
+    /// `f`'s body (bytes `s..e` of it unless it already has a place).
+    fn in_function(self, f: &UserFn, s: usize, e: usize) -> Self {
+        if self.msg.is_empty() {
+            return self;
+        }
+        PError {
+            msg: format!("{} (in function `{}`)", self.msg, f.name),
+            start: 0,
+            end: 0,
+            at: Some(self.at.unwrap_or_else(|| f.span_of(s, e))),
         }
     }
 }
@@ -189,11 +225,30 @@ enum Op {
     Ge,
     And,
     Or,
-    /// Function, argument count, index into [`Expr::calls`].
-    Call(Func, u8, u32),
+    /// Callee, argument count, index into [`Expr::calls`].
+    Call(Callee, u16, u32),
     /// Pop; jump to the target when the value is exactly zero.
     JmpIfZero(u32),
     Jmp(u32),
+}
+
+/// What a call names. A built-in may still be shadowed by a user
+/// function (`.func sqrt(x) …` wins in ngspice-47, probe `f1
+/// f_shadow_builtin`), so the choice is made when evaluating.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Callee {
+    Builtin(Func),
+    /// Not a built-in: a user function, or an unknown one.
+    Named,
+}
+
+/// A call in an expression: the function name (lowercased) and its
+/// byte range.
+#[derive(Clone, Debug)]
+pub(crate) struct CallSite {
+    pub name: Box<str>,
+    pub start: u32,
+    pub end: u32,
 }
 
 /// A name used by an expression (lowercased), with its byte range.
@@ -209,8 +264,8 @@ pub(crate) struct VarRef {
 pub(crate) struct Expr {
     code: Vec<Op>,
     vars: Vec<VarRef>,
-    /// Byte range of each call's function name (for the random note).
-    calls: Vec<(u32, u32)>,
+    /// Each call's function name and byte range.
+    calls: Vec<CallSite>,
 }
 
 /// How the random functions (`agauss gauss aunif unif limit`) are
@@ -234,6 +289,8 @@ pub(crate) struct EvalCtx {
     rng: Cell<u64>,
     /// Set once any random function has been evaluated.
     pub random_used: Cell<bool>,
+    /// Work spent in user-function bodies so far ([`MAX_FN_WORK`]).
+    pub fn_work: Cell<u64>,
 }
 
 impl EvalCtx {
@@ -246,7 +303,15 @@ impl EvalCtx {
             policy,
             rng: Cell::new(seed),
             random_used: Cell::new(false),
+            fn_work: Cell::new(0),
         }
+    }
+
+    /// Spend `units` of the user-function budget; `false` once spent.
+    pub fn charge(&self, units: u64) -> bool {
+        let w = self.fn_work.get().saturating_add(units);
+        self.fn_work.set(w);
+        w <= MAX_FN_WORK
     }
 
     /// SplitMix64 step, mapped to [0, 1).
@@ -273,32 +338,83 @@ impl Expr {
         &self.vars
     }
 
+    /// The calls the expression makes, in order of appearance.
+    pub fn calls(&self) -> &[CallSite] {
+        &self.calls
+    }
+
     /// Byte range of the first random-function call, if any.
     pub fn first_random_call(&self) -> Option<(usize, usize)> {
         self.code.iter().find_map(|op| match op {
-            Op::Call(f, _, i) if f.is_random() => {
-                let (s, e) = self.calls[*i as usize];
-                Some((s as usize, e as usize))
+            Op::Call(Callee::Builtin(f), _, i) if f.is_random() => {
+                let c = &self.calls[*i as usize];
+                Some((c.start as usize, c.end as usize))
             }
             _ => None,
         })
+    }
+
+    /// Evaluate without user functions (see [`Expr::eval_in`]).
+    #[cfg(test)]
+    pub fn eval(
+        &self,
+        lookup: &mut dyn FnMut(&VarRef) -> Result<f64, PError>,
+        ctx: &EvalCtx,
+    ) -> Result<f64, PError> {
+        self.eval_in(lookup, ctx, None)
     }
 
     /// Evaluate. `lookup` resolves a (lowercased) name; every name is
     /// resolved before anything is computed, so an undefined name is
     /// an error even in an untaken `?:` branch (ngspice-47 behaves the
     /// same way); `lookup` builds the error for a missing name.
-    pub fn eval(
-        &self,
+    ///
+    /// `funcs` is the user-function scope (`.func`). A call to one
+    /// pushes a frame whose formal arguments take the call's values
+    /// and whose other names go through `lookup` — the scope of the
+    /// call site, as ngspice's textual expansion has it (probe `f1
+    /// f_local_sees_inst_param`); calls inside a body resolve in the
+    /// scope that defined it, then in `funcs`. Frames live on the heap: the evaluator
+    /// never recurses, and depth and work are bounded
+    /// ([`MAX_CALL_DEPTH`], [`MAX_FN_WORK`]).
+    pub fn eval_in<'s>(
+        &'s self,
         lookup: &mut dyn FnMut(&VarRef) -> Result<f64, PError>,
         ctx: &EvalCtx,
+        funcs: Option<&'s FuncScope<'s>>,
     ) -> Result<f64, PError> {
+        struct Frame<'s> {
+            expr: &'s Expr,
+            pc: usize,
+            vals: Vec<f64>,
+            /// Value stack height when the frame was entered.
+            base: usize,
+            scope: Option<&'s FuncScope<'s>>,
+            func: Option<&'s UserFn<'s>>,
+        }
+        /// An error at bytes `s..e` of the frame's expression: inside a
+        /// function body it points at the body and names the function.
+        fn at(fr: &Frame, msg: String, s: usize, e: usize) -> PError {
+            let pe = PError::new(msg, s, e);
+            match fr.func {
+                Some(f) => pe.in_function(f, s, e),
+                None => pe,
+            }
+        }
+
         let mut vals = Vec::with_capacity(self.vars.len());
         for v in &self.vars {
             vals.push(lookup(v)?);
         }
+        let mut frames: Vec<Frame<'s>> = vec![Frame {
+            expr: self,
+            pc: 0,
+            vals,
+            base: 0,
+            scope: funcs,
+            func: None,
+        }];
         let mut st: Vec<f64> = Vec::with_capacity(16);
-        let mut pc = 0usize;
         // The compiler only emits well-formed programs, but a stack
         // underflow must still not panic.
         macro_rules! pop {
@@ -306,12 +422,27 @@ impl Expr {
                 st.pop().unwrap_or(f64::NAN)
             };
         }
-        while pc < self.code.len() {
-            let op = self.code[pc];
-            pc += 1;
+        loop {
+            let depth = frames.len();
+            let Some(fr) = frames.last_mut() else {
+                return Ok(f64::NAN);
+            };
+            if fr.pc >= fr.expr.code.len() {
+                // Frame done: its value replaces its stack segment.
+                let v = if st.len() > fr.base { pop!() } else { f64::NAN };
+                st.truncate(fr.base);
+                frames.pop();
+                if frames.is_empty() {
+                    return Ok(v);
+                }
+                st.push(v);
+                continue;
+            }
+            let op = fr.expr.code[fr.pc];
+            fr.pc += 1;
             match op {
                 Op::Num(x) => st.push(x),
-                Op::Var(i) => st.push(vals.get(i as usize).copied().unwrap_or(f64::NAN)),
+                Op::Var(i) => st.push(fr.vals.get(i as usize).copied().unwrap_or(f64::NAN)),
                 Op::Neg => {
                     let a = pop!();
                     st.push(-a);
@@ -322,15 +453,95 @@ impl Expr {
                 }
                 Op::JmpIfZero(t) => {
                     if pop!() == 0.0 {
-                        pc = t as usize;
+                        fr.pc = t as usize;
                     }
                 }
-                Op::Jmp(t) => pc = t as usize,
-                Op::Call(f, argc, _) => {
+                Op::Jmp(t) => fr.pc = t as usize,
+                Op::Call(callee, argc, ci) => {
                     let n = argc as usize;
-                    let at = st.len().saturating_sub(n);
-                    let args: Vec<f64> = st.drain(at..).collect();
-                    st.push(call(f, &args, ctx));
+                    let site = &fr.expr.calls[ci as usize];
+                    let (s, e) = (site.start as usize, site.end as usize);
+                    // A call inside a body resolves where the body was
+                    // defined, then — the expanded text lands there — at
+                    // the call site (probe `f2 f_top_calls_local`).
+                    let user = fr
+                        .scope
+                        .and_then(|sc| sc.find(&site.name))
+                        .or_else(|| funcs.and_then(|sc| sc.find(&site.name)));
+                    let Some((f, fscope)) = user else {
+                        let Callee::Builtin(b) = callee else {
+                            let msg = format!("unknown function `{}`", site.name);
+                            return Err(at(fr, msg, s, e));
+                        };
+                        // ngspice-47 garbles wrong counts instead of
+                        // rejecting them (`sqrt(1,2)` is `sqrt(2)`); here
+                        // they are errors.
+                        let (lo, hi) = b.arity();
+                        if n < lo || n > hi {
+                            let want = if lo == hi {
+                                format!("{lo}")
+                            } else {
+                                format!("{lo} or {hi}")
+                            };
+                            let msg = format!("`{}` takes {want} argument(s), got {n}", site.name);
+                            return Err(at(fr, msg, s, e));
+                        }
+                        let from = st.len().saturating_sub(n);
+                        let v = call(b, &st[from..], ctx);
+                        st.truncate(from);
+                        st.push(v);
+                        continue;
+                    };
+                    if f.recursive.get() {
+                        // Reported where the function is defined.
+                        return Err(PError::silenced(s, e));
+                    }
+                    if n != f.formals.len() {
+                        let msg = format!(
+                            "function `{}` takes {} argument(s), got {n}",
+                            f.name,
+                            f.formals.len()
+                        );
+                        return Err(at(fr, msg, s, e));
+                    }
+                    let body = match &f.body {
+                        Ok(b) => b,
+                        Err(pe) => return Err(pe.clone().in_function(f, pe.start, pe.end)),
+                    };
+                    if depth >= MAX_CALL_DEPTH {
+                        let msg =
+                            format!("user functions nested deeper than {MAX_CALL_DEPTH} calls");
+                        return Err(at(fr, msg, s, e));
+                    }
+                    if !ctx.charge(1 + (body.code.len() + body.vars.len()) as u64) {
+                        let msg = format!(
+                            "user-function evaluation exceeds {MAX_FN_WORK} steps; giving up"
+                        );
+                        return Err(at(fr, msg, s, e));
+                    }
+                    let base = st.len().saturating_sub(n);
+                    let mut vals = Vec::with_capacity(body.vars.len());
+                    for v in &body.vars {
+                        match f.formals.iter().position(|a| **a == *v.name) {
+                            Some(k) => vals.push(st.get(base + k).copied().unwrap_or(f64::NAN)),
+                            None => match lookup(v) {
+                                Ok(x) => vals.push(x),
+                                Err(pe) => {
+                                    let (vs, ve) = (v.start as usize, v.end as usize);
+                                    return Err(pe.in_function(f, vs, ve));
+                                }
+                            },
+                        }
+                    }
+                    st.truncate(base);
+                    frames.push(Frame {
+                        expr: body,
+                        pc: 0,
+                        vals,
+                        base,
+                        scope: Some(fscope),
+                        func: Some(f),
+                    });
                 }
                 bin => {
                     let b = pop!();
@@ -339,7 +550,6 @@ impl Expr {
                 }
             }
         }
-        Ok(st.pop().unwrap_or(f64::NAN))
     }
 }
 
@@ -724,7 +934,7 @@ struct Parser<'a> {
     lx: Lexer<'a>,
     code: Vec<Op>,
     vars: Vec<VarRef>,
-    calls: Vec<(u32, u32)>,
+    calls: Vec<CallSite>,
     depth: usize,
 }
 
@@ -988,18 +1198,24 @@ impl Parser<'_> {
                 let name = self.text(&t).to_ascii_lowercase();
                 if self.lx.peek()?.tok == Tok::LParen {
                     let lp = self.lx.next()?;
-                    let Some(f) = Func::lookup(&name) else {
-                        let msg = if name == "v" || name == "i" {
-                            // ngspice turns such R/C/L values into
-                            // B sources (`inp_compat`); not here yet.
-                            format!(
-                                "`{name}(…)` in an element value (behavioural R/C/L) is \
-                                 not supported yet"
-                            )
-                        } else {
-                            format!("unknown function `{name}`")
-                        };
-                        return Err(PError::new(msg, t.start, t.end));
+                    // Unknown names and argument counts are checked when
+                    // evaluating: a user function may define or shadow
+                    // the name (`.func`).
+                    let callee = match Func::lookup(&name) {
+                        Some(f) => Callee::Builtin(f),
+                        None if name == "v" || name == "i" => {
+                            // ngspice turns such R/C/L values into B
+                            // sources (`inp_compat`); not here yet.
+                            return Err(PError::new(
+                                format!(
+                                    "`{name}(…)` in an element value (behavioural R/C/L) is \
+                                     not supported yet"
+                                ),
+                                t.start,
+                                t.end,
+                            ));
+                        }
+                        None => Callee::Named,
                     };
                     self.enter(lp.start)?;
                     let mut argc = 0usize;
@@ -1007,6 +1223,9 @@ impl Parser<'_> {
                         loop {
                             self.ternary(Ctx::Start)?;
                             argc += 1;
+                            if argc > u16::MAX as usize {
+                                return Err(PError::new("too many arguments", t.start, t.end));
+                            }
                             let s = self.lx.next()?;
                             match s.tok {
                                 Tok::Comma => continue,
@@ -1025,22 +1244,13 @@ impl Parser<'_> {
                         self.lx.next()?;
                     }
                     self.leave();
-                    let (lo, hi) = f.arity();
-                    if argc < lo || argc > hi {
-                        let want = if lo == hi {
-                            format!("{lo}")
-                        } else {
-                            format!("{lo} or {hi}")
-                        };
-                        return Err(PError::new(
-                            format!("`{name}` takes {want} argument(s), got {argc}"),
-                            t.start,
-                            t.end,
-                        ));
-                    }
                     let ci = self.calls.len() as u32;
-                    self.calls.push((t.start as u32, t.end as u32));
-                    self.code.push(Op::Call(f, argc as u8, ci));
+                    self.calls.push(CallSite {
+                        name: name.into_boxed_str(),
+                        start: t.start as u32,
+                        end: t.end as u32,
+                    });
+                    self.code.push(Op::Call(callee, argc as u16, ci));
                 } else {
                     if Func::lookup(&name).is_some() {
                         return Err(PError::new(

@@ -139,7 +139,7 @@ do testbench, "full" = biblioteca inteira.
 | `$` de fim de linha, `//` | 0 | 0 | 0 | — |
 | cartão-ponto em maiúsculas (`.LIB`, `.PARAM`) | 4 / 5 | 0 / 66 | 0 / 112 | sim (case-insensitive) |
 | `.control` | 0 | 0 | 0 | — |
-| `.func` | 0 | 0 | 0 | — |
+| `.func` | 0 | 0 | 0 | sim (Fase 8, `docs/dune-netlist.md` "Funções do usuário") |
 | `.params` (sinônimo) | 0 | 0 | 0 / 41 | **não** |
 | maior linha física | 298 | 148 / 264 | 210 / 621 | ok |
 | maior cartão lógico (bytes) | 344 942 / 1 260 574 (`parameters/montecarlo.spice`, um `.param` com milhares de `+`) | 8204 | 15 155 | ok (medido, §7) |

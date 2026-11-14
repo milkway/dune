@@ -33,6 +33,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::deck::Card;
 use crate::diag::Diagnostic;
+use crate::func::FuncScope;
 use crate::pexpr::{self, EvalCtx, Expr, PError, RandomPolicy, VarRef};
 use crate::span::Span;
 
@@ -51,6 +52,9 @@ pub(crate) struct ParamEnv<'p> {
     poisoned: HashSet<String>,
     /// The enclosing (calling) scope; `None` for the global scope.
     parent: Option<&'p ParamEnv<'p>>,
+    /// The user functions (`.func`) visible here — lexical, unlike
+    /// `parent`, which follows the calls.
+    pub(crate) funcs: Option<&'p FuncScope<'p>>,
     /// Evaluation state; only the global scope's is used.
     ctx: EvalCtx,
     /// Span of the first random-function call evaluated (global
@@ -64,6 +68,7 @@ impl Default for ParamEnv<'_> {
             map: HashMap::new(),
             poisoned: HashSet::new(),
             parent: None,
+            funcs: None,
             ctx: EvalCtx::new(RandomPolicy::Nominal),
             random_first: Cell::new(None),
         }
@@ -134,11 +139,7 @@ impl<'p> ParamEnv<'p> {
             let (s, e) = (v.start as usize, v.end as usize);
             if env.poisoned.contains(&*v.name) {
                 silenced.set(true);
-                return Err(PError {
-                    msg: String::new(),
-                    start: s,
-                    end: e,
-                });
+                return Err(PError::silenced(s, e));
             }
             match env.parent {
                 Some(p) => env = p,
@@ -150,11 +151,7 @@ impl<'p> ParamEnv<'p> {
                     } else {
                         format!("unknown parameter `{}`", v.name)
                     };
-                    return Err(PError {
-                        msg,
-                        start: s,
-                        end: e,
-                    });
+                    return Err(PError::new(msg, s, e));
                 }
             }
         }
@@ -172,24 +169,37 @@ impl<'p> ParamEnv<'p> {
     ) -> Result<f64, ValueError> {
         let silenced = Cell::new(false);
         let root = self.root();
-        let r = expr.eval(
+        let random_before = root.ctx.random_used.get();
+        let r = expr.eval_in(
             &mut |v| match (own, self.parent) {
                 (Some(n), Some(p)) if *v.name == *n => p.lookup(v, &silenced),
                 _ => self.lookup(v, &silenced),
             },
             &root.ctx,
+            self.funcs,
         );
         match r {
             Ok(v) => {
-                if root.random_first.get().is_none()
-                    && let Some((s, e)) = expr.first_random_call()
-                {
-                    root.random_first.set(Some(span_of(s, e)));
+                if root.random_first.get().is_none() && root.ctx.random_used.get() {
+                    // The first random call, or (drawn inside a user
+                    // function's body) the first call of the expression.
+                    let at = expr.first_random_call().or_else(|| {
+                        (!random_before)
+                            .then(|| expr.calls().first())
+                            .flatten()
+                            .map(|c| (c.start as usize, c.end as usize))
+                    });
+                    if let Some((s, e)) = at {
+                        root.random_first.set(Some(span_of(s, e)));
+                    }
                 }
                 Ok(v)
             }
-            Err(_) if silenced.get() => Err(None),
-            Err(e) => Err(Some(Diagnostic::error(e.msg, span_of(e.start, e.end)))),
+            Err(e) if silenced.get() || e.msg.is_empty() => Err(None),
+            Err(e) => {
+                let span = e.at.unwrap_or_else(|| span_of(e.start, e.end));
+                Err(Some(Diagnostic::error(e.msg, span)))
+            }
         }
     }
 
@@ -236,10 +246,14 @@ impl<'p> ParamEnv<'p> {
 }
 
 /// The names a card value token reads (as [`ParamEnv::eval_value`]
-/// would parse it), or `None` if it does not parse.
-pub(crate) fn value_vars(token: &str) -> Option<Vec<Box<str>>> {
+/// would parse it), or `None` if it does not parse or calls one of
+/// `user_fns` (whose body may read more names).
+pub(crate) fn value_vars(token: &str, user_fns: &HashSet<String>) -> Option<Vec<Box<str>>> {
     let (inner, _) = delimited(token).ok()?;
     let expr = pexpr::parse(&inner.replace('"', " ")).ok()?;
+    if expr.calls().iter().any(|c| user_fns.contains(&*c.name)) {
+        return None;
+    }
     Some(expr.vars().iter().map(|v| v.name.clone()).collect())
 }
 
@@ -268,8 +282,12 @@ const CYCLE_NAMES_SHOWN: usize = 8;
 
 /// Resolve the global `.param` definitions (in deck order) into the
 /// global scope, reporting every failure.
-pub(crate) fn resolve<'p>(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEnv<'p> {
-    resolve_scope(defs, None, diags)
+pub(crate) fn resolve<'p>(
+    defs: &[ParamDef],
+    funcs: Option<&'p FuncScope<'p>>,
+    diags: &mut Vec<Diagnostic>,
+) -> ParamEnv<'p> {
+    resolve_scope(defs, None, funcs, diags)
 }
 
 /// Resolve one subcircuit instance's definitions — the `.subckt`
@@ -279,9 +297,10 @@ pub(crate) fn resolve<'p>(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> Par
 pub(crate) fn resolve_local<'p>(
     defs: &[ParamDef],
     parent: &'p ParamEnv<'p>,
+    funcs: Option<&'p FuncScope<'p>>,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
-    resolve_scope(defs, Some(parent), diags)
+    resolve_scope(defs, Some(parent), funcs, diags)
 }
 
 /// Resolve the definitions of one scope (in order) into an
@@ -296,12 +315,15 @@ pub(crate) fn resolve_local<'p>(
 fn resolve_scope<'p>(
     defs: &[ParamDef],
     parent: Option<&'p ParamEnv<'p>>,
+    funcs: Option<&'p FuncScope<'p>>,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
     let mut env = ParamEnv {
         parent,
+        funcs,
         ..ParamEnv::default()
     };
+    let mut via_funcs: Vec<Box<str>> = Vec::new();
     let local = parent.is_some();
     let n_defs = defs.len();
 
@@ -338,6 +360,19 @@ fn resolve_scope<'p>(
                             .filter(|v| !(local && *v.name == *d.name))
                             .filter_map(|v| winner.get(&*v.name).copied()),
                     );
+                    // The names read inside the user functions it calls
+                    // are dependencies too (probe `f1 f_param_uses_func_fwd`).
+                    if let Some(fs) = funcs {
+                        via_funcs.clear();
+                        let ctx = parent.map_or(&env.ctx, |p| &p.root().ctx);
+                        fs.free_names(&e, ctx, &mut via_funcs);
+                        row.extend(
+                            via_funcs
+                                .iter()
+                                .filter(|n| !(local && ***n == *d.name))
+                                .filter_map(|n| winner.get(&**n).copied()),
+                        );
+                    }
                     row.sort_unstable();
                     row.dedup();
                     dep_list.extend_from_slice(&row);

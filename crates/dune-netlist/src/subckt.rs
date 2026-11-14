@@ -34,6 +34,7 @@ use std::collections::{HashMap, HashSet};
 use crate::deck::Card;
 use crate::diag::{Diagnostic, Severity};
 use crate::elem::parse_element_in;
+use crate::func::{FuncScope, FuncTable};
 use crate::ir::{Device, Element, Expr, ExprOp, Model, Param, ParamValue, SourceKind};
 use crate::param::{self, ParamDef, ParamEnv};
 use crate::scan::Scanner;
@@ -94,7 +95,7 @@ impl<'c> ModelCard<'c> {
     /// Read a `.model` card's name, type and binning keys; `local`
     /// (a card inside a subcircuit) also collects the names its values
     /// read, so instances agreeing on them can share one evaluation.
-    pub fn new(card: &'c Card, local: bool) -> Self {
+    pub fn new(card: &'c Card, local: bool, user_fns: &HashSet<String>) -> Self {
         let mut sc = Scanner::new(card);
         sc.next_tok(); // `.model`
         let name = sc.next_tok().map(|t| t.lc()).unwrap_or_default();
@@ -121,7 +122,7 @@ impl<'c> ModelCard<'c> {
                     break;
                 };
                 if let (KeyVal::Text(s, e), Some(names)) = (v, free.as_mut()) {
-                    match param::value_vars(&card.text[s..e]) {
+                    match param::value_vars(&card.text[s..e], user_fns) {
                         Some(vs) => names.extend(vs),
                         None => free = None,
                     }
@@ -233,6 +234,9 @@ pub(crate) struct SubcktDef<'c> {
     pub models: Vec<ModelCard<'c>>,
     pub model_index: ModelIndex,
     pub subckts: Vec<SubcktDef<'c>>,
+    /// The body's user functions (`.func`), seen by the body and by
+    /// the subcircuits defined inside it.
+    pub funcs: FuncTable<'c>,
     /// Problems found while reading the body, reported when (and
     /// only if) the subcircuit is instantiated.
     pub deferred: Vec<Diagnostic>,
@@ -251,6 +255,7 @@ impl SubcktDef<'_> {
     /// Fill `model_index` once the body is complete.
     pub fn finish(&mut self) {
         self.model_index = ModelIndex::build(self.models.iter().map(|m| m.name.as_str()));
+        self.funcs.check_recursion(&mut self.deferred);
     }
 }
 
@@ -428,6 +433,8 @@ struct Frame<'a, 'c> {
     parent: Option<&'a Frame<'a, 'c>>,
     def: &'c SubcktDef<'c>,
     env: &'a ParamEnv<'a>,
+    /// The user functions visible in the body (lexical).
+    funcs: &'a FuncScope<'a>,
     path: &'a str,
     node_map: &'a HashMap<String, String>,
     /// The instance's multiplier when the subcircuit is multiplied.
@@ -869,12 +876,15 @@ impl<'c> Expander<'_, 'c> {
             return;
         }
         // Innermost definition wins: the calling instances' local
-        // definitions, then the top level.
+        // definitions, then the top level. The functions the body sees
+        // are those of where the definition is written.
         let mut def = None;
+        let mut container = caller_env.root().funcs;
         let mut fr = caller;
         while let Some(f) = fr {
             if let Some(d) = f.def.subckts.iter().find(|d| d.name == call.subname) {
                 def = Some(d);
+                container = Some(f.funcs);
                 break;
             }
             fr = f.parent;
@@ -974,8 +984,12 @@ impl<'c> Expander<'_, 'c> {
         if !self.charge(defs.len(), call.span) {
             return;
         }
+        let funcs = FuncScope {
+            table: &def.funcs,
+            parent: container,
+        };
         let mut ds = Vec::new();
-        let env = param::resolve_local(&defs, caller_env, &mut ds);
+        let env = param::resolve_local(&defs, caller_env, Some(&funcs), &mut ds);
         self.report_all(ds);
 
         let mult = if def.multiplied {
@@ -1011,6 +1025,7 @@ impl<'c> Expander<'_, 'c> {
             parent: caller,
             def,
             env: &env,
+            funcs: &funcs,
             path: &inst_path,
             node_map: &inner_nodes,
             mult,

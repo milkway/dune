@@ -359,6 +359,69 @@ avaliá-lo é erro "not supported yet" (G7: precisa reexpandir quando a
 temperatura muda, e no ngspice ele só vale em certas posições — erro em
 `.param` global e em `v1 1 0 {temper}`, valor em `r={temper}`, P07/c4).
 
+### Funções do usuário (`.func`, `func.rs`)
+
+Fase 8 (2026-11-14). No ngspice-47 o `.func` é uma **expansão textual
+de macro** feita antes do avaliador de parâmetros, em
+`frontend/inpcom.c` (Modified BSD; lido: `inp_get_func_from_line`,
+`inp_grab_func`, `inp_expand_macro_in_str`, `inp_expand_macros_in_deck`
+e a reescrita `.param f(x) = …` → `.func` em
+`inp_fix_macro_param_func_paren_io`); o `numparam` não foi aberto. O
+Dune **avalia** a chamada em vez de reescrever o texto
+(`pexpr::Expr::eval_in`): o argumento chega como `f64`, o corpo é
+compilado uma vez, e as regras observáveis da expansão foram sondadas
+(`.claude/scratch/g9-probes/f1.txt`, `f2.txt`; testes em
+`tests/func.rs`, deck `regress/func_op.cir` e `func_dc.cir`):
+
+| Regra | ngspice-47 | Sonda |
+|---|---|---|
+| Formas | `.func f(x) {corpo}`, `.func f(x) = {corpo}`, `= corpo`, `corpo` nu (o resto da linha, com brancos), `'corpo'`; `f (x)` com branco; continuação `+`; `.param f(x) = corpo` é o mesmo `.func` (o primeiro token depois de `.param` tem `(`) | `f1 f_brace`, `f_eq`, `f_eq_bare`, `f_bare`, `f_quote`, `f_space_name`, `f_body_two_tokens`, `f_continuation`, `f_params_kw` |
+| Aridade | zero ou mais formais; contagem errada na chamada é erro fatal; `.func f {2}` (sem parênteses), `f(x,)`, `f(x {…}` são erro fatal | `f_zero`, `f_arity_*`, `f_noargs_def`, `f_comma_empty`, `f_unbalanced` |
+| Onde chama | `{…}`, `'…'`, valor nu depois de `=`, `.param` (com ou sem chaves), `.model`, linha `.subckt` e linha `X`, corpo de outro `.func` (em qualquer ordem), argumentos aninhados; `k` sem parênteses é parâmetro, não chamada | `f_in_*`, `f_kw_bare`, `f_in_func(_fwd)`, `f_nested_call`, `f_zero_noparen_use` |
+| Ordem | as funções de um nível são colhidas antes de expandir: chamada antes da definição vale | `f_after_use`, `f2 f_local_redef_after` |
+| Redefinição | a última vence (inclusive com outra aridade) | `f_redef`, `f_redef_arity(_old)` |
+| Sombra | formal sombreia `.param`; `.func` sombreia função embutida (`sqrt`, `min` com 3 argumentos); `.param f` e `.func f` convivem | `f_shadow_param`, `f_shadow_builtin(_arity)`, `f_name_is_param` |
+| Nomes do corpo | todo nome que não é formal é lido **onde a chamada está** (o texto vai para lá): `.param` global definido depois, parâmetro da instância que chama | `f_glob_param(_after)`, `f_param_uses_func_fwd`, `f_local_sees_inst_param`, `f2 f_glob_param_shadow_inst` |
+| Escopo | léxico por nível de `.subckt`: a função de um corpo vale nele e nos subcircuitos definidos dentro dele, não fora nem num subcircuito que ele só instancia; a interna sombreia a externa | `f_local*`, `f2 f_top_calls_top_shadowed` |
+| Chamada dentro de um corpo | resolve onde o corpo foi definido; se não achar, onde o texto foi parar (uma função global pode chamar uma que só existe dentro do subcircuito que a chama) | `f2 f_top_calls_local` |
+| Preguiça | corpo nunca chamado não é avaliado (nome indefinido, sintaxe ruim passam); subcircuito não instanciado idem | `f_undef_in_body_unused`, `f_syntax_unused`, `f_local_unused_sub` |
+| Recursão | *segfault* (rc −11), mesmo sem uso | `f_recursive`, `f_mutual`, `f_recursive_unused` |
+| `temper`, aleatórias | `temper` no corpo vale a temperatura num valor de elemento; `agauss` no corpo sorteia | `f_temper`, `f_random`, `f2 f_random_func_note` |
+| Fonte `B` | a expansão alcança a linha `B` (`v=f(3)`, `v=f(v(2))`) | `f_bsrc*` |
+
+No Dune, além disso:
+
+- **Funções aleatórias** no corpo valem o nominal, como fora dele
+  (decisão G8). O ngspice transforma internamente um `.param` com
+  `agauss` em `.func` para que cada uso sorteie de novo
+  (`inp_fix_agauss_in_param`); como o Dune avalia no nominal, essa
+  distinção não existe aqui.
+- **Erros dentro do corpo** apontam para o corpo (span no `.func`) e
+  dizem `(in function `f`)`; aridade e função desconhecida apontam para
+  a chamada.
+- **Recursão** (direta ou mútua, no mesmo nível) é erro com o span da
+  chamada que fecha o ciclo, assim que o nível termina de ser lido — no
+  topo sempre, num subcircuito só se ele for instanciado. Um ciclo que
+  só aparece pelo recurso da chamada no lugar da expansão (global →
+  local → global) para no limite de profundidade.
+- **Limites** (`pexpr.rs`): ≤ 256 chamadas aninhadas por avaliação;
+  orçamento de 2²⁴ passos (operações + nomes resolvidos dentro de
+  corpos, e o cálculo de dependências pelos corpos) por deck — uma
+  cadeia em que cada função chama a anterior duas vezes (2⁶⁰ chamadas)
+  para com erro em ~0,5 s; ≤ 1000 formais. O avaliador continua sem
+  recursão (pilha de quadros no heap).
+- **Dependências:** um `.param` que chama uma função depende dos nomes
+  que o corpo lê (transitivamente), para a ordem de avaliação e para a
+  detecção de ciclo; um `.model` local que chama uma função do usuário
+  não é compartilhado entre instâncias.
+
+Diferenças (linhas no `KNOWN_DIFFS.md`): formal repetido (`f(x,x)`, o
+ngspice usa o primeiro) é erro; corpo vazio (`.func f(x)`, aceito
+calado) é erro quando chamado; recursão é erro, não *segfault*; o corpo
+é uma expressão por si — `{3*-x}` é recusado como em qualquer
+expressão (o ngspice substitui o texto e lê `3*-2`); `.func` em fonte
+`B` é erro "not supported yet" (a linguagem da fonte B é a do 3f5).
+
 ### Entrada hostil e medidas
 
 Limites: expressão ≤ 64 KiB (o IHP chega a 613 bytes; o limite antigo

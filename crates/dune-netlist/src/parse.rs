@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::deck::{self, Card, Deck, IncludeLoader};
 use crate::diag::Diagnostic;
 use crate::elem::{ElemCtx, parse_element};
+use crate::func::{FuncScope, FuncTable};
 use crate::ir::{Model, Netlist, Param, ParamValue};
 use crate::param::{ParamDef, ParamEnv};
 use crate::scan::Scanner;
@@ -100,6 +101,10 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     let mut vdmos_models: HashSet<String> = HashSet::new();
     let mut param_defs: Vec<ParamDef> = Vec::new();
     let mut params_full = false;
+    // User functions: the top level's, and the names defined anywhere
+    // (a local model card calling one cannot share its evaluation).
+    let mut global_funcs = FuncTable::default();
+    let mut func_names: HashSet<String> = HashSet::new();
     let mut in_control = false;
     let mut subckt_depth = 0usize;
     for card in &cards {
@@ -122,16 +127,39 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     }
                 }
             }
+            // `.param name(args) = body` is a `.func` (ngspice rewrites
+            // it, probe `f1 f_params_kw`).
+            ".func" => {
+                func_name(card, &mut func_names);
+                if subckt_depth == 0
+                    && let Some(f) = crate::func::parse_def(card, &mut all_diags)
+                {
+                    global_funcs.insert(f);
+                }
+            }
+            ".param" | ".params" if crate::func::is_param_function(card) => {
+                func_name(card, &mut func_names);
+                if subckt_depth == 0
+                    && let Some(f) = crate::func::parse_def(card, &mut all_diags)
+                {
+                    global_funcs.insert(f);
+                }
+            }
             // `.params` is ngspice's synonym (the IHP libraries use it).
             // Definitions inside `.subckt` belong to the subcircuit's
-            // scope (G3, not supported yet: pass B reports them).
+            // scope (pass B collects them).
             ".param" | ".params" if subckt_depth == 0 && !params_full => {
                 params_full = collect_params(card, &mut param_defs, &mut all_diags);
             }
             _ => {}
         }
     }
-    let env = crate::param::resolve(&param_defs, &mut all_diags);
+    global_funcs.check_recursion(&mut all_diags);
+    let global_scope = FuncScope {
+        table: &global_funcs,
+        parent: None,
+    };
+    let env = crate::param::resolve(&param_defs, Some(&global_scope), &mut all_diags);
     drop(param_defs);
 
     // Pass B: the real parse. Subcircuit bodies are only read
@@ -183,6 +211,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     models: Vec::new(),
                     model_index: Default::default(),
                     subckts: Vec::new(),
+                    funcs: FuncTable::default(),
                     deferred,
                     multiplied: false,
                     span,
@@ -218,7 +247,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 }
             }
             ".model" => match stack.last_mut() {
-                Some(def) => def.models.push(ModelCard::new(card, true)),
+                Some(def) => def.models.push(ModelCard::new(card, true, &func_names)),
                 None => {
                     // Evaluated now with the global parameters; its
                     // diagnostics only count if an element uses it
@@ -226,12 +255,23 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     let mut diags = Vec::new();
                     let model = parse_model(card, &mut diags, &env);
                     top.models.push(GlobalModel {
-                        card: ModelCard::new(card, false),
+                        card: ModelCard::new(card, false, &func_names),
                         model,
                         diags,
                     });
                 }
             },
+            ".func" | ".param" | ".params"
+                if kw == ".func" || crate::func::is_param_function(card) =>
+            {
+                // Top-level ones were read in pass A; a subcircuit's
+                // belong to its body (lexical scope, `f1 f_local*`).
+                if let Some(def) = stack.last_mut()
+                    && let Some(f) = crate::func::parse_def(card, &mut def.deferred)
+                {
+                    def.funcs.insert(f);
+                }
+            }
             ".param" | ".params" => {
                 // Top-level ones were collected in pass A; inside a
                 // subcircuit they join its formal parameters.
@@ -351,6 +391,19 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
         netlist: nl,
         diags: all_diags,
         sources,
+    }
+}
+
+/// Record the name a `.func` (or function-form `.param`) card defines.
+fn func_name(card: &Card, names: &mut HashSet<String>) {
+    let mut sc = Scanner::new(card);
+    sc.next_tok();
+    if let Some(t) = sc.next_tok() {
+        let n = t.lc();
+        let n = n.split('(').next().unwrap_or_default();
+        if !n.is_empty() {
+            names.insert(n.to_string());
+        }
     }
 }
 
