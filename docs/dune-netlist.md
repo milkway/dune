@@ -9,8 +9,11 @@ produz diagnóstico com span, nunca pânico, nunca loop infinito.
 - **Leitor de deck** (`deck.rs` ← `inp_readall`): título = primeira
   linha não vazia; comentários de linha inteira `*`/`$`/`#`;
   continuação `+` junta com um espaço e sobrevive a comentários
-  intercalados; o título nunca é continuável; `.include` só na coluna 1,
-  emendado antes de tudo (continuações atravessam arquivos).
+  intercalados; o título nunca é continuável; `.include` emendado antes
+  de tudo (continuações atravessam arquivos). Desde 2026-11-14 também
+  `.inc`, diretiva indentada e nome entre aspas (ngspice; o 3f5 só
+  conhecia `.include` na coluna 1, sem aspas) e as seções `.lib` — ver
+  a seção própria abaixo.
 - **Tokenização** (`scan.rs` ← `INPgetTok`/`INPgetUTok`): separadores
   ` \t = ( ) ,` todos equivalentes e descartados; token de valor
   cortado pela máquina de sign-state do C (quebra em `* / ^` e em
@@ -58,9 +61,12 @@ Registradas também em `corpus/KNOWN_DIFFS.md` quando observáveis:
 2. **Comentários de fim de linha** `$`/`;` precedidos de branco
    (ngspice; o 3f5 só tem comentário de linha inteira). Título nunca
    é cortado.
-3. **`.include` relativo ao arquivo que inclui** (o 3f5 usa o diretório
-   corrente do processo); profundidade ≤ 16 e orçamento total de
-   256 MiB; o loader recusa o que não for arquivo regular.
+3. **`.include`/`.lib` relativos ao arquivo que inclui** (o 3f5 usa o
+   diretório corrente do processo; o ngspice-47 tenta o diretório
+   corrente, depois o do deck, e só então o do arquivo que inclui);
+   aninhamento ≤ 16 contando `.include` e `.lib` juntos, ciclo
+   detectado com span, 256 MiB lidos e 256 MiB emendados; o loader
+   recusa o que não for arquivo regular.
 4. **R/C semicondutores**: um token nu na posição do modelo que seja
    um keyword conhecido (`w l temp ic resistance capacitance area
    off`) é tratado como parâmetro, não como nome de modelo. O C cru
@@ -70,11 +76,75 @@ Registradas também em `corpus/KNOWN_DIFFS.md` quando observáveis:
 6. **`.param` básico** (`param.rs`, extensão ngspice, PLAN Fase 1):
    constantes numéricas globais; valores e referências `{…}` aceitam
    números com escala, nomes já definidos e `+ - * / ^` com menos
-   unário (`-2^2 = -4`, associatividade à direita do `^`). **Sem**
-   parênteses, espaços ou vírgulas dentro de `{}` (viram separadores
-   no léxico) e sem funções — amplia-se quando o corpus pedir.
+   unário (`-2^2 = -4`; `^` associa **à esquerda**, `2^3^2 = 64`, e
+   aceita expoente com sinal, `2^-1 = 0,5` — medido no ngspice-47,
+   deck `regress/param_pow.cir`; até 2026-11-14 o Dune associava à
+   direita e dava 512). **Sem** parênteses, espaços ou vírgulas dentro
+   de `{}` (viram separadores no léxico) e sem funções — amplia-se
+   quando o corpus pedir. `.params` é sinônimo (ngspice). Valor não
+   finito: um `.param` pode valer `inf`/NaN e passar por outros
+   `.param` sem erro (`{1/z}` volta a 0), mas o valor `{…}` que chega a
+   um elemento, `.model` ou cartão de controle e não é finito vira
+   erro com o span do `{…}` — o ngspice-47 aborta nesse ponto ("unknown
+   parameter (inf)") e roda normalmente se o parâmetro não é usado.
+   Diferenças: no `.model` o ngspice só avisa e segue com valor
+   mutilado, e num subcircuito não instanciado ele nem avalia (o Dune
+   avalia o corpo de todo subcircuito até a G3 do `docs/pdk-parser.md`).
+   Parâmetros na linha `X` (`x1 a b inv w=1u`, `params:`) ainda não
+   existem: erro preciso com o span do nome, em vez do enganoso "no
+   such subcircuit `1u`".
 7. **Fonte `B`**: ver a seção própria abaixo (expressões com as
    extensões mínimas do ngspice onde o 3f5 rejeita ou mutila).
+
+## Bibliotecas `.lib` (`deck.rs` ← `expand_section_ref` do ngspice-47)
+
+Extensão do ngspice (não existe no 3f5), necessária para ler as
+bibliotecas de modelos dos PDKs abertos (G1 de `docs/pdk-parser.md`).
+Seguimos o `frontend/inpcom.c` do ngspice-47 (Modified BSD) e sondas
+no binário; tudo acontece no leitor, sobre linhas físicas, antes da
+junção de continuações:
+
+- `.lib ARQ SEÇÃO` emenda só o corpo da seção `.lib SEÇÃO` … `.endl`
+  de `ARQ`; o resto do arquivo nunca é lido como cartão (texto fora de
+  seção, inclusive lixo, é ignorado). Nome de seção case-insensitive;
+  vale a **primeira** definição do nome; `.endl NOME` divergente é
+  aviso (o ngspice aceita calado). Arquivo e seção entre `"…"`, `'…'`
+  ou nus; diretivas indentadas e em maiúsculas; `;`/`$` isolado
+  começam comentário.
+- Dentro da seção, `.lib`/`.include` resolvem relativos ao arquivo da
+  biblioteca; a mesma seção pedida duas vezes é emendada duas vezes
+  (inofensivo, como no ngspice); outra seção do mesmo arquivo pode ser
+  pedida de dentro de uma seção.
+- Cada arquivo é lido **uma vez** por deck (cache por caminho
+  normalizado lexicamente), e o índice de seções é construído numa
+  passada linear na primeira consulta — o gf180 pede o mesmo arquivo
+  de 1,3 MB oito vezes.
+- Diagnósticos com span: seção inexistente (span no nome da seção, no
+  arquivo que pede), `.endl` faltando (span no `.lib SEÇÃO` dentro da
+  biblioteca), `.endl` sem `.lib`, `.lib` sem argumentos, aspas sem
+  fechamento, nome vazio, arquivo inexistente/diretório/ilegível. Um
+  `.lib NOME` (definição) fora de biblioteca é erro e o bloco até o
+  `.endl` é pulado (o ngspice para em "unimplemented dot command");
+  definição aninhada dentro de seção é erro, e a seção termina no
+  primeiro `.endl`, como no ngspice. Erros dentro de uma seção apontam
+  para a linha da biblioteca.
+- Entrada hostil: aninhamento ≤ 16 contando `.include` e `.lib` juntos;
+  ciclo (o mesmo arquivo, ou a mesma seção do mesmo arquivo, já na
+  pilha) é erro com o span da diretiva que fecha o ciclo — o ngspice-47
+  dá *segfault* num ciclo de `.include` e um erro espúrio de aspas num
+  ciclo de `.lib`; 256 MiB de texto **lido** (cada arquivo uma vez) e
+  256 MiB **emendados** (uma seção pedida milhares de vezes, ou um
+  leque de aninhamentos, para com um erro só — tudo para a partir
+  dali).
+- Diferenças medidas (linhas no `KNOWN_DIFFS.md`): caminho só relativo
+  ao arquivo que inclui (o ngspice procura antes no diretório corrente
+  e no do deck); `.include` de seções **não pedidas** não é lido (o
+  ngspice lê todos os `.include` do arquivo ao carregá-lo, e um
+  inexistente numa seção não usada é fatal lá).
+- No WASM não há sistema de arquivos: `.lib`/`.include` passam pelo
+  mesmo `IncludeLoader` do mapa `includes` das opções; arquivo fora do
+  mapa vira o diagnóstico "cannot open library file …: not among the
+  supplied includes".
 
 ## Expressões da fonte `B` (`expr.rs` ← `inpptree.c`)
 
@@ -95,7 +165,10 @@ Gramática (porte do `PTparse`, precedência por tabela
 - `+ -` (associam à esquerda) < `* /` < `^` (associa à direita) <
   menos unário. **Não há `+` unário** (`+1` é erro de sintaxe, como
   no C) e `--1` também é erro (`u-` seguido de `u-` reduz sem
-  operando); `-(-1)` funciona. `-2^2` é `(-2)^2`.
+  operando); `-(-1)` funciona. `-2^2` é `(-2)^2`. O ngspice-47 difere
+  nos dois pontos (sonda de 2026-11-14: `v=2^3^2` dá 64 e `v=-2^2` dá
+  −4 lá, 512 e 4 aqui); fica o 3f5 (linha no `KNOWN_DIFFS.md`) — a
+  linguagem do `.param` (acima) segue o ngspice.
 - `nome(expr)`: as 20 funções do `funcs[]` — `abs acos acosh asin
   asinh atan atanh cos cosh exp ln log sgn sin sinh sqrt tan tanh u
   uramp` (semântica do `ptfuncs.c` no `dune-core`: `log` é base 10;
@@ -154,7 +227,6 @@ inteira; texto sobrando é erro).
 
 ## Pendências conhecidas
 
-- `.lib` diagnostica "não suportado" (nenhum deck do corpus usa).
 - `.plot` ignora as faixas `(PLO, PHI)` (sem plotter ainda).
 - Variáveis de saída com espaços internos (`v ( 1 )`) viram `Raw` com
   aviso — o frontend do 3f5 tinha um lexer próprio para isso.
