@@ -115,7 +115,8 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     }
                 }
             }
-            ".param" => collect_params(card, &mut env, &mut all_diags),
+            // `.params` is ngspice's synonym (the IHP libraries use it).
+            ".param" | ".params" => collect_params(card, &mut env, &mut all_diags),
             _ => {}
         }
     }
@@ -204,7 +205,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     scope.models.push(model);
                 }
             }
-            ".param" => {} // collected in pass A
+            ".param" | ".params" => {} // collected in pass A
             ".include" => {
                 // A column-1 `.include` was spliced by the reader;
                 // reaching here means it was indented.
