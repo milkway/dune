@@ -1,23 +1,24 @@
-BSIM4 4.8.3 three-stage ring oscillator
-* Coverage: .tran of a free-running three-stage CMOS ring (kicked by an
-* initial condition): the self-consistent charge dynamics of three coupled
-* inverters. .options compat=spice3.
+BSIM4 4.8.3 ring-oscillator stage, opened: three inverters driven by an edge
+* Coverage: .tran of the three inverters of a ring oscillator with the
+* loop opened and driven by a pulse (a free-running ring accumulates phase
+* and cannot be refined by the accuracy ruler): coupled CAPMOD 2 charge
+* dynamics through three switching stages. .options compat=spice3.
 * Model cards: compact 0.18 um-class BSIM4 4.8.3 cards written for the
 * Dune regression decks (values chosen for these tests, not taken from
 * any PDK). Golden: ngspice-47 (Homebrew).
 .options compat=spice3
 vdd vdd 0 dc 1.8
+vin c 0 pulse(0 1.8 0.1n 30p 30p 0.4n 1n)
 mn1 a c 0 0 nch l=0.18u w=1u ad=0.5p as=0.5p pd=3u ps=3u
 mp1 a c vdd vdd pch l=0.18u w=2u ad=1p as=1p pd=5u ps=5u
 mn2 b a 0 0 nch l=0.18u w=1u ad=0.5p as=0.5p pd=3u ps=3u
 mp2 b a vdd vdd pch l=0.18u w=2u ad=1p as=1p pd=5u ps=5u
-mn3 c b 0 0 nch l=0.18u w=1u ad=0.5p as=0.5p pd=3u ps=3u
-mp3 c b vdd vdd pch l=0.18u w=2u ad=1p as=1p pd=5u ps=5u
+mn3 o b 0 0 nch l=0.18u w=1u ad=0.5p as=0.5p pd=3u ps=3u
+mp3 o b vdd vdd pch l=0.18u w=2u ad=1p as=1p pd=5u ps=5u
 ca a 0 2f
 cb b 0 2f
-cc c 0 2f
-.ic v(a)=1.8 v(b)=0 v(c)=1.8
-.tran 2p 1.5n uic
+co o 0 2f
+.tran 2p 2n
 .model nch nmos level=54 version=4.8.3
 + binunit=1 paramchk=1 mobmod=0 capmod=2 igcmod=0 igbmod=0 geomod=0 diomod=1
 + rdsmod=0 rbodymod=0 rgatemod=0 permod=1 acnqsmod=0 trnqsmod=0 tempmod=0

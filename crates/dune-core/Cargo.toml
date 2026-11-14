@@ -13,7 +13,7 @@ categories.workspace = true
 
 [features]
 default = ["solver-faer", "bsim"]
-# The Berkeley BSIM models from BSIM3 on (today BSIM3v3.3.0, `src/bsim3/`).
+# The Berkeley BSIM models from BSIM3 on (BSIM3v3.3.0 `src/bsim3/`, BSIM4 4.8.3 `src/bsim4/`).
 # They are translations of code that carries the BSIM terms of use (or,
 # for BSIM4 4.8.x, ECL-2.0) on top of the Modified BSD licence of the rest
 # of the engine — see NOTICE. On by default; a build without it is plain

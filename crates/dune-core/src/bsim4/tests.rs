@@ -303,11 +303,14 @@ fn jacobian_mobility_models() {
     }
 }
 
+/// A (keyword, value) list.
+type Params<'a> = &'a [(&'a str, f64)];
+
 #[test]
 fn jacobian_internal_nodes() {
     // RDSMOD 1 (bias-dependent external Rd/Rs), RGATEMOD 2 and 3,
     // RBODYMOD 1: internal nodes settled before differencing.
-    let cases: [(&[(&str, f64)], &[(&str, f64)]); 4] = [
+    let cases: [(Params, Params); 4] = [
         (&[("rdsmod", 1.0), ("rdw", 100.0), ("rsw", 100.0)], &[]),
         (&[("rshg", 10.0)], &[("rgatemod", 2.0), ("nf", 2.0)]),
         (&[("rshg", 10.0)], &[("rgatemod", 3.0), ("nf", 2.0)]),

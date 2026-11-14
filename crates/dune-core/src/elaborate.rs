@@ -56,6 +56,10 @@ impl Circuit {
         let mut wmodels: HashMap<&str, crate::switch::CswModel> = HashMap::new();
         let mut rmodels: HashMap<&str, ResModel> = HashMap::new();
         let mut cmodels: HashMap<&str, CapModel> = HashMap::new();
+        // BSIM4 model families (binned `name.N` cards share one) already
+        // given the version note.
+        #[cfg(feature = "bsim")]
+        let mut bsim4_noted: std::collections::HashSet<String> = std::collections::HashSet::new();
         for m in &nl.models {
             match m.mtype.as_str() {
                 "r" => match res_model(m, &mut notes) {
@@ -255,7 +259,7 @@ impl Circuit {
                         // BSIM4 code base; Dune has the 4.8.3 one (see
                         // `bsim4_model` for the version policy).
                         #[cfg(feature = "bsim")]
-                        match bsim4_model(m, &mut notes) {
+                        match bsim4_model(m, &mut notes, &mut bsim4_noted) {
                             Ok(Ok(mm)) => {
                                 mmodels.insert(m.name.as_str(), MosModel::B4(Box::new(mm)));
                             }
@@ -1985,27 +1989,37 @@ fn bsim3_model(
 fn bsim4_model(
     m: &ir::Model,
     notes: &mut Vec<String>,
+    noted: &mut std::collections::HashSet<String>,
 ) -> Result<Result<crate::bsim4::Bsim4Model, String>, String> {
+    // A version the lexer read as a number (`4.6` may arrive as
+    // 4.6000000000000005 after expression evaluation): back to the short
+    // decimal ngspice reads as a string.
+    let short = |x: f64| {
+        let s = format!("{x:.6}");
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
     let mut b = crate::bsim4::Bsim4Model::new(m.mtype == "nmos");
     b.set_name(&m.name);
     for p in &m.params {
         if p.name == "version" {
             let v = match &p.value {
                 ParamValue::Str(s) => s.clone(),
-                ParamValue::Num(v) => format!("{v}"),
-                ParamValue::NumList(v) => v
-                    .iter()
-                    .map(|x| format!("{x}"))
-                    .collect::<Vec<_>>()
-                    .join("."),
+                ParamValue::Num(v) => short(*v),
+                ParamValue::NumList(v) => v.iter().map(|x| short(*x)).collect::<Vec<_>>().join("."),
                 ParamValue::Flag => return Err("parameter version needs a value".into()),
             };
             if v.starts_with("4.8") {
                 // Native.
             } else if crate::bsim4::older_version(&v) {
-                notes.push(format!(
-                    "model `{}`: BSIM4 version {v} runs on the BSIM4 4.8.3 equations (ngspice-47 uses its older {} code base for it)",
-                    m.name,
+                // One note per model family: the binned cards `name.N`
+                // of a PDK device share it.
+                let family = match m.name.rsplit_once('.') {
+                    Some((f, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => f,
+                    _ => m.name.as_str(),
+                };
+                if noted.insert(format!("{family}\u{0}{v}")) {
+                    notes.push(format!(
+                    "model `{family}`: BSIM4 version {v} runs on the BSIM4 4.8.3 equations (ngspice-47 uses its older {} code base for it)",
                     if v.starts_with("4.6") {
                         "bsim4v6"
                     } else if v.starts_with("4.7") {
@@ -2014,6 +2028,7 @@ fn bsim4_model(
                         "bsim4v5"
                     }
                 ));
+                }
             } else {
                 return Ok(Err(format!(
                     "Device type BSIM4 version {v} not available in this binary"
@@ -2034,6 +2049,14 @@ fn bsim4_model(
             // `INPmakeMod`: unknown parameters are a warning.
             notes.push(format!("model `{}`: {e} (ignored)", m.name));
         }
+    }
+    if !m.params.iter().any(|p| p.name == "version") {
+        // `INPfindVer`: "Version not specified … Setting version to
+        // 'default'" (4.8.3).
+        notes.push(format!(
+            "model `{}`: BSIM4 VERSION not specified; running 4.8.3 (ngspice's default)",
+            m.name
+        ));
     }
     if let Some(reason) = b.unsupported() {
         return Ok(Err(reason));
