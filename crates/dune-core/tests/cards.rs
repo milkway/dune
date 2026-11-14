@@ -275,3 +275,26 @@ fn diode_extensions_refused_by_name() {
     let (q, _) = run("t\n.model dm d\nd1 1 0 dm\ni1 0 1 1m\n.op\n.end\n");
     assert!(close(real(&p[0], "v(1)")[0], real(&q[0], "v(1)")[0]));
 }
+
+/// ngspice-47 keyword values (probes `kw.cases`, dev-probes s3): `r=`,
+/// `c=`, `l=` alias `resistance=` …, win over the positional value;
+/// instance `tc1`/`tc2` on R replace the model's; on C/L a nonzero one
+/// is refused.
+#[test]
+fn rlc_keyword_values() {
+    let (p, _) = run("t\nr1 1 0 3k r=2k\ni1 0 1 1m\n.op\n.end\n");
+    assert!(close(real(&p[0], "v(1)")[0], 2.0));
+    let (p, _) = run("t\n.temp 50\nr1 1 0 r=2k tc1=0.01\ni1 0 1 1m\n.op\n.end\n");
+    assert!((real(&p[0], "v(1)")[0] - 2.46).abs() < 1e-9);
+    for card in ["c1 1 0 1u tc1=0.01", "l1 1 0 1m tc2=1e-4"] {
+        let deck = format!("t\n{card}\nr1 1 0 1k\ni1 0 1 1m\n.op\n.end\n");
+        let parsed = dune_netlist::parse_str("k.cir", &deck);
+        let err = Circuit::from_netlist(&parsed.netlist)
+            .err()
+            .map(|e| e.to_string());
+        assert!(
+            err.is_some_and(|e| e.contains("temperature coefficient")),
+            "{card}"
+        );
+    }
+}

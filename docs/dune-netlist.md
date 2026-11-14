@@ -764,6 +764,18 @@ supported yet", depois "tc1 on a behavioural R/C/L is not supported
 yet"). As funções que eles usam (`min`, `max`, `pow`, `pwr`, `**`,
 `abs`, `log`, `cosh`, `tanh`, `exp`, `sqrt`) já são aceitas.
 
+## Valores por palavra-chave em R, C e L
+
+O ngspice-47 aceita `r=` (sinônimo de `resistance=`), `c=`
+(`capacitance=`) e `l=` (`inductance=`) com valor numérico; o
+`INPdevParse` os aplica depois do valor posicional, então a palavra-chave
+vence (`r1 a b 3k r=2k` dá 2 kΩ; sondas `kw.cases` em
+`.claude/scratch/dev-probes/s3`). O Dune faz igual (antes: "resistor has
+no value" para `r=`, `c=` e `l=`, e o valor posicional ficava). `tc1`/`tc2` de instância num R substituem os do
+modelo (`restemp.c`); num C ou L, diferentes de zero, são recusados (o
+núcleo não tem temperatura nesses dois; antes eram ignorados com nota).
+Num C, `l=`/`w=` seguem sendo a geometria. Decks `regress/rlc_kw_{op,ac}`.
+
 ## Pendências conhecidas
 
 - `.plot` ignora as faixas `(PLO, PHI)` (sem plotter ainda).

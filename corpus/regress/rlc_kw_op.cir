@@ -1,0 +1,21 @@
+Keyword values on R cards (r= and resistance=, instance tc1/tc2)
+* written for Dune: ngspice-47 takes r= as an alias of resistance=,
+* set after the positional value (so it wins), and instance tc1/tc2
+* that replace the model coefficients (probes kw.cases in
+* .claude/scratch/dev-probes/s3)
+.temp 50
+.model rm r tc1=1e-3
+r1 1 0 r=2k
+i1 0 1 1m
+r2 2 0 resistance=2k m=2
+i2 0 2 1m
+r3 3 0 3k r=2k
+i3 0 3 1m
+r4 4 0 R=2k tc1=0.01 tc2=1e-5
+i4 0 4 1m
+r5 5 0 rm 2k tc1=0.02
+i5 0 5 1m
+r6 6 0 rm r=2k
+i6 0 6 1m
+.op
+.end

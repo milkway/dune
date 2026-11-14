@@ -409,13 +409,32 @@ impl Circuit {
                     if !set_mult(&mut ckt, &name, params, &mut problems) {
                         continue;
                     }
+                    let mut value = *value;
+                    let mut bad = false;
                     for p in params {
-                        if !matches!(p.name.as_str(), "ic" | "m") {
-                            notes.push(format!(
+                        match (p.name.as_str(), &p.value) {
+                            ("ic" | "m", _) => {}
+                            // ngspice-47 `ind.c`: `inductance`, alias
+                            // `l`; set after the positional value, so
+                            // it wins (probe `l_pos_l`).
+                            ("inductance" | "l", ParamValue::Num(v)) => value = Some(*v),
+                            ("tc1" | "tc2", ParamValue::Num(v)) if *v == 0.0 => {}
+                            ("tc1" | "tc2", _) => {
+                                problems.push(format!(
+                                    "`{name}`: inductor temperature coefficient {} is not \
+                                     supported yet",
+                                    p.name
+                                ));
+                                bad = true;
+                            }
+                            _ => notes.push(format!(
                                 "`{name}`: inductor parameter {} is not in the 3f5 - ignored",
                                 p.name
-                            ));
+                            )),
                         }
+                    }
+                    if bad {
+                        continue;
                     }
                     match value {
                         Some(v) => add(
@@ -423,7 +442,7 @@ impl Circuit {
                             Inductor {
                                 name,
                                 nodes: two(&el.nodes),
-                                value: *v,
+                                value: v,
                                 ic,
                             },
                             &mut problems,
@@ -2785,6 +2804,7 @@ fn res_instance(
     let mut w = None;
     let mut temp = None;
     let mut dtemp = None;
+    let (mut tc1, mut tc2) = (None, None);
     for p in params {
         let v = match p.value {
             ParamValue::Num(v) => v,
@@ -2794,7 +2814,13 @@ fn res_instance(
             }
         };
         match p.name.as_str() {
-            "resistance" => value = Some(v),
+            // ngspice-47 `res.c`: `resistance`, alias `r`, set after
+            // the positional value (probes `r_r`, `r_pos_r`).
+            "resistance" | "r" => value = Some(v),
+            // `res.c` instance `tc1`/`tc2`: they replace the model's
+            // (`restemp.c`; probe `r_r_tc`).
+            "tc1" => tc1 = Some(v),
+            "tc2" => tc2 = Some(v),
             "l" => l = Some(v),
             "w" => w = Some(v),
             "temp" => temp = Some(v + CTOK),
@@ -2832,9 +2858,10 @@ fn res_instance(
         ));
         dtemp = None;
     }
-    let rt = (rm.is_some() || temp.is_some() || dtemp.is_some()).then(|| crate::circuit::ResTemp {
-        tc1: rm.map_or(0.0, |m| m.tc1),
-        tc2: rm.map_or(0.0, |m| m.tc2),
+    let given = rm.is_some() || temp.is_some() || dtemp.is_some();
+    let rt = (given || tc1.is_some() || tc2.is_some()).then(|| crate::circuit::ResTemp {
+        tc1: tc1.unwrap_or(rm.map_or(0.0, |m| m.tc1)),
+        tc2: tc2.unwrap_or(rm.map_or(0.0, |m| m.tc2)),
         tnom: rm.and_then(|m| m.tnom),
         temp,
         dtemp: dtemp.unwrap_or(0.0),
@@ -2913,7 +2940,16 @@ fn cap_instance(
             }
         };
         match p.name.as_str() {
-            "capacitance" => value = Some(v),
+            // ngspice-47 `cap.c`: `capacitance`, alias `c`, set after
+            // the positional value (probes `c_c`, `c_pos_c`).
+            "capacitance" | "c" => value = Some(v),
+            "tc1" | "tc2" if v == 0.0 => {}
+            "tc1" | "tc2" => {
+                return Err(format!(
+                    "`{name}`: capacitor temperature coefficient {} is not supported yet",
+                    p.name
+                ));
+            }
             // `ic` is read by the caller; ngspice-47's multiplier `m`
             // by `mult_param`.
             "ic" | "m" => {}
