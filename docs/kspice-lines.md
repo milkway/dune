@@ -283,7 +283,9 @@ Portados literalmente (prováveis bugs ou esquisitices do C):
     `R=5 G=1 len=1` dá `+6,1e12 1/s`: o ngspice para com "timestep too
     small" em 0,403 ns, o Dune com "singular matrix" (o NaN chega à
     fatoração). O caso estável (`R=14 G=0,02 len=10`, `−7,9e7 1/s`) é
-    `regress/txl_img.cir`.
+    `regress/txl_img.cir`, com `L` e `C` dez vezes maiores (o ajuste
+    só depende de `R/L·τ` e `G/C·τ`, que não mudam; o polo fica em
+    `−7,9e6 1/s` e o atraso em 6,5 ns, na escala da régua).
 18. **CPL desacoplado** (mútuas `L` e `C` nulas): ajustes com termo
     constante zero ficam `NULL`, e a primeira carga transiente sai com
     "Forbidden combination of model parameters"; a DC funciona. O Dune
