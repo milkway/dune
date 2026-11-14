@@ -29,6 +29,7 @@ impl Circuit {
         // Diode, BJT and MOS models.
         let mut dmodels: HashMap<&str, DiodeModel> = HashMap::new();
         let mut qmodels: HashMap<&str, crate::bjt::BjtModel> = HashMap::new();
+        let mut vbic_models: HashMap<&str, crate::vbic::VbicModel> = HashMap::new();
         enum MosModel {
             M1(crate::mos1::Mos1Model),
             M2(crate::mos2::Mos2Model),
@@ -137,11 +138,43 @@ impl Circuit {
                     }
                     Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                 },
-                "npn" | "pnp" => match bjt_model(m, &mut notes) {
-                    Ok(bm) => {
-                        qmodels.insert(m.name.as_str(), bm);
+                // `inpdomod.c`: `LEVEL` (rounded, `INPfindLev`) picks
+                // the bipolar model: 1-2 (and 0) Gummel-Poon, 4 and 9
+                // VBIC, 8 HICUM/L2 (not implemented); like the MOS
+                // levels, an unsupported card only errs when an
+                // element instantiates it.
+                "npn" | "pnp" => match bjt_level(m) {
+                    0..=2 => match bjt_model(m, &mut notes) {
+                        Ok(bm) => {
+                            qmodels.insert(m.name.as_str(), bm);
+                        }
+                        Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                    },
+                    4 | 9 => match vbic_model(m, &mut notes) {
+                        Ok(vm) => {
+                            vbic_models.insert(m.name.as_str(), vm);
+                        }
+                        Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                    },
+                    8 => {
+                        unsupported_models.insert(
+                            m.name.as_str(),
+                            format!(
+                                "model `{}`: BJT level 8 (HICUM/L2) is not implemented",
+                                m.name
+                            ),
+                        );
                     }
-                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                    level => {
+                        unsupported_models.insert(
+                            m.name.as_str(),
+                            format!(
+                                "model `{}`: BJT level {level}: only levels 1-2, 4, 8, 9 \
+                                 exist in ngspice-47",
+                                m.name
+                            ),
+                        );
+                    }
                 },
                 "vdmos" | "vdmosn" | "vdmosp" => match vdmos_model(m, &mut notes) {
                     Ok(vm) => {
@@ -468,12 +501,38 @@ impl Circuit {
                     off,
                     params,
                 } => {
+                    if let Some(vm) = vbic_models.get(model.as_str()) {
+                        vbic_instance(
+                            &mut ckt,
+                            &name,
+                            &el.nodes,
+                            vm,
+                            *area,
+                            *off,
+                            params,
+                            &mut problems,
+                        );
+                        continue;
+                    }
                     let Some(bm) = qmodels.get(model.as_str()) else {
-                        problems.push(format!(
-                            "`{name}`: unable to find definition of model `{model}`"
-                        ));
+                        if let Some(reason) = unsupported_models.get(model.as_str()) {
+                            problems.push(format!("`{name}`: {reason}"));
+                        } else {
+                            problems.push(format!(
+                                "`{name}`: unable to find definition of model `{model}`"
+                            ));
+                        }
                         continue;
                     };
+                    // `INP2Q`: the Gummel-Poon BJT takes at most four
+                    // nodes (the fifth, thermal, is VBIC's).
+                    if el.nodes.len() > 4 {
+                        problems.push(format!(
+                            "`{name}`: too many nodes for this model type (the level-1 BJT \
+                             takes 3 or 4)"
+                        ));
+                        continue;
+                    }
                     let mut temp = None;
                     let mut ic = (0.0, 0.0);
                     let mut icg = IcGiven::NONE;
@@ -1160,6 +1219,8 @@ fn bjt_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bjt::BjtMo
             "kf" => bm.kf = v,
             "af" => bm.af = v,
             "tnom" => bm.tnom = Some(v + CTOK),
+            // Read by `INPfindLev`; `INPgetMod` throws it away.
+            "level" => {}
             other => notes.push(format!(
                 "model `{}`: unrecognized parameter ({other}) - ignored",
                 m.name
@@ -1167,6 +1228,140 @@ fn bjt_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::bjt::BjtMo
         }
     }
     Ok(bm)
+}
+
+/// The bipolar model level of a `.model … npn|pnp` card as
+/// `INPfindLev` reads it: rounded to the nearest integer, 1 when
+/// absent, and 1 (with the C's complaint) outside `0..=99`.
+fn bjt_level(m: &ir::Model) -> i64 {
+    match num_param(&m.params, "level") {
+        None => 1,
+        Some(v) => {
+            let l = (v + 0.5).floor();
+            if (0.0..=99.0).contains(&l) {
+                l as i64
+            } else {
+                1
+            }
+        }
+    }
+}
+
+/// Map `.model x npn|pnp (level=4|9 …)` onto
+/// [`crate::vbic::VbicModel`] (`vbic.c` keyword table, `vbicmpar.c`).
+/// The type token sets the `npn`/`pnp` flag like `INPgetMod`;
+/// `LEVEL` is thrown away there too. Instance parameters given on a
+/// model card (ngspice's instance defaults, `IF_SET`) are refused
+/// rather than silently dropped.
+fn vbic_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::vbic::VbicModel, String> {
+    let mut vm = crate::vbic::VbicModel::new(m.mtype == "npn");
+    for p in &m.params {
+        match (p.name.as_str(), &p.value) {
+            ("npn" | "pnp", ParamValue::Flag) => {
+                vm.set(&p.name, 1.0).map_err(|e| e.to_string())?;
+            }
+            ("level", _) => {}
+            ("area" | "off" | "ic" | "icvbe" | "icvce" | "temp" | "m", _) => {
+                return Err(format!(
+                    "instance parameter `{}` on a VBIC model card (instance defaults) is not \
+                     supported; give it on the Q card",
+                    p.name
+                ));
+            }
+            (name, ParamValue::Num(v)) => {
+                if let Err(e) = vm.set(name, *v) {
+                    notes.push(format!("model `{}`: {e} - ignored", m.name));
+                }
+            }
+            (name, _) => return Err(format!("parameter {name} needs a numeric value")),
+        }
+    }
+    Ok(vm)
+}
+
+/// Elaborate one VBIC instance (`vbic.c` instance table: `AREA`,
+/// `OFF`, `IC`, `ICVBE`, `ICVCE`, `TEMP`, `DTEMP`, `M`; `VBICparam`).
+/// `INP2Q` ties the missing substrate and thermal nodes to ground; a
+/// positional value is `AREA` (set after the keywords, so it wins
+/// over `AREA=`). `IC=` takes one or two values
+/// (`VBIC_IC`: any other count is `E_BADPARM`).
+#[allow(clippy::too_many_arguments)]
+fn vbic_instance(
+    ckt: &mut Circuit,
+    name: &str,
+    nodes: &[String],
+    vm: &crate::vbic::VbicModel,
+    area: Option<f64>,
+    off: bool,
+    params: &[ir::Param],
+    problems: &mut Vec<String>,
+) {
+    // `INP2Q` sets the positional value after the keywords: it wins.
+    let positional = area;
+    let mut area = 1.0;
+    let mut m = 1.0;
+    let mut ic = (0.0, 0.0);
+    let mut given = IcGiven::NONE;
+    let mut temp = None;
+    let mut dtemp = 0.0;
+    for p in params {
+        match (p.name.as_str(), &p.value) {
+            ("area", ParamValue::Num(v)) => area = *v,
+            ("m", ParamValue::Num(v)) => m = *v,
+            ("icvbe", ParamValue::Num(v)) => {
+                ic.0 = *v;
+                given = given.with(0);
+            }
+            ("icvce", ParamValue::Num(v)) => {
+                ic.1 = *v;
+                given = given.with(1);
+            }
+            ("ic", ParamValue::Num(v)) => {
+                ic.0 = *v;
+                given = given.with(0);
+            }
+            ("ic", ParamValue::NumList(v)) if (1..=2).contains(&v.len()) => {
+                ic.0 = v[0];
+                if let Some(&vce) = v.get(1) {
+                    ic.1 = vce;
+                }
+                given = IcGiven(given.0 | IcGiven::first(v.len()).0);
+            }
+            ("ic", ParamValue::NumList(v)) => {
+                problems.push(format!(
+                    "`{name}`: IC takes 1 or 2 values (VBE, VCE), got {}",
+                    v.len()
+                ));
+                return;
+            }
+            ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
+            ("dtemp", ParamValue::Num(v)) => dtemp = *v,
+            _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
+        }
+    }
+    if let Some(a) = positional {
+        area = a;
+    }
+    let mut n5: [String; 5] = std::array::from_fn(|_| "0".to_string());
+    for (k, n) in nodes.iter().take(5).enumerate() {
+        n5[k] = n.clone();
+    }
+    add_ic(
+        ckt,
+        crate::circuit::Vbic {
+            name: name.to_string(),
+            nodes: n5,
+            model: vm.clone(),
+            area,
+            m,
+            off,
+            ic,
+            temp,
+            dtemp,
+        },
+        given,
+        problems,
+    );
 }
 
 /// Map `.model x nmos/pmos(level=1 …)` parameters onto
