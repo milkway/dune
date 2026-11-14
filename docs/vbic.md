@@ -276,10 +276,12 @@ o passo do deck as resolver); `vbic_uic` tem teto 0,4 em
 `corpus/ACCURACY` (medido 0,316): o início UIC fixa só as tensões de
 junção, os nós internos (`collCI`, `baseBI`) partem de 0 V e esse
 transitório do primeiro passo não encolhe com o `TMAX`. Dois achados
-fora do VBIC, de passagem: o `.pz` do Dune acha menos polos que o do
-ngspice quando o circuito tem um segundo subcircuito desacoplado da
+fora do VBIC, de passagem: o `.pz` do Dune achava menos polos que o do
+ngspice quando o circuito tinha um segundo subcircuito desacoplado da
 função de transferência (também com o Gummel-Poon; por isso o `vbic_pz`
-liga os dois estágios); e o `.temp` é ignorado pelo Dune (cartão obsoleto
+liga os dois estágios) — era a busca complexa da `cktpzstr.c`
+convergindo para uma raiz real, corrigida depois (`regress/pz_decoupled`,
+`docs/dune-core.md`, KNOWN_DIFFS); e o `.temp` é ignorado pelo Dune (cartão obsoleto
 do 3f5), ao passo que o ngspice o aplica — os decks usam `.options temp`.
 
 ## Pendências

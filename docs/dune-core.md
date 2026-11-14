@@ -216,7 +216,24 @@ resultados espelhando o rawfile).
   `b = 0.0 ||` do `NIpzSym2` (atribuição dentro da condição)
   portado literal; `vonbm`/`new_mag` não inicializados viram 0;
   o `abort()` do Strat e o "Lost numerical stability" viram
-  fallback de ponto médio. Valida: `simplepz`, `pz2`, `pzt` PASS
+  fallback de ponto médio. Desvio medido como melhor (KNOWN_DIFFS):
+  a busca complexa aberta por um mínimo termina, no C, só quando um
+  iterado do Muller repete um trial bit a bit — o que nunca acontece
+  quando ela converge para uma raiz REAL (a parte imaginária só
+  encolhe). O C então estoura o limite de 200 iterações e perde as
+  raízes restantes (o ngspice-47 também), ou a parte imaginária some
+  por underflow e uma "raiz" NaN envenena a deflação. O caso típico é
+  um subcircuito desacoplado da função de transferência: seus polos
+  entram nos dois determinantes (viram polos e zeros que se cancelam,
+  como o C reporta), e um intervalo preso com duas raízes reais sem
+  troca de sinal leva a quadrática a cair sobre uma delas.
+  `on_real_axis`: iterado que andou menos que a resolução do eixo real
+  dos trials (`reltol 1e-12`, `abstol 1e-20`) e tem parte imaginária
+  abaixo dela vira raiz real (repete uma raiz existente, ou substitui o
+  trial-mínimo, que o `verify` descarta). Sonda `regress/pz_decoupled`
+  (dois estágios emissor comum independentes; antes, dois polos NaN).
+  Os dois typos do `NIpzSym2` que o ngspice corrigiu (`b == 0.0` e
+  `b_mag = 0`) seguem literais do 3f5 — não mordem em nenhuma sonda. Valida: `simplepz`, `pz2`, `pzt` PASS
   contra o ngspice-47 a ≤1.5e-8.
 
 - **`.noise`** (`noise.rs`, `engine.rs::noise_point` ←

@@ -2,9 +2,9 @@ VBIC pole-zero: npn common emitter into a pnp common emitter
 * Coverage: .pz of a two-stage amplifier, a degenerated npn common
 * emitter whose collector drives the base of a pnp common emitter
 * (vbicpzld.c: every conductance of the AC load, the capacitances at s,
-* the excess-phase pair of the npn). Both devices sit in the transfer:
-* ngspice and Dune find the poles of a disconnected second circuit
-* differently (pz search, not VBIC). Written for the Dune port of
+* the excess-phase pair of the npn). Both devices sit in the transfer
+* (a decoupled second stage exercises the pz search, not VBIC: see
+* regress/pz_decoupled). Written for the Dune port of
 * ngspice-47's vbic model.
 vcc vcc 0 dc 5
 vin in 0 dc 0.8
