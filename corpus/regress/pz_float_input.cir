@@ -1,0 +1,17 @@
+Pole-zero with a floating input port
+* Coverage: the balance column of cktpzld.c. SMPcAddCol(matrix,
+* balance_col, solution_col) adds the solution column INTO the balance
+* column (the unknown becomes v(in+) - v(in-), so v(in-) keeps its own
+* coefficients plus those of v(in+)); Dune added it the other way round,
+* into the solution column it then zeroed, which threw the negative node
+* away: here it reported the pole of v(2)/v(1), -1000 rad/s.
+* Hand-derived answer: the drive current enters node 1 and leaves node 4,
+* Zin = r4 + r9 || (r1 + 1/sC), H = v(2)/(v(1) - v(4)) = r9/num with
+* num = r4 + r9 + s C (r4 (r9 + r1) + r9 r1) = 1.001e6 + 2001 s:
+* one pole at -1.001e6/2001 = -500.2498750624688 rad/s, no zeros.
+r4 4 0 1k
+r1 1 2 1k
+c1 2 0 1u
+r9 1 0 1meg
+.pz 1 4 2 0 vol pz
+.end

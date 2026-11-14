@@ -1,0 +1,17 @@
+Pole-zero with an AC voltage source away from the input
+* Coverage: vsrcpzld.c opens a voltage source that has an AC value even
+* when the .pz input is elsewhere; Dune used to short it. With a CUR
+* input the source's termination is part of the network, so the poles
+* move: open (3f5, ngspice-47) vs shorted (old Dune: -1000 and -3000).
+* Hand-derived answer, vin open (r1 dangles), G = 1 mS, C = 1 uF:
+* det [[G + sC, -G], [-G, 2G + sC]] = 0 -> (s/1000)^2 + 3 (s/1000) + 1 = 0,
+* poles -1000 (3 -+ sqrt 5)/2 = -381.966 and -2618.034 rad/s; the
+* numerator of v(3)/i(2) is the constant G, so no zeros.
+vin 1 0 dc 0 ac 1
+r1 1 2 1k
+c1 2 0 1u
+r2 2 3 1k
+c2 3 0 1u
+r3 3 0 1k
+.pz 2 0 3 0 cur pz
+.end

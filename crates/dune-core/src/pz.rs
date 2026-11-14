@@ -1466,4 +1466,97 @@ mod tests {
             );
         }
     }
+
+    /// Run the `.pz` of a deck given as text: the named roots, or the
+    /// error message.
+    fn pz_roots(text: &str) -> Result<Vec<(String, Complex64)>, String> {
+        let parsed = dune_netlist::parse_str("t", text);
+        assert!(parsed.is_clean(), "{:?}", parsed.diags);
+        let (c, _) = Circuit::from_netlist(&parsed.netlist).unwrap();
+        let (sols, _) = c
+            .run(&parsed.netlist.analyses[0], &Options::spice3())
+            .map_err(|e| e.to_string())?;
+        let Data::Complex(cols) = &sols[0].data else {
+            panic!("complex plot expected");
+        };
+        Ok(sols[0]
+            .variables
+            .iter()
+            .zip(cols)
+            .map(|((n, _), v)| (n.clone(), v[0]))
+            .collect())
+    }
+
+    fn assert_roots(got: &[(String, Complex64)], want: &[(&str, Complex64)]) {
+        assert_eq!(got.len(), want.len(), "{got:?}");
+        for ((gn, g), (wn, w)) in got.iter().zip(want) {
+            assert_eq!(gn, wn);
+            assert!(
+                (g - w).norm() <= 1e-9 * w.norm().max(1.0),
+                "{gn}: got {g}, want {w}"
+            );
+        }
+    }
+
+    fn corpus_deck(stem: &str) -> String {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus"));
+        std::fs::read_to_string(root.join(format!("regress/{stem}.cir"))).unwrap()
+    }
+
+    /// `vsrcpzld.c`: a source with `AC` opens, so a `.pz` input on
+    /// its own nodes is driven, not shorted (`regress/pz_vsrc_input`,
+    /// series RLC solved by hand in the deck).
+    #[test]
+    fn ac_source_at_the_input_opens() {
+        let wd = (1e9f64 - 2.5e7).sqrt();
+        assert_roots(
+            &pz_roots(&corpus_deck("pz_vsrc_input")).unwrap(),
+            &[
+                ("v(pole(1))", Complex64::new(-5000.0, wd)),
+                ("v(pole(2))", Complex64::new(-5000.0, -wd)),
+                ("v(zero(1))", Complex64::new(-1e4, 0.0)),
+                ("v(zero(2))", Complex64::new(0.0, 0.0)),
+            ],
+        );
+    }
+
+    /// The same source without `AC` is a short (the C's DC branch):
+    /// the input is shorted and the C refuses with this message.
+    #[test]
+    fn dc_source_at_the_input_still_shorts_it() {
+        let err = pz_roots("t\nvin 1 0 dc 0\nr1 1 2 1k\nc1 2 0 1u\n.pz 1 0 2 0 vol pz\n.end\n")
+            .unwrap_err();
+        assert!(err.contains("shorted on the way to the output"), "{err}");
+    }
+
+    /// An `AC` source away from the input opens too, which moves the
+    /// poles of a `CUR` transfer (`regress/pz_vsrc_open`).
+    #[test]
+    fn ac_source_elsewhere_opens() {
+        let r5 = 5f64.sqrt();
+        assert_roots(
+            &pz_roots(&corpus_deck("pz_vsrc_open")).unwrap(),
+            &[
+                (
+                    "v(pole(1))",
+                    Complex64::new(-1000.0 * (3.0 + r5) / 2.0, 0.0),
+                ),
+                (
+                    "v(pole(2))",
+                    Complex64::new(-1000.0 * (3.0 - r5) / 2.0, 0.0),
+                ),
+            ],
+        );
+    }
+
+    /// `SMPcAddCol(balance, solution)` folds the solution column into
+    /// the balance column: a floating input keeps its negative node
+    /// (`regress/pz_float_input`).
+    #[test]
+    fn floating_input_keeps_its_negative_node() {
+        assert_roots(
+            &pz_roots(&corpus_deck("pz_float_input")).unwrap(),
+            &[("v(pole(1))", Complex64::new(-1.001e6 / 2001.0, 0.0))],
+        );
+    }
 }
