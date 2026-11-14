@@ -294,12 +294,21 @@ fn scan_deck(path: &Path) -> Result<(Vec<String>, Vec<char>, Vec<u32>)> {
     // the gate stays conservative.
     let mut mos_levels: Vec<u32> = Vec::new();
     for name in &mos_used {
-        let level = mos_models
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, l)| *l)
-            .unwrap_or(0);
-        mos_levels.push(level);
+        let exact = mos_models.iter().find(|(n, _)| n == name).map(|(_, l)| *l);
+        // A binned family `name.<digits>` (G4 of docs/pdk-parser.md):
+        // every bin's level counts, the least supported one gating.
+        let bins = || {
+            mos_models.iter().filter(|(n, _)| {
+                n.strip_prefix(name.as_str())
+                    .and_then(|r| r.strip_prefix('.'))
+                    .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+            })
+        };
+        match exact {
+            Some(l) => mos_levels.push(l),
+            None if bins().next().is_some() => mos_levels.extend(bins().map(|(_, l)| *l)),
+            None => mos_levels.push(0),
+        }
     }
     Ok((analyses, devices, mos_levels))
 }
@@ -466,6 +475,24 @@ mod tests {
         // Only model `a` (level 2) is instantiated; the unused
         // level-6 and level-1 cards do not gate the deck.
         assert_eq!(m, vec![2]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn scan_resolves_binned_families() {
+        let dir = std::env::temp_dir().join(format!("dune-oracle-bin-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("bin.cir");
+        fs::write(
+            &p,
+            "t\nm1 1 2 3 4 mm l=1u w=1u\nm2 1 2 3 4 nx l=1u w=1u\n\
+             .model mm.1 nmos level=49\n.model mm.2 nmos level=54\n.model mm.x nmos\n\
+             .op\n.end\n",
+        )
+        .unwrap();
+        let (_, _, m) = scan_deck(&p).unwrap();
+        // Every bin of `mm` counts (`mm.x` is no bin); `nx` is unknown.
+        assert_eq!(m, vec![49, 54, 0]);
         fs::remove_dir_all(&dir).ok();
     }
 
