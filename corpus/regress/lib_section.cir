@@ -1,0 +1,9 @@
+library section pick: corner tt of an ngspice-style library
+* written for Dune (Fase 8 item 7, G1 of docs/pdk-parser.md); the library
+* lib/corners.lib holds three corners, only `tt` is read
+.lib 'lib/corners.lib' tt
+v1 1 0 {vdd}
+r1 1 2 {rload}
+d1 2 0 dmod
+.dc v1 0 1.8 0.05
+.end

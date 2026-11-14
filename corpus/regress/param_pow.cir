@@ -1,0 +1,16 @@
+parameter power is left-associative, unary minus looser than power
+* written for Dune: ngspice-47 gives 2^3^2 = 64 and -2^2 = -4 in .param
+* expressions (Dune gave 512 until 2026-11-14; docs/pdk-parser.md §8)
+.param p={2^3^2}
+.param q={-2^2}
+.param s={2^-1}
+v1 1 0 {p}
+r1 1 0 1k
+v2 2 0 {q}
+r2 2 0 1k
+v3 3 0 {s}
+r3 3 0 1k
+v4 4 0 {2^2^-1}
+r4 4 0 1k
+.op
+.end

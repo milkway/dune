@@ -1,0 +1,17 @@
+* Corner library in the ngspice style, written for Dune (not from a PDK).
+* Read by corpus/regress/lib_section.cir and lib_nested.cir; only the
+* body of the requested section is ever read, so this line and the
+* next one are never parsed.
+this text is outside every section ( (
+.lib tt
+.param vdd=1.8 rload=1k
+.model dmod d is=1e-14 n=1.05 rs=10
+.endl tt
+.lib ff
+.param vdd=1.98 rload=900
+.model dmod d is=2e-14 n=1.0 rs=5
+.endl ff
+.lib ss
+.param vdd=1.62 rload=1.1k
+.model dmod d is=5e-15 n=1.1 rs=20
+.endl ss
