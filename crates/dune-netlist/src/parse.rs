@@ -14,8 +14,8 @@ use crate::deck::{self, Card, Deck, IncludeLoader};
 use crate::diag::Diagnostic;
 use crate::elem::{ElemCtx, parse_element};
 use crate::func::{FuncScope, FuncTable};
-use crate::ir::{Model, Netlist, Param, ParamValue};
-use crate::param::{ParamDef, ParamEnv};
+use crate::ir::{Analysis, Model, Netlist, Param, ParamValue};
+use crate::param::{ParamDef, ParamEnv, TemperUse};
 use crate::scan::Scanner;
 use crate::span::SourceMap;
 use crate::subckt::{
@@ -160,7 +160,26 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
         table: &global_funcs,
         parent: None,
     };
-    let env = crate::param::resolve(&param_defs, Some(&global_scope), &mut all_diags);
+    // The global scope at the default temperature, then — if the
+    // deck sets another one and a parameter depends on `temper` —
+    // again at the circuit temperature, which may itself read global
+    // parameters (`.options temp={t0}`).
+    let mut first_diags = Vec::new();
+    let env = crate::param::resolve(&param_defs, Some(&global_scope), 27.0, &mut first_diags);
+    let temperature = circuit_temperature(&cards, &env);
+    let env = if temperature != 27.0 && env.has_tainted() {
+        drop(env);
+        crate::param::resolve(
+            &param_defs,
+            Some(&global_scope),
+            temperature,
+            &mut all_diags,
+        )
+    } else {
+        all_diags.append(&mut first_diags);
+        env
+    };
+    env.set_temperature(temperature);
     drop(param_defs);
 
     // Pass B: the real parse. Subcircuit bodies are only read
@@ -200,7 +219,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                 }
                 None => {
                     if let Some(b) = top_conds.read(d, card, &mut all_diags) {
-                        top_conds.eval_branch(b, &env, &mut top_act, &mut |d| all_diags.push(d));
+                        env.with_temper(TemperUse::Forbidden("an .if condition"), || {
+                            top_conds.eval_branch(b, &env, &mut top_act, &mut |d| all_diags.push(d))
+                        });
                     }
                 }
             }
@@ -291,7 +312,8 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                     // diagnostics only count if an element uses it
                     // (ngspice P05c/P05f, `s1 model_undef_used_top`).
                     let mut diags = Vec::new();
-                    let model = parse_model(card, &mut diags, &env);
+                    let model =
+                        env.with_temper(TemperUse::Device, || parse_model(card, &mut diags, &env));
                     top.models.push(GlobalModel {
                         card: ModelCard::new(card, false, &func_names),
                         model,
@@ -330,14 +352,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
                         format!("{k} is not allowed inside .subckt")
                     };
                     all_diags.push(Diagnostic::error(msg, span));
-                } else if !crate::dot::parse_dot(
-                    k,
-                    card,
-                    &mut all_diags,
-                    &env,
-                    &mut nl,
-                    &mut temp_card,
-                ) {
+                } else if !env.with_temper(TemperUse::Forbidden("a control card"), || {
+                    crate::dot::parse_dot(k, card, &mut all_diags, &env, &mut nl, &mut temp_card)
+                }) {
                     all_diags.push(Diagnostic::error(
                         format!("unknown control card `{k}`"),
                         span,
@@ -360,9 +377,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
             _ => match stack.last_mut() {
                 Some(def) => def.items.push((def.conds.guard(), BodyItem::Elem(card))),
                 None => {
-                    if let Some(el) =
+                    if let Some(el) = env.with_temper(ParamEnv::temper_for_card(card), || {
                         parse_element(card, &mut all_diags, &model_names, &vdmos_models, &env)
-                    {
+                    }) {
                         top.items.push(TopItem::Elem(el));
                     }
                 }
@@ -425,12 +442,107 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     nl.elements = elements;
     nl.models = models;
     all_diags.extend(env.random_note());
+    if let Some(at) = env.temper_first() {
+        temper_checks(&nl, at, &env, &mut all_diags);
+    }
 
     ParseOutcome {
         netlist: nl,
         diags: all_diags,
         sources,
     }
+}
+
+/// The circuit temperature `temper` reads (°C): the last `.temp` card
+/// in effect, else the last `.options temp=`, else 27 — as the engine
+/// will run (`dot.rs` `dot_temp`; probes `g9-probes t1 t_opt50_*`,
+/// `t_temp75_*`, `t_temp_and_opt`, `t_opt50_after`, `t_temp_if`). A
+/// quiet pre-pass over the top level: `.options` count wherever they
+/// stand (they ignore `.if`, `i4 i_d_options_*`), a `.temp` only in a
+/// branch taken; diagnostics are left to the real pass.
+fn circuit_temperature(cards: &[Card], env: &ParamEnv) -> f64 {
+    let mut scratch = Netlist::default();
+    let mut temp_card: Option<Param> = None;
+    let mut quiet = Vec::new();
+    let mut conds = Conds::default();
+    let mut act = Activity::default();
+    let mut depth = 0usize;
+    let mut in_control = false;
+    for card in cards {
+        let kw = first_keyword(card);
+        if in_control {
+            in_control = kw != ".endc";
+            continue;
+        }
+        match kw.as_str() {
+            ".control" => in_control = true,
+            ".subckt" => depth += 1,
+            ".ends" => depth = depth.saturating_sub(1),
+            ".end" if depth == 0 => break,
+            _ if depth > 0 => {}
+            k if crate::cond::directive(k).is_some() => {
+                if let Some(d) = crate::cond::directive(k)
+                    && let Some(b) = conds.read(d, card, &mut quiet)
+                {
+                    conds.eval_branch(b, env, &mut act, &mut |_| {});
+                }
+            }
+            ".options" | ".option" | ".opt" => {
+                crate::dot::parse_dot(&kw, card, &mut quiet, env, &mut scratch, &mut temp_card);
+            }
+            ".temp" if act.on(conds.guard()) => {
+                crate::dot::parse_dot(&kw, card, &mut quiet, env, &mut scratch, &mut temp_card);
+            }
+            _ => {}
+        }
+        quiet.clear();
+    }
+    let num = |p: &Param| match p.value {
+        ParamValue::Num(v) if v.is_finite() => Some(v),
+        _ => None,
+    };
+    temp_card
+        .as_ref()
+        .and_then(num)
+        .or_else(|| {
+            scratch
+                .options
+                .iter()
+                .rev()
+                .find(|p| p.name == "temp")
+                .and_then(num)
+        })
+        .unwrap_or(27.0)
+}
+
+/// After a deck read `temper` (first at `at`): it was evaluated once,
+/// at the circuit temperature. A `.dc temp` sweep would need the deck
+/// re-expanded at every point — ngspice-47 re-evaluates such
+/// expressions there (`g9-probes t2 t_dc_sweep_model`); the parser
+/// here runs once, before the engine, so the sweep is refused. Any
+/// later change of the temperature (an engine-option override from a
+/// binding) does not reach `temper` either: a warning says so.
+fn temper_checks(nl: &Netlist, at: crate::span::Span, env: &ParamEnv, diags: &mut Vec<Diagnostic>) {
+    for a in &nl.analyses {
+        if let Analysis::Dc { sweeps, span } = a
+            && sweeps.iter().any(|s| s.src.eq_ignore_ascii_case("temp"))
+        {
+            diags.push(Diagnostic::error(
+                "a .dc temp sweep cannot be combined with `temper`: Dune evaluates `temper` \
+                 once, when the netlist is read, and re-expanding the deck at every \
+                 temperature point is not supported yet",
+                *span,
+            ));
+        }
+    }
+    let t = env.temperature();
+    diags.push(Diagnostic::warning(
+        format!(
+            "`temper` is evaluated once, at the circuit temperature {t} °C; changing the \
+             temperature after the netlist is read does not re-evaluate it"
+        ),
+        at,
+    ));
 }
 
 /// Record the name a `.func` (or function-form `.param`) card defines.
@@ -536,6 +648,16 @@ pub(crate) fn collect_assignments<'c>(
         }
         let name = text[ns..ne].to_ascii_lowercase();
         let name_span = card.span_of(ns, ne);
+        if name == "temper" {
+            // ngspice-47 ignores such a definition and keeps reading
+            // the circuit temperature (`g9-probes t1 t_user_param`).
+            diags.push(Diagnostic::error(
+                "`temper` is the circuit temperature and cannot be defined as a parameter \
+                 (ngspice-47 ignores this definition)",
+                name_span,
+            ));
+            return false;
+        }
         p = q + 1;
         while p < b.len() && blank(b[p]) {
             p += 1;
@@ -616,6 +738,7 @@ pub(crate) fn collect_assignments<'c>(
             card,
             value_start,
             value: &text[value_start..value_end],
+            temper_ok: true,
         });
     }
 }

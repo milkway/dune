@@ -37,7 +37,7 @@ use crate::diag::{Diagnostic, Severity};
 use crate::elem::parse_element_in;
 use crate::func::{FuncScope, FuncTable};
 use crate::ir::{Device, Element, Expr, ExprOp, Model, Param, ParamValue, SourceKind};
-use crate::param::{self, ParamDef, ParamEnv};
+use crate::param::{self, ParamDef, ParamEnv, TemperUse};
 use crate::scan::Scanner;
 use crate::span::Span;
 
@@ -335,6 +335,9 @@ pub(crate) fn parse_xcall<'c>(card: &'c Card, diags: &mut Vec<Diagnostic>) -> Op
     let mut actuals = Vec::new();
     if let Some(p) = params_at {
         crate::parse::collect_assignments(card, p, &mut actuals, diags);
+    }
+    for a in &mut actuals {
+        a.temper_ok = false;
     }
     Some(XCall {
         name,
@@ -815,7 +818,8 @@ impl<'c> Expander<'_, 'c> {
             if !card.static_keys() && !self.charge(1, el.span) {
                 return None;
             }
-            if let Some([lmin, lmax, wmin, wmax]) = card.bin_limits(env)
+            if let Some([lmin, lmax, wmin, wmax]) =
+                env.with_temper(TemperUse::Device, || card.bin_limits(env))
                 && in_range(l, lmin, lmax)
                 && in_range(w, wmin, wmax)
             {
@@ -864,7 +868,9 @@ impl<'c> Expander<'_, 'c> {
             return None;
         }
         let mut ds = Vec::new();
-        let model = crate::parse::parse_model(mc.card, &mut ds, f.env);
+        let model = f.env.with_temper(TemperUse::Device, || {
+            crate::parse::parse_model(mc.card, &mut ds, f.env)
+        });
         self.report_all(ds);
         let mut model = model?;
         model.name = format!("{}.{}", f.path, model.name);
@@ -959,6 +965,7 @@ impl<'c> Expander<'_, 'c> {
                 card: def.card,
                 value_start: 0,
                 value: "1",
+                temper_ok: true,
             });
         }
         defs.extend(def.formals.iter().cloned());
@@ -1001,6 +1008,7 @@ impl<'c> Expander<'_, 'c> {
                 card: call.card,
                 value_start: 0,
                 value: "m",
+                temper_ok: true,
             });
         }
         if !self.charge(defs.len(), call.span) {
@@ -1019,7 +1027,9 @@ impl<'c> Expander<'_, 'c> {
             return;
         }
         let mut ds = Vec::new();
-        let active = def.conds.evaluate(&env, &mut |d| ds.push(d));
+        let active = env.with_temper(TemperUse::Forbidden("an .if condition"), || {
+            def.conds.evaluate(&env, &mut |d| ds.push(d))
+        });
         self.report_all(ds);
 
         let mult = if def.multiplied {
@@ -1075,14 +1085,16 @@ impl<'c> Expander<'_, 'c> {
                         return;
                     }
                     let mut ds = Vec::new();
-                    let el = parse_element_in(
-                        card,
-                        &mut ds,
-                        self.ctx.model_names,
-                        self.ctx.vdmos_models,
-                        frame.env,
-                        frame.mult.is_some(),
-                    );
+                    let el = frame.env.with_temper(ParamEnv::temper_for_card(card), || {
+                        parse_element_in(
+                            card,
+                            &mut ds,
+                            self.ctx.model_names,
+                            self.ctx.vdmos_models,
+                            frame.env,
+                            frame.mult.is_some(),
+                        )
+                    });
                     self.report_all(ds);
                     if let Some(el) = el {
                         self.finish_element(

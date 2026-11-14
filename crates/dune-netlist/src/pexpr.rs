@@ -291,6 +291,11 @@ pub(crate) struct EvalCtx {
     pub random_used: Cell<bool>,
     /// Work spent in user-function bodies so far ([`MAX_FN_WORK`]).
     pub fn_work: Cell<u64>,
+    /// How many user-function bodies are resolving names right now.
+    pub in_body: Cell<u32>,
+    /// Set when an evaluation read `temper` (directly or through a
+    /// parameter that depends on it).
+    pub temper_touched: Cell<bool>,
 }
 
 impl EvalCtx {
@@ -304,6 +309,8 @@ impl EvalCtx {
             rng: Cell::new(seed),
             random_used: Cell::new(false),
             fn_work: Cell::new(0),
+            in_body: Cell::new(0),
+            temper_touched: Cell::new(false),
         }
     }
 
@@ -524,13 +531,18 @@ impl Expr {
                     for v in &body.vars {
                         match f.formals.iter().position(|a| **a == *v.name) {
                             Some(k) => vals.push(st.get(base + k).copied().unwrap_or(f64::NAN)),
-                            None => match lookup(v) {
-                                Ok(x) => vals.push(x),
-                                Err(pe) => {
-                                    let (vs, ve) = (v.start as usize, v.end as usize);
-                                    return Err(pe.in_function(f, vs, ve));
+                            None => {
+                                ctx.in_body.set(ctx.in_body.get() + 1);
+                                let r = lookup(v);
+                                ctx.in_body.set(ctx.in_body.get().saturating_sub(1));
+                                match r {
+                                    Ok(x) => vals.push(x),
+                                    Err(pe) => {
+                                        let (vs, ve) = (v.start as usize, v.end as usize);
+                                        return Err(pe.in_function(f, vs, ve));
+                                    }
                                 }
-                            },
+                            }
                         }
                     }
                     st.truncate(base);

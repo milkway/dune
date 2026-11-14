@@ -1,0 +1,19 @@
+Title: temper in models, device values and parameters at .options temp=50
+Date: Sat Nov 14 16:35:15  2026
+Command: ngspice-47, Build 
+Plotname: Operating Point
+Flags: real
+No. Variables: 5
+No. Points: 1       
+Variables:
+	0	v(1)	voltage
+	1	v(2)	voltage
+	2	v(3)	voltage
+	3	v(4)	voltage
+	4	v(5)	voltage
+Values:
+0		1.000000000000000e-01
+	1.010000000000000e+00
+	5.947911475907781e-01
+	2.000000000000000e-01
+	6.463000000000001e-01

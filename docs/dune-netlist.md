@@ -354,10 +354,80 @@ a política do Dune é decisão pendente do dono (G8). O avaliador já tem
 o modo sorteado (`RandomPolicy::Seeded`, gerador SplitMix64 + Box–Muller,
 fórmulas do manual: `agauss` = nom + avar/sigma·N(0,1), `gauss` relativo,
 `aunif`/`unif` uniformes em ±var, `limit` = nom ± avar), alcançável só
-nos testes. `temper` é lido como nome; sem um `.param temper` definido,
-avaliá-lo é erro "not supported yet" (G7: precisa reexpandir quando a
-temperatura muda, e no ngspice ele só vale em certas posições — erro em
-`.param` global e em `v1 1 0 {temper}`, valor em `r={temper}`, P07/c4).
+nos testes. `temper`: seção própria, abaixo.
+
+### `temper` (G7)
+
+Fase 8 (2026-11-14). No ngspice-47 o `temper` não é um parâmetro do
+`numparam`: o `inpcom.c` (Modified BSD; lidos `inp_fix_temper_in_param`
+e `inp_temper_compat`) transforma um `.param` que o nomeia em `.func`
+sem argumentos e troca os usos dele, **no mesmo nível de subcircuito**,
+por chamadas; depois, nas linhas `.model` e nas de dispositivo que não
+começam por `V I E G F H B`, reescreve os `{…}` que contêm `temper`
+para o parser da fonte B, que os reavalia a cada temperatura. Em
+qualquer outro lugar o `numparam` responde "Undefined parameter
+[temper]". Sondas: `.claude/scratch/g9-probes/t1.txt` e `t2.txt`
+(testes em `tests/temper.rs`; decks `regress/temper_op.cir` e
+`temper_dc.cir`).
+
+| Posição | ngspice-47 | Sonda |
+|---|---|---|
+| valor de `.model` (`{…}`, `'…'`, nu) | a temperatura do circuito | `t1 t_model*`, `t_case` |
+| valor de dispositivo R, C, L, D, Q, J, M… (posicional ou palavra-chave) | idem | `t_r_pos*`, `t_c_pos`, `t_diode_area`, `t_mos_w`, `t2 t_l_val` |
+| `V`, `I` (posicional, `dc`), `E G F H`; `K` | erro | `t_v_pos`, `t_v_dc`, `t_i_pos`, `t2 t_k` |
+| `.param` global ou do corpo | vale; quem o usa num dispositivo/modelo do mesmo nível também; uma cadeia (`q={p*2}`) também | `t_glob(_unused)`, `t_sub_local*`, `t2 t_chain*`, `t_tparam_model` |
+| … usado noutro nível (global dentro de subcircuito, corpo num subcircuito chamado) | erro | `t2 t_tparam_in_sub`, `t_sub_local_nested_use` |
+| … usado em `V`, linha `X`, cartão de controle | erro | `t2 t_tparam_v`, `t_tparam_x_actual`, `t_tparam_tran` |
+| padrão da linha `.subckt` | vale (num `V` do corpo, erro) | `t_sub_default*`, `t2 t_sub_default_expr`, `t_sub_default_v` |
+| atual da linha `X` | erro | `t_sub_actual` |
+| corpo de `.func` chamado de dispositivo | vale | `t_func`, `t_func_kw` |
+| … chamado de um `.param` | erro (o `.param` não nomeia `temper`, o `numparam` o avalia) | `t_func_glob` |
+| cartões de controle (`.tran`, `.options temp=`), condição de `.if` | erro | `t_tran_card`, `t_options_temp`, `t_if_temper` |
+| fonte `B` (`v=temper`) | variável da própria fonte B | `t_bsrc*` |
+| `.param temper=99` | ignorado calado; `temper` continua a temperatura | `t_user_param*` |
+
+Temperatura: a do circuito — último `.temp` em vigor (respeita `.if`),
+senão o último `.options temp` (em qualquer posição, também dentro de
+ramo não tomado), senão 27 °C (`t_opt50_*`, `t_temp75_*`,
+`t_temp_and_opt`, `t2`); o `temp=` de uma instância **não** muda o
+`temper` (`t_inst_temp`); `tnom` não entra (`t_model_tnom`). Numa
+varredura `.dc temp` o ngspice reavalia (`t2 t_dc_sweep_model`: 1 mΩ,
+50, 100 Ω).
+
+Como ficou: o escopo global é resolvido a 27 °C; uma pré-passada
+silenciosa pelo topo acha a temperatura do circuito (`.if` avaliados,
+`.temp`/`.options` lidos pelo `dot.rs`); se ela não é 27 e algum
+`.param` global depende de `temper`, o escopo é resolvido de novo. Cada
+avaliação sabe onde está (`TemperUse`: modelo/dispositivo, `.param`,
+proibido com o motivo), um nome que depende de `temper` fica marcado no
+seu escopo e só é lido daquele escopo; a leitura vinda de corpo de
+`.func` dentro de um `.param` é recusada como no ngspice. Erros sempre
+com span e dizendo por quê.
+
+**Varredura de temperatura.** O parser roda uma vez, antes do motor; o
+`Circuit` não guarda o texto do deck para reexpandir, então não há
+como reavaliar `temper` por ponto sem API nova. Um `.dc temp` num deck
+que **usa** `temper` (num dispositivo ou modelo; um `.param` que
+ninguém usa não conta) é erro com o span do `.dc`, e todo deck que usa
+`temper` recebe um aviso de que ele foi avaliado uma vez, a T °C — vale
+também para uma troca de `temp` depois do parse (as opções de motor do
+wasm/R/Python). Uma solução completa precisaria de uma API que
+reexpanda o netlist por temperatura: por exemplo
+`dune_netlist::parse_*_at(…, temperature)` (ou uma opção no
+`parse_with_loader`) e, no `dune-core`, um laço de `.dc temp` que, em
+vez de só trocar `CKTtemp`, reconstrua o `Circuit` a partir do texto
+guardado (o `Session` já reconstrói circuitos; faltaria a temperatura
+como entrada do parser). Não feito: é mudança de API pública.
+
+Diferenças (linhas no `KNOWN_DIFFS.md`): `.param temper=…` é erro (o
+ngspice o ignora); com padrão `t={temper}` na linha `.subckt` e
+`t=5` na linha `X`, o ngspice-47 usa **27** (o padrão vence a atual —
+provável efeito da reescrita, `t2 t_sub_default_override`), o Dune usa
+5; valor posicional de área de `Q`/`J`/`D` com `temper` vale no Dune (o
+ngspice recusa a reescrita no `Q`, `t2 t_q_area`); fonte `B` com
+`temper` segue sem suporte (a linguagem da fonte B é a do 3f5); `r=`
+como sinônimo de `resistance=` (o ngspice aceita, `t1 t_inst_kw`) não
+existe no Dune — à parte do `temper`.
 
 ### Funções do usuário (`.func`, `func.rs`)
 

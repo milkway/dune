@@ -60,7 +60,37 @@ pub(crate) struct ParamEnv<'p> {
     /// Span of the first random-function call evaluated (global
     /// scope only; instance scopes record into it).
     random_first: Cell<Option<Span>>,
+    /// Names of this scope whose value depends on `temper`.
+    tainted: HashSet<String>,
+    /// Global scope only: the circuit temperature (°C) `temper` reads,
+    /// where the card being evaluated may read it, and the first
+    /// place it was read.
+    temperature: Cell<f64>,
+    temper_use: Cell<TemperUse>,
+    temper_first: Cell<Option<Span>>,
 }
+
+/// Where `temper` (and a parameter that depends on it) may be read —
+/// ngspice-47 re-evaluates `{…temper…}` itself only on `.model` cards
+/// and on device lines other than `V I E G F H B` (`inp_temper_compat`,
+/// `frontend/inpcom.c`, Modified BSD), and turns a `.param` naming it
+/// into a function so that those lines see it (`inp_fix_temper_in_param`);
+/// everywhere else the parameter preprocessor answers "Undefined
+/// parameter [temper]" (probes `g9-probes t1`, `t2`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TemperUse {
+    /// A `.model` value or a device card that ngspice re-evaluates.
+    Device,
+    /// A `.param` definition or a `.subckt`-line default: it may name
+    /// `temper` (and then depends on it), but not through the body of
+    /// a user function (`t1 t_func_glob`).
+    Param,
+    /// Not available here; the text says where "here" is.
+    Forbidden(&'static str),
+}
+
+/// Default circuit temperature (°C), as the 3f5's `CKTtemp`.
+const DEFAULT_TEMP: f64 = 27.0;
 
 impl Default for ParamEnv<'_> {
     fn default() -> Self {
@@ -71,6 +101,10 @@ impl Default for ParamEnv<'_> {
             funcs: None,
             ctx: EvalCtx::new(RandomPolicy::Nominal),
             random_first: Cell::new(None),
+            tainted: HashSet::new(),
+            temperature: Cell::new(DEFAULT_TEMP),
+            temper_use: Cell::new(TemperUse::Forbidden("this position")),
+            temper_first: Cell::new(None),
         }
     }
 }
@@ -88,6 +122,8 @@ pub(crate) struct ParamDef<'c> {
     pub value_start: usize,
     /// The expression text, without its `{…}`/`'…'` delimiters.
     pub value: &'c str,
+    /// Whether the value may read `temper` (not on an `X` line).
+    pub temper_ok: bool,
 }
 
 /// A value that could not be computed: a diagnostic, or `None` when
@@ -129,13 +165,118 @@ impl<'p> ParamEnv<'p> {
         ))
     }
 
+    /// Whether some parameter of this scope depends on `temper`.
+    pub fn has_tainted(&self) -> bool {
+        !self.tainted.is_empty()
+    }
+
+    /// Set the circuit temperature `temper` reads (°C).
+    pub fn set_temperature(&self, t: f64) {
+        self.root().temperature.set(t);
+    }
+
+    /// The circuit temperature `temper` reads (°C).
+    pub fn temperature(&self) -> f64 {
+        self.root().temperature.get()
+    }
+
+    /// Where the first `temper` was read, if any.
+    pub fn temper_first(&self) -> Option<Span> {
+        self.root().temper_first.get()
+    }
+
+    /// Run `f` with `temper` readable as `u` says, then restore.
+    pub fn with_temper<R>(&self, u: TemperUse, f: impl FnOnce() -> R) -> R {
+        let root = self.root();
+        let before = root.temper_use.replace(u);
+        let r = f();
+        root.temper_use.set(before);
+        r
+    }
+
+    /// The use of `temper` a device card allows: ngspice-47 leaves
+    /// `V I E G F H B` lines to the parameter preprocessor (`t1
+    /// t_v_pos`, `t_i_pos`), and its `K` parser rejects the rewritten
+    /// value (`t2 t_k`).
+    pub fn temper_for_card(card: &Card) -> TemperUse {
+        let first = card
+            .text
+            .trim_start()
+            .bytes()
+            .next()
+            .map(|c| c.to_ascii_lowercase());
+        match first {
+            Some(b'v' | b'i' | b'e' | b'g' | b'f' | b'h' | b'b' | b'k') => {
+                TemperUse::Forbidden("a V, I, E, G, F, H, B or K card")
+            }
+            _ => TemperUse::Device,
+        }
+    }
+
+    /// Read `temper` or a parameter that depends on it (`v`, found in
+    /// `env`, whose `tainted` set it is in): allowed where the card
+    /// being evaluated allows it, and only in the scope that defined
+    /// the parameter (`outer`: found in an enclosing scope —
+    /// ngspice turns the `.param` into a function of its own
+    /// subcircuit level, `t2 t_tparam_in_sub`,
+    /// `t_sub_local_nested_use`).
+    fn read_temper(&self, v: &VarRef, outer: bool, value: f64) -> Result<f64, PError> {
+        let root = self.root();
+        let (s, e) = (v.start as usize, v.end as usize);
+        let direct = &*v.name == "temper";
+        let what = if direct {
+            "`temper`".to_string()
+        } else {
+            format!("`{}` (it depends on `temper`)", v.name)
+        };
+        if outer {
+            return Err(PError::new(
+                format!(
+                    "{what} is defined in an enclosing scope; ngspice-47 makes a parameter that depends on `temper` a function of its own subcircuit level only"
+                ),
+                s,
+                e,
+            ));
+        }
+        match root.temper_use.get() {
+            TemperUse::Device => {}
+            TemperUse::Param if direct && root.ctx.in_body.get() > 0 => {
+                return Err(PError::new(
+                    "`temper` inside a user function called from a .param is not evaluated by ngspice-47 (Undefined parameter); name `temper` in the .param itself",
+                    s,
+                    e,
+                ));
+            }
+            TemperUse::Param => {}
+            TemperUse::Forbidden(where_) => {
+                return Err(PError::new(
+                    format!(
+                        "{what} is not available in {where_}: ngspice-47 evaluates it only in .model cards, device values and .param (Undefined parameter)"
+                    ),
+                    s,
+                    e,
+                ));
+            }
+        }
+        root.ctx.temper_touched.set(true);
+        Ok(value)
+    }
+
     /// Resolve `v` in this scope, then in the enclosing ones.
     fn lookup(&self, v: &VarRef, silenced: &Cell<bool>) -> Result<f64, PError> {
+        if &*v.name == "temper" {
+            return self.read_temper(v, false, self.root().temperature.get());
+        }
         let mut env = self;
+        let mut outer = false;
         loop {
             if let Some(x) = env.map.get(&*v.name) {
+                if env.tainted.contains(&*v.name) {
+                    return env.read_temper(v, outer, *x);
+                }
                 return Ok(*x);
             }
+            outer = true;
             let (s, e) = (v.start as usize, v.end as usize);
             if env.poisoned.contains(&*v.name) {
                 silenced.set(true);
@@ -144,14 +285,7 @@ impl<'p> ParamEnv<'p> {
             match env.parent {
                 Some(p) => env = p,
                 None => {
-                    let msg = if &*v.name == "temper" {
-                        "`temper` in parameter expressions is not supported yet (it needs \
-                         re-expansion when the temperature changes)"
-                            .to_string()
-                    } else {
-                        format!("unknown parameter `{}`", v.name)
-                    };
-                    return Err(PError::new(msg, s, e));
+                    return Err(PError::new(format!("unknown parameter `{}`", v.name), s, e));
                 }
             }
         }
@@ -180,6 +314,12 @@ impl<'p> ParamEnv<'p> {
         );
         match r {
             Ok(v) => {
+                if root.ctx.temper_touched.get()
+                    && root.temper_use.get() == TemperUse::Device
+                    && root.temper_first.get().is_none()
+                {
+                    root.temper_first.set(Some(span_of(0, 0)));
+                }
                 if root.random_first.get().is_none() && root.ctx.random_used.get() {
                     // The first random call, or (drawn inside a user
                     // function's body) the first call of the expression.
@@ -282,12 +422,14 @@ const CYCLE_NAMES_SHOWN: usize = 8;
 
 /// Resolve the global `.param` definitions (in deck order) into the
 /// global scope, reporting every failure.
+/// `temperature` is the circuit temperature `temper` reads (°C).
 pub(crate) fn resolve<'p>(
     defs: &[ParamDef],
     funcs: Option<&'p FuncScope<'p>>,
+    temperature: f64,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
-    resolve_scope(defs, None, funcs, diags)
+    resolve_scope(defs, None, funcs, Some(temperature), diags)
 }
 
 /// Resolve one subcircuit instance's definitions — the `.subckt`
@@ -300,7 +442,7 @@ pub(crate) fn resolve_local<'p>(
     funcs: Option<&'p FuncScope<'p>>,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
-    resolve_scope(defs, Some(parent), funcs, diags)
+    resolve_scope(defs, Some(parent), funcs, None, diags)
 }
 
 /// Resolve the definitions of one scope (in order) into an
@@ -316,6 +458,7 @@ fn resolve_scope<'p>(
     defs: &[ParamDef],
     parent: Option<&'p ParamEnv<'p>>,
     funcs: Option<&'p FuncScope<'p>>,
+    temperature: Option<f64>,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
     let mut env = ParamEnv {
@@ -323,6 +466,9 @@ fn resolve_scope<'p>(
         funcs,
         ..ParamEnv::default()
     };
+    if let Some(t) = temperature {
+        env.temperature.set(t);
+    }
     let mut via_funcs: Vec<Box<str>> = Vec::new();
     let local = parent.is_some();
     let n_defs = defs.len();
@@ -448,13 +594,25 @@ fn resolve_scope<'p>(
             }
             let span_of = |s: usize, e: usize| d.card.span_of(d.value_start + s, d.value_start + e);
             let own = local.then_some(d.name.as_str());
+            // An `X`-line actual may not read `temper` (`t1 t_sub_actual`).
+            let rules = if d.temper_ok {
+                TemperUse::Param
+            } else {
+                TemperUse::Forbidden("a subcircuit call's parameters (X line)")
+            };
+            let tctx = &env.root().ctx;
+            tctx.temper_touched.set(false);
             let value = match pexpr::parse(d.value) {
-                Ok(expr) => env.eval_expr(&expr, own, &span_of),
+                Ok(expr) => env.with_temper(rules, || env.eval_expr(&expr, own, &span_of)),
                 Err(e) => Err(Some(Diagnostic::error(e.msg, span_of(e.start, e.end)))),
             };
+            let touched = env.root().ctx.temper_touched.replace(false);
             match value {
                 Ok(v) => {
                     env.map.insert(d.name.clone(), v);
+                    if touched {
+                        env.tainted.insert(d.name.clone());
+                    }
                 }
                 Err(diag) => {
                     diags.extend(diag);
@@ -560,8 +718,9 @@ mod tests {
         assert!(e[0].contains("unknown parameter `nosuch`"), "{e:?}");
         let (e, _) = run("t\n.param a={foo(1)}\nv1 1 0 1\n.end\n");
         assert!(e[0].contains("unknown function `foo`"), "{e:?}");
+        // A `.param` naming `temper` is a value (g9-probes t1 t_glob_unused).
         let (e, _) = run("t\n.param t1={temper}\nv1 1 0 1\n.end\n");
-        assert!(e[0].contains("temper"), "{e:?}");
+        assert!(e.is_empty(), "{e:?}");
         // A failed definition does not cascade into its users.
         let (e, _) = run("t\n.param a={1+}\n.param b={a*2}\nv1 1 0 {b}\n.end\n");
         assert_eq!(e.len(), 1, "{e:?}");
