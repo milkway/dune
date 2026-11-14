@@ -26,6 +26,7 @@ mod dderivs;
 mod devices;
 mod devnoise;
 mod diode;
+mod dioext;
 mod disto;
 mod elaborate;
 mod engine;

@@ -846,12 +846,20 @@ pub struct Circuit {
     /// no `DTEMP`; a device without an entry has `DTEMP = 0`.
     pub(crate) dtemp: HashMap<String, f64>,
     /// Instance name → the ngspice-47 parallel multiplier `m` of an
-    /// R, C, L or D card (`RESm`, `CAPm`, `INDm`, `DIOm`), recorded
-    /// by the netlist front end: `G = m/R`, `C·m`, `L/m`, and the
-    /// diode's currents, conductances and charges times `m` with the
-    /// breakdown matched as `M·IBV` (`diotemp.c`). The 3f5 has no
-    /// `m`; a device without an entry has `m = 1`.
+    /// R, C, L, D, Gummel–Poon Q, J or Z card (`RESm`, `CAPm`,
+    /// `INDm`, `DIOm`, `BJTm`, `JFETm`, `MESm`), recorded by the
+    /// netlist front end: `G = m/R`, `C·m`, `L/m`, the diode's
+    /// currents, conductances and charges times `m` with the
+    /// breakdown matched as `M·IBV` (`diotemp.c`), and the Q/J/Z
+    /// stamps times `m` (`bjtload.c`, `jfetload.c`, `mesload.c`).
+    /// The 3f5 has no `m`; a device without an entry has `m = 1`.
     pub(crate) mult: HashMap<String, f64>,
+    /// Instance name → the ngspice-47 diode extension of a `D` card
+    /// whose model or instance uses parameters beyond the 3f5
+    /// (`LEVEL=3`, `JSW`, `CJSW`, `ISR`, `IKF`, `JTUN`, `TLEV`…, `PJ`,
+    /// `W`, `L`…; [`crate::dioext`]), recorded by the elaborator. A
+    /// diode without an entry runs the 3f5 path.
+    pub(crate) dio_ext: HashMap<String, crate::dioext::DioExtInst>,
     /// A `.noise` analysis is part of the deck (ngspice's
     /// `noiseAnalGiven`, read by `BSIM4setup`).
     pub(crate) noise_job: bool,
@@ -2188,15 +2196,28 @@ impl Circuit {
                     };
                     let temp = self.instance_temp(&s.name, s.temp, opts);
                     let mult = self.instance_mult(&s.name);
-                    let t = DiodeTemp::new(
-                        &s.name,
-                        &s.model,
-                        s.area,
-                        mult,
-                        temp,
-                        opts.tnom,
-                        opts.reltol,
-                    );
+                    let ext = self.dio_ext.get(&s.name.to_ascii_lowercase()).cloned();
+                    let t = match &ext {
+                        Some(x) => DiodeTemp::new_ext(
+                            &s.name,
+                            &s.model,
+                            s.area,
+                            mult,
+                            temp,
+                            opts.tnom,
+                            opts.reltol,
+                            x,
+                        ),
+                        None => DiodeTemp::new(
+                            &s.name,
+                            &s.model,
+                            s.area,
+                            mult,
+                            temp,
+                            opts.tnom,
+                            opts.reltol,
+                        ),
+                    };
                     notes.extend(t.notes.iter().cloned());
                     devices.push(Box::new(crate::diode::DiodeI::new(
                         pos,
@@ -2210,6 +2231,7 @@ impl Circuit {
                         crate::diode::DiodeSensBase {
                             name: s.name.clone(),
                             model: s.model.clone(),
+                            ext,
                             temp,
                             m: mult,
                             default_tnom: opts.tnom,

@@ -1,0 +1,26 @@
+ngspice-47 diode extensions swept through forward, reverse and breakdown
+* written for Dune: one source drives four diodes in series with
+* their own resistors, swept from deep breakdown to forward bias -
+* sidewall with its own NS, ISR recombination with its generation
+* factor, IKF/IKR knees, JTUN/JTUNSW tunnelling and the NBV
+* breakdown slope (the vectors are the currents of the four branch
+* sources, which cross every region of each diode)
+.model da d is=1e-14 n=1.05 jsw=2e-13 ns=1.4 bv=4 ibv=1m nbv=1.6 rs=5
+.model db d is=1e-13 isr=1e-11 nr=2.1 m=0.45 vj=0.75 ikf=5m ikr=2u bv=6 ibv=10u
+.model dc d is=1e-15 jtun=1e-13 jtunsw=1e-13 ntun=12 jsw=1e-14 bv=8 ibv=1m
+.model dd d level=3 js=1e-4 jsw=1e-10 rs=1e-8 ik=1e5 bv=5 ibv=1e4 tlev=1 tcv=1e-3
+v1 1 0 0
+va 1 2 0
+ra 2 3 100
+da1 3 0 da pj=3
+vb 1 4 0
+rb 4 5 100
+db1 5 0 db
+vc 1 6 0
+rc 6 7 100
+dc1 7 0 dc pj=2
+vd 1 8 0
+rd 8 9 100
+dd1 9 0 dd area=1e-10 pj=4e-5
+.dc v1 -10 1.2 0.05
+.end

@@ -27,7 +27,8 @@ impl Circuit {
         let mut notes: Vec<String> = Vec::new();
 
         // Diode, BJT and MOS models.
-        let mut dmodels: HashMap<&str, DiodeModel> = HashMap::new();
+        let mut dmodels: HashMap<&str, (DiodeModel, Option<crate::dioext::DioModelExt>)> =
+            HashMap::new();
         let mut qmodels: HashMap<&str, crate::bjt::BjtModel> = HashMap::new();
         let mut vbic_models: HashMap<&str, crate::vbic::VbicModel> = HashMap::new();
         enum MosModel {
@@ -158,11 +159,16 @@ impl Circuit {
                     }
                     Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                 },
+                // A refused diode card errs only when an element
+                // instantiates it (PDK libraries carry many models).
                 "d" => match diode_model(m, &mut notes) {
                     Ok(dm) => {
                         dmodels.insert(m.name.as_str(), dm);
                     }
-                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                    Err(e) => {
+                        unsupported_models
+                            .insert(m.name.as_str(), format!("model `{}`: {e}", m.name));
+                    }
                 },
                 // `inpdomod.c`: `LEVEL` (rounded, `INPfindLev`) picks
                 // the bipolar model: 1-2 (and 0) Gummel-Poon, 4 and 9
@@ -536,15 +542,26 @@ impl Circuit {
                     off,
                     params,
                 } => {
-                    let Some(dm) = dmodels.get(model.as_str()) else {
-                        problems.push(format!(
-                            "`{name}`: unable to find definition of model `{model}`"
-                        ));
+                    let Some((dm, dext)) = dmodels.get(model.as_str()) else {
+                        if let Some(reason) = unsupported_models.get(model.as_str()) {
+                            problems.push(format!("`{name}`: {reason}"));
+                        } else {
+                            problems.push(format!(
+                                "`{name}`: unable to find definition of model `{model}`"
+                            ));
+                        }
                         continue;
                     };
+                    if el.nodes.len() != 2 {
+                        problems.push(format!(
+                            "`{name}`: a self-heating diode (thermal node) is not supported yet"
+                        ));
+                        continue;
+                    }
                     let mut temp = None;
                     let mut ic = None;
                     let mut area_kw = None;
+                    let mut geom = crate::dioext::DioGeom::default();
                     if !set_mult(&mut ckt, &name, params, &mut problems) {
                         continue;
                     }
@@ -559,10 +576,39 @@ impl Circuit {
                             // keywords as `INP2D` does.
                             ("area", ParamValue::Num(v)) => area_kw = Some(*v),
                             ("m", ParamValue::Num(_)) => {}
+                            // ngspice-47 `dio.c` instance geometry
+                            // (`crate::dioext`).
+                            ("pj" | "perim", ParamValue::Num(v)) => geom.pj = Some(*v),
+                            ("w", ParamValue::Num(v)) => geom.w = Some(*v),
+                            ("l", ParamValue::Num(v)) => geom.l = Some(*v),
+                            ("lm", ParamValue::Num(v)) => geom.lm = Some(*v),
+                            ("lp", ParamValue::Num(v)) => geom.lp = Some(*v),
+                            ("wm", ParamValue::Num(v)) => geom.wm = Some(*v),
+                            ("wp", ParamValue::Num(v)) => geom.wp = Some(*v),
+                            // `IP("sens_area", IF_FLAG)`: a request
+                            // flag of the old sensitivity code.
+                            ("sens_area", ParamValue::Flag) => {}
+                            ("thermal", _) => problems.push(format!(
+                                "`{name}`: self-heating (thermal) is not supported yet"
+                            )),
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
                     let area = &area.or(area_kw);
+                    let geom_given = [geom.pj, geom.w, geom.l, geom.lm, geom.lp, geom.wm, geom.wp]
+                        .iter()
+                        .any(Option::is_some);
+                    if dext.is_some() || geom_given {
+                        geom.area_given = area.is_some();
+                        ckt.dio_ext.insert(
+                            name.to_ascii_lowercase(),
+                            crate::dioext::DioExtInst {
+                                model: dext.clone().unwrap_or_default(),
+                                geom,
+                                scale: option_scale(nl),
+                            },
+                        );
+                    }
                     add(
                         &mut ckt,
                         Diode {
@@ -2638,6 +2684,20 @@ fn set_mult(
     }
 }
 
+/// `.option scale` (the last one), read by `diosetup.c` for the
+/// level-3 diode geometry; 1 without one.
+fn option_scale(nl: &Netlist) -> f64 {
+    nl.options
+        .iter()
+        .rev()
+        .find(|p| p.name == "scale")
+        .and_then(|p| match p.value {
+            ParamValue::Num(v) => Some(v),
+            _ => None,
+        })
+        .unwrap_or(1.0)
+}
+
 fn num_param(params: &[ir::Param], name: &str) -> Option<f64> {
     params
         .iter()
@@ -2918,38 +2978,145 @@ fn device_phase(d: &ir::Device) -> &'static str {
     }
 }
 
-/// Map `.model x d(...)` parameters onto [`DiodeModel`], 3f5 names
-/// (`dev/dio/diompar.c`; `cj0` is accepted for `cjo` like the C).
-fn diode_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<DiodeModel, String> {
+/// Map `.model x d(...)` parameters onto [`DiodeModel`] (the 3f5
+/// names, `dev/dio/diompar.c`) and, for the ngspice-47 parameters a
+/// 3f5 card does not have, a [`crate::dioext::DioModelExt`]
+/// (`DIOmPTable` of ngspice-47's `dio.c`, aliases included). The
+/// extension is `None` when the card stays within the 3f5 set (with
+/// at most `LEVEL=1`), so such a diode keeps the 3f5 path. Refused by
+/// name: `LEVEL` other than 1 or 3, `RSW` (the separate sidewall
+/// diode), `VP` with a nonzero `TT` (soft reverse recovery),
+/// `TLEVC` other than 0 or 1 (the C leaves the junction potential
+/// unset), `TLEV` above 2 and the output-only `COND`. Accepted and
+/// inert, as in ngspice without `.option warn`: the SOA limits
+/// (`FV_MAX BV_MAX ID_MAX TE_MAX PD_MAX`); `RTH0`/`CTH0` act only on
+/// a self-heating instance (the instance `thermal` flag, refused).
+fn diode_model(
+    m: &ir::Model,
+    notes: &mut Vec<String>,
+) -> Result<(DiodeModel, Option<crate::dioext::DioModelExt>), String> {
     let mut dm = DiodeModel::default();
+    let mut x = crate::dioext::DioModelExt::default();
+    let mut ext = false;
+    let mut vp = 0.0;
+    // IF_INTEGER parameters (`level`, `tlev`, `tlevc`).
+    let int = |v: f64| (0.5 + v).floor() as i64;
     for p in &m.params {
         let v = match p.value {
             ParamValue::Num(v) => v,
+            // `IP("d", …, IF_FLAG)`: the model-type flag.
+            ParamValue::Flag if p.name == "d" => continue,
             _ => return Err(format!("parameter {} needs a numeric value", p.name)),
         };
+        // The 3f5 parameters (and their ngspice aliases) first.
         match p.name.as_str() {
-            "is" => dm.is = v,
+            "is" | "js" => dm.is = v,
             "rs" => dm.rs = v,
             "n" => dm.n = v,
             "tt" => dm.tt = v,
-            "cjo" | "cj0" => dm.cjo = v,
-            "vj" => dm.vj = v,
-            "m" => dm.m = v,
-            "eg" => dm.eg = v,
+            "cjo" | "cj0" | "cj" => dm.cjo = v,
+            "vj" | "pb" => dm.vj = v,
+            "m" | "mj" => dm.m = v,
+            "eg" => {
+                dm.eg = v;
+                x.eg_given = true;
+            }
             "xti" => dm.xti = v,
             "kf" => dm.kf = v,
             "af" => dm.af = v,
             "fc" => dm.fc = v,
-            "bv" => dm.bv = Some(v),
-            "ibv" => dm.ibv = v,
-            "tnom" => dm.tnom = Some(v + CTOK),
-            other => notes.push(format!(
-                "model `{}`: unrecognized parameter ({other}) - ignored",
-                m.name
-            )),
+            "bv" | "vb" | "vrb" | "var" => dm.bv = Some(v),
+            "ibv" | "ib" => dm.ibv = v,
+            "tnom" | "tref" => dm.tnom = Some(v + CTOK),
+            "level" => match int(v) {
+                1 => x.level = 1,
+                3 => {
+                    x.level = 3;
+                    ext = true;
+                }
+                2 => return Err("diode model level 2 is not supported (as in ngspice)".into()),
+                l => return Err(format!("diode model level {l} is not supported")),
+            },
+            name => {
+                let mut known = true;
+                match name {
+                    "jsw" | "isw" => x.jsw = Some(v),
+                    "ns" => x.ns = Some(v),
+                    "trs" | "trs1" => x.trs = v,
+                    "trs2" => x.trs2 = v,
+                    "ttt1" => x.ttt1 = v,
+                    "ttt2" => x.ttt2 = v,
+                    "tm1" => x.tm1 = v,
+                    "tm2" => x.tm2 = v,
+                    "cjp" | "cjsw" => x.cjsw = v,
+                    "php" | "vjsw" => x.php = v,
+                    "mjsw" => x.mjsw = v,
+                    "fcs" => x.fcs = v,
+                    "ikf" | "ik" => x.ikf = Some(v),
+                    "ikr" => x.ikr = Some(v),
+                    "ikp" => x.ikp = Some(v),
+                    "nbv" | "nz" => x.nbv = Some(v),
+                    "area" => x.area = v,
+                    "pj" => x.pj = v,
+                    "tlev" => match int(v) {
+                        t @ 0..=2 => x.tlev = t,
+                        t => return Err(format!("TLEV={t} is not supported (0, 1 or 2)")),
+                    },
+                    "tlevc" => match int(v) {
+                        t @ 0..=1 => x.tlevc = t,
+                        t => return Err(format!("TLEVC={t} is not supported (0 or 1)")),
+                    },
+                    "gap1" => x.gap1 = v,
+                    "gap2" => x.gap2 = v,
+                    "cta" | "ctc" => x.cta = v,
+                    "ctp" => x.ctp = v,
+                    "tpb" | "tvj" => x.tpb = v,
+                    "tphp" => x.tphp = v,
+                    "jtun" => x.jtun = Some(v),
+                    "jtunsw" => x.jtunsw = Some(v),
+                    "ntun" => x.ntun = v,
+                    "xtitun" => x.xtitun = v,
+                    "keg" => x.keg = v,
+                    "tcv" | "tbv1" => x.tcv = v,
+                    "isr" => x.isr = Some(v),
+                    "nr" => x.nr = v,
+                    "lm" => x.lm = v,
+                    "lp" => x.lp = v,
+                    "wm" => x.wm = v,
+                    "wp" => x.wp = v,
+                    "xom" => x.xom = v,
+                    "xoi" => x.xoi = v,
+                    "xm" => x.xm = v,
+                    "xp" => x.xp = v,
+                    "xw" => x.xw = v,
+                    "vp" => vp = v,
+                    // Inert without `.option warn` / a thermal node.
+                    "fv_max" | "bv_max" | "id_max" | "te_max" | "pd_max" | "rth0" | "cth0" => {}
+                    "rsw" => {
+                        return Err(
+                            "RSW (the separate sidewall diode of ngspice-47) is not supported yet"
+                                .into(),
+                        );
+                    }
+                    "cond" => return Err("COND is an output-only parameter".into()),
+                    other => {
+                        known = false;
+                        notes.push(format!(
+                            "model `{}`: unrecognized parameter ({other}) - ignored",
+                            m.name
+                        ));
+                    }
+                }
+                ext |= known;
+            }
         }
     }
-    Ok(dm)
+    if vp != 0.0 && dm.tt != 0.0 {
+        return Err(
+            "VP (soft reverse recovery, ngspice-47) with a nonzero TT is not supported yet".into(),
+        );
+    }
+    Ok((dm, ext.then_some(x)))
 }
 
 /// `.model x njf/pjf(...)` → [`crate::jfet::JfetModel`] (`jfet.c`

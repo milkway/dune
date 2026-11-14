@@ -242,3 +242,36 @@ fn temp_card_sets_the_circuit_temperature() {
         assert!(close(real(&p[0], "i(v1)")[0], -1.0 / 2000.0), "{order}");
     }
 }
+
+/// ngspice-47 diode extensions (`docs/diode.md`): the refused
+/// parameters err by name, only when an instance uses the model.
+#[test]
+fn diode_extensions_refused_by_name() {
+    for (model, inst, what) in [
+        ("level=2", "", "level 2"),
+        ("level=4", "", "level 4"),
+        ("rsw=10", "", "RSW"),
+        ("vp=0.5 tt=1n", "", "VP"),
+        ("tlevc=2", "", "TLEVC=2"),
+        ("tlev=3", "", "TLEV=3"),
+        ("cond=1", "", "output-only"),
+        ("jsw=1e-12", " thermal", "self-heating"),
+    ] {
+        let deck = format!("t\n.model dm d {model}\nd1 1 0 dm{inst}\ni1 0 1 1m\n.op\n.end\n");
+        let parsed = dune_netlist::parse_str("d.cir", &deck);
+        let err = match Circuit::from_netlist(&parsed.netlist) {
+            Ok(_) => panic!("{model}{inst}: accepted"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains(what), "{model}{inst}: {err}");
+    }
+    // Unused, a refused card is no error (PDK libraries).
+    let (p, _) =
+        run("t\n.model dm d rsw=10\n.model ok d jsw=1e-12\nd1 1 0 ok pj=2\ni1 0 1 1m\n.op\n.end\n");
+    assert!(real(&p[0], "v(1)")[0] > 0.5);
+    // Inert as in the C: SOA limits, rth0 without a thermal node, vp
+    // with TT = 0.
+    let (p, _) = run("t\n.model dm d bv_max=10 rth0=100 vp=0.5\nd1 1 0 dm\ni1 0 1 1m\n.op\n.end\n");
+    let (q, _) = run("t\n.model dm d\nd1 1 0 dm\ni1 0 1 1m\n.op\n.end\n");
+    assert!(close(real(&p[0], "v(1)")[0], real(&q[0], "v(1)")[0]));
+}

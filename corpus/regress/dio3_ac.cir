@@ -1,0 +1,29 @@
+ngspice-47 diode extension capacitances in an AC sweep
+* written for Dune: the sidewall junction capacitance CJSW/PHP/MJSW
+* with PJ (in reverse and past FCS*PHP in forward bias), TLEVC=1
+* CTA/CTP at a nondefault temperature, TT with TTT1, and the level-3
+* metal and poly overlap capacitances (LM/WM/LP/WP, XOM/XOI, XM/XP);
+* each diode is biased by its own current source and AC-driven
+* through a resistor
+.temp 60
+.model ca d is=1e-14 cjo=2p vj=0.8 m=0.4 cjsw=1p php=0.6 mjsw=0.25 fcs=0.4 tt=1n ttt1=2e-3 jsw=1e-14
+.model cb d is=1e-14 cjo=2p cjsw=1p tlevc=1 cta=1e-3 ctp=2e-3 tpb=1e-3 tphp=2e-3 jsw=0
+.model cc d level=3 js=1e-4 cj=1e-3 cjsw=1e-9 lm=10 wm=20 lp=5 wp=8 xom=1e-9 xoi=2e-9 xm=0.2 xp=0.1
+vin 1 0 dc 0 ac 1
+ia 0 2 -1n
+ra 1 2 1k
+da 2 0 ca pj=3
+ib 0 3 1m
+rb 1 3 1k
+db 3 0 ca pj=3
+ic 0 4 -1n
+rc 1 4 1k
+dc 4 0 cb pj=2
+id 0 5 -1n
+rd 1 5 1k
+dd 5 0 cc area=1e-9 pj=1.3e-4
+ie 0 6 -1n
+rf 1 6 1k
+de 6 0 cc area=1e-9 pj=1.3e-4 lm=4 wm=4
+.ac dec 10 1meg 10g
+.end
