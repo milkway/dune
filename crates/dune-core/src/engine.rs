@@ -1757,8 +1757,9 @@ impl Engine {
                 return Ok(rows);
             }
 
-            // "resume": pick the next delta.
-            delta = f64::min(delta, max_step);
+            // "resume": pick the next delta. `CKTmaxStep` may have been
+            // lowered by a KSPICE line's load since the last step.
+            delta = f64::min(delta, self.device_max_step(max_step));
             if self.time == self.breaks[0] || self.breaks[0] - self.time <= delmin {
                 // First timepoint after a breakpoint: cut the order
                 // and limit the step by the breakpoint spacing.
@@ -1846,6 +1847,9 @@ impl Engine {
 
                 if let Err(e) = converged {
                     if matches!(e, Error::Singular(_)) {
+                        return Err(e);
+                    }
+                    if let Some(e) = self.fatal_fault() {
                         return Err(e);
                     }
                     // Rejected for non-convergence.
@@ -2254,8 +2258,21 @@ impl Engine {
         match self.ni_iter(opts, start, opts.itl4, 0.0, 1.0) {
             Ok(_) => Ok(true),
             Err(e @ Error::Singular(_)) => Err(e),
-            Err(_) => Ok(false),
+            Err(_) => match self.fatal_fault() {
+                Some(e) => Err(e),
+                None => Ok(false),
+            },
         }
+    }
+
+    /// A device fault no smaller step can cure
+    /// ([`crate::devices::Device::fatal`]): the transient stops with
+    /// it instead of cutting the step.
+    fn fatal_fault(&self) -> Option<Error> {
+        self.devices
+            .iter()
+            .zip(&self.names)
+            .find_map(|(d, n)| d.fatal().map(|f| Error::Build(format!("`{n}`: {f}"))))
     }
 
     /// `ACan` (`ckt/acan.c`): operating point, one `MODEINITSMSIG`
@@ -2306,6 +2323,7 @@ impl Engine {
         };
 
         sweep_budget(step_type, n, fstart, fstop, self.vars.len(), "ac")?;
+        self.check_small_signal()?;
 
         // DC operating point, then the small-signal storage pass.
         self.set_kind(AnKind::DcOp, false);
@@ -2503,6 +2521,7 @@ impl Engine {
     /// `SPan`'s operating point (`span.c`): `CKTop`, then the
     /// `MODEINITSMSIG` load that stores the small-signal parameters.
     pub fn sp_prepare(&mut self, opts: &Options) -> Result<(), Error> {
+        self.check_small_signal()?;
         self.set_kind(AnKind::DcOp, false);
         self.op(opts)?;
         self.load_all(InitMode::Smsig, opts, 1.0);
@@ -2632,6 +2651,7 @@ impl Engine {
             self.vars.len(),
             "disto",
         )?;
+        self.check_small_signal()?;
         let (freq_delta, freq_tol) = match step_type {
             AcStepType::Decade => {
                 let d = f64::exp(f64::ln(10.0) / n);
@@ -3095,6 +3115,34 @@ impl Engine {
     /// a device without a sensitivity port fails the analysis (the C
     /// would perturb its parameters too, so skipping it silently
     /// would drop vectors).
+    /// The device list (unit tests of devices that keep state).
+    #[cfg(test)]
+    pub(crate) fn devices_for_test(&self) -> &[Box<dyn Device>] {
+        &self.devices
+    }
+
+    /// Refuse a small-signal analysis when a device cannot take part
+    /// in it ([`crate::devices::Device::small_signal`]).
+    pub fn check_small_signal(&self) -> Result<(), Error> {
+        for (k, d) in self.devices.iter().enumerate() {
+            d.small_signal().map_err(|what| Error::Unsupported {
+                name: self.names[k].clone(),
+                what: what.to_string(),
+            })?;
+        }
+        Ok(())
+    }
+
+    /// The transient step cap: the run's `TMAX` lowered by the caps
+    /// devices set from their loads (`CKTmaxStep`, see
+    /// [`crate::devices::Device::max_step`]).
+    fn device_max_step(&self, max_step: f64) -> f64 {
+        self.devices
+            .iter()
+            .filter_map(|d| d.max_step())
+            .fold(max_step, f64::min)
+    }
+
     pub fn sens_params(&self, ac: bool) -> Result<Vec<Vec<SensParam>>, Error> {
         self.devices
             .iter()

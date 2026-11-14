@@ -208,6 +208,15 @@ impl Circuit {
                         .into(),
                 });
             }
+            if matches!(spec, Spec::Txl(_) | Spec::Cpl(_)) {
+                // The KSPICE lines keep their history from an operating
+                // point and have no periodic-past port (ngspice-47 has
+                // no `.pss` model for them either).
+                return Err(Error::Unsupported {
+                    name: spec.name().to_string(),
+                    what: "a KSPICE (Y/P) line in .pss".into(),
+                });
+            }
             if let Spec::Ltra(l) = spec
                 && !opts.ltra_fit
             {

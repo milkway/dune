@@ -166,6 +166,7 @@ impl Circuit {
 
         // Operating point, then the small-signal pass.
         crate::engine::sweep_budget(step_type, n, fstart, fstop, engine.vars.len(), "noise")?;
+        engine.check_small_signal()?;
         engine.set_kind(AnKind::DcOp, false);
         engine.op(opts)?;
         engine.load_all_public(InitMode::Smsig, opts);

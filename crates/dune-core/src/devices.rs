@@ -69,6 +69,25 @@ pub(crate) trait Device: Send {
     /// Drop the middle of the last three history samples (called on
     /// every participating device at once, when all are ready).
     fn compact(&mut self) {}
+    /// A cap the device put on the transient step (`CKTmaxStep`),
+    /// sticky for the rest of the run: the KSPICE lines lower it to
+    /// `0.9·τ` from their load when a step outruns their delay
+    /// (`txlload.c`, `cplload.c`). The transient takes the smallest
+    /// cap of all devices at every step choice. Default: none.
+    fn max_step(&self) -> Option<f64> {
+        None
+    }
+    /// A load fault no smaller step can cure (the C exits there): the
+    /// transient stops with it instead of retrying. Default: none.
+    fn fatal(&self) -> Option<&'static str> {
+        None
+    }
+    /// Whether the device can take part in a small-signal analysis
+    /// (`.ac`, `.noise`, `.sp`, `.pz`, `.disto`): `Err` names what is
+    /// missing (a CPL line, whose C has no AC load). Default: yes.
+    fn small_signal(&self) -> Result<(), &'static str> {
+        Ok(())
+    }
     /// The length of the device's accepted-point history, if it keeps
     /// one (tests and statistics; LTRA lines).
     #[cfg_attr(not(test), allow(dead_code))]

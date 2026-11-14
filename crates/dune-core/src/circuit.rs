@@ -503,6 +503,46 @@ pub struct Tra {
     pub ic: [f64; 4],
 }
 
+/// `YXXX N1 GND1 N2 GND2 MNAME <LEN VALUE>`: ngspice-47's KSPICE
+/// single lossy line (`devices/txl/`) with its model inline. The line
+/// joins `N1` and `N2` against the global ground — the reference
+/// nodes are created (as `INP2Y` inserts them) but not connected. Its
+/// two branch equations are named after the instance, so both
+/// currents come out as `i(<name>)`, the way ngspice writes them.
+#[derive(Clone, Debug)]
+pub struct Txl {
+    pub name: String,
+    /// `N1`, `GND1`, `N2`, `GND2`.
+    pub nodes: [String; 4],
+    pub model: crate::kspice::TxlModel,
+    /// The instance `LEN`, overriding the model `LENGTH`.
+    pub len: Option<f64>,
+}
+
+/// `PXXX N1 … Nk GND1 M1 … Mk GND2 MNAME <LENGTH VALUE>`: ngspice-47's
+/// KSPICE coupled lines (`devices/cpl/`), `k` conductors between the
+/// `N` and the `M` nodes, with its model inline. As for [`Txl`], the
+/// reference nodes are created but not connected, and the `2k`
+/// branch currents all come out as `i(<name>)`.
+#[derive(Clone, Debug)]
+pub struct Cpl {
+    pub name: String,
+    /// The `2k + 2` nodes in card order: `N1 … Nk GND1 M1 … Mk GND2`.
+    pub nodes: Vec<String>,
+    pub model: crate::kspice::CplModel,
+    /// The instance `LENGTH`, overriding the model's.
+    pub len: Option<f64>,
+}
+
+impl Cpl {
+    /// The conductor count `k` of the node list (`None` when it is not
+    /// `2k + 2` names).
+    fn conductors(&self) -> Option<usize> {
+        let n = self.nodes.len();
+        (n >= 4 && n.is_multiple_of(2)).then(|| (n - 2) / 2)
+    }
+}
+
 /// `SXXXXXXX N+ N- NC+ NC- MODEL <ON|OFF>`: voltage-controlled
 /// switch with its model inline (`dev/sw/`).
 #[derive(Clone, Debug)]
@@ -563,6 +603,8 @@ pub enum Spec {
     Asrc(Box<Asrc>),
     Vdmos(Box<Vdmos>),
     Vbic(Box<Vbic>),
+    Txl(Box<Txl>),
+    Cpl(Box<Cpl>),
 }
 
 macro_rules! impl_into_spec {
@@ -662,6 +704,18 @@ impl From<Vbic> for Spec {
     }
 }
 
+impl From<Txl> for Spec {
+    fn from(s: Txl) -> Spec {
+        Spec::Txl(Box::new(s))
+    }
+}
+
+impl From<Cpl> for Spec {
+    fn from(s: Cpl) -> Spec {
+        Spec::Cpl(Box::new(s))
+    }
+}
+
 impl From<Tra> for Spec {
     fn from(s: Tra) -> Spec {
         Spec::Tra(Box::new(s))
@@ -700,6 +754,8 @@ impl Spec {
             Spec::Asrc(s) => &s.name,
             Spec::Vdmos(s) => &s.name,
             Spec::Vbic(s) => &s.name,
+            Spec::Txl(s) => &s.name,
+            Spec::Cpl(s) => &s.name,
         }
     }
 }
@@ -933,6 +989,14 @@ fn normalize(spec: &mut Spec) {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
         }
+        Spec::Txl(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
+        Spec::Cpl(s) => {
+            lc(&mut s.name);
+            s.nodes.iter_mut().for_each(lc);
+        }
         Spec::Asrc(s) => {
             lc(&mut s.name);
             s.nodes.iter_mut().for_each(lc);
@@ -1055,6 +1119,8 @@ impl Circuit {
         // control references), state-slot bases (`CKTnumStates`) and
         // the inductor info the mutuals need.
         let mut branches: HashMap<String, Var> = HashMap::new();
+        // The branch equations of the KSPICE lines, by instance.
+        let mut line_branches: HashMap<String, Vec<Var>> = HashMap::new();
         let mut st = crate::state::StateAlloc::new();
         let mut state_base: Vec<usize> = Vec::with_capacity(self.specs.len());
         let mut state_ranges: Vec<(usize, usize)> = Vec::with_capacity(self.specs.len());
@@ -1120,6 +1186,8 @@ impl Circuit {
                 Spec::Asrc(s) => &s.nodes,
                 Spec::Vdmos(s) => &s.nodes,
                 Spec::Vbic(s) => &s.nodes,
+                Spec::Txl(s) => &s.nodes,
+                Spec::Cpl(s) => &s.nodes,
             };
             for (k, n) in node_names.iter().enumerate() {
                 let var = node(&mut vars, &mut node_ids, n);
@@ -1316,6 +1384,35 @@ impl Circuit {
                     for v in vbic_internal(s) {
                         node(&mut vars, &mut node_ids, &format!("{}#{v}", s.name));
                     }
+                }
+                // `TXLsetup`: `CKTmkCur(…, "branch1")`, `"branch2"`;
+                // ngspice writes both as `i(<name>)`.
+                Spec::Txl(s) => {
+                    let b1 = vars.push(s.name.clone(), VarKind::Branch);
+                    let b2 = vars.push(s.name.clone(), VarKind::Branch);
+                    line_branches.insert(s.name.clone(), vec![b1, b2]);
+                }
+                // `CPLsetup`: `branch1_0 … branch1_{k-1}`, then the
+                // `branch2_*`.
+                Spec::Cpl(s) => {
+                    let k = s.conductors().ok_or_else(|| {
+                        Error::Build(format!(
+                            "`{}`: a CPL line takes 2k + 2 nodes, got {}",
+                            s.name,
+                            s.nodes.len()
+                        ))
+                    })?;
+                    if k > crate::kspice::MAX_CPL_LINES {
+                        return Err(Error::Build(format!(
+                            "`{}`: a CPL line has at most {} conductors, got {k}",
+                            s.name,
+                            crate::kspice::MAX_CPL_LINES
+                        )));
+                    }
+                    let br: Vec<Var> = (0..2 * k)
+                        .map(|_| vars.push(s.name.clone(), VarKind::Branch))
+                        .collect();
+                    line_branches.insert(s.name.clone(), br);
                 }
                 _ => {}
             }
@@ -2028,6 +2125,36 @@ impl Circuit {
                         n,
                         [v("i1"), v("i2")],
                         [v("int1"), v("int2")],
+                    )));
+                }
+                Spec::Txl(s) => {
+                    let br = &line_branches[&s.name];
+                    let p = crate::kspice::TxlParams::new(&s.name, &s.model, s.len)
+                        .map_err(Error::Build)?;
+                    devices.push(Box::new(crate::kspice::TxlI::new(
+                        p,
+                        get(&node_ids, &s.nodes[0]),
+                        get(&node_ids, &s.nodes[2]),
+                        [br[0], br[1]],
+                        opts.gmin,
+                    )));
+                }
+                Spec::Cpl(s) => {
+                    let k = s.conductors().unwrap_or(0);
+                    let br = &line_branches[&s.name];
+                    let p = crate::kspice::CplParams::new(&s.name, &s.model, k, s.len)
+                        .map_err(Error::Build)?;
+                    let pos = s.nodes[..k].iter().map(|n| get(&node_ids, n)).collect();
+                    let neg = s.nodes[k + 1..2 * k + 1]
+                        .iter()
+                        .map(|n| get(&node_ids, n))
+                        .collect();
+                    devices.push(Box::new(crate::kspice::CplI::new(
+                        p,
+                        pos,
+                        neg,
+                        br[..k].to_vec(),
+                        br[k..].to_vec(),
                     )));
                 }
                 Spec::SwitchV(s) => {
