@@ -510,6 +510,7 @@ pub(crate) fn fet3_finish(
     typ: f64,
     gdpr: f64,
     gspr: f64,
+    m: f64,
     bias: &Fet3Bias,
     op: &Fet3Op,
 ) {
@@ -546,32 +547,32 @@ pub(crate) fn fet3_finish(
     let ceqgd = typ * (op.cgd - op.ggd * op.vgd);
     let ceqgs = typ * ((op.cg - op.cgd) - op.ggs * op.vgs);
     let cdreq = typ * ((op.cd + op.cgd) - op.gds * vds - op.gm * op.vgs);
-    ctx.add_rhs(n.gate, -ceqgs - ceqgd);
-    ctx.add_rhs(n.d_p, -cdreq + ceqgd);
-    ctx.add_rhs(n.s_p, cdreq + ceqgs);
+    ctx.add_rhs(n.gate, m * (-ceqgs - ceqgd));
+    ctx.add_rhs(n.d_p, m * (-cdreq + ceqgd));
+    ctx.add_rhs(n.s_p, m * (cdreq + ceqgs));
 
     let (gm, gds, ggs, ggd) = (op.gm, op.gds, op.ggs, op.ggd);
-    ctx.add(n.s[D_DP], -gdpr);
-    ctx.add(n.s[G_DP], -ggd);
-    ctx.add(n.s[G_SP], -ggs);
-    ctx.add(n.s[S_SP], -gspr);
-    ctx.add(n.s[DP_D], -gdpr);
-    ctx.add(n.s[DP_G], gm - ggd);
-    ctx.add(n.s[DP_SP], -gds - gm);
-    ctx.add(n.s[SP_G], -ggs - gm);
-    ctx.add(n.s[SP_S], -gspr);
-    ctx.add(n.s[SP_DP], -gds);
-    ctx.add(n.s[D_D], gdpr);
-    ctx.add(n.s[G_G], ggd + ggs);
-    ctx.add(n.s[S_S], gspr);
-    ctx.add(n.s[DP_DP], gdpr + gds + ggd);
-    ctx.add(n.s[SP_SP], gspr + gds + gm + ggs);
+    ctx.add(n.s[D_DP], m * (-gdpr));
+    ctx.add(n.s[G_DP], m * (-ggd));
+    ctx.add(n.s[G_SP], m * (-ggs));
+    ctx.add(n.s[S_SP], m * (-gspr));
+    ctx.add(n.s[DP_D], m * (-gdpr));
+    ctx.add(n.s[DP_G], m * (gm - ggd));
+    ctx.add(n.s[DP_SP], m * (-gds - gm));
+    ctx.add(n.s[SP_G], m * (-ggs - gm));
+    ctx.add(n.s[SP_S], m * (-gspr));
+    ctx.add(n.s[SP_DP], m * (-gds));
+    ctx.add(n.s[D_D], m * (gdpr));
+    ctx.add(n.s[G_G], m * (ggd + ggs));
+    ctx.add(n.s[S_S], m * (gspr));
+    ctx.add(n.s[DP_DP], m * (gdpr + gds + ggd));
+    ctx.add(n.s[SP_SP], m * (gspr + gds + gm + ggs));
 }
 
 /// `JFETacLoad` / `MESacLoad`: the small-signal conductances from
 /// `state0` and the capacitances the `MODEINITSMSIG` pass left in
 /// the charge slots.
-pub(crate) fn fet3_ac(ctx: &mut AcCtx, n: &Fet3Nodes, st: usize, gdpr: f64, gspr: f64) {
+pub(crate) fn fet3_ac(ctx: &mut AcCtx, n: &Fet3Nodes, st: usize, gdpr: f64, gspr: f64, m: f64) {
     let s0 = |o: usize| ctx.states.get(0, st + o);
     let gm = s0(GM);
     let gds = s0(GDS);
@@ -579,28 +580,28 @@ pub(crate) fn fet3_ac(ctx: &mut AcCtx, n: &Fet3Nodes, st: usize, gdpr: f64, gspr
     let xgs = s0(QGS) * ctx.omega;
     let ggd = s0(GGD);
     let xgd = s0(QGD) * ctx.omega;
-    ctx.add_g(n.s[D_D], gdpr);
-    ctx.add_g(n.s[G_G], ggd + ggs);
-    ctx.add_b(n.s[G_G], xgd + xgs);
-    ctx.add_g(n.s[S_S], gspr);
-    ctx.add_g(n.s[DP_DP], gdpr + gds + ggd);
-    ctx.add_b(n.s[DP_DP], xgd);
-    ctx.add_g(n.s[SP_SP], gspr + gds + gm + ggs);
-    ctx.add_b(n.s[SP_SP], xgs);
-    ctx.add_g(n.s[D_DP], -gdpr);
-    ctx.add_g(n.s[G_DP], -ggd);
-    ctx.add_b(n.s[G_DP], -xgd);
-    ctx.add_g(n.s[G_SP], -ggs);
-    ctx.add_b(n.s[G_SP], -xgs);
-    ctx.add_g(n.s[S_SP], -gspr);
-    ctx.add_g(n.s[DP_D], -gdpr);
-    ctx.add_g(n.s[DP_G], -ggd + gm);
-    ctx.add_b(n.s[DP_G], -xgd);
-    ctx.add_g(n.s[DP_SP], -gds - gm);
-    ctx.add_g(n.s[SP_G], -ggs - gm);
-    ctx.add_b(n.s[SP_G], -xgs);
-    ctx.add_g(n.s[SP_S], -gspr);
-    ctx.add_g(n.s[SP_DP], -gds);
+    ctx.add_g(n.s[D_D], m * (gdpr));
+    ctx.add_g(n.s[G_G], m * (ggd + ggs));
+    ctx.add_b(n.s[G_G], m * (xgd + xgs));
+    ctx.add_g(n.s[S_S], m * (gspr));
+    ctx.add_g(n.s[DP_DP], m * (gdpr + gds + ggd));
+    ctx.add_b(n.s[DP_DP], m * (xgd));
+    ctx.add_g(n.s[SP_SP], m * (gspr + gds + gm + ggs));
+    ctx.add_b(n.s[SP_SP], m * (xgs));
+    ctx.add_g(n.s[D_DP], m * (-gdpr));
+    ctx.add_g(n.s[G_DP], m * (-ggd));
+    ctx.add_b(n.s[G_DP], m * (-xgd));
+    ctx.add_g(n.s[G_SP], m * (-ggs));
+    ctx.add_b(n.s[G_SP], m * (-xgs));
+    ctx.add_g(n.s[S_SP], m * (-gspr));
+    ctx.add_g(n.s[DP_D], m * (-gdpr));
+    ctx.add_g(n.s[DP_G], m * (-ggd + gm));
+    ctx.add_b(n.s[DP_G], m * (-xgd));
+    ctx.add_g(n.s[DP_SP], m * (-gds - gm));
+    ctx.add_g(n.s[SP_G], m * (-ggs - gm));
+    ctx.add_b(n.s[SP_G], m * (-xgs));
+    ctx.add_g(n.s[SP_S], m * (-gspr));
+    ctx.add_g(n.s[SP_DP], m * (-gds));
 }
 
 /// `JFETpzLoad` / `MESpzLoad` (`jfetpzld.c`, `mespzld.c`): the AC
@@ -615,6 +616,8 @@ pub(crate) fn fet3_pz(
     st: usize,
     gdpr: f64,
     gspr: f64,
+    m: f64,
+    mes_slip: bool,
 ) {
     let s0 = |o: usize| ctx.states.get(0, st + o);
     let gm = s0(GM);
@@ -623,28 +626,45 @@ pub(crate) fn fet3_pz(
     let xgs = s0(QGS);
     let ggd = s0(GGD);
     let xgd = s0(QGD);
-    ctx.add_g(n.s[D_D], gdpr);
-    ctx.add_g(n.s[G_G], ggd + ggs);
-    ctx.add_cap(n.s[G_G], xgd + xgs);
-    ctx.add_g(n.s[S_S], gspr);
-    ctx.add_g(n.s[DP_DP], gdpr + gds + ggd);
-    ctx.add_cap(n.s[DP_DP], xgd);
-    ctx.add_g(n.s[SP_SP], gspr + gds + gm + ggs);
-    ctx.add_cap(n.s[SP_SP], xgs);
-    ctx.add_g(n.s[D_DP], -gdpr);
-    ctx.add_g(n.s[G_DP], -ggd);
-    ctx.add_cap(n.s[G_DP], -xgd);
-    ctx.add_g(n.s[G_SP], -ggs);
-    ctx.add_cap(n.s[G_SP], -xgs);
-    ctx.add_g(n.s[S_SP], -gspr);
-    ctx.add_g(n.s[DP_D], -gdpr);
-    ctx.add_g(n.s[DP_G], -ggd + gm);
-    ctx.add_cap(n.s[DP_G], -xgd);
-    ctx.add_g(n.s[DP_SP], -gds - gm);
-    ctx.add_g(n.s[SP_G], -ggs - gm);
-    ctx.add_cap(n.s[SP_G], -xgs);
-    ctx.add_g(n.s[SP_S], -gspr);
-    ctx.add_g(n.s[SP_DP], -gds);
+    // `mespzld.c` (ngspice-47) writes three diagonal stamps without
+    // parentheses — `m * ggd+ggs`, `m * gdpr+gds+ggd`,
+    // `m * gspr+gds+gm+ggs` — so only the first term carries `m`;
+    // ported literally (`mes_slip`, docs/dune-core.md "Fidelidade").
+    let (gg, dpdp, spsp) = if mes_slip {
+        (
+            m * ggd + ggs,
+            m * gdpr + gds + ggd,
+            m * gspr + gds + gm + ggs,
+        )
+    } else {
+        (
+            m * (ggd + ggs),
+            m * (gdpr + gds + ggd),
+            m * (gspr + gds + gm + ggs),
+        )
+    };
+    ctx.add_g(n.s[D_D], m * (gdpr));
+    ctx.add_g(n.s[G_G], gg);
+    ctx.add_cap(n.s[G_G], m * (xgd + xgs));
+    ctx.add_g(n.s[S_S], m * (gspr));
+    ctx.add_g(n.s[DP_DP], dpdp);
+    ctx.add_cap(n.s[DP_DP], m * (xgd));
+    ctx.add_g(n.s[SP_SP], spsp);
+    ctx.add_cap(n.s[SP_SP], m * (xgs));
+    ctx.add_g(n.s[D_DP], m * (-gdpr));
+    ctx.add_g(n.s[G_DP], m * (-ggd));
+    ctx.add_cap(n.s[G_DP], m * (-xgd));
+    ctx.add_g(n.s[G_SP], m * (-ggs));
+    ctx.add_cap(n.s[G_SP], m * (-xgs));
+    ctx.add_g(n.s[S_SP], m * (-gspr));
+    ctx.add_g(n.s[DP_D], m * (-gdpr));
+    ctx.add_g(n.s[DP_G], m * (-ggd + gm));
+    ctx.add_cap(n.s[DP_G], m * (-xgd));
+    ctx.add_g(n.s[DP_SP], m * (-gds - gm));
+    ctx.add_g(n.s[SP_G], m * (-ggs - gm));
+    ctx.add_cap(n.s[SP_G], m * (-xgs));
+    ctx.add_g(n.s[SP_S], m * (-gspr));
+    ctx.add_g(n.s[SP_DP], m * (-gds));
 }
 
 /// Name suffixes of the JFET/MESFET noise generators
@@ -666,7 +686,7 @@ pub(crate) enum Fet3Channel {
         temp: f64,
         nlev: i64,
         gdsnoi: f64,
-        /// `tThreshold`, `tBeta·area`.
+        /// `tThreshold`, `tBeta·area·m`.
         vto: f64,
         beta: f64,
     },
@@ -675,7 +695,9 @@ pub(crate) enum Fet3Channel {
 /// `JFETnoise` (ngspice-47) / `MESnoise`: thermal noise of RD and
 /// RS, channel thermal noise (see [`Fet3Channel`]), flicker
 /// `KF·|Id|^AF/f` on the drain current of `state0`, and the total.
-/// `gdpr`/`gspr` already carry the area.
+/// `gdpr`/`gspr` already carry the area; ngspice-47's multiplier `m`
+/// scales the two resistors, the channel and the flicker density
+/// (`m·KF·|Id|^AF`, `Id` per device — not `|m·Id|^AF`).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fet3_noise(
     ctx: &crate::matrix::NoiseCtx,
@@ -683,6 +705,7 @@ pub(crate) fn fet3_noise(
     st: usize,
     gdpr: f64,
     gspr: f64,
+    m: f64,
     kf: f64,
     af: f64,
     chan: &Fet3Channel,
@@ -691,9 +714,9 @@ pub(crate) fn fet3_noise(
     let gm = ctx.states.get(0, st + GM);
     let (rd, rs, id) = match *chan {
         Fet3Channel::Mes => (
-            ctx.thermal(n.d_p, n.drain, gdpr),
-            ctx.thermal(n.s_p, n.source, gspr),
-            ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * gm.abs()),
+            ctx.thermal(n.d_p, n.drain, gdpr * m),
+            ctx.thermal(n.s_p, n.source, gspr * m),
+            ctx.thermal(n.d_p, n.s_p, 2.0 / 3.0 * m * gm.abs()),
         ),
         Fet3Channel::Jfet {
             temp,
@@ -703,7 +726,7 @@ pub(crate) fn fet3_noise(
             beta,
         } => {
             let sid = if nlev < 3 {
-                2.0 / 3.0 * gm.abs()
+                2.0 / 3.0 * m * gm.abs()
             } else {
                 let vgs = ctx.states.get(0, st + VGS);
                 let vds = vgs - ctx.states.get(0, st + VGD);
@@ -716,8 +739,8 @@ pub(crate) fn fet3_noise(
                 2.0 / 3.0 * beta * vgst * (1.0 + alpha + alpha * alpha) / (1.0 + alpha) * gdsnoi
             };
             (
-                ctx.thermal_at(n.d_p, n.drain, gdpr, temp),
-                ctx.thermal_at(n.s_p, n.source, gspr, temp),
+                ctx.thermal_at(n.d_p, n.drain, gdpr * m, temp),
+                ctx.thermal_at(n.s_p, n.source, gspr * m, temp),
                 ctx.thermal_at(n.d_p, n.s_p, sid, temp),
             )
         }
@@ -726,7 +749,7 @@ pub(crate) fn fet3_noise(
     let flicker = ctx.flicker(
         n.d_p,
         n.s_p,
-        kf * f64::exp(af * f64::ln(f64::max(cd.abs(), N_MINLOG))),
+        m * kf * f64::exp(af * f64::ln(f64::max(cd.abs(), N_MINLOG))),
         1.0,
     );
     vec![rd, rs, id, flicker, rd + rs + id + flicker]
@@ -998,6 +1021,11 @@ pub(crate) fn jfet_dsetup(
 /// A JFET instance (`JFETinstance`).
 pub(crate) struct JfetI {
     n: Fet3Nodes,
+    /// ngspice-47's parallel multiplier `m` (`JFETm`/`MESm`): every
+    /// load, AC and pz stamp times `m`, the noise sources as
+    /// `jfetnoi.c`/`mesnoise.c`, and `.disto` with `area·m`
+    /// (`jfetdset.c`/`mesdset.c`). 1 in the 3f5.
+    m: f64,
     t: JfetTemp,
     area: f64,
     off: bool,
@@ -1021,6 +1049,7 @@ impl JfetI {
     ) -> Self {
         JfetI {
             n: Fet3Nodes::new(nodes, primes),
+            m: 1.0,
             t,
             area,
             off,
@@ -1029,6 +1058,12 @@ impl JfetI {
             st,
             dist: Fet3DistoCoeffs::default(),
         }
+    }
+
+    /// Set ngspice-47's parallel multiplier `m` (`JFETm`).
+    pub(crate) fn with_mult(mut self, m: f64) -> Self {
+        self.m = m;
+        self
     }
 }
 
@@ -1117,7 +1152,7 @@ impl crate::devices::Device for JfetI {
             }
         }
 
-        fet3_finish(ctx, &self.n, st, typ, gdpr, gspr, &bias, &op);
+        fet3_finish(ctx, &self.n, st, typ, gdpr, gspr, self.m, &bias, &op);
     }
 
     /// `JFETtrunc`.
@@ -1130,14 +1165,14 @@ impl crate::devices::Device for JfetI {
     fn load_ac(&mut self, ctx: &mut AcCtx) {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
-        fet3_ac(ctx, &self.n, self.st, gdpr, gspr);
+        fet3_ac(ctx, &self.n, self.st, gdpr, gspr, self.m);
     }
 
     /// `JFETpzLoad` (`jfetpzld.c`): see [`fet3_pz`].
     fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
-        fet3_pz(ctx, &self.n, self.st, gdpr, gspr);
+        fet3_pz(ctx, &self.n, self.st, gdpr, gspr, self.m, false);
         Ok(())
     }
 
@@ -1155,9 +1190,9 @@ impl crate::devices::Device for JfetI {
             nlev: t.nlev,
             gdsnoi: t.gdsnoi,
             vto: t.vto,
-            beta: t.beta * self.area,
+            beta: t.beta * self.area * self.m,
         };
-        fet3_noise(ctx, &self.n, self.st, gdpr, gspr, t.kf, t.af, &chan)
+        fet3_noise(ctx, &self.n, self.st, gdpr, gspr, self.m, t.kf, t.af, &chan)
     }
 
     /// `JFETdSetup`: see [`jfet_dsetup`].
@@ -1166,7 +1201,7 @@ impl crate::devices::Device for JfetI {
         let typ = self.t.type_;
         let vgs = typ * (ctx.sol[n.gate] - ctx.sol[n.s_p]);
         let vgd = typ * (ctx.sol[n.gate] - ctx.sol[n.d_p]);
-        self.dist = jfet_dsetup(&self.t, self.area, ctx.gmin, vgs, vgd);
+        self.dist = jfet_dsetup(&self.t, self.area * self.m, ctx.gmin, vgs, vgd);
         Ok(())
     }
 

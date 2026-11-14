@@ -673,11 +673,14 @@ fn x_line_multiplier_per_device_kind_s4() {
         Device::Diode { area: None, params, .. } if param(params, "m") == Some(2.0)));
     assert!(matches!(dev("d.x1.d2"),
         Device::Diode { area: Some(a), params, .. } if *a == 3.0 && param(params, "m") == Some(2.0)));
-    assert!(matches!(dev("q.x1.q1"), Device::Bjt { area: Some(a), .. } if *a == 2.0));
+    // The Gummel–Poon Q and J too (stamps times m, bjtload.c).
+    assert!(matches!(dev("q.x1.q1"),
+        Device::Bjt { area: None, params, .. } if param(params, "m") == Some(2.0)));
     assert!(
         matches!(dev("q.x1.q2"), Device::Bjt { area: None, params, .. } if param(params, "m") == Some(2.0))
     );
-    assert!(matches!(dev("j.x1.j1"), Device::Jfet { area: Some(a), .. } if *a == 2.0));
+    assert!(matches!(dev("j.x1.j1"),
+        Device::Jfet { area: None, params, .. } if param(params, "m") == Some(2.0)));
     assert!(
         matches!(dev("m.x1.m1"), Device::Mosfet { params, .. } if param(params, "m") == Some(2.0))
     );
@@ -710,7 +713,7 @@ fn x_line_multiplier_per_device_kind_s4() {
             ".model n2 nmos level=2\nm1 a a 0 0 n2 l=1u w=1u",
             "MOS level 2",
         ),
-        ("i1 a 0 pulse(0 1 0 1n 1n 1n 2n)", "transient"),
+        ("i1 a 0 trnoise(1m 1n)", "TRNOISE"),
     ] {
         let out = parse(&format!(".subckt s a\n{dev}\n.ends\nx1 1 s m=2"));
         let e = errors(&out);
@@ -807,7 +810,8 @@ fn own_multiplier_outside_multiplied_subcircuits() {
         | Device::Mosfet { params, .. } => param(params, "m"),
         d => panic!("{d:?}"),
     };
-    // Kept for the elaborator: R, C, L, D and the native ones.
+    // Kept for the elaborator: R, C, L, D, Q, J, Z and the native
+    // ones; the area is left alone (ngspice multiplies the stamps).
     for (n, want) in [
         ("r1", 2.0),
         ("r2", 4.0),
@@ -815,22 +819,22 @@ fn own_multiplier_outside_multiplied_subcircuits() {
         ("l1", 2.0),
         ("d1", 3.0),
         ("d2", 3.0),
+        ("q1", 2.0),
+        ("q2", 3.0),
         ("q3", 2.0),
+        ("j1", 3.0),
+        ("z1", 1.5),
         ("m1", 2.0),
     ] {
         assert_eq!(m(n), Some(want), "{n}");
     }
     assert_eq!(r(&nl, "r4"), 250.0); // the last `m=` wins (m_last)
-    // Folded into the area: positional, else `area=`, else m.
-    assert!(matches!(dev("q1"), Device::Bjt { area: Some(a), .. } if *a == 2.0));
+    assert!(matches!(dev("q1"), Device::Bjt { area: None, .. }));
     assert!(matches!(dev("q2"),
-        Device::Bjt { area: None, params, .. } if param(params, "area") == Some(6.0)));
-    assert!(matches!(dev("j1"), Device::Jfet { area: Some(a), .. } if *a == 6.0));
+        Device::Bjt { area: None, params, .. } if param(params, "area") == Some(2.0)));
+    assert!(matches!(dev("j1"), Device::Jfet { area: Some(a), .. } if *a == 2.0));
     assert!(matches!(dev("z1"),
-        Device::Mesfet { area: None, params, .. } if param(params, "area") == Some(3.0)));
-    for n in ["q1", "q2", "j1", "z1"] {
-        assert_eq!(m(n), None, "{n}");
-    }
+        Device::Mesfet { area: None, params, .. } if param(params, "area") == Some(2.0)));
     // Folded into gains and values.
     assert!(matches!(dev("g1"), Device::Vccs { gain: Some(g) } if *g == 2e-3));
     assert!(matches!(dev("f1"), Device::Cccs { gain: Some(g), .. } if *g == 6.0));
@@ -882,6 +886,28 @@ fn own_multiplier_inside_subcircuits_s4() {
 }
 
 #[test]
+fn own_multiplier_folds_current_waveforms() {
+    // dev-probes s1/isrc_m: isrcload.c stamps m*value(t); the levels of
+    // PULSE/SIN/EXP/SFFM and the PWL values carry it. isrc_d: the
+    // DISTOF magnitude is not multiplied (CKTdisto reads ISRCdF1mag).
+    let nl = clean(
+        "i1 0 1 pulse(0 1m 1u 1u 1u 3u 8u) m=2\ni2 0 1 sin(0.5m 1m 100k) m=3\n\
+         i3 0 1 pwl(0 0 2u 1m 4u -1m) m=2\ni4 0 1 dc 1m distof1 1m m=2\nr1 1 0 1k\n\
+         .subckt s a\ni5 0 a exp(0 1m 1u 1u 4u 2u)\n.ends\nx1 1 s m=4",
+    );
+    let args = |n: &str| match &element(&nl, n).device {
+        Device::Source { tran: Some(t), .. } => t.args.clone(),
+        d => panic!("{d:?}"),
+    };
+    assert_eq!(args("i1"), [0.0, 2e-3, 1e-6, 1e-6, 1e-6, 3e-6, 8e-6]);
+    assert_eq!(args("i2"), [1.5e-3, 3e-3, 1e5]);
+    assert_eq!(args("i3"), [0.0, 0.0, 2e-6, 2e-3, 4e-6, -2e-3]);
+    assert_eq!(args("i.x1.i5"), [0.0, 4e-3, 1e-6, 1e-6, 4e-6, 2e-6]);
+    assert!(matches!(&element(&nl, "i4").device,
+        Device::Source { dc: Some(v), distof1: Some(d), .. } if *v == 2e-3 && d.mag == 1e-3));
+}
+
+#[test]
 fn own_multiplier_errors_are_spanned() {
     for (card, what) in [
         ("r1 1 0 1k m=0", "positive"),
@@ -891,7 +917,8 @@ fn own_multiplier_errors_are_spanned() {
         ("g1 0 1 1 0 1m m=-1", "positive"),
         ("b1 0 1 i=1 m=0", "positive"),
         (".model nm nmos level=1\nm1 1 1 0 0 nm m=2", "MOS level 1"),
-        ("i1 0 1 pulse(0 1 0 1n 1n 1n 2n) m=2", "transient"),
+        ("i1 0 1 trrandom(1 1n) m=2", "TRRANDOM"),
+        ("i1 0 1 trnoise(1m 1n) m=2", "TRNOISE"),
         ("v1 1 0 1 m=2", "unknown parameter (m)"),
         ("e1 1 0 2 0 1 m=2", "unknown parameter (m)"),
         ("h1 1 0 v2 2 m=2\nv2 2 0 1", "unknown parameter (m)"),

@@ -179,6 +179,31 @@ fn keepopinfo_dumps_the_operating_point_first() {
 }
 
 #[test]
+fn own_multiplier_of_q_j_z_is_m_devices_in_parallel() {
+    // bjtload.c/jfetload.c/mesload.c multiply every stamp by m, the
+    // junction gmin included: a cut-off junction fed 1 pA reads the
+    // same with m=2 as with two devices in parallel (dev-probes
+    // s1/qjz q_m_gmin: -0.25 V, where area=2 reads -0.5 V).
+    let models = ".model qm npn is=1e-20 rb=10\n.model jm njf is=1e-20 rd=5\n\
+                  .model zm nmf is=1e-20 rs=5\n";
+    for (dev, card) in [("q", "qm"), ("j", "jm"), ("z", "zm")] {
+        let one = format!("{dev}1 0 1 0 {card} m=2\ni1 1 0 1p\n");
+        let two = format!("{dev}1 0 1 0 {card}\n{dev}2 0 1 0 {card}\ni1 1 0 1p\n");
+        let area = format!("{dev}1 0 1 0 {card} area=2\ni1 1 0 1p\n");
+        let v = |body: &str| {
+            let (p, _) = run(&format!("m\n{models}{body}.op\n.end\n"));
+            real(&p[0], "v(1)")[0]
+        };
+        // Within the Newton tolerance (the iterates differ).
+        let near = |a: f64, b: f64| (a - b).abs() <= 1e-5 * b.abs();
+        let (m, par, a) = (v(&one), v(&two), v(&area));
+        assert!(near(m, par), "{dev}: m=2 {m} vs parallel {par}");
+        assert!(near(m, -0.25), "{dev}: {m}");
+        assert!(near(a, -0.5), "{dev}: area {a}");
+    }
+}
+
+#[test]
 fn own_multiplier_scales_resistors_by_value_and_geometry() {
     // ngspice-47 `G = m/R` (fix-probes r_m, r_m_geom): 1k/2 ∥ 1k/4,
     // then RSH·L/W = 1k by geometry over m=4; no "ignored" note.

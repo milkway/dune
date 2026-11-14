@@ -473,12 +473,13 @@ fn source(ctx: &mut ElemCtx, kind: SourceKind) -> Parsed {
     {
         let m = ctx.own_mult(m, span)?;
         if m != 1.0 {
-            if tran.is_some() || distof1.is_some() || distof2.is_some() {
+            if let Some(t) = &mut tran
+                && let Err(what) = scale_isrc_tran(t, m)
+            {
                 ctx.err(
                     span,
                     format!(
-                        "multiplier m={m} is not supported yet for a current source with a \
-                         transient or distortion spec"
+                        "multiplier m={m} is not supported yet for a current source with {what}"
                     ),
                 );
                 return None;
@@ -535,6 +536,36 @@ fn vc_source(ctx: &mut ElemCtx, is_e: bool) -> Parsed {
         }
     };
     Some((nodes, device))
+}
+
+/// Fold ngspice-47's multiplier `m` of a current source into its
+/// transient function: `isrcload.c` stamps `m·value(t)`, and every
+/// value of `PULSE`, `SIN`, `EXP`, `PWL` and `SFFM` is linear in its
+/// level arguments (`V1 V2`, `VO VA`, the `PWL` values), which no
+/// default depends on (probe `isrc_m` in
+/// `.claude/scratch/dev-probes/s1`). The random functions are refused
+/// (`TRRANDOM`'s poisson draw is not linear in its arguments, and
+/// `TRNOISE` is kept with them until a deck needs it). The `DISTOF`
+/// magnitudes are left alone, as in ngspice: `CKTdisto` reads
+/// `ISRCdF1mag` without `m` (probe `isrc_d`).
+pub(crate) fn scale_isrc_tran(t: &mut TranFn, m: f64) -> Result<(), &'static str> {
+    let levels: &[usize] = match t.kind {
+        TranFnKind::Pulse | TranFnKind::Sin | TranFnKind::Exp | TranFnKind::Sffm => &[0, 1],
+        TranFnKind::Pwl => {
+            for v in t.args.iter_mut().skip(1).step_by(2) {
+                *v *= m;
+            }
+            return Ok(());
+        }
+        TranFnKind::TrNoise => return Err("a TRNOISE function"),
+        TranFnKind::TrRandom => return Err("a TRRANDOM function"),
+    };
+    for &i in levels {
+        if let Some(v) = t.args.get_mut(i) {
+            *v *= m;
+        }
+    }
+    Ok(())
 }
 
 /// The gain of an `E`/`G`/`F`/`H` card: the leading value, else

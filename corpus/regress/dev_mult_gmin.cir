@@ -1,0 +1,25 @@
+A device's own m= on cut-off Gummel-Poon Q, J and Z junctions
+* written for Dune: with IS=1e-20 the junction gmin carries the 1 pA
+* source; ngspice-47 multiplies the device's stamps by m (bjtload.c,
+* jfetload.c, mesload.c), gmin included, so the node reads -0.25 V at
+* m=2 where area=2 reads -0.5 V (probes s1/qjz.cases in
+* .claude/scratch/dev-probes)
+.model qm npn is=1e-20
+.model jm njf vto=-2 beta=1e-4 is=1e-20
+.model zm nmf vto=-2 beta=1e-3 is=1e-20
+q1 0 1 0 qm m=2
+i1 1 0 1p
+q2 0 2 0 qm 3 m=2
+i2 2 0 1p
+q3 0 3 0 qm 2
+i3 3 0 1p
+j1 0 4 0 jm m=2
+i4 4 0 1p
+j2 0 5 0 jm 2
+i5 5 0 1p
+z1 0 6 0 zm m=2
+i6 6 0 1p
+z2 0 7 0 zm area=4 m=0.5
+i7 7 0 1p
+.op
+.end

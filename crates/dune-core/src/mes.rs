@@ -382,6 +382,11 @@ pub(crate) fn mes_dsetup(
 /// A MESFET instance (`MESinstance`).
 pub(crate) struct MesI {
     n: Fet3Nodes,
+    /// ngspice-47's parallel multiplier `m` (`JFETm`/`MESm`): every
+    /// load, AC and pz stamp times `m`, the noise sources as
+    /// `jfetnoi.c`/`mesnoise.c`, and `.disto` with `area·m`
+    /// (`jfetdset.c`/`mesdset.c`). 1 in the 3f5.
+    m: f64,
     t: MesTemp,
     area: f64,
     off: bool,
@@ -405,6 +410,7 @@ impl MesI {
     ) -> Self {
         MesI {
             n: Fet3Nodes::new(nodes, primes),
+            m: 1.0,
             t,
             area,
             off,
@@ -413,6 +419,12 @@ impl MesI {
             st,
             dist: Fet3DistoCoeffs::default(),
         }
+    }
+
+    /// Set ngspice-47's parallel multiplier `m` (`MESm`).
+    pub(crate) fn with_mult(mut self, m: f64) -> Self {
+        self.m = m;
+        self
     }
 }
 
@@ -508,7 +520,7 @@ impl crate::devices::Device for MesI {
             }
         }
 
-        fet3_finish(ctx, &self.n, st, typ, gdpr, gspr, &bias, &op);
+        fet3_finish(ctx, &self.n, st, typ, gdpr, gspr, self.m, &bias, &op);
     }
 
     /// `MEStrunc`.
@@ -521,14 +533,14 @@ impl crate::devices::Device for MesI {
     fn load_ac(&mut self, ctx: &mut AcCtx) {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
-        fet3_ac(ctx, &self.n, self.st, gdpr, gspr);
+        fet3_ac(ctx, &self.n, self.st, gdpr, gspr, self.m);
     }
 
     /// `MESpzLoad` (`mespzld.c`): see [`crate::jfet::fet3_pz`].
     fn load_pz(&mut self, ctx: &mut crate::matrix::PzCtx) -> Result<(), &'static str> {
         let gdpr = self.t.drain_conduct * self.area;
         let gspr = self.t.source_conduct * self.area;
-        fet3_pz(ctx, &self.n, self.st, gdpr, gspr);
+        fet3_pz(ctx, &self.n, self.st, gdpr, gspr, self.m, true);
         Ok(())
     }
 
@@ -546,6 +558,7 @@ impl crate::devices::Device for MesI {
             self.st,
             gdpr,
             gspr,
+            self.m,
             self.t.m.kf,
             self.t.m.af,
             &crate::jfet::Fet3Channel::Mes,
@@ -558,7 +571,7 @@ impl crate::devices::Device for MesI {
         let typ = self.t.type_;
         let vgs = typ * (ctx.sol[n.gate] - ctx.sol[n.s_p]);
         let vgd = typ * (ctx.sol[n.gate] - ctx.sol[n.d_p]);
-        self.dist = mes_dsetup(&self.t, self.area, ctx.gmin, vgs, vgd);
+        self.dist = mes_dsetup(&self.t, self.area * self.m, ctx.gmin, vgs, vgd);
         Ok(())
     }
 

@@ -1567,15 +1567,18 @@ impl Circuit {
                     let temp = self.instance_temp(&s.name, s.temp, opts);
                     let bt = crate::bjt::BjtTemp::new(&s.name, &s.model, temp, opts.tnom);
                     notes.extend(bt.notes.iter().cloned());
-                    devices.push(Box::new(crate::bjt::BjtI::new(
-                        [col, bse, emi, sub],
-                        primes,
-                        bt,
-                        s.area,
-                        s.off,
-                        s.ic,
-                        base,
-                    )));
+                    devices.push(Box::new(
+                        crate::bjt::BjtI::new(
+                            [col, bse, emi, sub],
+                            primes,
+                            bt,
+                            s.area,
+                            s.off,
+                            s.ic,
+                            base,
+                        )
+                        .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Mos1(s) => {
                     let d = get(&node_ids, &s.nodes[0]);
@@ -2220,17 +2223,19 @@ impl Circuit {
                     let temp = self.instance_temp(&s.name, s.temp, opts);
                     let t = crate::jfet::JfetTemp::new(&s.name, &s.model, temp, opts.tnom);
                     notes.extend(t.notes.iter().cloned());
-                    devices.push(Box::new(crate::jfet::JfetI::new(
-                        nodes, primes, t, s.area, s.off, s.ic, base,
-                    )));
+                    devices.push(Box::new(
+                        crate::jfet::JfetI::new(nodes, primes, t, s.area, s.off, s.ic, base)
+                            .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Mes(s) => {
                     let (nodes, primes) =
                         fet3_vars(&node_ids, &s.name, &s.nodes, s.model.rd, s.model.rs);
                     let t = crate::mes::MesTemp::new(&s.model);
-                    devices.push(Box::new(crate::mes::MesI::new(
-                        nodes, primes, t, s.area, s.off, s.ic, base,
-                    )));
+                    devices.push(Box::new(
+                        crate::mes::MesI::new(nodes, primes, t, s.area, s.off, s.ic, base)
+                            .with_mult(self.instance_mult(&s.name)),
+                    ));
                 }
                 Spec::Ltra(s) => {
                     let n = [

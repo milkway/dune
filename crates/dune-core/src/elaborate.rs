@@ -619,6 +619,9 @@ impl Circuit {
                     let mut ic = (0.0, 0.0);
                     let mut icg = IcGiven::NONE;
                     let mut area_kw = None;
+                    if !set_mult(&mut ckt, &name, params, &mut problems) {
+                        continue;
+                    }
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
@@ -638,6 +641,8 @@ impl Circuit {
                             // `bjt.c` `area` (probe `q_areakw`); the
                             // positional value wins (`INP2Q`).
                             ("area", ParamValue::Num(v)) => area_kw = Some(*v),
+                            // `BJTm`, read by `set_mult`.
+                            ("m", ParamValue::Num(_)) => {}
                             _ => problems.push(format!("`{name}`: unknown parameter ({})", p.name)),
                         }
                     }
@@ -987,12 +992,17 @@ impl Circuit {
                     let mut temp = None;
                     let mut ic = (0.0, 0.0);
                     let mut icg = IcGiven::NONE;
+                    if !set_mult(&mut ckt, &name, params, &mut problems) {
+                        continue;
+                    }
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("temp", ParamValue::Num(v)) => temp = Some(v + CTOK),
                             // ngspice-47 `jfet.c` (KNOWN_DIFFS).
                             ("dtemp", ParamValue::Num(v)) => ckt.set_dtemp(&name, *v),
                             ("area", ParamValue::Num(v)) => area = Some(*v),
+                            // `JFETm`, read by `set_mult`.
+                            ("m", ParamValue::Num(_)) => {}
                             ("ic", ParamValue::Num(v)) => {
                                 ic.0 = *v;
                                 icg = icg.with(0);
@@ -1042,9 +1052,14 @@ impl Circuit {
                     let mut area = None;
                     let mut ic = (0.0, 0.0);
                     let mut icg = IcGiven::NONE;
+                    if !set_mult(&mut ckt, &name, params, &mut problems) {
+                        continue;
+                    }
                     for p in params {
                         match (p.name.as_str(), &p.value) {
                             ("area", ParamValue::Num(v)) => area = Some(*v),
+                            // `MESm`, read by `set_mult`.
+                            ("m", ParamValue::Num(_)) => {}
                             ("icvds", ParamValue::Num(v)) => {
                                 ic.0 = *v;
                                 icg = icg.with(0);
@@ -2591,7 +2606,8 @@ fn add_ic(
     }
 }
 
-/// Record the ngspice-47 multiplier `m` of an R, C, L or D card
+/// Record the ngspice-47 multiplier `m` of an R, C, L, D, Gummel–Poon
+/// Q, J or Z card
 /// (the last `m=` wins, as `INPdevParse` overwrites; the netlist
 /// expansion puts an `X`-line multiplier here too). `false` after
 /// reporting an `m` that is not one finite positive number (the

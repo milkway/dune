@@ -498,14 +498,16 @@ nenhuma linha `X` multiplica — age pelo mesmo caminho
 | `C` (valor ou geometria) | `C·m` | parâmetro `m` (`CapacitorI`) |
 | `L` | `L/m`; o `K` lê o `L` sem dividir (`muttemp.c`) | parâmetro `m` (`InductorI`; sonda `l_m_k`) |
 | `D` | correntes, condutâncias e cargas ·m; joelho da ruptura casado como `IS·AREA·M` contra `M·IBV`; 1/f com `|I/m|` | parâmetro `m` (`DiodeTemp`; o `area`·m de antes errava a ruptura em `vt·ln m` — 18 mV em `d_m_bv`) |
-| `J`, `Z`, `Q` Gummel–Poon | estampas ·m, inclusive o `gmin` da junção | `area`·m (posicional, senão `area=`, senão m) |
+| `J`, `Z`, `Q` Gummel–Poon | estampas ·m, inclusive o `gmin` da junção; ruído ·m (1/f `m·KF·|I|^AF`); `.disto` com `area·m` | parâmetro `m` (`BjtI`/`JfetI`/`MesI` multiplicam as estampas; a área fica como está) |
 | `G`, `F` | ganho·m | ganho·m |
 | `I` DC/AC | valor·m | valor·m |
+| `I` com `PULSE`/`SIN`/`EXP`/`PWL`/`SFFM` | `m·valor(t)` | níveis da forma ·m (`V1 V2`, `VO VA`, valores do `PWL`; sonda `s1/isrc_m`) |
+| `I` com `DISTOF1/2` | magnitude **sem** m (`CKTdisto` lê `ISRCdF1mag`; sonda `s1/isrc_d`) | idem (literal) |
 | `B` de corrente | valor·m | `m·(expr)` |
 | `B` de tensão | valor·m (só o `m` próprio; a linha `X` não chega nele) | `m·(expr)` (sonda `bv_m`, `bv_sub_own`) |
 | `X` aninhado | atual `m` | atual `m` |
 | `V`, `E`, `H` | "unknown parameter (m)" | erro com span (o `E`/`H` aceitava qualquer palavra-chave calado) |
-| MOS 1–3/6, BSIM1/2; `I` com forma transiente/distorção | multiplica | erro "not supported yet" com o span (salvo m=1) |
+| MOS 1–3/6, BSIM1/2; `I` com `TRNOISE`/`TRRANDOM` | multiplica | erro "not supported yet" com o span (salvo m=1) |
 
 Diferenças: m ≤ 0 é erro (o ngspice simula: m=0 abre, m<0 inverte;
 sondas `r_m_zero`, `r_m_neg`); o marcador é fechado sobre o grafo de
@@ -513,11 +515,22 @@ chamadas em qualquer ordem — o ngspice marca numa passada em ordem de
 deck e um subcircuito aninhado definido **antes** de quem o chama falha
 com "Mismatch" (`m_nested_def_before`); subcircuitos aninhados
 (definidos dentro de outro) seguem a própria marcação — o ngspice só
-acrescenta `m={m}` até o primeiro `.ends`. O `gmin` de `J`/`Q` não
-escala com o `area`·m: só pesa quando o `gmin` domina a junção
-(`q_m_gmin`, junção cortada com `IS=1e-20`: −0,25 V no ngspice, −0,5 V
-no Dune); com polarização normal a diferença fica dentro da tolerância
-do Newton (`q_m` contra `q_area` no próprio ngspice: 2,8e-6 relativo).
+acrescenta `m={m}` até o primeiro `.ends`. Desde 2026-11-14 o `gmin`
+de `J`/`Z`/`Q` escala com o `m` como no ngspice (`q_m_gmin`, junção
+cortada com `IS=1e-20`: −0,25 V nos dois; antes o `area`·m dava −0,5 V
+no Dune; sondas `s1/qjz.cases` em `.claude/scratch/dev-probes`).
+
+Por que MOS 1–3/6 e BSIM1/2 seguem recusando (lido no C do ngspice-47):
+no MOS1/2/3 o `m` não é multiplicador de estampa — entra na física
+(`DrainSatCur = m·tSatCur`, `Beta·m`, sobreposições `·m·W`/`·m·L`,
+áreas de junção ·m, e o 1/f com `|cd/m|`), em ~12 pontos por modelo;
+no MOS6 só o `mos6load.c` multiplica as estampas (o `mos6acld.c` e o
+`mos6pzld.c` ignoram o `m` — inconsistente); no BSIM1/2 load, AC, pz e
+ruído multiplicam estampa a estampa (limpo), mas o `.disto` do BSIM1
+(`b1dset.c`) escala a geometria — porte possível sem API pública,
+deixado para depois. `TRNOISE`/`TRRANDOM` com m ≠ 1: o sorteio
+poisson do `TRRANDOM` não é linear nos argumentos e o ruído
+transiente do Dune não reproduz a sequência do ngspice para conferir.
 
 `area=` como palavra-chave vale no `D` (antes "unknown parameter") e
 no `Q` Gummel–Poon (antes ignorado calado); o valor posicional vence o
