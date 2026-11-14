@@ -144,6 +144,12 @@ fn delimiters_and_blanks_c6() {
     for v in ["v4", "v5", "v6"] {
         assert_eq!(dc(&nl, v), THREE, "{v}"); // b_nested_brace, b_brace_quote, b_brace_in_quote
     }
+    // Double quotes vanish from cards (probe c10), not from `.param`.
+    let nl = clean("t\n.param t=4\nv1 1 0 {2*\"3+1\"}\nv2 2 0 {\"-t/2-1\"}\n.end\n");
+    assert_eq!(dc(&nl, "v1"), 7f64.next_up());
+    assert_eq!(dc(&nl, "v2"), -THREE);
+    let e = errors("t\n.param a={\"2+1\"}\nv1 1 0 {a}\n.end\n");
+    assert!(e[0].contains("unexpected `\"`"), "{e:?}");
     for bad in ["v1 1 0 'a+1", "v1 1 0 {a+1", "v1 1 0 {}", "v1 1 0 ''"] {
         let e = errors(&format!("t\n.param a=2\n{bad}\n.end\n"));
         assert!(!e.is_empty(), "{bad}");

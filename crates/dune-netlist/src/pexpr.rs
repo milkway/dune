@@ -989,11 +989,17 @@ impl Parser<'_> {
                 if self.lx.peek()?.tok == Tok::LParen {
                     let lp = self.lx.next()?;
                     let Some(f) = Func::lookup(&name) else {
-                        return Err(PError::new(
-                            format!("unknown function `{name}`"),
-                            t.start,
-                            t.end,
-                        ));
+                        let msg = if name == "v" || name == "i" {
+                            // ngspice turns such R/C/L values into
+                            // B sources (`inp_compat`); not here yet.
+                            format!(
+                                "`{name}(…)` in an element value (behavioural R/C/L) is \
+                                 not supported yet"
+                            )
+                        } else {
+                            format!("unknown function `{name}`")
+                        };
+                        return Err(PError::new(msg, t.start, t.end));
                     };
                     self.enter(lp.start)?;
                     let mut argc = 0usize;
@@ -1353,13 +1359,15 @@ mod tests {
         assert_eq!(ev("floor(2.5k)"), 2500.0);
         for missing in [
             "round", "trunc", "sign", "atan2", "hypot", "u", "uramp", "fabs", "db", "if", "pwrs",
-            "random", "rand", "mod", "v", "ddt", "deriv", "nosuch",
+            "random", "rand", "mod", "ddt", "deriv", "nosuch",
         ] {
             assert!(
                 err(&format!("{missing}(1)")).contains("unknown function"),
                 "{missing}"
             );
         }
+        assert!(err("v(1)").contains("behavioural"));
+        assert!(err("i(vx)").contains("behavioural"));
         // Wrong argument counts: ngspice garbles them, Dune refuses.
         for bad in [
             "sqrt(1,2)",

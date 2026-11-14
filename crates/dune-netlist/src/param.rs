@@ -28,6 +28,11 @@ use crate::diag::Diagnostic;
 use crate::pexpr::{self, EvalCtx, Expr, PError, RandomPolicy, VarRef};
 use crate::span::Span;
 
+/// Most global `.param` definitions read from one deck (sky130's
+/// whole library has 170 406), so a hostile deck cannot make the
+/// resolver's tables exhaust memory.
+pub(crate) const MAX_PARAMS: usize = 1_000_000;
+
 /// The resolved global parameters of one deck.
 #[derive(Debug)]
 pub(crate) struct ParamEnv {
@@ -142,6 +147,17 @@ impl ParamEnv {
             Ok(x) => x,
             Err(msg) => return Err(Some(Diagnostic::error(msg, span_of(0, token.len())))),
         };
+        // ngspice deletes `"` from every card but `.param`, `.subckt`
+        // and `X` before substituting (`inp_casefix`, Modified BSD;
+        // probe c10: `{2*"3+1"}` is 7, sky130 writes
+        // `dw = {"-tol_nfom/2-nfom_dw/2"}`). A blank keeps the offsets.
+        let unquoted;
+        let inner = if inner.contains('"') {
+            unquoted = inner.replace('"', " ");
+            unquoted.as_str()
+        } else {
+            inner
+        };
         let expr = pexpr::parse(inner).map_err(|e| {
             Some(Diagnostic::error(
                 e.msg,
@@ -185,104 +201,106 @@ const CYCLE_NAMES_SHOWN: usize = 8;
 
 /// Resolve the global `.param` definitions (in deck order) into an
 /// environment, reporting every failure. Linear in the total size of
-/// the definitions: each one is parsed and evaluated once, the
-/// dependency walk uses an explicit stack.
+/// the definitions, with memory linear in the number of *distinct*
+/// dependencies: each winning definition is compiled once to find
+/// the parameters it reads (then dropped), and compiled again when
+/// its turn comes in the dependency walk, which uses an explicit
+/// stack — no recursion, whatever the chain length.
 pub(crate) fn resolve(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEnv {
     let mut env = ParamEnv::default();
+    let n_defs = defs.len();
 
     // Last definition wins: only the final definition of a name exists.
-    let mut winner: HashMap<&str, usize> = HashMap::with_capacity(defs.len());
+    let mut winner: HashMap<&str, u32> = HashMap::with_capacity(n_defs);
     for (i, d) in defs.iter().enumerate() {
-        winner.insert(d.name.as_str(), i);
+        winner.insert(d.name.as_str(), i as u32);
     }
-    let mut order: Vec<usize> = winner.values().copied().collect();
+    let mut order: Vec<u32> = winner.values().copied().collect();
     order.sort_unstable();
 
-    // Compile the winners.
-    let mut exprs: Vec<Option<Expr>> = (0..defs.len()).map(|_| None).collect();
-    for &i in &order {
-        let d = &defs[i];
-        let span_of = |s: usize, e: usize| d.card.span_of(d.value_start + s, d.value_start + e);
-        match pexpr::parse(d.value) {
-            Ok(e) => exprs[i] = Some(e),
-            Err(e) => {
-                diags.push(Diagnostic::error(e.msg, span_of(e.start, e.end)));
-                env.poisoned.insert(d.name.clone());
+    // Dependencies of each winner, deduplicated, in CSR form: the
+    // global parameters (by definition index) its expression reads.
+    let mut compiled = vec![false; n_defs];
+    let mut dep_start: Vec<u32> = vec![0; n_defs + 1];
+    let mut dep_list: Vec<u32> = Vec::new();
+    {
+        let mut row: Vec<u32> = Vec::new();
+        let mut next = 0usize; // definitions [next, i) have empty rows
+        for &i in &order {
+            let i = i as usize;
+            for s in &mut dep_start[next + 1..=i] {
+                *s = dep_list.len() as u32;
             }
+            let d = &defs[i];
+            match pexpr::parse(d.value) {
+                Ok(e) => {
+                    compiled[i] = true;
+                    row.clear();
+                    row.extend(
+                        e.vars()
+                            .iter()
+                            .filter_map(|v| winner.get(&*v.name).copied()),
+                    );
+                    row.sort_unstable();
+                    row.dedup();
+                    dep_list.extend_from_slice(&row);
+                }
+                Err(e) => {
+                    diags.push(Diagnostic::error(
+                        e.msg,
+                        d.card
+                            .span_of(d.value_start + e.start, d.value_start + e.end),
+                    ));
+                    env.poisoned.insert(d.name.clone());
+                }
+            }
+            dep_start[i + 1] = dep_list.len() as u32;
+            next = i + 1;
+        }
+        for s in &mut dep_start[next + 1..] {
+            *s = dep_list.len() as u32;
         }
     }
-
-    // Dependencies: (definition index, index of the name in its
-    // expression) for every name that is itself a global parameter.
-    let deps: Vec<Vec<(usize, u32)>> = (0..defs.len())
-        .map(|i| match &exprs[i] {
-            Some(e) => e
-                .vars()
-                .iter()
-                .enumerate()
-                .filter_map(|(k, v)| winner.get(&*v.name).map(|&j| (j, k as u32)))
-                .collect(),
-            None => Vec::new(),
-        })
-        .collect();
+    let deps = |n: usize| &dep_list[dep_start[n] as usize..dep_start[n + 1] as usize];
 
     const UNSEEN: u8 = 0;
     const OPEN: u8 = 1;
     const DONE: u8 = 2;
-    let mut state = vec![UNSEEN; defs.len()];
-    let mut in_cycle = vec![false; defs.len()];
-    let mut stack_pos = vec![usize::MAX; defs.len()];
-    let mut stack: Vec<(usize, usize)> = Vec::new();
+    let mut state = vec![UNSEEN; n_defs];
+    let mut in_cycle = vec![false; n_defs];
+    let mut stack_pos = vec![u32::MAX; n_defs];
+    let mut stack: Vec<(u32, u32)> = Vec::new();
 
     for &root in &order {
-        if state[root] != UNSEEN || exprs[root].is_none() {
+        let root = root as usize;
+        if state[root] != UNSEEN || !compiled[root] {
             continue;
         }
         state[root] = OPEN;
         stack_pos[root] = 0;
-        stack.push((root, 0));
+        stack.push((root as u32, 0));
         while let Some(&(n, k)) = stack.last() {
-            if k < deps[n].len() {
+            let (n, k) = (n as usize, k as usize);
+            if k < deps(n).len() {
                 if let Some(top) = stack.last_mut() {
                     top.1 += 1;
                 }
-                let (d, var) = deps[n][k];
+                let d = deps(n)[k] as usize;
                 match state[d] {
-                    UNSEEN if exprs[d].is_some() => {
+                    UNSEEN if compiled[d] => {
                         state[d] = OPEN;
-                        stack_pos[d] = stack.len();
-                        stack.push((d, 0));
+                        stack_pos[d] = stack.len() as u32;
+                        stack.push((d as u32, 0));
                     }
                     OPEN => {
-                        // A cycle: d … n → d. Report it once, at the
+                        // A cycle d … n → d: report it once, at the
                         // reference that closes it.
-                        let members: Vec<usize> =
-                            stack[stack_pos[d]..].iter().map(|t| t.0).collect();
-                        if !members.iter().any(|&m| in_cycle[m]) {
-                            let mut names: Vec<&str> = members
-                                .iter()
-                                .take(CYCLE_NAMES_SHOWN)
-                                .map(|&m| defs[m].name.as_str())
-                                .collect();
-                            if members.len() > CYCLE_NAMES_SHOWN {
-                                names.push("…");
-                            }
-                            names.push(defs[d].name.as_str());
-                            let v = &exprs[n].as_ref().map(|e| e.vars()[var as usize].clone());
-                            let span = match v {
-                                Some(v) => defs[n].card.span_of(
-                                    defs[n].value_start + v.start as usize,
-                                    defs[n].value_start + v.end as usize,
-                                ),
-                                None => defs[n].name_span,
-                            };
-                            diags.push(Diagnostic::error(
-                                format!("parameter dependency cycle: {}", names.join(" → ")),
-                                span,
-                            ));
+                        let from = stack_pos[d] as usize;
+                        if !stack[from..].iter().any(|t| in_cycle[t.0 as usize]) {
+                            diags.push(cycle_error(defs, &stack[from..], n, d));
                         }
-                        for m in members {
-                            in_cycle[m] = true;
+                        for t in &stack[from..] {
+                            in_cycle[t.0 as usize] = true;
                         }
                     }
                     _ => {}
@@ -296,25 +314,52 @@ pub(crate) fn resolve(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEn
                 env.poisoned.insert(d.name.clone());
                 continue;
             }
-            let Some(expr) = &exprs[n] else {
-                env.poisoned.insert(d.name.clone());
-                continue;
-            };
             let span_of = |s: usize, e: usize| d.card.span_of(d.value_start + s, d.value_start + e);
-            match env.eval_expr(expr, &span_of) {
+            let value = match pexpr::parse(d.value) {
+                Ok(expr) => env.eval_expr(&expr, &span_of),
+                Err(e) => Err(Some(Diagnostic::error(e.msg, span_of(e.start, e.end)))),
+            };
+            match value {
                 Ok(v) => {
                     env.map.insert(d.name.clone(), v);
                 }
                 Err(diag) => {
-                    if let Some(diag) = diag {
-                        diags.push(diag);
-                    }
+                    diags.extend(diag);
                     env.poisoned.insert(d.name.clone());
                 }
             }
         }
     }
     env
+}
+
+/// The diagnostic for a dependency cycle: `members` is the stack from
+/// `d` to `n`, and `n` reads `d`. The span is `n`'s reference to `d`.
+fn cycle_error(defs: &[ParamDef], members: &[(u32, u32)], n: usize, d: usize) -> Diagnostic {
+    let mut names: Vec<&str> = members
+        .iter()
+        .take(CYCLE_NAMES_SHOWN)
+        .map(|t| defs[t.0 as usize].name.as_str())
+        .collect();
+    if members.len() > CYCLE_NAMES_SHOWN {
+        names.push("…");
+    }
+    names.push(defs[d].name.as_str());
+    let dn = &defs[n];
+    let span = pexpr::parse(dn.value)
+        .ok()
+        .and_then(|e| {
+            e.vars()
+                .iter()
+                .find(|v| *v.name == *defs[d].name)
+                .map(|v| (v.start as usize, v.end as usize))
+        })
+        .map(|(s, e)| dn.card.span_of(dn.value_start + s, dn.value_start + e))
+        .unwrap_or(dn.name_span);
+    Diagnostic::error(
+        format!("parameter dependency cycle: {}", names.join(" → ")),
+        span,
+    )
 }
 
 #[cfg(test)]

@@ -96,6 +96,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     // VDMOS model names: their `M` instances take 3 to 5 nodes.
     let mut vdmos_models: HashSet<String> = HashSet::new();
     let mut param_defs: Vec<ParamDef> = Vec::new();
+    let mut params_full = false;
     let mut in_control = false;
     let mut subckt_depth = 0usize;
     for card in &cards {
@@ -121,8 +122,8 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
             // `.params` is ngspice's synonym (the IHP libraries use it).
             // Definitions inside `.subckt` belong to the subcircuit's
             // scope (G3, not supported yet: pass B reports them).
-            ".param" | ".params" if subckt_depth == 0 => {
-                collect_params(card, &mut param_defs, &mut all_diags);
+            ".param" | ".params" if subckt_depth == 0 && !params_full => {
+                params_full = collect_params(card, &mut param_defs, &mut all_diags);
             }
             _ => {}
         }
@@ -290,13 +291,20 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
 /// does not start the next `name=` is an error: ngspice silently
 /// drops it on a multi-assignment line (`.param b = a * 3 c=1` gives
 /// `b = a`) and rejects it on a single one.
-fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut Vec<Diagnostic>) {
+fn collect_params<'c>(
+    card: &'c Card,
+    defs: &mut Vec<ParamDef<'c>>,
+    diags: &mut Vec<Diagnostic>,
+) -> bool {
     let text = card.text.as_str();
     let b = text.as_bytes();
     let blank = |c: u8| c == b' ' || c == b'\t';
     let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    // Skip the keyword.
+    // Skip the keyword (directives may be indented).
     let mut p = 0usize;
+    while p < b.len() && blank(b[p]) {
+        p += 1;
+    }
     while p < b.len() && !blank(b[p]) {
         p += 1;
     }
@@ -305,7 +313,7 @@ fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut 
             p += 1;
         }
         if p >= b.len() {
-            return;
+            return false;
         }
         // Name.
         let ns = p;
@@ -340,7 +348,7 @@ fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut 
                 format!("parameter `{word}` has no value")
             };
             diags.push(Diagnostic::error(msg, card.span_of(ns, e)));
-            return;
+            return false;
         }
         let name = text[ns..ne].to_ascii_lowercase();
         let name_span = card.span_of(ns, ne);
@@ -355,7 +363,7 @@ fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut 
                     format!("parameter `{name}` has no value"),
                     name_span,
                 ));
-                return;
+                return false;
             }
             Some(b'{') => match crate::scan::match_brace(b, p) {
                 Some(end) => {
@@ -367,7 +375,7 @@ fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut 
                         format!("missing `}}` in the value of parameter `{name}`"),
                         card.span_of(vs, vs + 1),
                     ));
-                    return;
+                    return false;
                 }
             },
             Some(b'\'') => match b[p + 1..].iter().position(|&c| c == b'\'') {
@@ -380,7 +388,7 @@ fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut 
                         format!("missing closing `'` in the value of parameter `{name}`"),
                         card.span_of(vs, vs + 1),
                     ));
-                    return;
+                    return false;
                 }
             },
             Some(b'"') => {
@@ -388,7 +396,7 @@ fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut 
                     format!("string-valued parameter `{name}` is not supported"),
                     card.span_of(vs, vs + 1),
                 ));
-                return;
+                return false;
             }
             Some(_) => {
                 let mut depth = 0usize;
@@ -408,6 +416,16 @@ fn collect_params<'c>(card: &'c Card, defs: &mut Vec<ParamDef<'c>>, diags: &mut 
                 (vs, p)
             }
         };
+        if defs.len() >= crate::param::MAX_PARAMS {
+            diags.push(Diagnostic::error(
+                format!(
+                    "more than {} global .param definitions; the rest are ignored",
+                    crate::param::MAX_PARAMS
+                ),
+                name_span,
+            ));
+            return true;
+        }
         defs.push(ParamDef {
             name,
             name_span,
