@@ -1,11 +1,13 @@
-//! Global `.param` resolution and the evaluation of parameter values
-//! on cards (an ngspice extension; G2 of `docs/pdk-parser.md`).
+//! `.param` resolution — the global scope and the local scope of each
+//! subcircuit instance — and the evaluation of parameter values on
+//! cards (an ngspice extension; G2 and G3 of `docs/pdk-parser.md`).
 //!
 //! The expression language itself lives in `pexpr.rs`. This module
-//! implements the global scope as observed in ngspice-47
-//! (`docs/dune-netlist.md`, "Linguagem de expressões de parâmetros"):
+//! implements the scopes as observed in ngspice-47
+//! (`docs/dune-netlist.md`, "Linguagem de expressões de parâmetros"
+//! and "Parâmetros de subcircuito"):
 //!
-//! - every top-level `.param` definition is collected first; for a
+//! - every `.param` definition of a scope is collected first; for a
 //!   name defined more than once the **last** definition is the only
 //!   one that exists (earlier ones are never evaluated, even for uses
 //!   that precede the redefinition);
@@ -13,8 +15,14 @@
 //!   references); evaluation follows the dependency graph, iteratively
 //!   (no recursion), each definition once;
 //! - a dependency cycle, an undefined name, a syntax error or a
-//!   random/`temper` problem in any global `.param` is an error with a
-//!   span, used or not (ngspice-47 aborts on all of them);
+//!   random/`temper` problem in any `.param` of a scope that exists is
+//!   an error with a span, used or not (ngspice-47 aborts on all of
+//!   them); a subcircuit's scope exists only per instance;
+//! - in a subcircuit instance's scope a definition that names itself
+//!   (`.param w={w*2}`, `w={w+1}` on the `X` line) reads the name in
+//!   the enclosing scope — the caller's instance, then the global
+//!   one (probes `s1 body_self`, `s3 x_self_nested`); unknown names
+//!   are looked up the same way (dynamic scoping, `s1 dyn_scope`);
 //! - a `.param` may hold `inf`/NaN and pass it to other `.param`s; a
 //!   non-finite value reaching a card is an error (D-0064);
 //! - the value a card sees is the result formatted with `%.15e` and
@@ -33,30 +41,39 @@ use crate::span::Span;
 /// resolver's tables exhaust memory.
 pub(crate) const MAX_PARAMS: usize = 1_000_000;
 
-/// The resolved global parameters of one deck.
+/// The resolved parameters of one scope: the global one, or one
+/// subcircuit instance's, which reads through to its caller's.
 #[derive(Debug)]
-pub(crate) struct ParamEnv {
+pub(crate) struct ParamEnv<'p> {
     map: HashMap<String, f64>,
     /// Names whose definition failed with an error already reported:
     /// their uses fail silently instead of cascading.
     poisoned: HashSet<String>,
+    /// The enclosing (calling) scope; `None` for the global scope.
+    parent: Option<&'p ParamEnv<'p>>,
+    /// Evaluation state; only the global scope's is used.
     ctx: EvalCtx,
-    /// Span of the first random-function call evaluated.
+    /// Span of the first random-function call evaluated (global
+    /// scope only; instance scopes record into it).
     random_first: Cell<Option<Span>>,
 }
 
-impl Default for ParamEnv {
+impl Default for ParamEnv<'_> {
     fn default() -> Self {
         ParamEnv {
             map: HashMap::new(),
             poisoned: HashSet::new(),
+            parent: None,
             ctx: EvalCtx::new(RandomPolicy::Nominal),
             random_first: Cell::new(None),
         }
     }
 }
 
-/// One top-level `.param name = value` definition.
+/// One `.param name = value` definition (global or local), a
+/// parameter default on a `.subckt` line or an actual parameter on
+/// an `X` line.
+#[derive(Clone, Debug)]
 pub(crate) struct ParamDef<'c> {
     /// Lowercased.
     pub name: String,
@@ -72,11 +89,34 @@ pub(crate) struct ParamDef<'c> {
 /// the cause was already reported (a failed `.param` it depends on).
 pub(crate) type ValueError = Option<Diagnostic>;
 
-impl ParamEnv {
+impl<'p> ParamEnv<'p> {
+    /// The global scope at the root of the chain.
+    pub(crate) fn root(&self) -> &ParamEnv<'p> {
+        let mut env = self;
+        while let Some(p) = env.parent {
+            env = p;
+        }
+        env
+    }
+
+    /// The value of `name` in this scope or an enclosing one.
+    pub fn get(&self, name: &str) -> Option<f64> {
+        let mut env = self;
+        loop {
+            if let Some(v) = env.map.get(name) {
+                return Some(*v);
+            }
+            if env.poisoned.contains(name) {
+                return None;
+            }
+            env = env.parent?;
+        }
+    }
+
     /// The warning that random functions were evaluated at their
     /// nominal value, once per deck, at the first such call.
     pub fn random_note(&self) -> Option<Diagnostic> {
-        let span = self.random_first.get()?;
+        let span = self.root().random_first.get()?;
         Some(Diagnostic::warning(
             "random functions (agauss, gauss, aunif, unif, limit) are evaluated at their \
              nominal value; ngspice draws a new random value on every run",
@@ -84,48 +124,67 @@ impl ParamEnv {
         ))
     }
 
+    /// Resolve `v` in this scope, then in the enclosing ones.
     fn lookup(&self, v: &VarRef, silenced: &Cell<bool>) -> Result<f64, PError> {
-        if let Some(x) = self.map.get(&*v.name) {
-            return Ok(*x);
+        let mut env = self;
+        loop {
+            if let Some(x) = env.map.get(&*v.name) {
+                return Ok(*x);
+            }
+            let (s, e) = (v.start as usize, v.end as usize);
+            if env.poisoned.contains(&*v.name) {
+                silenced.set(true);
+                return Err(PError {
+                    msg: String::new(),
+                    start: s,
+                    end: e,
+                });
+            }
+            match env.parent {
+                Some(p) => env = p,
+                None => {
+                    let msg = if &*v.name == "temper" {
+                        "`temper` in parameter expressions is not supported yet (it needs \
+                         re-expansion when the temperature changes)"
+                            .to_string()
+                    } else {
+                        format!("unknown parameter `{}`", v.name)
+                    };
+                    return Err(PError {
+                        msg,
+                        start: s,
+                        end: e,
+                    });
+                }
+            }
         }
-        let (s, e) = (v.start as usize, v.end as usize);
-        if self.poisoned.contains(&*v.name) {
-            silenced.set(true);
-            return Err(PError {
-                msg: String::new(),
-                start: s,
-                end: e,
-            });
-        }
-        let msg = if &*v.name == "temper" {
-            "`temper` in parameter expressions is not supported yet (it needs re-expansion \
-             when the temperature changes)"
-                .to_string()
-        } else {
-            format!("unknown parameter `{}`", v.name)
-        };
-        Err(PError {
-            msg,
-            start: s,
-            end: e,
-        })
     }
 
-    /// Evaluate a compiled expression against the global parameters.
-    /// `span_of` maps byte ranges of the expression text to spans.
+    /// Evaluate a compiled expression in this scope. `own`, in an
+    /// instance scope, is the name being defined: it reads the
+    /// enclosing scope's value. `span_of` maps byte ranges of the
+    /// expression text to spans.
     fn eval_expr(
         &self,
         expr: &Expr,
+        own: Option<&str>,
         span_of: &dyn Fn(usize, usize) -> Span,
     ) -> Result<f64, ValueError> {
         let silenced = Cell::new(false);
-        let r = expr.eval(&mut |v| self.lookup(v, &silenced), &self.ctx);
+        let root = self.root();
+        let r = expr.eval(
+            &mut |v| match (own, self.parent) {
+                (Some(n), Some(p)) if *v.name == *n => p.lookup(v, &silenced),
+                _ => self.lookup(v, &silenced),
+            },
+            &root.ctx,
+        );
         match r {
             Ok(v) => {
-                if self.random_first.get().is_none()
+                if root.random_first.get().is_none()
                     && let Some((s, e)) = expr.first_random_call()
                 {
-                    self.random_first.set(Some(span_of(s, e)));
+                    root.random_first.set(Some(span_of(s, e)));
                 }
                 Ok(v)
             }
@@ -164,7 +223,7 @@ impl ParamEnv {
                 span_of(off + e.start, off + e.end),
             ))
         })?;
-        let v = self.eval_expr(&expr, &|s, e| span_of(off + s, off + e))?;
+        let v = self.eval_expr(&expr, None, &|s, e| span_of(off + s, off + e))?;
         if v.is_finite() {
             Ok(pexpr::as_substituted(v))
         } else {
@@ -199,15 +258,43 @@ fn delimited(token: &str) -> Result<(&str, usize), String> {
 /// Longest dependency chain printed in a cycle diagnostic.
 const CYCLE_NAMES_SHOWN: usize = 8;
 
-/// Resolve the global `.param` definitions (in deck order) into an
+/// Resolve the global `.param` definitions (in deck order) into the
+/// global scope, reporting every failure.
+pub(crate) fn resolve<'p>(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEnv<'p> {
+    resolve_scope(defs, None, diags)
+}
+
+/// Resolve one subcircuit instance's definitions — the `.subckt`
+/// line defaults and body `.param`s in order, then the `X` line's
+/// actual parameters (which therefore win) — into a scope that reads
+/// through to `parent`, the caller's scope.
+pub(crate) fn resolve_local<'p>(
+    defs: &[ParamDef],
+    parent: &'p ParamEnv<'p>,
+    diags: &mut Vec<Diagnostic>,
+) -> ParamEnv<'p> {
+    resolve_scope(defs, Some(parent), diags)
+}
+
+/// Resolve the definitions of one scope (in order) into an
 /// environment, reporting every failure. Linear in the total size of
 /// the definitions, with memory linear in the number of *distinct*
 /// dependencies: each winning definition is compiled once to find
 /// the parameters it reads (then dropped), and compiled again when
 /// its turn comes in the dependency walk, which uses an explicit
-/// stack — no recursion, whatever the chain length.
-pub(crate) fn resolve(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEnv {
-    let mut env = ParamEnv::default();
+/// stack — no recursion, whatever the chain length. With a `parent`
+/// (an instance scope), a definition's reference to its own name is
+/// not a dependency: it reads the parent's value.
+fn resolve_scope<'p>(
+    defs: &[ParamDef],
+    parent: Option<&'p ParamEnv<'p>>,
+    diags: &mut Vec<Diagnostic>,
+) -> ParamEnv<'p> {
+    let mut env = ParamEnv {
+        parent,
+        ..ParamEnv::default()
+    };
+    let local = parent.is_some();
     let n_defs = defs.len();
 
     // Last definition wins: only the final definition of a name exists.
@@ -219,7 +306,8 @@ pub(crate) fn resolve(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEn
     order.sort_unstable();
 
     // Dependencies of each winner, deduplicated, in CSR form: the
-    // global parameters (by definition index) its expression reads.
+    // parameters of this scope (by definition index) its expression
+    // reads.
     let mut compiled = vec![false; n_defs];
     let mut dep_start: Vec<u32> = vec![0; n_defs + 1];
     let mut dep_list: Vec<u32> = Vec::new();
@@ -239,6 +327,7 @@ pub(crate) fn resolve(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEn
                     row.extend(
                         e.vars()
                             .iter()
+                            .filter(|v| !(local && *v.name == *d.name))
                             .filter_map(|v| winner.get(&*v.name).copied()),
                     );
                     row.sort_unstable();
@@ -315,8 +404,9 @@ pub(crate) fn resolve(defs: &[ParamDef], diags: &mut Vec<Diagnostic>) -> ParamEn
                 continue;
             }
             let span_of = |s: usize, e: usize| d.card.span_of(d.value_start + s, d.value_start + e);
+            let own = local.then_some(d.name.as_str());
             let value = match pexpr::parse(d.value) {
-                Ok(expr) => env.eval_expr(&expr, &span_of),
+                Ok(expr) => env.eval_expr(&expr, own, &span_of),
                 Err(e) => Err(Some(Diagnostic::error(e.msg, span_of(e.start, e.end)))),
             };
             match value {

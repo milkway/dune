@@ -20,7 +20,7 @@ const STRING_OPTIONS: &[&str] = &["method", "compat"];
 pub(crate) struct DotCtx<'a> {
     pub card: &'a Card,
     pub diags: &'a mut Vec<Diagnostic>,
-    pub env: &'a ParamEnv,
+    pub env: &'a ParamEnv<'a>,
 }
 
 impl DotCtx<'_> {

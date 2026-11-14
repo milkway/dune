@@ -116,13 +116,12 @@ fn param_card_errors_c5() {
     let e = errors("t\n.param a={2 + nosuch}\nv1 1 0 1\n.end\n");
     assert!(e[0].starts_with("test.cir:2:15:"), "{e:?}");
     assert!(e[0].contains("unknown parameter `nosuch`"), "{e:?}");
-    // `.param` in a subcircuit is G3.
-    let e = errors("t\n.subckt s a\n.param w=1\nr1 a 0 {w}\n.ends\nx1 1 s\n.end\n");
-    assert!(
-        e.iter()
-            .any(|m| m.contains(".param inside .subckt is not supported yet")),
-        "{e:?}"
-    );
+    // A `.param` in a subcircuit is part of its scope (G3): a card
+    // error in it surfaces when the subcircuit is instantiated.
+    let e = errors("t\n.subckt s a\n.param w=\nr1 a 0 {w}\n.ends\nx1 1 s\n.end\n");
+    assert!(e.iter().any(|m| m.contains("has no value")), "{e:?}");
+    let e = errors("t\n.subckt s a\n.param w=\nr1 a 0 1\n.ends\nr1 1 0 1\n.end\n");
+    assert!(e.is_empty(), "{e:?}");
 }
 
 #[test]

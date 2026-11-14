@@ -145,14 +145,19 @@ fn power_is_left_associative_like_ngspice() {
 }
 
 #[test]
-fn x_line_parameters_are_a_precise_error() {
+fn x_line_parameters_need_formal_parameters() {
     let out = parse_str(
         "t.cir",
         "t\n.subckt inv a b\nr1 a b 1\n.ends\nx1 1 2 inv w=0.15 l=1u\n.end\n",
     );
     let e: Vec<_> = out.diags.iter().map(|d| d.message.as_str()).collect();
     assert_eq!(e.len(), 1, "{e:?}");
-    assert!(e[0].contains("subcircuit parameters on X lines"), "{e:?}");
+    // ngspice-47: "Mismatch: 0 formal but 1 actual params" (probe s1
+    // undeclared_x_noparams).
+    assert!(
+        e[0].contains("has no parameters, but the call passes `w`"),
+        "{e:?}"
+    );
     assert!(!e[0].contains("no such subcircuit"));
     assert_eq!(out.sources.snippet(out.diags[0].span.unwrap()), "w");
 }
@@ -171,7 +176,7 @@ fn non_finite_parameters_fail_where_used() {
     for (card, snippet) in [
         ("v1 1 0 {z}", "{z}"),
         ("r1 1 0 {z*0}", "{z*0}"),
-        (".model rm r rsh={z}", "{z}"),
+        (".model rm r rsh={z}\nr1 1 0 rm l=1 w=1", "{z}"),
         (".tran 1n {z}", "{z}"),
     ] {
         let out = parse_str("t.cir", &format!("t\n.param z={{1/0}}\n{card}\n.end\n"));
