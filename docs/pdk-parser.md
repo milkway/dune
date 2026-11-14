@@ -462,11 +462,27 @@ onde for usado.
 `.param` locais de subcircuito (`r_temp` dos resistores) e 4 em linhas
 `r`; sky130 (repositório `skywater-pdk-libs-sky130_fd_pr`) — 147 em
 `.param` locais e 93 em linhas `r`, 19 arquivos (dispositivos de 20 V,
-RF, varactores); o `sky130A` do open_pdks que o inversor usa não tem
-nenhum. Todas essas formas avaliam agora; mas todo consumidor é um
-resistor comportamental `r='…v(a,b)…'` (G11), então nenhum caso real
-simula ainda: o resistor `nplus_u` do gf180 a 85 °C para no `v(…)`
-(o único erro restante; o `r_temp` com `temper` avalia).
+RF, varactores); no `sky130A` do open_pdks o `.lib … tt` do inversor
+alcança, por `sky130_fd_pr__model__linear.model.spice`, os
+`libs.ref/sky130_fd_pr/spice/*res_high_po*`/`*res_xhigh_po*`, que têm
+`temper` em `.param` local (`vc1_end`…; 115 arquivos de
+`libs.ref/…/spice` citam `temper`, por `grep`) — o censo acima não os
+contou; só os subcircuitos instanciados são avaliados. Todas essas
+formas avaliam; **desde a integração com a reescrita comportamental
+(2026-11-14) os resistores reais simulam**: `temper` dentro da
+expressão comportamental, `tc1`/`tc2` do R comportamental (fator da
+fonte B à temperatura do circuito) e `.func` na expressão
+(`docs/dune-netlist.md`, "R, C e L comportamentais"). Bancadas fora do
+repositório (`behav-probes/pdk/`), `.dc` a 27 e 85 °C por `.options
+temp` e por `.temp`: gf180 `nplus_u` ≤ 8e-15 V, `ppolyf_u` ≤ 5e-10 V,
+sky130 `res_high_po_0p35` ≤ 4,1e-5 V (convergência de Newton: 1e-9 V
+com tolerâncias apertadas), `res_xhigh_po_0p35` ≤ 3,3e-16 V; todos PASS
+no comparador do oráculo. O corpo do `ppolyf_u` do gf180 é escrito
+`rb 11 21 ppolyf_u_body l=r_l w=r_w r='…'`, e o ngspice-47 simula
+`r_l` ohms (≈ 1e-5 Ω) — o primeiro `{…}` depois que ele põe chaves no
+valor nu de `l=`; o Dune reproduz e avisa. Inversores inalterados
+(gf180 `.dc` 0,71 mV, `.tran` 0,16 mV; sky130 `.dc` 1,0 mV, `.tran`
+0,56 mV).
 (a) inv: nenhum (aparece nos dispositivos de 20 V do sky130 e nos
 resistores do gf180); full: os três. (b) S12. (c) ~150 linhas; risco
 médio: um deck com varredura de temperatura (sweep/sessão) precisa
@@ -499,8 +515,11 @@ precisa ser entendida antes); (c) ~100; (d) não. Opcional.
 feito em 2026-11-14, `docs/diode.md`: diodos do sky130 da biblioteca
 contra o ngspice-47 em ≤ 4e-4 do máximo); resistor/capacitor
 comportamental com `v()` (sky130 104, gf180 149 — Fase 8 item 6; a
-reescrita do ngspice está feita desde 2026-11-14, `docs/dune-netlist.md`,
-mas os usos reais dependem de `temper` — G7 — e de `tc1`/`tc2`); modelos
+reescrita do ngspice está feita desde 2026-11-14, `docs/dune-netlist.md`;
+✅ com `temper` e `tc1`/`tc2` à temperatura fixa, integração de
+2026-11-14: `nplus_u`, `ppolyf_u`, `res_high_po_0p35` e
+`res_xhigh_po_0p35` casam com o ngspice; varredura de temperatura
+segue recusada); modelos
 `r`/`c` semicondutores completos; BSIM3v32 (sky130 células especiais);
 `bsim4v6` (`version=4.62`/`4.6`); VBIC nível 9 (IHP, item 4); PSP/OSDI
 (IHP, fora de escopo).

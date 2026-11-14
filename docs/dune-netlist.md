@@ -419,13 +419,39 @@ vez de só trocar `CKTtemp`, reconstrua o `Circuit` a partir do texto
 guardado (o `Session` já reconstrói circuitos; faltaria a temperatura
 como entrada do parser). Não feito: é mudança de API pública.
 
+**R, C e L cujo valor lê `temper`** (integração com a reescrita
+comportamental, 2026-11-14). O ngspice-47 testa o
+`b_transformation_wanted` **depois** de transformar os `.param` com
+`temper` em funções e de expandir as funções no texto, então todo R/C/L
+cujo valor depende de `temper` — direto, por um `.param`, por um
+padrão de `.subckt` ou por um `.func` — vira fonte B (`inp_compat`), e
+a fonte B lê `temper` como `CKTtemp − CONSTCtoK`. Na temperatura fixa o
+número é o mesmo do caminho de parâmetro, mas o circuito não: o R vira
+`bR1` (sem ruído térmico — sonda `behav-probes b1 r_temper_noise`; o
+`@r1[i]` não existe e o `@br1[i]` sim — `r_temper_save`), e o C e o L
+ganham os nós internos e o ramo de medida no rawfile (`c_temper_op`:
+`v(c1_int1)`, `v(c1_int2)`, `i(vcurrmeasc1)`; `l_temper_op`: `i(bl1)`,
+`i(ll1)`), que o oráculo exige. Regra no Dune, para casar com o golden
+do ngspice: um R/C/L é comportamental se o texto depois dos nós tem o
+gatilho, **ou** nomeia um parâmetro que depende de `temper` no escopo
+dele, **ou** chama um `.func` cujo corpo (transitivamente) tem o
+gatilho ou um tal parâmetro (`behav::wanted`); dentro da expressão
+`temper` vale a temperatura do circuito, com as mesmas regras de escopo
+desta seção, o aviso de avaliação única e o erro com `.dc temp`
+(`ParamEnv::read_for_behav`). Os `tc1`/`tc2` de um R/C/L comportamental
+contam como leitura de temperatura para o aviso e para o `.dc temp`.
+Os testes `values_where_ngspice_gives_them_t1_t2` e
+`circuit_temperature_t1` leem o valor de um R assim no divisor da fonte
+B (`tests/temper.rs::r`).
+
 Diferenças (linhas no `KNOWN_DIFFS.md`): `.param temper=…` é erro (o
 ngspice o ignora); com padrão `t={temper}` na linha `.subckt` e
 `t=5` na linha `X`, o ngspice-47 usa **27** (o padrão vence a atual —
 provável efeito da reescrita, `t2 t_sub_default_override`), o Dune usa
 5; valor posicional de área de `Q`/`J`/`D` com `temper` vale no Dune (o
-ngspice recusa a reescrita no `Q`, `t2 t_q_area`); fonte `B` com
-`temper` segue sem suporte (a linguagem da fonte B é a do 3f5); `r=`
+ngspice recusa a reescrita no `Q`, `t2 t_q_area`); cartão `B` do
+próprio deck com `temper` segue sem suporte (a linguagem da fonte B é a
+do 3f5; a fonte B que a reescrita de um R/C/L gera lê `temper`, acima); `r=`
 como sinônimo de `resistance=` (o ngspice aceita, `t1 t_inst_kw`) não
 existe no Dune — à parte do `temper`.
 
@@ -484,6 +510,22 @@ No Dune, além disso:
   que o corpo lê (transitivamente), para a ordem de avaliação e para a
   detecção de ciclo; um `.model` local que chama uma função do usuário
   não é compartilhado entre instâncias.
+- **Em R/C/L comportamental** (desde 2026-11-14, integração G7 ×
+  reescrita): a chamada é **expandida** na árvore da fonte B, como o
+  ngspice expande o texto — os formais viram as subárvores dos
+  argumentos, que podem ler `v()`/`i()` (`f(v(1))`) e o corpo também
+  (`.func g(x) {x*(1+0.1*v(1))}`); o corpo é lido com a gramática da
+  fonte B do `behav.rs`, não com o `pexpr` (por isso `v(` no corpo, que
+  o `pexpr` recusa, vale aqui). Sondas `behav-probes b1 r_func_v*`, `b2
+  r_func_body_v`, `r_func_nested`, `r_func_tparam`: iguais ao ngspice a
+  1e-15. O que a gramática da fonte B do Dune não tem (`?:`,
+  comparações, `floor`…) é erro com o span **dentro do corpo**;
+  aridade errada e recursão também com span — nunca um valor errado.
+  Limites: os do tradutor (40 níveis contando os corpos expandidos,
+  árvore ≤ 508 níveis e 9992 nós); bytes de corpo lidos e nós de
+  argumento copiados — e os corpos lidos para decidir se um cartão é
+  comportamental — são cobrados do mesmo orçamento de 2²⁴ passos por
+  deck do avaliador de parâmetros (`ParamEnv::charge_fn_work`).
 
 Diferenças (linhas no `KNOWN_DIFFS.md`): formal repetido (`f(x,x)`, o
 ngspice usa o primeiro) é erro; corpo vazio (`.func f(x)`, aceito
@@ -862,9 +904,21 @@ O ngspice-47 reescreve no front end (`src/frontend/inpcom.c`,
 `inp_compat`, Modified BSD) um R, C ou L cujo valor lê o circuito.
 Critério (`b_transformation_wanted`): o texto depois do nome e dos dois
 nós contém `v(`, `i(` ou as palavras `time`, `temper`, `hertz` (não
-precedidas de letra/dígito/`_`), ou, num capacitor, `q=`. A expressão é
-o que vem entre o primeiro `{` (ou `'`, que o ngspice converte em `{`)
-e o fecho; sem delimitador o ngspice para com "{...} or '...' around
+precedidas de letra/dígito/`_`), ou, num capacitor, `q=` — testado
+**depois** de os `.param` com `temper` virarem funções e de os `.func`
+serem expandidos no texto, então um valor que chega a `temper` (ou a
+`v(`…) só por um parâmetro ou por uma função também é reescrito (seção
+"`temper`", parágrafo "R, C e L cujo valor lê `temper`"). A expressão é
+o primeiro `{…}` da linha depois dos nós — depois de o ngspice trocar
+`'…'` por `{…}` (`inp_change_quotes`) **e** pôr chaves em todo valor nu
+depois de um `=` (`inp_fix_param_values`: não toca valor que começa por
+dígito, `.`, número com sinal, `{`, `true`/`false`; o valor vai até o
+primeiro branco fora de parênteses). Por isso, em `rb 11 21 rm l=r_l
+w=r_w r='…'` a expressão é **`r_l`**, não o `r=` (sondas `behav-probes
+b3 r_kw_*`); o resistor de corpo do `ppolyf_u` do gf180 está escrito
+assim, e o ngspice-47 o simula com `r_l` ≈ 1e-5 Ω. O Dune faz igual
+(`behav::equation`) e avisa quando a expressão é o valor de outra
+palavra-chave. Sem expressão o ngspice para com "{...} or '...' around
 equation's right hand side are missing!" — no Dune, erro com o span. A
 forma posicional (`r1 a b '…'`) e a de palavra-chave (`r=`, `c=`,
 `l=`) são a mesma coisa para ele. O Dune faz a mesma reescrita, com a
@@ -912,52 +966,93 @@ numa fonte `B` do próprio deck. Funções:
   `a·u(b−a) + b·u(a−b)`, `max(a,b)` → `a·u(a−b) + b·u(b−a)` (valor
   exato, inclusive no empate; a derivada no empate exato é a média das
   duas, no ngspice a de um dos lados);
+- `temper`: a temperatura do circuito, como a fonte B do ngspice a lê
+  (`CKTtemp − CONSTCtoK`), avaliada uma vez, com as regras da seção
+  "`temper`" (parâmetro que depende dele só no próprio escopo; aviso;
+  `.dc temp` recusado). Sondas `b1 r_temper_v_27/85`, `b2
+  r_sub_rtemp`: iguais ao ngspice a ≤ 5e-13;
+- funções do usuário (`.func`): expandidas na árvore (seção "Funções do
+  usuário");
 - recusadas com o span: `?:`, comparações e operadores lógicos;
   `ceil floor nint u2 pwl eq0 ne0 gt0 lt0 ge0 le0 ddt`; `time`,
-  `temper`, `hertz` (a fonte `B` do Dune não tem tempo nem temperatura —
-  G7); função desconhecida; parâmetro indefinido.
+  `hertz` (a fonte `B` do Dune não tem tempo); função desconhecida;
+  parâmetro indefinido.
 
 **Palavras-chave.** `m` como no ngspice (`eval_m`/`eval_mvalue`). No
 capacitor por capacitância o ngspice escreve o ganho do `G` como
 `"%se9"` com o `m` formatado em `"%15.8e"`: sem `m=` sai `1e9`, com
 `m=2` sai `"2.00000000e+00e9"`, que lê **2** — o capacitor encolhe 1e9
 vezes e some do circuito (sonda `c_ac_m`: |v| = 1000 Ω puro). Portado
-literalmente (`regress/behav_ac`, `c2`). `tc1`/`tc2` diferentes de zero:
-recusados (a fonte `B` do Dune não tem coeficientes de temperatura); zero
-passa. `noisy=1`/`noise=1` (o subcircuito de ruído extra do ngspice):
-recusado. Outras palavras-chave: aviso, e descartadas como o ngspice
-descarta. Num subcircuito multiplicado por um `m` de linha `X`: recusado
+literalmente (`regress/behav_ac`, `c2`). `tc1`/`tc2`: o ngspice os
+passa à fonte B (`eval_tc`), que multiplica o valor por `f = 1 +
+tc1·Δ + tc2·Δ²`, `Δ = (T + CONSTCtoK) − 300,15` — o nominal é **27 °C
+fixo** (`ASRCload`, comentário "FIXME: tnom"; o `tnom` não entra, sonda
+`b1 r_tc_85_tnom`) —, invertido com `reciproctc=1` (R: a corrente
+divide por `f`; C e forma de carga: a capacitância/carga divide) e
+direto com `reciproctc=0` (L: a indutância multiplica); o `m` da fonte
+B do R multiplica depois. O Dune dobra esse fator, calculado à
+temperatura do circuito, na expressão (`behav::tc_factor`) — exato na
+temperatura fixa: sondas `b1 r_tc_*` a ≤ 1e-15 relativo; `c_tc_85`, `b2
+c_charge_tc`, `l_m_tc` PASS no comparador do oráculo, e o controle
+negativo sem o fator FALHA (margens 8,8 e 8,9). Como o `temper`, conta
+para o aviso de avaliação única e recusa `.dc temp` — que o ngspice
+varre, recalculando o fator a cada ponto. O `temp=`/`dtemp=` da
+instância é descartado como no ngspice (`r_tc_85_temp`). Como o
+`strstr` do ngspice, vale o primeiro `tc1=`/`tc2=`/` m=` **em qualquer
+lugar** depois dos nós, também antes da expressão. Uma solução que
+varra a temperatura precisaria de API pública: `Device::Behavioral`
+com `tc: Option<(f64, f64, bool)>` (e o motor aplicando o fator com
+`CKTtemp`) mais uma folha `Expr::Temper` lida pelo motor — não feita.
+`noisy=1`/`noise=1` (o subcircuito de ruído extra do ngspice):
+recusado. Outras palavras-chave: aviso, e descartadas **sem avaliar**,
+como o ngspice descarta (um `v()` no valor de uma delas não é erro). Num subcircuito multiplicado por um `m` de linha `X`: recusado
 (a ordem entre `inp_fix_subckt_multiplier` e `inp_compat` decide qual
 `m` vence; não sondado).
 
 **Entrada hostil.** Limites aplicados durante a construção da árvore,
 nó a nó (cada subárvore leva profundidade e contagem): texto ≤
-`pexpr::MAX_LEN` (64 KiB), parênteses/chamadas/sinais aninhados ≤ 100
-(`MAX_NEST`, a recursão do parser), profundidade ≤ `EXPR_MAX_DEPTH` − 4
+`pexpr::MAX_LEN` (64 KiB), parênteses/chamadas/sinais/corpos de `.func`
+aninhados ≤ 40 (`MAX_NEST`, a recursão do parser: medido em build
+debug, 9,5 KB de pilha por parêntese e 12 KB por chamada — com 100,
+como era, uma cadeia de `abs(` estourava uma thread de 1 MiB; com 40
+cabe e sobra), profundidade ≤ `EXPR_MAX_DEPTH` − 4
 = 508 e nós ≤ `EXPR_MAX_NODES` − 8 = 9992 (a margem é do que
 `elements` põe em volta); `min`/`max`/`pwr` checam antes de clonar.
 Nenhuma árvore além dos limites é construída, percorrida ou destruída
 (a cadeia à esquerda `a+a+…` crescia um nível por termo). Teste
 `behav::tests::hostile_expressions_are_bounded` (cadeia de 1e6 termos,
-1e5 parênteses, 1e4 chamadas, cadeia de `^`, numa thread de 2 MiB — a
-recursão de 100 níveis passa de 1 MiB em debug); sementes de fuzz
+1e5 parênteses, 1e4 chamadas, cadeia de `^`) e
+`deepest_nesting_fits_a_1mib_stack` (39 níveis de cada tipo passam, 41
+são recusados), ambos numa thread de 1 MiB; `tests/temper.rs::
+hostile_user_functions_in_behavioural_expressions` (cadeia de 60
+`.func`, expansão exponencial de 30 níveis, 1 MiB); sementes de fuzz
 `behav_*.cir` no corpus do `parse_deck` e os cartões R/C/L dos decks
 `behav_*` no `fuzz_smoke`.
 
 Decks `regress/behav_{op,dc,ac,tran}` (goldens do ngspice-47, margens
 0,000); sondas `behav.cases`/`behav2.cases` em
-`.claude/scratch/dev-probes/s3`.
+`.claude/scratch/dev-probes/s3`. Com `temper`, `tc1`/`tc2`, `.func` e
+a escolha da expressão: `regress/behav_temper_{op,tran,ac}` (margens
+0,000) e `tests/temper.rs`; sondas `b1`–`b3` em
+`.claude/scratch/behav-probes/` (do worktree da integração).
 
-**PDKs.** Os 24 usos do sky130 (`res_high_po_*`, `res_xhigh_po*`,
-`cap_var_*`, `nfet_20v0*` e parentes) e os 4 do gf180
-(`nmos/pmos_10p0_asym`, `nplus_u` …) continuam sem rodar, agora por
-outros motivos: todos dependem de `.param` com `temper` (G7, recusado no
-parser de parâmetros) e os resistores do sky130 trazem `tc1`/`tc2`
-diferentes de zero (bancada `.claude/scratch/dev-probes/s3/
-sky130_behav_dc.cir`: "`temper` in parameter expressions is not
-supported yet", depois "tc1 on a behavioural R/C/L is not supported
-yet"). As funções que eles usam (`min`, `max`, `pow`, `pwr`, `**`,
-`abs`, `log`, `cosh`, `tanh`, `exp`, `sqrt`) já são aceitas.
+**PDKs** (2026-11-14, integração G7 × reescrita). Os resistores
+comportamentais reais simulam e casam com o ngspice-47 (bancadas
+`.claude/scratch/behav-probes/pdk/`: `.dc` de `v(out)` com carga
+simples, a 27 e 85 °C, temperatura por `.options temp` e por `.temp`;
+desvio máximo de `v(out)`, todos PASS no comparador do oráculo):
+
+| PDK | dispositivo | 27 °C | 85 °C |
+|---|---|---|---|
+| gf180 | `nplus_u` (`r_temp` com `temper`, terminais com `tc`, diodos nível 3) | 7,6e-15 V | 8,0e-15 V |
+| gf180 | `ppolyf_u` (corpo escrito `l=r_l … r='…'`: o ngspice usa `r_l`, acima) | 3,5e-10 V | 4,7e-10 V |
+| sky130 | `res_high_po_0p35` (`temper` em `.param` local, `tc1`/`tc2` no R comportamental, `min`/`pow`) | 4,1e-5 V | 2,4e-5 V |
+| sky130 | `res_xhigh_po_0p35` (via `res_xhigh_po__base`) | 2,2e-16 V | 3,3e-16 V |
+
+Os 4e-5 V do `res_high_po` são convergência de Newton (`reltol`
+1e-3): com `reltol=1e-7 abstol=1e-15 vntol=1e-12` nos dois caem para
+1e-9 V. `.options temp` e `.temp` dão o mesmo número nos dois
+simuladores.
 
 ## Valores por palavra-chave em R, C e L
 
