@@ -204,7 +204,10 @@ fn pathological_shapes_terminate() {
     ));
     // Expression over the length cap (64 KiB), and just under it.
     parse(format!("t\n.param x={{{}1}}\n.end\n", "1+".repeat(40_000)));
-    parse(format!("t\n.param x={{{}1}}\nr1 1 0 {{x}}\n.end\n", "1+".repeat(30_000)));
+    parse(format!(
+        "t\n.param x={{{}1}}\nr1 1 0 {{x}}\n.end\n",
+        "1+".repeat(30_000)
+    ));
     // Parameter-expression nesting at and past the bound, through
     // every construct that recurses; quotes and braces as groups.
     for expr in [
@@ -217,7 +220,9 @@ fn pathological_shapes_terminate() {
         vec!["2"; 20_000].join("^"),
         vec!["x"; 20_000].join("+"),
     ] {
-        parse(format!("t\n.param x=1\n.param y={{{expr}}}\nr1 1 0 {{{expr}}}\n.end\n"));
+        parse(format!(
+            "t\n.param x=1\n.param y={{{expr}}}\nr1 1 0 {{{expr}}}\n.end\n"
+        ));
     }
     // Unclosed delimiters swallowing the rest of a long card.
     parse(format!("t\nr1 1 0 {}\n.end\n", "{".repeat(50_000)));
