@@ -27,6 +27,7 @@ mod disto;
 mod elaborate;
 mod engine;
 mod error;
+pub mod four;
 mod integ;
 mod jfet;
 mod ltra;
@@ -80,6 +81,7 @@ pub use disto::Disto;
 /// the same types).
 pub use dune_raw::{Data, VarType};
 pub use error::Error;
+pub use four::{FourError, FourOutcome, FourParams, Fourier, Harmonic, four_all};
 pub use integ::Method;
 pub use jfet::JfetModel;
 pub use ltra::{LtraInterp, LtraModel};
