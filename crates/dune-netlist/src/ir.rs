@@ -122,7 +122,9 @@ pub enum Device {
         off: bool,
         params: Vec<Param>,
     },
-    /// `M`: 4 nodes + model + geometry parameters.
+    /// `M`: 4 nodes + model + geometry parameters (3 to 5 nodes for an
+    /// ngspice VDMOS model: drain, gate, source, then the junction and
+    /// case temperature nodes).
     Mosfet { model: Ident, params: Vec<Param> },
     /// `S`: voltage-controlled switch, 4 nodes + model.
     SwitchV { model: Ident, state: Option<OnOff> },
