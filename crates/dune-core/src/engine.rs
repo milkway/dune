@@ -2991,6 +2991,7 @@ impl Engine {
         let mut mb = MatrixBuilder::new(n);
         for d in &mut self.devices {
             d.alloc(&mut mb);
+            d.alloc_pz(&mut mb);
         }
 
         let mut input_pos = in_pos;

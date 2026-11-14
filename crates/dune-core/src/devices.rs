@@ -133,6 +133,11 @@ pub(crate) trait Device: Send {
     fn load_pz(&mut self, _ctx: &mut PzCtx) -> Result<(), &'static str> {
         Err("this device has no pole-zero load yet")
     }
+    /// Matrix positions that only the pole-zero matrix has
+    /// (`DEVpzSetup` allocating more than `*setup.c`, e.g. the
+    /// branch diagonal of `vsrcpzs.c`). Runs after [`Device::alloc`]
+    /// when `CKTpzSetup` rebuilds the matrix; the default adds none.
+    fn alloc_pz(&mut self, _mb: &mut MatrixBuilder) {}
     /// Noise generators (`*noise.c`): the per-generator name
     /// suffixes, the last entry being the device total (empty
     /// suffix). `None` marks a noiseless device.
@@ -936,6 +941,9 @@ pub(crate) struct VsourceI {
     ac_re: f64,
     ac_im: f64,
     branch: BranchStamp,
+    /// `VSRCibrIbrptr`, allocated only for the pole-zero matrix
+    /// (`vsrcpzs.c`).
+    br_br: Slot,
     /// `DISTOF1`/`DISTOF2 <MAG <PHASE°>>` (`VSRCdF1mag` …).
     disto: SourceDisto,
     /// RF port (ngspice-47 RFSPICE): the series reference
@@ -981,6 +989,7 @@ impl VsourceI {
             ac_re,
             ac_im,
             branch: BranchStamp::new(pos, neg, br),
+            br_br: TRASH,
             disto: SourceDisto::default(),
             port: None,
         }
@@ -1102,15 +1111,30 @@ impl Device for VsourceI {
         }
     }
 
-    /// `VSRCpzLoad`: the branch incidence, no excitation (the PZ
-    /// drive comes from the column surgery). ngspice's `vsrcpzld.c`
-    /// has no RFSPICE branch, so a port loads only its branch (on the
-    /// internal node) and no reference conductance.
+    /// `VSRCpzSetup` (`vsrcpzs.c`): the branch diagonal, which only
+    /// the pole-zero load of an AC source writes.
+    fn alloc_pz(&mut self, mb: &mut MatrixBuilder) {
+        self.br_br = mb.slot(self.branch.br, self.branch.br);
+    }
+
+    /// `VSRCpzLoad`: no excitation (the PZ drive comes from the
+    /// column surgery). A source without `AC` is a short (the branch
+    /// incidence); a source with `AC` — given at all, even `AC 0` — is
+    /// the stimulus the drive replaces, so it opens: the branch row
+    /// becomes `ibr = 0` (`VSRCibrIbrptr += 1`, no `ibr`–node terms).
+    /// Shorting it too would short a `.pz` input placed on its nodes.
+    /// ngspice's `vsrcpzld.c` has no RFSPICE branch, so a port loads
+    /// only its branch (on the internal node) and no reference
+    /// conductance.
     fn load_pz(&mut self, ctx: &mut PzCtx) -> Result<(), &'static str> {
         ctx.add_g(self.branch.slots[0], 1.0);
-        ctx.add_g(self.branch.slots[1], 1.0);
         ctx.add_g(self.branch.slots[2], -1.0);
-        ctx.add_g(self.branch.slots[3], -1.0);
+        if self.ac.is_some() {
+            ctx.add_g(self.br_br, 1.0);
+        } else {
+            ctx.add_g(self.branch.slots[1], 1.0);
+            ctx.add_g(self.branch.slots[3], -1.0);
+        }
         Ok(())
     }
 
