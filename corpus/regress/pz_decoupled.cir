@@ -1,0 +1,28 @@
+Pole-zero with a decoupled stage: two independent common emitters
+* Coverage: the complex phase of the pz search (cktpzstr.c/nipzmeth.c)
+* ending on a REAL root. The .pz input and output touch only the first
+* stage; the second, decoupled from the transfer, multiplies both
+* determinants by its own factor, so its poles show up as poles and as
+* cancelling zeros (ngspice and the 3f5 report them). In the pole search
+* the bracket [-1e12, -1e13] holds two real roots (-2.82e12 of the second
+* stage, -3.17e12 of the first) without a sign change; the trapped
+* quadratic lands on -2.82e12, flags it a minima and Muller then converges
+* onto the real axis, where no iterate ever repeats bit for bit. Before
+* the fix Dune ran the imaginary part down to underflow, got a NaN "root"
+* that poisoned the deflation and lost two poles; ngspice-47 finds all
+* six here (on other values of rc2/rs2 it hits its iteration limit and
+* loses the same two — see KNOWN_DIFFS).
+vcc vcc 0 dc 5
+vin in 0 dc 0.8
+rs in b 50
+q1 c b e 0 nv
+re e 0 50
+rc vcc c 2k
+vin2 in2 0 dc 0.8
+rs2 in2 b2 50
+q2 c2 b2 e2 0 nv
+re2 e2 0 50
+rc2 vcc c2 2k
+.model nv npn is=1e-16 bf=100 vaf=50 rb=100 rc=10 re=2 cje=50f cjc=30f tf=10p cjs=20f
+.pz b 0 c 0 vol pz
+.end

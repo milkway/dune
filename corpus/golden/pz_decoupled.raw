@@ -1,0 +1,31 @@
+Title: pole-zero with a decoupled stage: two independent common emitters
+Date: Sat Nov 14 15:05:25  2026
+Command: ngspice-47, Build 
+Plotname: Pole-Zero Analysis
+Flags: complex
+No. Variables: 11
+No. Points: 1       
+Variables:
+	0	v(pole(1))	voltage
+	1	v(pole(2))	voltage
+	2	v(pole(3))	voltage
+	3	v(pole(4))	voltage
+	4	v(pole(5))	voltage
+	5	v(pole(6))	voltage
+	6	v(zero(1))	voltage
+	7	v(zero(2))	voltage
+	8	v(zero(3))	voltage
+	9	v(zero(4))	voltage
+	10	v(zero(5))	voltage
+Values:
+0		-3.167632335706264e+12,0.000000000000000e+00
+	-2.823106813322053e+12,0.000000000000000e+00
+	-7.313048717553755e+10,0.000000000000000e+00
+	-6.638081757127088e+10,0.000000000000000e+00
+	-8.059167611736632e+09,0.000000000000000e+00
+	-6.676446840310222e+09,0.000000000000000e+00
+	-2.823106813322106e+12,0.000000000000000e+00
+	-3.586633974568365e+11,0.000000000000000e+00
+	-6.638081757127061e+10,0.000000000000000e+00
+	-6.676446840313226e+09,0.000000000000000e+00
+	2.268570441711473e+11,0.000000000000000e+00

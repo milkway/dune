@@ -333,6 +333,35 @@ struct Finder<'a> {
 struct Cand {
     s: Complex64,
     seq: i32,
+    /// A Muller estimate that converged onto the real axis (see
+    /// [`on_real_axis`]): `s` is already real and is a root.
+    on_axis: bool,
+}
+
+/// Whether a Muller estimate `s` has converged onto the real axis:
+/// it moved from the previous iterate `last` by less than the
+/// real-axis resolution of `CKTpzRunTrial` (two non-root trials
+/// closer than `reltol = 1e-12`, `abstol = 1e-20` are the same
+/// point), and its imaginary part is below that resolution too.
+///
+/// The 3f5 ends the complex search (`NIpzMuller` after a minima) only
+/// when an iterate repeats an earlier trial bit for bit, which a
+/// complex root does once Muller has converged. A *real* root reached
+/// from the complex plane never does: the real part stops moving but
+/// the imaginary part keeps shrinking (or flips between neighbouring
+/// doubles), so the search burns the 200-iteration limit and gives up
+/// on every root still unfound (ngspice-47 behaves the same), or —
+/// once the imaginary part underflows — `h0/h1` turns NaN and a NaN
+/// "root" poisons the deflation of every later trial. The quadratic
+/// estimate of a trapped interval holding two real roots without a
+/// sign change (typical when a decoupled sub-circuit adds its poles to
+/// both determinants) lands on one of them and opens exactly that
+/// path.
+fn on_real_axis(s: Complex64, last: Complex64) -> bool {
+    const ABSTOL: f64 = 1e-20;
+    const RELTOL: f64 = 1e-12;
+    let scale = s.re.abs() + ABSTOL / RELTOL;
+    (s - last).norm() / scale < RELTOL && s.im.abs() / scale < RELTOL
 }
 
 type Set = [Option<usize>; 3];
@@ -663,7 +692,18 @@ impl Finder<'_> {
                 s.re = self.t(set[0].unwrap()).s.re;
                 s.im = if set[2].is_none() { 1.0e8 } else { 1.0e12 };
             }
-            MULLER => s = self.muller(set),
+            MULLER => {
+                s = self.muller(set);
+                let last = self.t(set[0].unwrap()).s;
+                if on_real_axis(s, last) {
+                    s.im = 0.0;
+                    return Ok(Cand {
+                        s,
+                        seq,
+                        on_axis: true,
+                    });
+                }
+            }
             SPLIT_LEFT => {
                 s.re = (self.t(set[0].unwrap()).s.re + 2.0 * self.t(set[1].unwrap()).s.re) / 3.0;
             }
@@ -673,7 +713,11 @@ impl Finder<'_> {
             _ => return Err(Error::Build(".pz: internal — unknown step type".into())),
         }
 
-        Ok(Cand { s, seq })
+        Ok(Cand {
+            s,
+            seq,
+            on_axis: false,
+        })
     }
 
     /// `NIpzSym2`: quadratic (or linear) estimate on the real axis,
@@ -994,6 +1038,20 @@ impl Finder<'_> {
                 };
 
                 if diff.im == 0.0 && diff.re.abs() / (p.s.re.abs() + abstol / reltol) < reltol {
+                    if cand.on_axis {
+                        // A Muller iterate that converged onto the
+                        // real axis is a root: it repeats an earlier
+                        // root, or it supersedes the non-root trial
+                        // it lands on (the minima that started the
+                        // complex search; `verify` drops it). No
+                        // `alter` nudge — the point has converged.
+                        if p.flags & ISAROOT != 0 {
+                            pretest = true;
+                            hit = Some(i);
+                            break;
+                        }
+                        continue;
+                    }
                     if was_shifted || p.count >= 3 || !self.alter(&mut s, set[1], abstol, reltol) {
                         self.nodes[i].count = 0;
                         pretest = true;
@@ -1033,7 +1091,7 @@ impl Finder<'_> {
             }
         }
 
-        let mut singular = false;
+        let mut singular = cand.on_axis;
         if pretest {
             let i = hit.unwrap();
             let hflags = self.nodes[i].flags;
@@ -1058,7 +1116,7 @@ impl Finder<'_> {
         // declared the point a root).
         let mut f_raw = Complex64::new(0.0, 0.0);
         let mut mag_raw = 0i32;
-        if !pretest {
+        if !pretest && !singular {
             let (det, mag) = self.eng.pz_det(self.setup, s)?;
             f_raw = det;
             mag_raw = mag;
@@ -1339,6 +1397,73 @@ impl Finder<'_> {
             if mag2 < 1.0e-20 {
                 self.nflat += 1;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn real_axis_needs_converged_and_negligible_imaginary_part() {
+        let s = Complex64::new(-2.823e12, 1e-6);
+        // Converged (moved ~1e-15 relative), imaginary part negligible.
+        assert!(on_real_axis(s, Complex64::new(-2.823e12 + 2e-3, 3e-4)));
+        // Imaginary part negligible but still moving: not yet.
+        assert!(!on_real_axis(s, Complex64::new(-2.8e12, 1e-6)));
+        // Converged onto a genuine complex pair: never snapped.
+        let c = Complex64::new(-2.4e11, 1.7e11);
+        assert!(!on_real_axis(c, c));
+        // The imaginary part is measured against the real-axis
+        // resolution, `1e-12 · (|re| + 1e-8)`, so a root at the origin
+        // only snaps once its imaginary part is below 1e-20.
+        assert!(on_real_axis(
+            Complex64::new(0.0, 1e-21),
+            Complex64::new(0.0, 2e-21)
+        ));
+        assert!(!on_real_axis(
+            Complex64::new(0.0, 1e-19),
+            Complex64::new(0.0, 1e-19)
+        ));
+    }
+
+    /// `regress/pz_decoupled`: the trapped quadratic lands on a real
+    /// root without a sign change, the complex search converges onto
+    /// the real axis there. Every pole and zero must be finite and
+    /// match the ngspice-47 golden at the oracle's `reltol` (before
+    /// the convergence test, two poles came out NaN).
+    #[test]
+    fn decoupled_stage_keeps_every_pole() {
+        let stem = "pz_decoupled";
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus"));
+        let text = std::fs::read_to_string(root.join(format!("regress/{stem}.cir"))).unwrap();
+        let parsed = dune_netlist::parse_str(stem, &text);
+        assert!(parsed.is_clean(), "{:?}", parsed.diags);
+        let (c, _) = Circuit::from_netlist(&parsed.netlist).unwrap();
+        let (sols, _) = c
+            .run(&parsed.netlist.analyses[0], &Options::spice3())
+            .unwrap();
+        let golden = dune_raw::Rawfile::read_from(root.join(format!("golden/{stem}.raw"))).unwrap();
+        let (gp, dp) = (&golden.plots[0], &sols[0]);
+        assert_eq!(gp.variables.len(), dp.variables.len());
+        let (Data::Complex(g), Data::Complex(d)) = (&gp.data, &dp.data) else {
+            panic!("complex plots expected");
+        };
+        for (k, (gv, dv)) in g.iter().zip(d).enumerate() {
+            assert_eq!(gp.variables[k].name, dp.variables[k].0);
+            let (a, b) = (gv[0], dv[0]);
+            assert!(
+                b.re.is_finite() && b.im.is_finite(),
+                "{}: {b}",
+                dp.variables[k].0
+            );
+            assert!(
+                (a - b).norm() <= 1e-3 * a.norm(),
+                "{}: ngspice {a}, dune {b}",
+                dp.variables[k].0
+            );
         }
     }
 }
