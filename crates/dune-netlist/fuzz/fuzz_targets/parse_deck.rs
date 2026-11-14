@@ -48,6 +48,18 @@ fuzz_target!(|data: &[u8]| {
          .model m r rsh={line}\nv1 2 0 {{q}}\n.end\n"
     );
     let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), params, &mut NoFs);
+    // Subcircuit parameters (G3/G4/G6): the bytes as the parameters of
+    // an X line, as a .subckt-line default list, as a body .param and
+    // as the parameters of a local binned model, with the instance
+    // nested, multiplied and repeated.
+    let sub = format!(
+        "t\n.param g=1\n.subckt leaf a w=1 {line}\n.param q={{w*g}} {line}\n\
+         .model nm.1 nmos level=49 lmin=0 lmax=1 wmin=0 wmax=1 {line}\n\
+         m1 a a 0 0 nm l={{q*1u}} w=1u\nr1 a 0 {{{line}}}\nx1 a leaf2 {line}\n.ends\n\
+         .subckt leaf2 b {line}\nr2 b 0 {{w}}\n.ends\n\
+         x1 1 leaf {line}\nx2 2 leaf m=2 w={{{line}}}\nx3 3 leaf w=2\n.end\n"
+    );
+    let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), sub, &mut NoFs);
     let _ =
         dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), text.clone(), &mut NoFs);
     let _ = dune_netlist::parse_with_loader(
