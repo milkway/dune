@@ -1,0 +1,17 @@
+KSPICE TXL card replaced by the 3-pi RC fall-back
+* Coverage: a `txl` model with R/L > 1.6e10 and a length: `INP2Y`
+* replaces the line by "3-pi model for high resistance as fall back",
+* resistors txlres1-3 through the nodes txlnd1y1 and txlnd2y1 and
+* capacitors txlcap1-4 to the first reference node. The resistors get
+* 3/(R*len) = 0.12 ohm, the C's formula (a third of the line resistance
+* would be 8.3 ohm); the capacitors C*len/6, C*len/3, C*len/3,
+* C*len/6. Spice3 profile. Written for the Dune port of ngspice-47's
+* txl model.
+.options compat=spice3
+v1 in 0 pulse(0 1 0.2003n 0.3n 0.3n 3n 20n)
+r1 in a 50
+y1 a 0 b 0 ymod len 0.05
+r2 b 0 50
+.model ymod txl R=500 L=8.972e-9 G=0 C=0.468e-12 length=16
+.tran 0.05n 8n 0 0.0503n
+.end

@@ -193,6 +193,8 @@ pub(crate) fn parse_element(
         't' => tline_ideal(&mut ctx)?,
         'o' => tline_lossy(&mut ctx)?,
         'u' => urc(&mut ctx)?,
+        'y' => txl(&mut ctx)?,
+        'p' => cpl(&mut ctx)?,
         'b' => behavioral(&mut ctx)?,
         'x' => subckt_call(&mut ctx)?,
         _ => {
@@ -719,6 +721,86 @@ fn tline_lossy(ctx: &mut ElemCtx) -> Parsed {
     Some((nodes, Device::TlineLossy { model }))
 }
 
+/// The optional length after a KSPICE line's model name (`INP2Y`,
+/// `INP2P`): `keyword VALUE`, the value a plain number or `{expr}`.
+/// The C ignores whatever else follows; Dune diagnoses it.
+fn line_length(ctx: &mut ElemCtx, accept: &[&str]) -> Option<(String, f64)> {
+    let t = ctx.sc.next_tok()?;
+    let (kw, span) = (t.lc(), ctx.sc.span(&t));
+    if !accept.contains(&kw.as_str()) {
+        ctx.err(span, format!("unexpected `{kw}` after the line model name"));
+        trailing_junk(ctx);
+        return None;
+    }
+    let v = ctx.value_req("line length")?;
+    trailing_junk(ctx);
+    Some((kw, v))
+}
+
+/// `Y`: `name N1 GND1 N2 GND2 MNAME <LEN VALUE>` (`INP2Y`). A
+/// `LENGTH VALUE` there is kept apart: `INP2Y` ignores it, `INP2P`
+/// (a CPL-typed model) reads it.
+fn txl(ctx: &mut ElemCtx) -> Parsed {
+    let nodes = vec![
+        ctx.node_req("first node")?,
+        ctx.node_req("first reference node")?,
+        ctx.node_req("second node")?,
+        ctx.node_req("second reference node")?,
+    ];
+    let (model, _) = ctx.tok_req("model name")?;
+    let (mut len, mut length) = (None, None);
+    match line_length(ctx, &["len", "length"]) {
+        Some((kw, v)) if kw == "len" => len = Some(v),
+        Some((_, v)) => length = Some(v),
+        None => {}
+    }
+    Some((nodes, Device::Txl { model, len, length }))
+}
+
+/// Most conductors of a `P` card: ngspice-47 sizes every per-line
+/// array of the CPL device by `MAX_CP_TX_LINES` (8, `swec.h`).
+pub(crate) const MAX_CPL_CONDUCTORS: usize = 8;
+
+/// `P`: `name N1 … Nk GND1 M1 … Mk GND2 MNAME <LENGTH|LEN VALUE>`
+/// (`INP2P`): the tokens before `length`/`len` are counted, model
+/// included, and `k = (count − 2)/2`.
+fn cpl(ctx: &mut ElemCtx) -> Parsed {
+    let start = ctx.sc.here();
+    let mut toks: Vec<String> = Vec::new();
+    while let Some(t) = ctx.sc.peek_tok() {
+        let lc = t.lc();
+        if lc == "length" || lc == "len" {
+            break;
+        }
+        ctx.sc.next_tok();
+        toks.push(lc);
+        if toks.len() > 2 * MAX_CPL_CONDUCTORS + 3 {
+            ctx.err(
+                start,
+                format!(
+                    "a CPL line takes at most {MAX_CPL_CONDUCTORS} conductors \
+                     (ngspice-47's MAX_CP_TX_LINES)"
+                ),
+            );
+            return None;
+        }
+    }
+    let count = toks.len();
+    if count < 5 || count.is_multiple_of(2) {
+        ctx.err(
+            start,
+            format!(
+                "a CPL line needs k in-nodes, a reference node, k out-nodes, a reference \
+                 node and a model name (got {count} names)"
+            ),
+        );
+        return None;
+    }
+    let model = toks.pop().unwrap_or_default();
+    let len = line_length(ctx, &["len", "length"]).map(|(_, v)| v);
+    Some((toks, Device::Cpl { model, len }))
+}
+
 /// `U`: `name N1 N2 N3 MNAME L=LEN <N=LUMPS>`.
 fn urc(ctx: &mut ElemCtx) -> Parsed {
     let nodes = vec![
@@ -861,6 +943,12 @@ mod tests {
             .collect();
         let e = parse_element(&card, &mut diags, &names, &vd, &env);
         (e, diags)
+    }
+
+    /// Whether the card produces an error diagnostic.
+    fn parse_err(line: &str) -> bool {
+        let (_, diags) = parse(line);
+        diags.iter().any(|d| d.severity == Severity::Error)
     }
 
     fn ok(line: &str) -> Element {
@@ -1233,6 +1321,67 @@ mod tests {
         assert!(matches!(&e.device, Device::TlineLossy { model } if model == "lossymod"));
         let e = ok("U1 1 2 0 URCMOD L=50U");
         assert!(matches!(&e.device, Device::Urc { model, .. } if model == "urcmod"));
+    }
+
+    #[test]
+    fn kspice_lines() {
+        let e = ok("Y1 a 0 b 0 ymod len=0.5");
+        assert_eq!(e.nodes, ["a", "0", "b", "0"]);
+        assert!(matches!(
+            &e.device,
+            Device::Txl { model, len: Some(l), length: None } if model == "ymod" && *l == 0.5
+        ));
+        let e = ok("Y2 a 0 b 0 ymod");
+        assert!(matches!(
+            &e.device,
+            Device::Txl {
+                len: None,
+                length: None,
+                ..
+            }
+        ));
+        let e = ok("Y3 a 0 b 0 ymod length 2");
+        assert!(matches!(
+            &e.device,
+            Device::Txl {
+                len: None,
+                length: Some(_),
+                ..
+            }
+        ));
+        let e = ok("P1 a1 a2 0 b1 b2 0 pmod length=0.25");
+        assert_eq!(e.nodes, ["a1", "a2", "0", "b1", "b2", "0"]);
+        assert!(matches!(
+            &e.device,
+            Device::Cpl { model, len: Some(l) } if model == "pmod" && *l == 0.25
+        ));
+        let e = ok("P2 a 0 b 0 pmod");
+        assert_eq!(e.nodes.len(), 4);
+    }
+
+    #[test]
+    fn kspice_lines_reject_malformed_cards() {
+        for card in [
+            "P1 a b 0 c 0 pmod",
+            "P1 a 0 pmod",
+            "Y1 a 0 b 0 ymod junk",
+            "Y1 a 0 b 0 ymod len",
+            "P1 a 0 b 0 pmod len 1 extra",
+        ] {
+            assert!(parse_err(card), "{card}");
+        }
+        let many = format!(
+            "P1 {} 0 {} 0 pmod",
+            (0..9)
+                .map(|k| format!("a{k}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+            (0..9)
+                .map(|k| format!("b{k}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        assert!(parse_err(&many));
     }
 
     #[test]

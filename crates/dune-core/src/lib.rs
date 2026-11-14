@@ -31,6 +31,7 @@ mod error;
 pub mod four;
 mod integ;
 mod jfet;
+mod kspice;
 mod ltra;
 mod ltrafit;
 mod matrix;
@@ -74,9 +75,9 @@ pub use bsim3::Bsim3Model;
 #[cfg(feature = "bsim")]
 pub use circuit::Bsim3;
 pub use circuit::{
-    Asrc, Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Diode, Inductor, Isource, Jfet, Ltra,
-    Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Vbic, Vccs,
-    Vcvs, Vdmos, Vsource,
+    Asrc, Bjt, Bsim1, Bsim2, Capacitor, Cccs, Ccvs, Circuit, Cpl, Diode, Inductor, Isource, Jfet,
+    Ltra, Mes, Mos1, Mos2, Mos3, Mos6, Mutual, Resistor, RfPort, Spec, SwitchI, SwitchV, Tra, Txl,
+    Vbic, Vccs, Vcvs, Vdmos, Vsource,
 };
 pub use dc::{Dc, DcSweep};
 pub use diode::DiodeModel;
@@ -90,6 +91,7 @@ pub use error::Error;
 pub use four::{FourError, FourOutcome, FourParams, Fourier, Harmonic, four_all};
 pub use integ::Method;
 pub use jfet::JfetModel;
+pub use kspice::{CplModel, MAX_CPL_LINES, TxlModel};
 pub use ltra::{LtraInterp, LtraModel};
 pub use measure::{MeasClause, MeasDetail, MeasureError, MeasureOutcome, Measurement, measure_all};
 pub use mes::MesModel;

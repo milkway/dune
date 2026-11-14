@@ -1,0 +1,22 @@
+KSPICE CPL: three coupled lossy lines with shunt conductance
+* Coverage: a 3-conductor CPL with resistive and conductive coupling
+* (full upper triangles of R, L, G, C, `length` on the card overriding
+* the model's): three modes, three delays, the head of the history
+* moved by the slowest mode. Line 1 driven, lines 2 and 3 quiet.
+* Spice3 profile. Written for the Dune port of ngspice-47's cpl model.
+.options compat=spice3
+v1 in 0 pulse(0 1 2.0003n 2n 2n 20n 100n)
+r1 in a1 50
+r2 0 a2 50
+r3 0 a3 50
+p1 a1 a2 a3 0 b1 b2 b3 0 pmod length=1.2
+r4 b1 0 50
+r5 b2 0 50
+r6 b3 0 50
+.model pmod cpl length=1
++ R=2 0.1 0.05 2 0.1 2
++ L=3.83e-7 5.79e-8 2.1e-8 3.83e-7 5.79e-8 3.83e-7
++ G=1e-3 -1e-4 0 1e-3 -1e-4 1e-3
++ C=1.15e-10 -1.04e-11 -3e-12 1.15e-10 -1.04e-11 1.15e-10
+.tran 0.5n 60n 0 0.2003n
+.end

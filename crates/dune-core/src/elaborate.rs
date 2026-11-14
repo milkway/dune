@@ -47,6 +47,11 @@ impl Circuit {
         // cards for levels they never instantiate (mos6inv.cir).
         let mut unsupported_models: HashMap<&str, String> = HashMap::new();
         let mut omodels: HashMap<&str, crate::ltra::LtraModel> = HashMap::new();
+        // KSPICE line models: `txl` cards that stay TXL, and the CPL
+        // models (`cpl` cards and the `txl` cards `inpdomod.c` turns
+        // into CPLs).
+        let mut ymodels: HashMap<&str, TxlCard> = HashMap::new();
+        let mut pmodels: HashMap<&str, crate::kspice::CplModel> = HashMap::new();
         let mut umodels: HashMap<&str, UrcModel> = HashMap::new();
         let mut jmodels: HashMap<&str, crate::jfet::JfetModel> = HashMap::new();
         let mut zmodels: HashMap<&str, crate::mes::MesModel> = HashMap::new();
@@ -123,6 +128,21 @@ impl Circuit {
                 "urc" => match urc_model(m, &mut notes) {
                     Ok(um) => {
                         umodels.insert(m.name.as_str(), um);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
+                "txl" => match txl_model(m, &mut notes) {
+                    Ok(TxlKind::Txl(card)) => {
+                        ymodels.insert(m.name.as_str(), card);
+                    }
+                    Ok(TxlKind::Cpl(cm)) => {
+                        pmodels.insert(m.name.as_str(), cm);
+                    }
+                    Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
+                },
+                "cpl" => match cpl_model(m, &mut notes) {
+                    Ok(cm) => {
+                        pmodels.insert(m.name.as_str(), cm);
                     }
                     Err(e) => problems.push(format!("model `{}`: {e}", m.name)),
                 },
@@ -1028,6 +1048,63 @@ impl Circuit {
                         &mut problems,
                     );
                 }
+                ir::Device::Txl { model, len, length } => {
+                    if let Some(card) = ymodels.get(model.as_str()) {
+                        if length.is_some() {
+                            notes.push(format!(
+                                "`{name}`: `length` on a Y card is ignored (ngspice-47's INP2Y \
+                                 reads only `len`)"
+                            ));
+                        }
+                        match txl_instance(&name, &el.nodes, card, *len) {
+                            Ok(specs) => {
+                                for spec in specs {
+                                    add(&mut ckt, spec, &mut problems);
+                                }
+                            }
+                            Err(e) => problems.push(e),
+                        }
+                    } else if let Some(cm) = pmodels.get(model.as_str()) {
+                        // `INP2Y` hands a CPL-typed model to `INP2P`,
+                        // which reads the card as a one-conductor P.
+                        add(
+                            &mut ckt,
+                            crate::circuit::Cpl {
+                                name,
+                                nodes: el.nodes.clone(),
+                                model: cm.clone(),
+                                len: len.or(*length),
+                            },
+                            &mut problems,
+                        );
+                    } else if nl.models.iter().any(|m| m.name == *model) {
+                        problems.push(format!("`{name}`: incorrect model type `{model}`"));
+                    } else {
+                        problems.push(format!(
+                            "`{name}`: unable to find definition of model `{model}`"
+                        ));
+                    }
+                }
+                ir::Device::Cpl { model, len } => {
+                    if let Some(cm) = pmodels.get(model.as_str()) {
+                        add(
+                            &mut ckt,
+                            crate::circuit::Cpl {
+                                name,
+                                nodes: el.nodes.clone(),
+                                model: cm.clone(),
+                                len: *len,
+                            },
+                            &mut problems,
+                        );
+                    } else if nl.models.iter().any(|m| m.name == *model) {
+                        problems.push(format!("`{name}`: incorrect model type `{model}`"));
+                    } else {
+                        problems.push(format!(
+                            "`{name}`: unable to find definition of model `{model}`"
+                        ));
+                    }
+                }
                 ir::Device::Behavioral { kind, expr } => add(
                     &mut ckt,
                     crate::circuit::Asrc {
@@ -1161,6 +1238,163 @@ fn ltra_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::ltra::Ltr
         }
     }
     Ok(lm)
+}
+
+/// A `.model … txl` card that stays a TXL model: the model and the
+/// `R`, `L`, `C` values `INP2Y` scans the card for (its 3-π fallback,
+/// see [`txl_instance`]).
+struct TxlCard {
+    model: crate::kspice::TxlModel,
+    r: f64,
+    l: f64,
+    c: f64,
+}
+
+/// What `inpdomod.c` makes of a `txl` card.
+enum TxlKind {
+    Txl(TxlCard),
+    Cpl(crate::kspice::CplModel),
+}
+
+/// `.model x txl(...)` (`TXLmPTable`: `R L C G LENGTH`, the `txl`
+/// flag). `inpdomod.c` picks the device type by `R/L` (`R` alone when
+/// `L` is zero): above 1.6e9 up to 1.6e10 the card becomes a CPL model
+/// (one conductor, `CPLmPTable` accepts the `txl` flag); above 1.6e10
+/// it stays TXL (the first `INPmakeMod` wins), and so below 1.6e9.
+fn txl_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<TxlKind, String> {
+    let mut tm = crate::kspice::TxlModel::default();
+    for p in &m.params {
+        let num = match p.value {
+            ParamValue::Num(v) => Some(v),
+            _ => None,
+        };
+        let need = || num.ok_or_else(|| format!("parameter {} needs a numeric value", p.name));
+        match p.name.as_str() {
+            "txl" => {}
+            "r" => tm.r = Some(need()?),
+            "l" => tm.l = Some(need()?),
+            "g" => tm.g = Some(need()?),
+            "c" => tm.c = Some(need()?),
+            "length" => tm.length = Some(need()?),
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    let r = tm.r.unwrap_or(0.0);
+    let l = tm.l.unwrap_or(0.0);
+    let ratio = if l != 0.0 { r / l } else { r };
+    if ratio > 1.6e9 && ratio <= 1.6e10 {
+        let v = |x: Option<f64>| x.map(|x| vec![x]);
+        return Ok(TxlKind::Cpl(crate::kspice::CplModel {
+            r: v(tm.r),
+            l: v(tm.l),
+            g: v(tm.g),
+            c: v(tm.c),
+            length: tm.length,
+        }));
+    }
+    Ok(TxlKind::Txl(TxlCard {
+        r,
+        l,
+        c: tm.c.unwrap_or(0.0),
+        model: tm,
+    }))
+}
+
+/// `.model x cpl(...)` (`CPLmPTable`): `R L C G` as vectors (a single
+/// number is a one-entry vector), `LENGTH`, the `cpl`/`txl` flags.
+fn cpl_model(m: &ir::Model, notes: &mut Vec<String>) -> Result<crate::kspice::CplModel, String> {
+    let mut cm = crate::kspice::CplModel::default();
+    for p in &m.params {
+        let vec = match &p.value {
+            ParamValue::Num(v) => Some(vec![*v]),
+            ParamValue::NumList(v) => Some(v.clone()),
+            _ => None,
+        };
+        let need = || {
+            vec.clone()
+                .ok_or_else(|| format!("parameter {} needs numeric values", p.name))
+        };
+        match p.name.as_str() {
+            "cpl" | "txl" => {}
+            "r" => cm.r = Some(need()?),
+            "l" => cm.l = Some(need()?),
+            "g" => cm.g = Some(need()?),
+            "c" => cm.c = Some(need()?),
+            "length" => match &p.value {
+                ParamValue::Num(v) => cm.length = Some(*v),
+                _ => return Err("parameter length needs one numeric value".into()),
+            },
+            other => notes.push(format!(
+                "model `{}`: unrecognized parameter ({other}) - ignored",
+                m.name
+            )),
+        }
+    }
+    Ok(cm)
+}
+
+/// One `Y` instance of a TXL-typed model (`INP2Y`). With a length and
+/// `R/L > 1.6e10` it is replaced by ngspice's "3-pi model for high
+/// resistance as fall back": three resistors of `3/(R·len)` ohms —
+/// the C's formula, the inverse of a third of the line resistance —
+/// through the internal nodes `txlnd1<name>`, `txlnd2<name>`, and
+/// capacitors `C·len/6`, `C·len/3`, `C·len/3`, `C·len/6` to the first
+/// reference node.
+fn txl_instance(
+    name: &str,
+    nodes: &[String],
+    card: &TxlCard,
+    len: Option<f64>,
+) -> Result<Vec<crate::circuit::Spec>, String> {
+    use crate::circuit::{Capacitor, Resistor, Spec, Txl};
+    if nodes.len() != 4 {
+        return Err(format!("`{name}`: a Y line takes 4 nodes"));
+    }
+    let lenval = len.or(card.model.length).unwrap_or(0.0);
+    if lenval != 0.0 && card.r != 0.0 && card.l != 0.0 && card.r / card.l > 1.6e10 {
+        let rval = 3.0 / (card.r * lenval);
+        let cval = card.c * lenval / 6.0;
+        let i1 = format!("txlnd1{name}");
+        let i2 = format!("txlnd2{name}");
+        let res = |k: usize, a: &str, b: &str| -> Spec {
+            Resistor {
+                name: format!("txlres{k}{name}"),
+                nodes: [a.to_string(), b.to_string()],
+                value: rval,
+            }
+            .into()
+        };
+        let cap = |k: usize, a: &str, v: f64| -> Spec {
+            Capacitor {
+                name: format!("txlcap{k}{name}"),
+                nodes: [a.to_string(), nodes[1].clone()],
+                value: v,
+                ic: None,
+            }
+            .into()
+        };
+        return Ok(vec![
+            res(1, &nodes[0], &i1),
+            res(2, &i1, &i2),
+            res(3, &i2, &nodes[2]),
+            cap(1, &nodes[0], cval),
+            cap(2, &i1, cval * 2.0),
+            cap(3, &i2, cval * 2.0),
+            cap(4, &nodes[2], cval),
+        ]);
+    }
+    Ok(vec![
+        Txl {
+            name: name.to_string(),
+            nodes: four(nodes),
+            model: card.model.clone(),
+            len,
+        }
+        .into(),
+    ])
 }
 
 /// `.model x npn/pnp(...)` → [`crate::bjt::BjtModel`], 3f5 names
@@ -2371,6 +2605,7 @@ fn device_kind_name(d: &ir::Device) -> &'static str {
         ir::Device::SwitchV { .. } | ir::Device::SwitchI { .. } => "the switch",
         ir::Device::TlineIdeal { .. } | ir::Device::TlineLossy { .. } => "the transmission line",
         ir::Device::Urc { .. } => "the URC line",
+        ir::Device::Txl { .. } | ir::Device::Cpl { .. } => "the KSPICE line",
         ir::Device::Behavioral { .. } => "the B source",
         ir::Device::SubcktCall { .. } => "an unexpanded subcircuit call",
         _ => "this device",

@@ -1,0 +1,21 @@
+KSPICE TXL: propagation fit with a complex pole pair
+* Coverage: the `ifImg` branch of the TXL: `exp_find_roots` finds two
+* complex poles of the propagation Pade fit ("***** Two Imaginary
+* Roots." on ngspice's stdout), `get_h3` builds the voltage terms with
+* the complex residue, and the load convolves the pair as one complex
+* exponential (h3 terms 4/5, h2 terms 1/2) and counts term 4 twice.
+* Of six such fits in a grid of R, G and length this is the one whose
+* pair is stable (real part -7.9e6 1/s at this time scale); the other
+* five have a right-half-plane pair and diverge in ngspice too
+* (docs/kspice-lines.md). L and C are ten times those of the grid,
+* which keeps the fit (R/L*tau and G/C*tau unchanged) and stretches the
+* delay to 6.5 ns, for the accuracy ruler. Spice3 profile. Written for
+* the Dune port of ngspice-47's txl model.
+.options compat=spice3
+v1 in 0 pulse(0 1 2.0003n 2n 2n 20n 100n)
+r1 in a 50
+y1 a 0 b 0 ymod
+r2 b 0 150
+.model ymod txl R=14 L=8.972e-8 G=0.02 C=4.68e-12 length=10
+.tran 0.5n 60n 0 0.0503n
+.end

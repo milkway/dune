@@ -86,6 +86,7 @@ impl Circuit {
         }
 
         // Operating point + small-signal parameter pass (`PZan`).
+        engine.check_small_signal()?;
         engine.set_kind(AnKind::DcOp, false);
         engine.op(opts)?;
         engine.load_all_public(InitMode::Smsig, opts);

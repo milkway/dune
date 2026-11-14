@@ -8,3 +8,4 @@ ltra_3_gear|unmeasured|already runs at the refined step; gated against ngspice i
 tra_pulse|0.25|measured 0.18, close to the default cap
 uic_getic|0.25|measured 0.17, close to the default cap
 vbic_uic|0.4|measured 0.316 at TSTEP 0.5 ns: a UIC start sets only the junction voltages, the internal nodes (collCI, baseBI) start at 0 V, and that first-step transient does not shrink with TMAX (0.538 at TSTEP 0.25 ns, the same with q1 alone)
+cpl_3line|unmeasured|the CPL history is kept in integer picoseconds (cplload.c): refining its TMAX of 200 ps, successive runs differ by 10.4, 1.23, 0.29, 0.52, 2.27 and 4.95 rulers (/1-/5, /5-/10, /10-/20, /20-/40, /40-/80, /80-/160) - they stop converging below ~5 ps steps, and ngspice-47 itself at TMAX/80 and /160 differs by the same 4.95 (Dune at /80 = ngspice at /80 within 3e-13 V); fidelity is gated by the golden check

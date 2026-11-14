@@ -117,6 +117,9 @@ licença completos estão no `NOTICE` da raiz do repositório):
   foram escritos para o Dune.
 - `regress/vbic_*.cir`: escritos para o Dune (cartões próprios, sem
   modelo de fabricante).
+- `regress/txl_*.cir`, `regress/cpl_*.cir`: escritos para o Dune
+  (cartões próprios; as matrizes do par acoplado seguem a ordem de
+  grandeza do exemplo de CPL do manual do ngspice).
 - `pss/osc_colpitts.cir`: circuito e cartão `.pss` do exemplo
   `examples/pss/colpitt_osc_pss.cir` do ngspice-47 (anotado no deck).
 - `regress/ltra_*_gear.cir`, `mosamp2_fine.cir`, `schmitt_fine.cir`,

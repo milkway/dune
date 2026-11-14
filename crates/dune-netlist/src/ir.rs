@@ -139,6 +139,22 @@ pub enum Device {
     TlineIdeal { params: Vec<Param> },
     /// `O`: lossy transmission line, 4 nodes + LTRA model.
     TlineLossy { model: Ident },
+    /// `Y`: ngspice's KSPICE lossy line, `YXXX N1 GND1 N2 GND2 MNAME
+    /// <LEN VALUE>` (`INP2Y`). `nodes` keeps all four names, the two
+    /// reference nodes included (the C inserts them into the node
+    /// table but binds only `N1` and `N2`). `len` is the instance
+    /// length after `len`; `length` the value after a `length`
+    /// keyword, which `INP2Y` ignores but `INP2P` — reached when the
+    /// model turns out to be a CPL — honours.
+    Txl {
+        model: Ident,
+        len: Option<f64>,
+        length: Option<f64>,
+    },
+    /// `P`: ngspice's KSPICE coupled lines, `PXXX N1 … Nk GND1 M1 …
+    /// Mk GND2 MNAME <LENGTH|LEN VALUE>` (`INP2P`); `nodes` holds the
+    /// `2k + 2` names in card order.
+    Cpl { model: Ident, len: Option<f64> },
     /// `U`: uniform distributed RC, 3 nodes + URC model.
     Urc { model: Ident, params: Vec<Param> },
     /// `B`: non-linear dependent source (`ASRC`), `V=EXPR` or

@@ -1,0 +1,32 @@
+KSPICE lines at the operating point: CPL and TXL in DC
+* Coverage: the DC load of the CPL (MODEDC): per conductor a series
+* resistance Rm(i,i)*len from the clamped model diagonal (line 2 of p2
+* has R=0, raised to 1e-4 ohm/m), 0.1*gmin across each conductor's
+* node block, all 2k branch currents; a 3-conductor CPL feeding a
+* 2-conductor one, and a TXL in the same circuit. Written for the
+* Dune port of ngspice-47's cpl and txl models.
+v1 in 0 dc 1
+v2 in2 0 dc -0.5
+r1 in a1 50
+r2 in2 a2 50
+r3 0 a3 50
+p1 a1 a2 a3 0 b1 b2 b3 0 p3mod
+r4 b3 0 50
+p2 b1 b2 0 c1 c2 0 p2mod
+r5 c1 0 100
+r6 c2 0 100
+y1 b3 0 d 0 ymod
+r7 d 0 75
+.model p3mod cpl length=0.1
++ R=2 0.1 0.05 2 0.1 2
++ L=3.83e-7 5.79e-8 2.1e-8 3.83e-7 5.79e-8 3.83e-7
++ G=1e-3 -1e-4 0 1e-3 -1e-4 1e-3
++ C=1.15e-10 -1.04e-11 -3e-12 1.15e-10 -1.04e-11 1.15e-10
+.model p2mod cpl length=0.5
++ R=3 0 0
++ L=3.83e-7 5.79e-8 3.83e-7
++ G=0 0 0
++ C=1.15e-10 -1.04e-11 1.15e-10
+.model ymod txl R=12.45 L=8.972e-9 G=0.01 C=0.468e-12 length=1
+.op
+.end

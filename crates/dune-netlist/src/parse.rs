@@ -24,7 +24,8 @@ const MODEL_TYPES: &[&str] = &[
     "pmf",
     // ngspice-47's power MOSFET (`inpdomod.c`; `vdmosn`/`vdmosp` are
     // the forms its front end rewrites `vdmos` into).
-    "vdmos", "vdmosn", "vdmosp",
+    "vdmos", "vdmosn", "vdmosp", // ngspice-47's KSPICE lines (`inpdomod.c`).
+    "txl", "cpl",
 ];
 
 /// Whether a `.model` type token names ngspice's VDMOS
