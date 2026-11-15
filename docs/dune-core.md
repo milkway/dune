@@ -1183,6 +1183,29 @@ porque o consumidor é outro crate (`dune-wasm`).
   dos outros níveis; `TEMP=` de instância fica. Sonda
   `regress/dctemp` (`.dc temp -25 125 25 v1 1 3 1`: diodo, BJT, R
   com TC e um R com `temp=` fixo) PASS a 0.475.
+- **Reexpansão por temperatura** (D-0075, `retemp.rs`): um netlist
+  que lê `temper` (`Netlist::uses_temper`) fica guardado no `Circuit`
+  (`Circuit::temper`, privado, com a temperatura em kelvin em que foi
+  avaliado — a das `.options`/`.temp` do deck, `Options::apply`). Todo
+  `Circuit::build` com `opts.temp` diferente reexpande o deck ali
+  (`Netlist::at_temperature`), elabora de novo, carrega o que o
+  chamador mudou depois (`Circuit::alter` fica registrado e é
+  reaplicado; specs acrescentados com `add`, `.nodeset`/`.ic` e o canal
+  de warm start são levados) e exige os mesmos elementos na mesma
+  ordem. Cobre, num só ponto: cada ponto do `.dc temp` (o fecho
+  `retemp` do `dc.rs`, que ainda confere as incógnitas contra as do
+  primeiro ponto, e `Engine::replace_devices`, que passou a exigir o
+  padrão da matriz entrada a entrada), `Session::set_temp`,
+  `Options::temp` mudado pelo chamador (os bindings) e o `temp`
+  varrido de `sweep` (que, com `temper`, reexpande uma vez por rodada e
+  aplica os valores varridos com `Circuit::alter`). Deck sem `temper`
+  não guarda nada: caminho antigo, bit a bit (os 287 decks do corpus,
+  rawfile antes/depois idênticos byte a byte). Custo: uma leitura do
+  deck por ponto — `.dc temp` de 101 pontos no `res_high_po` do sky130
+  5,3 s (ponto único 0,12 s; ngspice 15,4 s), gf180 0,03–0,05 s; um
+  `.dc temp` com mais de 10 000 reexpansões é recusado antes do
+  primeiro ponto (`MAX_REEXPANSIONS`). Oráculo:
+  `regress/temper_sweep_{model,value,behav,tc,subckt}` PASS.
 - **`keepopinfo`** (`cktsopt.c`, IF_FLAG): `Options::keepopinfo`;
   `Circuit::run` antepõe o op (`self.op`, idêntico ao op da
   análise) com o nome do C — 3f5: `.ac` "AC Operating Point"

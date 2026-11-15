@@ -65,7 +65,12 @@ pub fn sweep_parallel(nl, opts, params, runs, threads: usize) -> Result<Vec<Swee
 ```
 
 `opts` já traz o `.options` do deck e os overrides do chamador; um
-`temp` varrido substitui `opts.temp` na rodada.
+`temp` varrido substitui `opts.temp` na rodada. Num deck que lê `temper`
+(`Netlist::uses_temper`, D-0075) a rodada reexpande o netlist na sua
+temperatura (`Netlist::at_temperature`) e aplica os outros valores com
+`Circuit::alter` em vez de escrevê-los no IR — mesmos números, e um
+cartão `.dc temp` do deck, que reexpande de novo a cada ponto, os
+mantém.
 
 ### Python (`spice`)
 

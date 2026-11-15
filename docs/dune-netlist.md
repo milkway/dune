@@ -404,20 +404,47 @@ seu escopo e só é lido daquele escopo; a leitura vinda de corpo de
 `.func` dentro de um `.param` é recusada como no ngspice. Erros sempre
 com span e dizendo por quê.
 
-**Varredura de temperatura.** O parser roda uma vez, antes do motor; o
-`Circuit` não guarda o texto do deck para reexpandir, então não há
-como reavaliar `temper` por ponto sem API nova. Um `.dc temp` num deck
-que **usa** `temper` (num dispositivo ou modelo; um `.param` que
-ninguém usa não conta) é erro com o span do `.dc`, e todo deck que usa
-`temper` recebe um aviso de que ele foi avaliado uma vez, a T °C — vale
-também para uma troca de `temp` depois do parse (as opções de motor do
-wasm/R/Python). Uma solução completa precisaria de uma API que
-reexpanda o netlist por temperatura: por exemplo
-`dune_netlist::parse_*_at(…, temperature)` (ou uma opção no
-`parse_with_loader`) e, no `dune-core`, um laço de `.dc temp` que, em
-vez de só trocar `CKTtemp`, reconstrua o `Circuit` a partir do texto
-guardado (o `Session` já reconstrói circuitos; faltaria a temperatura
-como entrada do parser). Não feito: é mudança de API pública.
+**Varredura de temperatura: reexpansão (D-0075).** O ngspice-47
+reavalia todo `{…temper…}` de `.model` e de linha de dispositivo (e a
+fonte B lê `temper` como `CKTtemp`) a **cada** temperatura que simula:
+`inp_evaluate_temper` (`frontend/inp.c`, Modified BSD) é chamado pelo
+`cktdojob.c` antes de toda análise e pelo `dctrcurv.c` a cada ponto de
+`.dc temp`. Sondas `.claude/scratch/temper-seed-probes/t1` (no
+worktree da leva; `.dc temp 0 100 25`): `.model` direto, por `.param`
+e por `.func` (`tm_model`, `tm_model_param`, `tm_func_model`,
+`tm_model_vto`), valor de instância (`tm_dio_area`, `tm_mos_w`),
+R/C/L que lê `temper` (vira fonte B: `tm_r_value`, `tm_param_r`,
+`tm_func`, `tm_behav_v`, `tm_cap_value`), `.param` local e padrão de
+`.subckt` (`tm_sub_local`, `tm_sub_default`, `tm_sub_model`), `tc1`/`tc2`
+de comportamental (`tm_behav_tc`, `tm_behav_tc_temper`) — **todos**
+seguem o ponto; `.options temp=50` não interfere (`tm_opt_temp`); o
+`temp=`/`dtemp=` da instância não muda o `temper` também na varredura
+(`tm_dio_area_temp`: o dispositivo fica a 60 °C e a área segue o ponto;
+`tm_dio_area_dtemp`). Condição de `.if` com `temper` segue erro (`t2`),
+então a topologia não depende da temperatura.
+
+No Dune o `Netlist` guarda os cartões já lidos (inclusões resolvidas —
+nada é relido do disco; o wasm não tem sistema de arquivos) quando o
+deck **usa** `temper` (num dispositivo ou modelo; um `.param` que
+ninguém usa não conta) ou um `tc1`/`tc2` de comportamental, e responde
+`Netlist::uses_temper()`. `Netlist::at_temperature(t)` roda a leitura
+de novo sobre esses cartões com `temper` = `t` (a pré-passada que acha
+a temperatura do deck é pulada) e devolve `(Netlist, Vec<Diagnostic>)`:
+o netlist reexpandido leva `temp = t` como última opção (é simulado na
+temperatura em que foi avaliado) e os diagnósticos têm spans do
+`SourceMap` da leitura original. Deck sem `temper`/`tc` não guarda nada
+e `at_temperature` devolve uma cópia (com a opção). O motor reexpande
+sozinho (`dune-core/src/retemp.rs`, seção em `docs/dune-core.md`).
+Sumiram o aviso de "avaliado uma vez" e a recusa do `.dc temp`.
+
+Desvios (`KNOWN_DIFFS.md`): o ngspice devolve o valor reavaliado de
+`.model`/instância como texto `%g` (6 algarismos: `tm_model` dá
+4,08642 onde o exato é 4,0864175); o Dune guarda o valor exato. Binning
+cujo `w`/`l` lê `temper`: o ngspice apaga o valor antes de escolher o
+modelo e para ("could not find a valid modelname", `tm_bin_w`); o Dune
+escolhe o bin a cada temperatura. Uma reexpansão que muda o conjunto
+de elementos ou de incógnitas (nó interno de MOS que some quando
+`rd={…temper…}` zera) é erro.
 
 **R, C e L cujo valor lê `temper`** (integração com a reescrita
 comportamental, 2026-11-14). O ngspice-47 testa o
@@ -437,9 +464,9 @@ gatilho, **ou** nomeia um parâmetro que depende de `temper` no escopo
 dele, **ou** chama um `.func` cujo corpo (transitivamente) tem o
 gatilho ou um tal parâmetro (`behav::wanted`); dentro da expressão
 `temper` vale a temperatura do circuito, com as mesmas regras de escopo
-desta seção, o aviso de avaliação única e o erro com `.dc temp`
-(`ParamEnv::read_for_behav`). Os `tc1`/`tc2` de um R/C/L comportamental
-contam como leitura de temperatura para o aviso e para o `.dc temp`.
+desta seção (`ParamEnv::read_for_behav`), e o deck é reexpandido a cada
+temperatura (D-0075). Os `tc1`/`tc2` de um R/C/L comportamental contam
+como leitura de temperatura (`Netlist::uses_temper`).
 Os testes `values_where_ngspice_gives_them_t1_t2` e
 `circuit_temperature_t1` leem o valor de um R assim no divisor da fonte
 B (`tests/temper.rs::r`).
@@ -967,9 +994,9 @@ numa fonte `B` do próprio deck. Funções:
   exato, inclusive no empate; a derivada no empate exato é a média das
   duas, no ngspice a de um dos lados);
 - `temper`: a temperatura do circuito, como a fonte B do ngspice a lê
-  (`CKTtemp − CONSTCtoK`), avaliada uma vez, com as regras da seção
-  "`temper`" (parâmetro que depende dele só no próprio escopo; aviso;
-  `.dc temp` recusado). Sondas `b1 r_temper_v_27/85`, `b2
+  (`CKTtemp − CONSTCtoK`), com as regras da seção "`temper`"
+  (parâmetro que depende dele só no próprio escopo); a cada
+  temperatura simulada o deck é reexpandido (D-0075). Sondas `b1 r_temper_v_27/85`, `b2
   r_sub_rtemp`: iguais ao ngspice a ≤ 5e-13;
 - funções do usuário (`.func`): expandidas na árvore (seção "Funções do
   usuário");
@@ -994,16 +1021,12 @@ B do R multiplica depois. O Dune dobra esse fator, calculado à
 temperatura do circuito, na expressão (`behav::tc_factor`) — exato na
 temperatura fixa: sondas `b1 r_tc_*` a ≤ 1e-15 relativo; `c_tc_85`, `b2
 c_charge_tc`, `l_m_tc` PASS no comparador do oráculo, e o controle
-negativo sem o fator FALHA (margens 8,8 e 8,9). Como o `temper`, conta
-para o aviso de avaliação única e recusa `.dc temp` — que o ngspice
-varre, recalculando o fator a cada ponto. O `temp=`/`dtemp=` da
+negativo sem o fator FALHA (margens 8,8 e 8,9). Como o `temper`, faz o deck
+ser reexpandido a cada temperatura (D-0075), como o ngspice recalcula o
+fator a cada ponto de `.dc temp`. O `temp=`/`dtemp=` da
 instância é descartado como no ngspice (`r_tc_85_temp`). Como o
 `strstr` do ngspice, vale o primeiro `tc1=`/`tc2=`/` m=` **em qualquer
-lugar** depois dos nós, também antes da expressão. Uma solução que
-varra a temperatura precisaria de API pública: `Device::Behavioral`
-com `tc: Option<(f64, f64, bool)>` (e o motor aplicando o fator com
-`CKTtemp`) mais uma folha `Expr::Temper` lida pelo motor — não feita.
-`noisy=1`/`noise=1` (o subcircuito de ruído extra do ngspice):
+lugar** depois dos nós, também antes da expressão. `noisy=1`/`noise=1` (o subcircuito de ruído extra do ngspice):
 recusado. Outras palavras-chave: aviso, e descartadas **sem avaliar**,
 como o ngspice descarta (um `v()` no valor de uma delas não é erro). Num subcircuito multiplicado por um `m` de linha `X`: recusado
 (a ordem entre `inp_fix_subckt_multiplier` e `inp_compat` decide qual
