@@ -215,6 +215,7 @@ dependencies = [
 name = "dune-netlist"
 version = "0.7.0"
 dependencies = [
+ "libm",
  "thiserror 2.0.21",
 ]
 
