@@ -13,8 +13,10 @@
 spice runs SPICE3 circuit netlists from R and hands the results back
 as tidy data. The engine is [Dune](https://milkway.github.io/dune/), a
 circuit simulator written in Rust and derived from Berkeley SPICE3f5
-(with BSIM3v3.3, `.sp`, `.measure` and several revised routines derived
-from ngspice-47), checked circuit by circuit against ngspice.
+(with BSIM3v3.3, BSIM4 4.8.3, VDMOS, VBIC, the KSPICE transmission
+lines, the extended diode, `.sp`, `.measure`, `.four` and several
+revised routines derived from ngspice-47), checked circuit by circuit
+against ngspice.
 
 - **Every SPICE3f5 analysis**: operating point, DC sweep, transient,
   AC, pole-zero, noise, distortion, transfer function and sensitivity,
@@ -116,11 +118,14 @@ implementation behind `spice_pic()`.
 
 The engine is a derived work: it is translated from SPICE3f5
 (© 1985–1991 The Regents of the University of California; Thomas L.
-Quarles and many others at UC Berkeley) and, for BSIM3v3.3, the `.sp`
-analysis, the operating-point fallback chain, `.measure`, the transient
-noise sources and the revisions of several device routines, from
-ngspice-47 (the ngspice team and contributors; BSIM3v3.3.0 by the UC
-Berkeley BSIM Research Group). The file `inst/COPYRIGHTS` of the package
+Quarles and many others at UC Berkeley) and, for BSIM3v3.3, BSIM4
+4.8.3, the VDMOS and VBIC models, the KSPICE transmission lines, the
+extended diode, the `.sp` and `.four` analyses, the operating-point
+fallback chain, `.measure`, the transient noise sources and the
+revisions of several device routines, from ngspice-47 (the ngspice team
+and contributors; BSIM3v3.3.0 and BSIM4 4.8.3 by the UC Berkeley BSIM
+Research Group, the latter under the Educational Community License
+2.0). The file `inst/COPYRIGHTS` of the package
 ([NOTICE](https://github.com/milkway/dune/blob/main/NOTICE) in the repository) lists the upstream files
 and reproduces their copyright and licence notices.
 

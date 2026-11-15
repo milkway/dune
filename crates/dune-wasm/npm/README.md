@@ -3,8 +3,9 @@
 > Package name is provisional.
 
 The [Dune](https://github.com/milkway/dune) circuit simulator — a Rust port of
-Berkeley SPICE3f5, with parts derived from ngspice-47 (BSIM3v3.3, `.sp`,
-`.measure`) — compiled to WebAssembly. Run a SPICE3 netlist, or extract
+Berkeley SPICE3f5, with parts derived from ngspice-47 (BSIM3v3.3, BSIM4
+4.8.3, VDMOS, VBIC, the KSPICE transmission lines, the extended diode,
+`.sp`, `.measure`, `.four`) — compiled to WebAssembly. Run a SPICE3 netlist, or extract
 the netlist of an [rpic](https://github.com/milkway/rpic-lang) schematic figure
 (`spice = 1`) and simulate it. Browser and Node.
 

@@ -32,10 +32,19 @@ references:
     authors:
       - name: "The ngspice team"
     url: "https://ngspice.sourceforge.io/"
-    notes: "Numerical reference of Dune and source of the modules listed in the NOTICE file (BSIM3v3.3, .sp, the operating-point fallback chain, .measure, transient noise sources)."
+    notes: "Numerical reference of Dune and source of the modules listed in the NOTICE file (BSIM3v3.3, BSIM4 4.8.3, VDMOS, VBIC, the KSPICE transmission lines, the extended diode, .sp, .four, the operating-point fallback chain, .measure, transient noise sources)."
   - type: software
     title: "BSIM3v3.3.0"
     authors:
       - name: "The Regents of the University of California (UC Berkeley BSIM Research Group)"
     year: 2005
+    notes: "MOSFET model, translated from the code distributed with ngspice-47."
+  - type: software
+    title: "BSIM4"
+    version: "4.8.3"
+    authors:
+      - name: "University of California (UC Berkeley BSIM Research Group)"
+    year: 2025
+    url: "https://www.bsim.berkeley.edu/models/bsim4/"
+    license: ECL-2.0
     notes: "MOSFET model, translated from the code distributed with ngspice-47."

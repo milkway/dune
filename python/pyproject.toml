@@ -13,7 +13,7 @@ description = "Circuit simulation for Python on Dune, an engine derived from Ber
 readme = "README.md"
 license = "BSD-3-Clause AND ECL-2.0"
 # Both ship in the sdist and in the wheels (dist-info/licenses/):
-# NOTICE credits SPICE3f5, ngspice and BSIM3 and reproduces their
+# NOTICE credits SPICE3f5, ngspice, BSIM3 and BSIM4 and reproduces their
 # copyright and licence notices.
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "André Leite", email = "leite@castlab.org" }]

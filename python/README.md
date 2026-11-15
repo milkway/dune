@@ -3,8 +3,10 @@
 `pip install spice3` → `import spice`.
 
 Circuit simulation for Python, powered by **Dune** — a Rust engine
-derived from Berkeley **SPICE3f5** (with BSIM3v3.3, `.sp`, `.measure`
-and several revised routines derived from **ngspice-47**) and validated
+derived from Berkeley **SPICE3f5** (with BSIM3v3.3, BSIM4 4.8.3, VDMOS,
+VBIC, the KSPICE transmission lines, the extended diode, `.sp`,
+`.measure`, `.four` and several revised routines derived from
+**ngspice-47**) and validated
 circuit-by-circuit against **ngspice** as numerical oracle.
 
 > **Status: pre-alpha.** This release reserves the package name while

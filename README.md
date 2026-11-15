@@ -7,10 +7,11 @@ clean engine you can call from Python, R, JavaScript or C.
 
 Dune is a derived work: the engine is a translation of the SPICE3f5
 sources of the University of California, Berkeley, and some parts
-(BSIM3v3.3, the `.sp` analysis, the operating-point fallback chain,
-`.measure`, the transient noise sources and the revisions of several
-device routines) are derived from [ngspice](https://ngspice.sourceforge.io/)
-release 47. See [Credits and lineage](#credits-and-lineage) and
+(the BSIM3v3.3 and BSIM4 4.8.3 models, the VDMOS and VBIC models, the
+KSPICE transmission lines, the extended diode, the `.sp`, `.measure` and
+`.four` analyses, the operating-point fallback chain, the transient
+noise sources and the revisions of several device routines) are derived
+from [ngspice](https://ngspice.sourceforge.io/) release 47. See [Credits and lineage](#credits-and-lineage) and
 [NOTICE](NOTICE).
 
 **Site: [milkway.github.io/dune](https://milkway.github.io/dune/)** ·
@@ -58,9 +59,15 @@ tolerances. The sources of both diagrams are pic figures in
 - **Every SPICE3f5 device and analysis**: R C L K, V/I sources, E F G H,
   diode, BJT (Gummel–Poon), MOS levels 1–6, BSIM1/2, JFET, MESFET,
   switches, ideal and lossy (LTRA) transmission lines, `.subckt` — and
-  `.OP .DC .AC .TRAN .PZ .NOISE .DISTO .TF .SENS`. Plus BSIM3v3.3 and
-  S-parameter analysis (`.sp`), both translated from the ngspice-47
-  sources.
+  `.OP .DC .AC .TRAN .PZ .NOISE .DISTO .TF .SENS`.
+- **What modern decks need, from ngspice-47**: BSIM3v3.3 and BSIM4
+  4.8.3, the VDMOS power MOSFET, the VBIC bipolar transistor, the KSPICE
+  lossy and coupled lines (`Y`, `P`), the diode beyond the SPICE3 card
+  (`LEVEL=3`), S-parameters (`.sp`), `.four`, `.measure` — and the
+  netlist language of the open PDKs (`.lib` sections, parameter
+  expressions, subcircuit parameters, binning, `.func`, `.if`, `temper`,
+  behavioural R/C/L, `agauss` with `.options seed`), so the gf180mcu and
+  sky130 libraries are read as shipped.
 - **Oracle-tested**: nothing ships until every corpus circuit matches
   pinned ngspice-47 goldens point by point, at SPICE's own tolerances
   (`reltol`/`abstol`/`vntol`). Deliberate divergences are documented in
@@ -150,7 +157,16 @@ Dune exists because of the work of others, and is derived from it:
 - **ngspice** — the maintained successor of SPICE3f5, by the ngspice
   team and contributors (Modified BSD licence). Dune is validated
   against ngspice-47, and the following are derived from its sources:
-  BSIM3v3.3 (`spicelib/devices/bsim3`), the S-parameter analysis `.sp`
+  BSIM3v3.3 (`spicelib/devices/bsim3`) and BSIM4 4.8.3
+  (`spicelib/devices/bsim4`), the VDMOS power MOSFET (`devices/vdmos`,
+  Holger Vogt and Dietmar Warning), the VBIC bipolar transistor
+  (`devices/vbic`; model by Colin McAndrew, implementation by Dietmar
+  Warning), the KSPICE lossy and coupled transmission lines
+  (`devices/txl`, `devices/cpl`, Charles Hough), the diode extensions
+  and `LEVEL=3` (`devices/dio`, as revised by Paolo Nenzi, Dietmar
+  Warning and Arpad Buermen), the Fourier analysis `.four`
+  (`fourier.c`, Wayne A. Christopher), the rewriting of behavioural R,
+  C and L into B sources (`inpcom.c`), the S-parameter analysis `.sp`
   (`span.c`, Alessio Cacciatori), the operating-point fallback chain
   (`cktop.c`, with Alan Gillespie's gmin and source stepping, and
   `optran.c`, Holger Vogt), BSIM1/BSIM2 noise (`b1noi.c`, `b2noi.c`,
@@ -163,6 +179,16 @@ Dune exists because of the work of others, and is derived from it:
   California; developed by the UC Berkeley BSIM Research Group
   (JianHui Huang, Min-Chie Jeng, Mansun Chan, Gary W. Ng, Weidong Liu,
   Xuemei Xi).
+- **BSIM4 4.8.3** — © 2025 University of California; developed by the
+  UC Berkeley BSIM Research Group (project directors Sayeef Salahuddin
+  and Chenming Hu; developers listed at
+  <https://www.bsim.berkeley.edu/models/bsim4/auth_bsim4/>), under the
+  Educational Community License 2.0. Only version 4.8.3 is used.
+
+The parameter language of the netlist (`.param` expressions, subcircuit
+parameters, `.func`, `.if`, `temper`, the random functions) was written
+from the ngspice manual and from the observed behaviour of ngspice-47,
+not from its implementation.
 
 [NOTICE](NOTICE) lists the upstream files module by module and
 reproduces their copyright and licence notices; it ships with every
