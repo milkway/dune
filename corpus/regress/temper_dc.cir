@@ -1,8 +1,8 @@
 temper under the .temp card, in a dc sweep of a source
 * written for Dune (Fase 8, G7 of docs/pdk-parser.md; probes t1/t2 in
 * ngspice-47): the .temp card wins over .options temp, and a model
-* parameter and a device value follow it. The sweep is over a source;
-* a .dc temp sweep with temper is refused (temper is evaluated once).
+* parameter and a device value follow it. The sweep is over a source
+* (the .dc temp sweeps are the temper_sweep_* decks, D-0075).
 .options temp=0
 .temp 75
 .model rm r rsh={temper*10}

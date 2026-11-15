@@ -1,0 +1,11 @@
+temper in a behavioural R that reads v() under a .dc temp sweep
+* written for Dune (D-0075; probe temper-seed-probes t1 tm_behav_v,
+* behav-probes b1 r_dcsweep_v): the B source ngspice-47 makes of the
+* resistor reads temper as CKTtemp at every point.
+i1 0 1 1m
+r1 1 0 r={1k*(1+temper/100)*(1+0.1*v(1))}
+v2 2 0 1
+r2 2 3 r={500*(1+temper*temper*1e-5)+100*v(3)}
+r3 3 0 1k
+.dc temp -40 125 5
+.end

@@ -1,0 +1,16 @@
+temper inside subcircuits under a nested .dc sweep with temp outer
+* written for Dune (D-0075; probes temper-seed-probes t1 tm_sub_local,
+* tm_sub_default, tm_sub_model): a body .param, a .subckt default and
+* a local .model that read temper follow each temperature point; the
+* inner level sweeps a source, the outer one the temperature.
+.subckt seg a b w=1 tc=1e-3 rt={1+tc*(temper-27)}
+.param rloc={100*rt/w}
+.model rl r rsh={50*(1+temper/400)}
+r1 a m {rloc}
+r2 m b rl l=2 w=1
+.ends
+v1 1 0 1
+x1 1 2 seg w=2
+x2 2 0 seg w=1 tc=2e-3
+.dc v1 0 2 1 temp -40 120 40
+.end

@@ -1,0 +1,11 @@
+tc1/tc2 on behavioural resistors under a .dc temp sweep
+* written for Dune (D-0075; probes temper-seed-probes t1 tm_behav_tc,
+* tm_behav_tc_temper): the B source multiplies by 1 + tc1*D + tc2*D^2
+* with D = T - 27 C (ASRCload), recomputed at every point.
+i1 0 1 1m
+r1 1 0 r={1k*(1+0.1*v(1))} tc1=1e-3 tc2=1e-5
+v2 2 0 1
+r2 2 3 r={500+0*v(3)} tc1=-2e-3
+r3 3 0 r={1k+temper} tc1=1e-3 tc2=-1e-6
+.dc temp -40 125 5
+.end

@@ -1,0 +1,16 @@
+temper in device values under a .dc temp sweep
+* written for Dune (D-0075; probes temper-seed-probes t1 tm_dio_area,
+* tm_mos_w, tm_r_value, tm_param_r): device values that read temper
+* (directly or through a .param) follow each temperature point. The
+* resistor becomes a behavioural B source (ngspice's inp_compat), the
+* diode area and the MOS width are altered by inp_evaluate_temper.
+.param rv={200+temper*1.5}
+.model dm d is=1e-14
+.model nm nmos level=1 vto=0.6 kp=1e-4
+i1 0 1 1m
+r1 1 2 {rv}
+d1 2 0 dm area={1+temper/200}
+i2 0 3 20u
+m1 3 3 0 0 nm w={2u+temper*5n} l=1u
+.dc temp -40 125 5
+.end

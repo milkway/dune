@@ -1,0 +1,15 @@
+temper in .model cards under a .dc temp sweep
+* written for Dune (D-0075; probes temper-seed-probes t1 tm_model,
+* tm_model_vto): ngspice-47 re-evaluates every {..temper..} of a
+* .model card at each temperature point (inp_evaluate_temper from
+* dctrcurv.c); Dune re-expands the deck there.
+.model rm r rsh={10+temper*0.125}
+.model dm d is={1e-14*(1+temper/50)} n=1.2
+.model nm nmos level=1 vto={0.6+temper*1e-3} kp=1e-4
+i1 0 1 1m
+r1 1 2 rm l=2 w=1
+d1 2 0 dm
+i2 0 3 20u
+m1 3 3 0 0 nm w=2u l=1u
+.dc temp -40 125 5
+.end
