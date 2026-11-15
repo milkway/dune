@@ -270,3 +270,52 @@ fn parallel_sweep_is_bit_identical_to_sequential() {
         assert_runs_bits(&seq, &par);
     }
 }
+
+/// A seeded deck (D-0075) whose draws reach a model, an instance, a
+/// subcircuit and a value that reads `temper`.
+fn seeded_deck() -> String {
+    "seeded mismatch\n.options seed=21\n.param p=agauss(1k,100,3) q=aunif(1,0.05)\n\
+     .model dm d is={1e-14*q}\n.subckt seg a b\nr1 a b {p}\n.ends\n\
+     v1 1 0 2\nx1 1 2 seg\nx2 2 3 seg\nd1 3 0 dm area={q}\nr9 3 0 {p+temper}\n\
+     .op\n.dc v1 0 2 0.5\n.end\n"
+        .to_string()
+}
+
+#[test]
+fn a_seeded_deck_is_reproducible() {
+    // Same seed, same bits; another seed (with_seed), other numbers.
+    let a = single(&parse(&seeded_deck()));
+    let b = single(&parse(&seeded_deck()));
+    for (x, y) in a.iter().zip(&b) {
+        assert_bits(x, y, "same seed");
+    }
+    let (other, _) = parse(&seeded_deck()).with_seed(22);
+    let c = single(&other);
+    assert_ne!(
+        format!("{:?}", a[0].data),
+        format!("{:?}", c[0].data),
+        "another seed draws other numbers"
+    );
+    // Monte Carlo by seed: run i = with_seed(base + i); with_seed(21)
+    // is the deck itself.
+    let (same, _) = parse(&seeded_deck()).with_seed(21);
+    for (x, y) in a.iter().zip(&single(&same)) {
+        assert_bits(x, y, "with_seed(21)");
+    }
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn a_seeded_sweep_is_thread_count_independent() {
+    let base = parse(&seeded_deck());
+    let params: Vec<SweepParam> = vec!["v1".parse().unwrap(), "temp".parse().unwrap()];
+    let rows: Vec<Vec<f64>> = (0..9)
+        .map(|i| vec![1.0 + 0.1 * i as f64, -40.0 + 20.0 * i as f64])
+        .collect();
+    let opts = options(&base);
+    let seq = sweep(&base, &opts, &params, &rows).unwrap();
+    for threads in [1, 2, 3] {
+        let par = dune_core::sweep_parallel(&base, &opts, &params, &rows, threads).unwrap();
+        assert_runs_bits(&seq, &par);
+    }
+}

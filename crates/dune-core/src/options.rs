@@ -473,20 +473,31 @@ impl Options {
                 },
                 // ngspice-47 `inp.c`: `option seed=val|random`; a
                 // value that `atoi` makes non-positive is skipped with
-                // a warning. Dune never seeds from the clock.
-                "seed" => match num {
-                    Some(v) if v >= 1.0 && v.is_finite() && v < 9.007_199_254_740_992e15 => {
-                        self.seed = v as u64;
+                // a warning. Dune never seeds from the clock: a
+                // `seed=random` is resolved by the caller
+                // (`Netlist::with_seed`, which writes `seed=N` here;
+                // the dune CLI does it). `rndseed=N` is the same
+                // number in ngspice (probe `temper-seed-probes t2
+                // a_rndseed`), used when no `seed` is given.
+                "seed" | "rndseed"
+                    if p.name == "seed" || !params.iter().any(|q| q.name == "seed") =>
+                {
+                    match num {
+                        Some(v) if v >= 1.0 && v.is_finite() && v < 9.007_199_254_740_992e15 => {
+                            self.seed = v as u64;
+                        }
+                        _ => diags.push(Diagnostic::warning(
+                            format!(
+                                "option {} needs a positive integer (seed=random must be \
+                                 resolved by the caller, e.g. the dune CLI or \
+                                 Netlist::with_seed); keeping seed={}",
+                                p.name, self.seed
+                            ),
+                            p.span,
+                        )),
                     }
-                    _ => diags.push(Diagnostic::warning(
-                        format!(
-                            "option seed needs a positive integer (seed=random is not \
-                             supported: runs must be reproducible); keeping seed={}",
-                            self.seed
-                        ),
-                        p.span,
-                    )),
-                },
+                }
+                "rndseed" => {}
                 // ngspice-47 `set notrnoise` / `.options notrnoise`
                 // (a bare flag; `notrnoise=0|1` too).
                 "notrnoise" => self.notrnoise = num.is_none_or(|v| v != 0.0),

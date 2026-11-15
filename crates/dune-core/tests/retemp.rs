@@ -206,3 +206,42 @@ fn re_expanding_sweeps_are_bounded() {
     let (ckt, _) = Circuit::from_netlist(&nl).unwrap();
     assert!(ckt.run(&nl.analyses[0], &options(&nl)).is_ok());
 }
+
+#[test]
+fn a_seeded_temperature_sweep_keeps_its_draws() {
+    // D-0075: the draws of a seeded deck do not change when it is
+    // re-expanded at another temperature, so each point of the .dc
+    // temp sweep equals the deck read (and drawn) at that temperature.
+    let text = |temp: &str, an: &str| {
+        format!(
+            "t\n{temp}\n.options seed=5\n.param p=agauss(1k,100,1)\n\
+             .subckt seg a b\nr1 a b {{p*(1+temper/1000)}}\n.ends\n\
+             i1 0 1 1m\nx1 1 2 seg\nx2 2 0 seg\n{an}\n.end\n"
+        )
+    };
+    let nl = parse(&text("", ".dc temp 0 100 50"));
+    let (ckt, _) = Circuit::from_netlist(&nl).unwrap();
+    let (sols, _) = ckt.run(&nl.analyses[0], &options(&nl)).unwrap();
+    for (k, t) in [0.0, 50.0, 100.0].into_iter().enumerate() {
+        let one = parse(&text(&format!(".temp {t}"), ".op"));
+        let (c1, _) = Circuit::from_netlist(&one).unwrap();
+        let (s1, _) = c1.run(&one.analyses[0], &options(&one)).unwrap();
+        for n in ["v(1)", "v(2)"] {
+            let (a, b) = (column(&sols[0], n)[k], column(&s1[0], n)[0]);
+            // Linear circuit: the same draws give the same voltages.
+            assert!((a - b).abs() <= 1e-12 * b.abs(), "{t} {n}: {a} vs {b}");
+        }
+    }
+    // Re-expanding at the deck's own temperature is bit-identical.
+    let op = parse(&text("", ".op"));
+    let (again, _) = op.at_temperature(27.0);
+    let run = |nl: &Netlist| {
+        let (c, _) = Circuit::from_netlist(nl).unwrap();
+        let (s, _) = c.run(&nl.analyses[0], &options(nl)).unwrap();
+        NODES[..2]
+            .iter()
+            .map(|n| column(&s[0], n)[0].to_bits())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(run(&op), run(&again));
+}
