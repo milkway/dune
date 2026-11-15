@@ -2173,7 +2173,12 @@ ngspice-47** (`inp.c` lê `option seed=val|random` e põe em
 `rndseed`; o `set rndseed=N` do front-end é o mesmo número).
 `Options::seed: u64`, default **1** (o `rndseed` de partida do
 `main.c` do ngspice). `seed=random` (relógio) e valores ≤ 0 são
-recusados com aviso, a semente fica. O gerador é **contado**
+recusados com aviso, a semente fica — desde a D-0075 o `seed=random`
+é resolvido por quem chama (`Netlist::with_seed` escreve `seed=S`
+nas opções; o CLI faz isso), e `rndseed=N` vale como `seed` quando
+não há `seed` (sonda `temper-seed-probes t2 a_rndseed`). A mesma
+semente sorteia as funções aleatórias dos parâmetros
+(`docs/dune-netlist.md` "Funções aleatórias"), com outra chave. O gerador é **contado**
 (counter-based): todo número é função pura de `(seed, nome da fonte,
 fluxo, índice)` — chave = SplitMix64 encadeado sobre a semente, o
 FNV-1a 64 do nome em minúsculas e o id do fluxo (branco, 1/f, RTS,

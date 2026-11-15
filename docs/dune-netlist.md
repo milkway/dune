@@ -345,16 +345,98 @@ em `f64` (c2 store_*). Número literal fora de `{}` não muda.
   não gera erros em cascata nos que dependem dele. A avaliação segue o
   grafo de dependência com pilha explícita, cada definição uma vez.
 
-### Funções aleatórias e `temper`
+### Funções aleatórias (`agauss gauss aunif unif limit`, D-0075)
 
-`agauss gauss aunif unif limit` são lidas inteiras, mas **avaliadas no
-valor nominal** (o primeiro argumento) e o deck recebe **um** aviso, no
-primeiro uso: o ngspice sorteia a cada execução, sem semente (P06), e
-a política do Dune é decisão pendente do dono (G8). O avaliador já tem
-o modo sorteado (`RandomPolicy::Seeded`, gerador SplitMix64 + Box–Muller,
-fórmulas do manual: `agauss` = nom + avar/sigma·N(0,1), `gauss` relativo,
-`aunif`/`unif` uniformes em ±var, `limit` = nom ± avar), alcançável só
-nos testes. `temper`: seção própria, abaixo.
+**Padrão: nominal.** Sem `.options seed`, as funções valem o primeiro
+argumento e o deck recebe **um** aviso, no primeiro uso — desvio
+deliberado do ngspice-47, que sorteia diferente a cada execução (P06,
+`temper-seed-probes t2 a_noseed`, `a_noseed_b`).
+
+**`.options seed=N` liga o sorteio, reprodutível.** Contrato observado
+(sondas em `.claude/scratch/temper-seed-probes/t2` e `t3`, no worktree
+da leva; ngspice-47 com `.options seed=7`): vale o **primeiro** cartão
+`seed=` (um segundo dá "Multiple 'option seed=val|random' found!" e é
+ignorado — `a_two_options`, `a_two_options_rev`); a posição do cartão
+não importa (`a_option_after`); o valor é truncado e lido como inteiro
+sem sinal de 32 bits (`7.6` e `4294967303` sorteiam como 7:
+`a_seedfrac`, `a_seedbig`); `0`, negativo ou palavra dão "Cannot
+convert … skipped!" e o sorteio volta ao relógio (`a_seed0`,
+`a_seedneg`, `a_seedword`); `seed=random` usa o relógio
+(`a_seedrandom`, `_b`); `.options rndseed=N` é o mesmo número
+(`a_rndseed`); sem função aleatória a semente não muda nada
+(`a_seed_norandom`); a semente nunca é informada. No Dune: o primeiro
+`seed` vale (os seguintes avisam e **saem** das opções, para o ruído
+transiente do motor ver a mesma semente); `7.6` → 7, módulo 2³²;
+`rndseed` vale se não houver `seed`; valor inválido avisa e fica no
+nominal; `seed=random` fica no nominal com aviso e
+`Netlist::random_mode() == RandomMode::SeedRequested` — a entropia vem
+de quem chama (abaixo). `Netlist::random_mode()` informa a semente
+usada (`Seeded(s)`).
+
+**Estrutura dos sorteios — quem divide um sorteio** (a parte que tem
+de bater com o ngspice; os números não batem, outro gerador):
+
+| Regra | Sonda |
+|---|---|
+| Um `.param` (global, do corpo ou padrão de `.subckt`) cuja **própria** expressão chama uma função aleatória vira função: **cada referência** sorteia de novo — dois dispositivos, duas vezes na mesma expressão, cada instância e cada cartão dela | `t2 b_glob_two_devices`, `b_twice_in_expr`, `b_sub_local`, `b_sub_default`, `b_sub_global`; `t3 c_expr_param`, `c_nested_sub` |
+| Um `.param` que só **lê** um aleatório (`q={p}`, `q={p*2}`, `q={p-p}`) ou chama um `.func` que sorteia é avaliado **uma vez** por escopo (global: uma; local ou padrão: uma por instância) e guarda o sorteio | `b_through_param`, `b_through_param2`, `b_param_in_param_twice`; `t3 c_param_of_func`, `c_local_of_global`, `c_default_of_global`, `c_local_value_param` |
+| Atual de linha `X` (`lp={agauss(…)}`, `lp={p}`): uma vez por instância | `b_sub_actual`, `b_sub_actual_param` |
+| `.model` global: avaliado uma vez (todas as instâncias dividem); `.model` local de subcircuito: uma vez por instância; modelo não usado não sorteia | `b_model_shared`, `b_model_param`, `b_sub_model`, `b_sub_model_glob`; `t3 c_model_unused` |
+| Função aleatória direto no valor do dispositivo, ou no corpo de um `.func`: cada cartão / cada chamada sorteia | `b_direct`, `b_func` |
+| `agauss`/`gauss` com dois argumentos: nominal, sem sorteio | `t3 c_two_args`, `c_gauss_two_args` |
+
+Desvio: argumento de `.func` que lê um `.param` aleatório é avaliado uma
+vez por chamada (o ngspice expande o texto e sorteia a cada uso do
+formal, `b_func_arg`; `KNOWN_DIFFS.md`).
+
+**Como ficou.** Com semente, `param.rs` guarda os `.param` cuja
+expressão chama função aleatória em `random_defs` (não em `map`): cada
+leitura reavalia a expressão no escopo que a definiu (aninhamento ≤ 64,
+cada reavaliação cobrada do orçamento de 2²⁴ passos dos `.func`; erro
+com span ao estourar). O atual de linha `X` fica valor. O
+compartilhamento do modelo local entre instâncias de entradas iguais
+(D-0067) é desligado para um cartão que chama função aleatória e não
+acontece para um que lê `.param` aleatório (o `get` sorteia). Sem
+semente nada disso existe: o caminho nominal é o de antes, bit a bit
+(os 287 decks do corpus com rawfile idêntico).
+
+**Ordem e chave dos sorteios.** Nenhum sorteio sai de um fluxo
+corrente (cuja posição dependeria da ordem de avaliação): cada um é
+função pura de `(semente, raiz, n)` (`pexpr::EvalCtx`). A **raiz** é a
+avaliação que pediu o número — um valor de cartão de dispositivo, um
+parâmetro de `.model`, uma definição de `.param`, um atual de `X` —
+identificada pelo hash FNV-1a do **texto do cartão**, a posição do
+valor dentro do cartão e o hash do **caminho da instância** (`x1.x2`;
+0 no topo); `n` conta os sorteios dentro dela, na ordem do programa.
+SplitMix64 mistura as chaves; o normal é o polar de Marsaglia com
+`libm` (Rust puro: os mesmos bits em toda plataforma, wasm incluído).
+Consequências: a sequência é função só de (semente, deck); não depende
+de threads, de ordem de `HashMap`, de perfil de compilação; título,
+comentário ou cartão novo noutro lugar não mexem nos outros sorteios;
+avaliar o mesmo valor de novo (o escopo global resolvido outra vez à
+temperatura do circuito, `Netlist::at_temperature`) repete os mesmos
+números — uma varredura de temperatura de um deck com semente não
+pula entre pontos.
+
+**Ponto de entrada da semente (API nova).** `Netlist::with_seed(seed)
+-> (Netlist, Vec<Diagnostic>)` reavalia os cartões guardados com a
+semente dada (vence a do deck) e troca toda opção `seed`/`rndseed` por
+`seed = seed`, para o ruído transiente do motor seguir a mesma semente
+(no ngspice um só `rndseed` serve aos dois). O parser fica sem
+entropia e sem dependência nova além do `libm`: `seed=random` é
+resolvido na borda — o CLI (`dune -b`) tira uma semente do relógio e
+do PID, chama `with_seed` e imprime `note: .options seed=random:
+random functions drawn with seed S (.options seed=S repeats this
+run)`; com semente do deck imprime `note: random functions drawn with
+seed S`. Alternativa descartada: uma opção de parse (`parse_with_options(…,
+seed)`) — evitaria uma segunda leitura num deck `seed=random`, mas
+pediria variantes de `parse_file`/`parse_str`/`parse_with_loader` e não
+serviria ao Monte Carlo (abaixo). O `Netlist` guarda os cartões quando
+o deck usa função aleatória ou `temper`.
+
+**Monte Carlo** (`docs/dune-sweep.md`): rodada `i` ↔
+`netlist.with_seed(s_i)`, com `s_i` escolhido por quem chama (por
+exemplo `base + i`).
 
 ### `temper` (G7)
 

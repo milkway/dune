@@ -144,3 +144,29 @@ os núcleos P; os núcleos E rendem menos.
   reaproveitar ponto de operação/fatoração. O teste bit a bit continua
   valendo para o caminho por reconstrução; o warm start seria opt-in
   (convergência a partir de outro chute pode mudar os últimos ulps).
+
+## Decks com funções aleatórias (D-0075)
+
+Um deck com `agauss`/`gauss`/`aunif`/`unif`/`limit` roda no nominal sem
+`.options seed`; com semente, os sorteios são função de (semente,
+deck) — o mesmo em toda rodada de um `sweep`, em qualquer número de
+threads (`tests/sweep.rs::a_seeded_sweep_is_thread_count_independent`),
+e a mesma coisa a qualquer temperatura varrida (a reexpansão repete os
+sorteios). **Monte Carlo do próprio deck:** rodada `i` ↔
+`netlist.with_seed(s_i)` (por exemplo `s_i = base + i`), cada uma uma
+leitura nova dos cartões guardados, sem API nova no `dune-core`:
+
+```rust
+let runs: Vec<_> = (0..n)
+    .map(|i| {
+        let (nl, _diags) = netlist.with_seed(base + i);
+        let (ckt, _) = Circuit::from_netlist(&nl)?;
+        nl.analyses.iter().map(|a| ckt.run(a, &opts)).collect::<Result<Vec<_>, _>>()
+    })
+    .collect();
+```
+
+Não feito (pediria API pública): um parâmetro `seed` como `SweepParam`
+(o `sweep` então chamaria `with_seed` por rodada, e o `sweep_parallel`
+herdaria a independência de threads), ou um `monte_carlo(netlist, opts,
+seeds)`. Os bindings podem fazer o laço acima.

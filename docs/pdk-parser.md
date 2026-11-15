@@ -248,7 +248,7 @@ Decks e saídas no Apêndice A. "Dune" = comportamento atual.
 | S8 | funções | `pwr(-2,3)=8` (não preserva sinal), `pow(-2,3)=-8`, `pow(-2,0.5)` e `sqrt(-4)` → NaN → erro fatal "unknown parameter (nan)" **se usado**; `log` é **natural** (`log(100)=4,6052`), `log10`; `nint(2.5)=2`; `int` trunca; `7/2=3,5`; `limit(5,0,3)=8` (não é clamp; nenhum PDK usa); `!0=1`; booleanos valem 0/1 (P05) | sem funções; **igual desde 2026-11-14** (G2: as 34 funções do ngspice-47; NaN usado é erro com span; aridade errada é erro, o ngspice a lê errado) |
 | S9 | sufixos em expressão | `2k*3=6000`; **`1mil` = 1e-3** (não 25,4e-6 como no leitor de números do 3f5) (P05 e21) | `mil`=25,4e-6; **igual desde 2026-11-14** dentro de expressões (fora delas segue o `INPevaluate` do 3f5) |
 | S10 | ternário em linha `X` entre aspas (`lr='(d_sab==0) ? 2 : d_sab'`) | funciona (P17) | erro |
-| S11 | `agauss/gauss/aunif/unif` | **aleatórios a cada execução** sem semente fixa (duas rodadas: 0,9708 / 1,0276); `0*agauss(…)` = 0 (P06) | erro; desde a G2 lidas inteiras e avaliadas no **nominal** com um aviso por deck (decisão pendente, G8) |
+| S11 | `agauss/gauss/aunif/unif` | **aleatórios a cada execução** sem semente fixa (duas rodadas: 0,9708 / 1,0276); `0*agauss(…)` = 0 (P06) | erro; desde a G2 lidas inteiras e avaliadas no **nominal** com um aviso por deck; **desde a D-0075** `.options seed=N` sorteia reprodutível, cada referência a um `.param` aleatório sorteia de novo (como o ngspice), `seed=random` resolvido por quem chama |
 | S12 | `temper` | vale em `.model`, na instância e em `.param` local de subcircuito, com a temperatura do circuito (`.options temp`/`.temp`); em `.param` **global** é erro fatal "Undefined parameter [temper]" (P07, P07a–d) | erro; desde a G2 erro "not supported yet" onde é avaliado; **desde 2026-11-14 como o ngspice** (G7: valor onde ele dá valor — o `.param` global que nomeia `temper` também vale, sondas `g9-probes t1 t_glob`; o P07 o usava fora das posições que o ngspice reescreve —, erro onde ele erra; desde a D-0075 reexpandido a cada temperatura, `.dc temp` inclusive) |
 | S13 | `.model` local dependente da instância | uma cópia por instância (`rsh={w*100}` → 100 e 300 Ω) (P08) | erro; **igual desde 2026-11-14** (G3; instâncias com os mesmos valores compartilham a cópia) |
 | S14 | avaliação preguiçosa | parâmetro indefinido num subcircuito não instanciado ou num `.model` não usado **não** é erro; erro num `.param` global **é** fatal (P05e, P05f) | avalia tudo; **igual desde 2026-11-14** (G3, também `.model` de topo) |
@@ -496,7 +496,7 @@ resistores do gf180 são **aleatórios por execução** no ngspice e não servem
 de oráculo sem desligar a chave). (b) S11. (c) ~100 linhas. (d) **[API]**
 **decisão do dono**: o ngspice sorteia sem semente; a proposta é nominal
 (média) por padrão, Monte Carlo com semente explícita opcional — desvio a
-registrar em `KNOWN_DIFFS`. (e) nada novo.
+registrar em `KNOWN_DIFFS`. (e) nada novo. ✔ **Feito (D-0075):** nominal por padrão, `.options seed=N` sorteia reprodutível, `Netlist::with_seed`; gf180 com descasamento contra o ngspice em distribuição (`docs/dune-netlist.md` "Funções aleatórias").
 
 **G9 — Condicionais `.if/.elseif/.else/.endif`.** ✔ **Feito em
 2026-11-14** (`cond.rs`, sondas `g9-probes i1–i5`): o inversor IHP
