@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use dune_core::{Circuit, Options, OutExpr, Solution};
 use dune_netlist::Severity;
-use dune_netlist::ir::{Output, OutputKind};
+use dune_netlist::ir::{Output, OutputKind, RandomMode};
 use dune_raw::{Format, Rawfile};
 
 const USAGE: &str = "usage: dune -b INPUT.cir [-r OUTPUT.raw]\n       \
@@ -151,32 +151,64 @@ fn run_deck(
     input: &Path,
     rawfile: Option<&Path>,
 ) -> Result<()> {
+    // `.options seed=random`: the CLI is the edge that picks the seed
+    // (D-0075), and reports it so the run can be repeated.
+    let resolved = match parsed.netlist.random_mode() {
+        RandomMode::SeedRequested => {
+            let seed = fresh_seed();
+            Some((seed, parsed.netlist.with_seed(seed)))
+        }
+        _ => None,
+    };
     // Diagnostics go to stderr, errors are fatal like the 3f5's deck
     // errors.
     let mut fatal = false;
     for d in &parsed.diags {
+        if resolved.is_some()
+            && (d.message.starts_with("`.options seed=random`")
+                || d.message.starts_with("random functions (agauss"))
+        {
+            continue;
+        }
         eprintln!("{}", d.render(&parsed.sources));
         fatal |= d.severity == Severity::Error;
+    }
+    let nl = match &resolved {
+        Some((seed, (nl, diags))) => {
+            for d in diags.iter().filter(|d| d.severity == Severity::Error) {
+                eprintln!("{}", d.render(&parsed.sources));
+                fatal = true;
+            }
+            eprintln!(
+                "note: .options seed=random: random functions drawn with seed {seed} \
+                 (.options seed={seed} repeats this run)"
+            );
+            nl
+        }
+        None => &parsed.netlist,
+    };
+    if let RandomMode::Seeded(seed) = parsed.netlist.random_mode() {
+        eprintln!("note: random functions drawn with seed {seed}");
     }
     if fatal {
         bail!("deck has errors");
     }
 
-    let (circuit, notes) = Circuit::from_netlist(&parsed.netlist)
-        .map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
+    let (circuit, notes) =
+        Circuit::from_netlist(nl).map_err(|e| anyhow::anyhow!("{}: {e}", input.display()))?;
     for n in &notes {
         eprintln!("note: {n}");
     }
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
-    options.apply(&parsed.netlist.options, &mut opt_diags);
-    let four_params = dune_core::FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
+    options.apply(&nl.options, &mut opt_diags);
+    let four_params = dune_core::FourParams::from_options(&nl.options, &mut opt_diags);
     for d in &opt_diags {
         eprintln!("{}", d.render(&parsed.sources));
     }
 
     let mut solutions: Vec<Solution> = Vec::new();
-    for analysis in &parsed.netlist.analyses {
+    for analysis in &nl.analyses {
         let (sols, notes) = circuit.run(analysis, &options)?;
         for n in &notes {
             eprintln!("note: {n}");
@@ -190,7 +222,7 @@ fn run_deck(
 
     // `.measure`: pure post-processing of the plots, printed before
     // any `.print` output, as `ngspice -b` does.
-    let measures = &parsed.netlist.measures;
+    let measures = &nl.measures;
     if !measures.is_empty() {
         let outcomes = dune_core::measure_all(measures, &solutions);
         let (out, err) = measure::render(measures, &solutions, &outcomes);
@@ -199,7 +231,7 @@ fn run_deck(
     }
 
     // `.four`: pure post-processing too, on the last transient plot.
-    let fourier = dune_core::four_all(&parsed.netlist.outputs, &solutions, &four_params);
+    let fourier = dune_core::four_all(&nl.outputs, &solutions, &four_params);
 
     match rawfile {
         Some(path) => {
@@ -209,10 +241,7 @@ fn run_deck(
             eprint!("{err}");
             print!("{out}");
             let raw = Rawfile {
-                plots: solutions
-                    .iter()
-                    .map(|s| s.to_plot(&parsed.netlist.title, ""))
-                    .collect(),
+                plots: solutions.iter().map(|s| s.to_plot(&nl.title, "")).collect(),
                 warnings: Vec::new(),
             };
             let mut f = std::fs::File::create(path)
@@ -221,7 +250,7 @@ fn run_deck(
             raw.write(&mut f, Format::Binary)?;
         }
         None => {
-            run_prints(&parsed.netlist, &solutions, &options, &fourier)?;
+            run_prints(nl, &solutions, &options, &fourier)?;
         }
     }
     Ok(())
@@ -313,4 +342,19 @@ fn run_prints(
         }
     }
     Ok(())
+}
+
+/// A fresh seed for `.options seed=random` (ngspice seeds from the
+/// clock): the clock's nanoseconds and the process id, mixed, in
+/// `1..2^32` as ngspice's seeds are.
+fn fresh_seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut z = nanos ^ (u64::from(std::process::id()) << 32);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z & 0xFFFF_FFFF).max(1)
 }
