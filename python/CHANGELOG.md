@@ -1,7 +1,12 @@
 # Changelog — spice3 (Python)
 
-## Unreleased
+## 0.9.0
 
+- **Temperature sweeps re-evaluate the deck:** `temper` and the
+  `tc1`/`tc2` of behavioural R, C and L follow every point of a
+  `.dc temp` sweep, a `temp` option given after parsing and the
+  session's temperature (before, `.dc temp` with `temper` was an
+  error and other changes used the value read once).
 - **Seeded random functions:** `options={"seed": n}` is now exactly
   `.options seed=n` in the deck, in `simulate`, `sweep`, `Session`, `pss`
   and figure runs: it draws the deck's `agauss`, `gauss`, `aunif`, `unif`

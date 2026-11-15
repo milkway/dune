@@ -57,6 +57,7 @@ use crate::solution::Solution;
 ///
 /// Model parameters are not sweepable yet (v2 of issue #10).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SweepParam {
     /// Circuit temperature (`TEMP`), in °C.
     Temp,

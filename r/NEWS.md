@@ -1,5 +1,10 @@
 # spice (development version)
 
+* **Temperature sweeps re-evaluate the deck:** `temper` and the
+  `tc1`/`tc2` of behavioural R, C and L follow every point of a
+  `.dc temp` sweep, a `temp` option given after parsing and the
+  session's temperature (before, `.dc temp` with `temper` was an
+  error and other changes used the value read once).
 * **Seeded random functions:** `options = list(seed = n)` is now exactly
   `.options seed=n` in the deck, in `spice_run()`, `spice_sweep()`,
   `spice_session()`, `spice_pss()` and figure runs: it draws the deck's
