@@ -292,15 +292,19 @@ C1 out 0 1n
 
   <section id="coverage">
     <div class="wrap">
-      <h2>The whole SPICE3f5 surface</h2>
-      <p class="sub">Every device and analysis of the Berkeley release, plus BSIM3v3 and S-parameters from modern ngspice.</p>
+      <h2>The whole SPICE3f5 surface, and what modern decks need</h2>
+      <p class="sub">Every device and analysis of the Berkeley release, plus the models and the netlist language of modern ngspice that the open PDKs use: the gf180mcu and sky130 libraries are read as shipped.</p>
       <div class="pills">
         <span class="pill hd">devices</span>
-        <span class="pill">R C L + coupled K</span><span class="pill">V I sources</span><span class="pill">E F G H controlled</span><span class="pill">diode</span><span class="pill">BJT (Gummel–Poon)</span><span class="pill">MOS levels 1–6</span><span class="pill">BSIM1 · BSIM2 · BSIM3v3</span><span class="pill">JFET · MESFET</span><span class="pill">S/W switches</span><span class="pill">T ideal line</span><span class="pill">O lossy line (LTRA)</span><span class="pill">.subckt / X</span>
+        <span class="pill">R C L + coupled K</span><span class="pill">V I sources</span><span class="pill">E F G H controlled</span><span class="pill">diode (levels 1, 3)</span><span class="pill">BJT (Gummel–Poon)</span><span class="pill">MOS levels 1–6</span><span class="pill">BSIM1 · BSIM2 · BSIM3v3 · BSIM4</span><span class="pill">VDMOS</span><span class="pill">VBIC</span><span class="pill">JFET · MESFET</span><span class="pill">S/W switches</span><span class="pill">T ideal line</span><span class="pill">Y · P lossy and coupled lines</span><span class="pill">behavioural R C L</span><span class="pill">O lossy line (LTRA)</span><span class="pill">.subckt / X</span>
       </div>
       <div class="pills">
         <span class="pill hd">analyses</span>
-        <span class="pill">.OP</span><span class="pill">.DC</span><span class="pill">.AC</span><span class="pill">.TRAN</span><span class="pill">.PZ</span><span class="pill">.NOISE</span><span class="pill">.DISTO</span><span class="pill">.TF</span><span class="pill">.SENS</span><span class="pill">.SP (S-parameters)</span>
+        <span class="pill">.OP</span><span class="pill">.DC</span><span class="pill">.AC</span><span class="pill">.TRAN</span><span class="pill">.PZ</span><span class="pill">.NOISE</span><span class="pill">.DISTO</span><span class="pill">.TF</span><span class="pill">.SENS</span><span class="pill">.SP (S-parameters)</span><span class="pill">.FOUR</span><span class="pill">.MEASURE</span><span class="pill">.PSS</span>
+      </div>
+      <div class="pills">
+        <span class="pill hd">netlist</span>
+        <span class="pill">.lib sections</span><span class="pill">.param expressions</span><span class="pill">subcircuit parameters</span><span class="pill">.model binning</span><span class="pill">.func</span><span class="pill">.if / .else</span><span class="pill">temper</span><span class="pill">.option scale</span><span class="pill">agauss with .options seed</span><span class="pill">Monte Carlo sweeps</span>
       </div>
       <p class="note">Rawfiles come out in SPICE3's own binary and ASCII formats, so existing viewers read them unchanged. Transmission-line convolution, Volterra distortion kernels, adjoint noise analysis and pole-zero deflation are ports of the original algorithms, validated against the oracle.</p>
     </div>
