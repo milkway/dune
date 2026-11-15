@@ -1384,3 +1384,43 @@ fn bad_seeds_are_warnings_and_a_session_keeps_its_draws() {
     let want = sim(&noisy.replace(".tran", ".options seed=6\n.tran"), "{}");
     assert_eq!(s.run().unwrap().to_json().plots, want.plots);
 }
+
+/// `temper` in a model value, a device value (a behavioural R) and a
+/// subcircuit parameter (the deck of `python/tests/test_temper.py`).
+fn temper_deck(card: &str) -> String {
+    format!(
+        "temper\n{card}\n.model dm d is={{1e-14*(1 + 0.005*(temper - 27))}}\n\
+         .subckt load a\n.param rl={{1k + 10*temper}}\nr1 a 0 {{rl}}\n.ends\n\
+         v1 1 0 dc 2\nr1 1 2 {{1k*(1 + 0.004*(temper - 27))}}\nd1 2 0 dm\nx1 2 load\n\
+         .op\n.dc v1 0 2 0.5\n.end\n"
+    )
+}
+
+#[test]
+fn a_deck_reading_temper_follows_the_temp_override_and_set_temp() {
+    // The engine re-expands the deck at the run's temperature (D-0075):
+    // `options.temp` and `Session.temp` give the deck with `.options
+    // temp=` written in it, bit for bit.
+    let mut s = SimSession::open(&temper_deck(""), &SimOptions::default()).unwrap();
+    let mut seen = Vec::new();
+    for temp in [-40.0, 27.0, 85.0, 27.0] {
+        let want = sim(&temper_deck(&format!(".options temp={temp}")), "{}");
+        let got = sim(
+            &temper_deck(""),
+            &format!(r#"{{"options": {{"temp": {temp}}}}}"#),
+        );
+        assert_eq!(got.plots, want.plots, "options.temp = {temp}");
+        s.set_temp(temp).unwrap();
+        assert_eq!(
+            s.run().unwrap().to_json().plots,
+            want.plots,
+            "set_temp({temp})"
+        );
+        seen.push(want.plots);
+    }
+    assert_ne!(
+        seen[0], seen[2],
+        "the temperature reaches the temper values"
+    );
+    assert_eq!(seen[1], seen[3]);
+}
