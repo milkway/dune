@@ -345,12 +345,28 @@ fn divisor(d: &RealSexp) -> Option<f64> {
     d.as_slice().first().copied()
 }
 
+/// A `random_seed` from R — the seed R's RNG drew for a `seed =
+/// "random"` — `numeric(0)` for none.
+fn random_seed_of(s: &RealSexp) -> savvy::Result<Option<u64>> {
+    engine::check_random_seed(s.as_slice().first().copied()).map_err(savvy::Error::new)
+}
+
+/// The seed of a run as R holds it: `NULL` (nominal) or a double.
+fn seed_sexp(seed: Option<u64>) -> savvy::Result<Sexp> {
+    match seed {
+        Some(s) => Ok(OwnedRealSexp::try_from_scalar(s as f64)?.into()),
+        None => Ok(savvy::NullSexp.into()),
+    }
+}
+
 /// Run a deck. `deck` is a path when `is_path`, netlist text
 /// otherwise; includes are parallel name/text vectors (text decks
 /// only); options are names plus a list of length-1 values;
-/// `tmax_divisor` is `numeric(0)` for none.
+/// `tmax_divisor` and `random_seed` (the seed R drew for `seed =
+/// "random"`) are `numeric(0)` for none.
 /// @noRd
 #[savvy]
+#[allow(clippy::too_many_arguments)]
 fn ffi_run_deck(
     deck: &str,
     is_path: bool,
@@ -359,6 +375,7 @@ fn ffi_run_deck(
     opt_names: StringSexp,
     opt_values: ListSexp,
     tmax_divisor: RealSexp,
+    random_seed: RealSexp,
 ) -> savvy::Result<Sexp> {
     let includes = includes_map(&include_names, &include_texts);
     let user = user_options(&opt_names, opt_values)?;
@@ -372,7 +389,8 @@ fn ffi_run_deck(
     };
 
     let tmax = divisor(&tmax_divisor);
-    run_list(engine::compute(|| engine::run(source, &user, tmax)))
+    let seed = random_seed_of(&random_seed)?;
+    run_list(engine::compute(|| engine::run(source, &user, tmax, seed)))
 }
 
 /// `list(ok = FALSE, message, plots = NULL, notes, diagnostics, kind,
@@ -431,10 +449,10 @@ fn run_list(result: Result<engine::RunOutput, Failure>) -> savvy::Result<Sexp> {
     }
 }
 
-/// The 8 fields of a successful run, in a list with room for `extra`
+/// The 9 fields of a successful run, in a list with room for `extra`
 /// more after them.
 fn ok_list(r: &engine::RunOutput, extra: usize) -> savvy::Result<OwnedListSexp> {
-    let mut out = OwnedListSexp::new(8 + extra, true)?;
+    let mut out = OwnedListSexp::new(9 + extra, true)?;
     out.set_name_and_value(0, "ok", logical(true)?)?;
     out.set_name_and_value(1, "title", string(&r.title)?)?;
     out.set_name_and_value(
@@ -447,6 +465,7 @@ fn ok_list(r: &engine::RunOutput, extra: usize) -> savvy::Result<OwnedListSexp> 
     out.set_name_and_value(5, "kind", savvy::NullSexp)?;
     out.set_name_and_value(6, "measurements", meas_columns(&r.measures)?)?;
     out.set_name_and_value(7, "fourier", four_columns(&r.fourier)?)?;
+    out.set_name_and_value(8, "seed", seed_sexp(r.seed)?)?;
     Ok(out)
 }
 
@@ -468,6 +487,7 @@ fn ffi_pss_deck(
     opt_names: StringSexp,
     opt_values: ListSexp,
     tmax_divisor: RealSexp,
+    random_seed: RealSexp,
     freq: f64,
     tstab: f64,
     osc_node: &str,
@@ -501,17 +521,18 @@ fn ffi_pss_deck(
         }
     };
     let tmax = divisor(&tmax_divisor);
-    match engine::compute(|| engine::pss(source, &user, tmax, &params)) {
+    let seed = random_seed_of(&random_seed)?;
+    match engine::compute(|| engine::pss(source, &user, tmax, seed, &params)) {
         Ok(out) => {
             let mut list = ok_list(&out.run, 4)?;
-            list.set_name_and_value(8, "period", OwnedRealSexp::try_from_scalar(out.period)?)?;
-            list.set_name_and_value(9, "t0", OwnedRealSexp::try_from_scalar(out.t0)?)?;
+            list.set_name_and_value(9, "period", OwnedRealSexp::try_from_scalar(out.period)?)?;
+            list.set_name_and_value(10, "t0", OwnedRealSexp::try_from_scalar(out.t0)?)?;
             list.set_name_and_value(
-                10,
+                11,
                 "residuals",
                 OwnedRealSexp::try_from_slice(out.residuals)?,
             )?;
-            list.set_name_and_value(11, "periods", OwnedRealSexp::try_from_slice(out.periods)?)?;
+            list.set_name_and_value(12, "periods", OwnedRealSexp::try_from_slice(out.periods)?)?;
             Ok(list.into())
         }
         Err(f) => failure_list(&f),
@@ -553,6 +574,7 @@ fn outcome(r: Result<(), Failure>) -> savvy::Result<Sexp> {
 #[savvy]
 impl SpiceSession {
     /// Arguments as `ffi_run_deck`'s.
+    #[allow(clippy::too_many_arguments)]
     fn open(
         deck: &str,
         is_path: bool,
@@ -561,6 +583,7 @@ impl SpiceSession {
         opt_names: StringSexp,
         opt_values: ListSexp,
         tmax_divisor: RealSexp,
+        random_seed: RealSexp,
     ) -> savvy::Result<Self> {
         let includes = includes_map(&include_names, &include_texts);
         let user = user_options(&opt_names, opt_values)?;
@@ -573,8 +596,9 @@ impl SpiceSession {
             }
         };
         let tmax = divisor(&tmax_divisor);
+        let seed = random_seed_of(&random_seed)?;
         Ok(SpiceSession {
-            live: engine::compute(|| engine::LiveSession::open(source, &user, tmax)),
+            live: engine::compute(|| engine::LiveSession::open(source, &user, tmax, seed)),
         })
     }
 
@@ -699,6 +723,7 @@ fn ffi_sweep_deck(
     opt_names: StringSexp,
     opt_values: ListSexp,
     tmax_divisor: RealSexp,
+    random_seed: RealSexp,
     params: StringSexp,
     values: RealSexp,
     threads: i32,
@@ -725,8 +750,12 @@ fn ffi_sweep_deck(
     };
 
     let tmax = divisor(&tmax_divisor);
-    let result =
-        engine::compute(|| engine::sweep(source, &user, tmax, &names, &rows, threads as usize));
+    let result = {
+        let seed = random_seed_of(&random_seed)?;
+        engine::compute(|| {
+            engine::sweep(source, &user, tmax, seed, &names, &rows, threads as usize)
+        })
+    };
     let mut out = OwnedListSexp::new(7, true)?;
     match result {
         Ok(r) => {
@@ -741,8 +770,9 @@ fn ffi_sweep_deck(
                         measures,
                         fourier,
                         notes,
+                        seed,
                     } => {
-                        let mut item = OwnedListSexp::new(5, true)?;
+                        let mut item = OwnedListSexp::new(6, true)?;
                         item.set_name_and_value(0, "ok", logical(true)?)?;
                         item.set_name_and_value(
                             1,
@@ -752,6 +782,7 @@ fn ffi_sweep_deck(
                         item.set_name_and_value(2, "notes", strings(notes)?)?;
                         item.set_name_and_value(3, "measurements", meas_columns(measures)?)?;
                         item.set_name_and_value(4, "fourier", four_columns(fourier)?)?;
+                        item.set_name_and_value(5, "seed", seed_sexp(*seed)?)?;
                         item
                     }
                     // Kind `pss` carries the shooting history too.

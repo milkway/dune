@@ -141,12 +141,14 @@ spice_pss <- function(deck, freq = 0, tstab = 0, osc_node = NULL, points = 128L,
   opt <- check_options(options, call = call)
   div <- check_tmax_divisor(tmax_divisor, call = call)
 
-  out <- ffi_pss_deck(
-    src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
-    as.character(names(opt)), unname(opt), div,
-    freq, tstab, if (is.null(osc_node)) "" else osc_node,
-    points, harmonics, max_iter, steady_coeff, uic
-  )
+  out <- with_random_seed(opt, function(seed) {
+    ffi_pss_deck(
+      src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
+      as.character(names(opt)), unname(opt), div, seed,
+      freq, tstab, if (is.null(osc_node)) "" else osc_node,
+      points, harmonics, max_iter, steady_coeff, uic
+    )
+  })
   diagnostics <- tibble::tibble(
     severity = out$diagnostics$severity,
     message = out$diagnostics$message
@@ -154,7 +156,10 @@ spice_pss <- function(deck, freq = 0, tstab = 0, osc_node = NULL, points = 128L,
   if (!isTRUE(out$ok)) {
     abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
-  res <- new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier)
+  res <- new_spice_result(
+    out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier,
+    seed = out$seed
+  )
   res$time <- pss_time_tibble(res$plots[[1L]])
   res$spectrum <- pss_spectrum_tibble(res$plots[[2L]])
   res$period <- out$period

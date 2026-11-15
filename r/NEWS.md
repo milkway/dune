@@ -1,5 +1,19 @@
 # spice (development version)
 
+* **Seeded random functions:** `options = list(seed = n)` is now exactly
+  `.options seed=n` in the deck, in `spice_run()`, `spice_sweep()`,
+  `spice_session()`, `spice_pss()` and figure runs: it draws the deck's
+  `agauss`, `gauss`, `aunif`, `unif` and `limit` from the seed (before,
+  it only seeded the transient noise). Without a seed they keep their
+  nominal value. `seed = "random"`, and a deck with `.options
+  seed=random`, draw a seed with R's random number generator, so
+  `set.seed()` makes it reproducible. Results gain `seed` (the seed the
+  run was drawn with, `NA` when nominal) and `random_mode` (`"nominal"`
+  or `"seeded"`); `options = list(seed = res$seed)` repeats a run.
+* `seed` must now be a whole number from 1 to `2^32 - 1` (was below
+  `2^53`): ngspice reads a seed as an unsigned 32-bit integer, so a
+  larger one only aliased a smaller one.
+
 * **Models from ngspice-47:** BSIM4 4.8.3 (`LEVEL=14|54`; cards that
   declare version 4.0-4.7 run on the 4.8.3 equations, with a note), the
   VDMOS power MOSFET, the VBIC bipolar transistor (`LEVEL=4|9`, with

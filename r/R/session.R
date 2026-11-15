@@ -19,6 +19,10 @@
 #' `spice_set_temp()` and `spice_set_tmax_divisor()` modify it in place (every copy of it sees the
 #' change) and return it invisibly, so calls can be piped.
 #'
+#' The deck's random functions (`agauss`, `gauss`, ...) are drawn once,
+#' when the session opens, from the `seed` option or the deck's `.options
+#' seed`; every `spice_rerun()` result carries that seed in `seed`.
+#'
 #' @inheritParams spice_run
 #' @param warm_start Continue each operating point from the previous run's
 #'   (see Details).
@@ -48,11 +52,20 @@ spice_session <- function(deck, includes = NULL, options = NULL, warm_start = FA
   check_flag(warm_start, "warm_start", call = call)
   div <- check_tmax_divisor(tmax_divisor, call = call)
 
-  ptr <- SpiceSession$open(
-    src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
-    as.character(names(opt)), unname(opt), div
-  )
+  open <- function(seed) {
+    SpiceSession$open(
+      src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
+      as.character(names(opt)), unname(opt), div, seed
+    )
+  }
+  # The random functions are drawn once, here (see `with_random_seed()`).
+  wants <- is.character(opt$seed) && identical(tolower(opt$seed), "random")
+  ptr <- open(if (wants) draw_seed() else numeric(0))
   failed <- ptr$status()
+  if (!is.null(failed) && identical(failed$kind, "seed")) {
+    ptr <- open(draw_seed())
+    failed <- ptr$status()
+  }
   if (!is.null(failed)) {
     abort_failure(failed, call = call)
   }
@@ -188,7 +201,10 @@ spice_rerun <- function(session) {
   if (!isTRUE(out$ok)) {
     abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
-  new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier)
+  new_spice_result(
+    out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier,
+    seed = out$seed
+  )
 }
 
 #' Read a session's element values

@@ -39,14 +39,23 @@ unset, a \code{.tran} integrates with \code{"trbdf2"}), \code{compat} (\code{"du
 \code{"spice3"}, the 'SPICE3f5' defaults: a trapezoidal \code{.tran},
 switches flipping on the time grid, \code{ltrabkrate} 0),
 \code{ltrabkrate}, \code{ltrafit}, \code{maxord}, \code{nopage}, \code{defl}, \code{defw},
-\code{defad}, \code{defas}, \code{seed} (the transient-noise seed, a whole number
-\verb{>= 1}; no \code{"random"}), \code{notrnoise}, \code{devnoise}, \code{devnt} (the
-device-noise grid step, seconds, \verb{> 0}), \code{keepopinfo} and
-\code{trytocompact}. The flags
+\code{defad}, \code{defas}, \code{seed} (see below), \code{notrnoise}, \code{devnoise},
+\code{devnt} (the device-noise grid step, seconds, \verb{> 0}), \code{keepopinfo}
+and \code{trytocompact}. The flags
 \code{noopiter}, \code{nopage}, \code{ltrafit}, \code{notrnoise}, \code{devnoise} and
 \code{keepopinfo} take \code{TRUE}/\code{FALSE} (\code{FALSE} clears a flag the deck's
 card set). Unlike a \code{.options} card, which only warns, an unknown
-name or a value of the wrong type is an error.}
+name or a value of the wrong type is an error.
+
+\code{seed} is exactly \verb{.options seed=} written in the deck: a whole
+number from 1 to 4294967295 (\code{2^32 - 1}) draws the deck's random
+functions (\code{agauss}, \code{gauss}, \code{aunif}, \code{unif}, \code{limit}) from that
+seed -- the same seed gives the same circuit on every platform --
+and seeds the transient noise (\code{TRNOISE}, \code{devnoise}). \code{"random"}
+draws a seed with R's random number generator, so \code{\link[=set.seed]{set.seed()}}
+makes it reproducible; so does a deck that says \verb{.options seed=random}. The seed used comes back in the result's \code{seed}, and
+\code{options = list(seed = res$seed)} repeats the run. Without a seed
+the random functions take their nominal value.}
 
 \item{warm_start}{Continue each operating point from the previous run's
 (see Details).}
@@ -83,6 +92,9 @@ warm-started.
 A session is a \strong{reference} object: \code{spice_alter()},
 \code{spice_set_temp()} and \code{spice_set_tmax_divisor()} modify it in place (every copy of it sees the
 change) and return it invisibly, so calls can be piped.
+
+The deck's random functions (\code{agauss}, \code{gauss}, ...) are drawn once,
+when the session opens, from the \code{seed} option or the deck's \verb{.options seed}; every \code{spice_rerun()} result carries that seed in \code{seed}.
 }
 \section{Mirror of the Python package}{
 

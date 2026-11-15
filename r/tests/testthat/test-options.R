@@ -66,8 +66,8 @@ test_that("the new names are listed and bad values are errors", {
   expect_true(all(c("seed", "notrnoise", "devnoise", "devnt", "keepopinfo", "trytocompact") %in%
     spice:::spice_option_names()))
   bad <- list(
-    list(seed = 0), list(seed = -2), list(seed = 1.5), list(seed = 2^53),
-    list(seed = "random"), list(seed = TRUE),
+    list(seed = 0), list(seed = -2), list(seed = 1.5), list(seed = 2^32), list(seed = 2^53),
+    list(seed = "rand"), list(seed = TRUE),
     list(devnt = 0), list(devnt = -1e-9), list(devnt = Inf), list(devnt = TRUE),
     list(devnoise = 1), list(notrnoise = "yes"), list(keepopinfo = 0)
   )

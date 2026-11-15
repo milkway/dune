@@ -75,14 +75,23 @@ unset, a \code{.tran} integrates with \code{"trbdf2"}), \code{compat} (\code{"du
 \code{"spice3"}, the 'SPICE3f5' defaults: a trapezoidal \code{.tran},
 switches flipping on the time grid, \code{ltrabkrate} 0),
 \code{ltrabkrate}, \code{ltrafit}, \code{maxord}, \code{nopage}, \code{defl}, \code{defw},
-\code{defad}, \code{defas}, \code{seed} (the transient-noise seed, a whole number
-\verb{>= 1}; no \code{"random"}), \code{notrnoise}, \code{devnoise}, \code{devnt} (the
-device-noise grid step, seconds, \verb{> 0}), \code{keepopinfo} and
-\code{trytocompact}. The flags
+\code{defad}, \code{defas}, \code{seed} (see below), \code{notrnoise}, \code{devnoise},
+\code{devnt} (the device-noise grid step, seconds, \verb{> 0}), \code{keepopinfo}
+and \code{trytocompact}. The flags
 \code{noopiter}, \code{nopage}, \code{ltrafit}, \code{notrnoise}, \code{devnoise} and
 \code{keepopinfo} take \code{TRUE}/\code{FALSE} (\code{FALSE} clears a flag the deck's
 card set). Unlike a \code{.options} card, which only warns, an unknown
-name or a value of the wrong type is an error.}
+name or a value of the wrong type is an error.
+
+\code{seed} is exactly \verb{.options seed=} written in the deck: a whole
+number from 1 to 4294967295 (\code{2^32 - 1}) draws the deck's random
+functions (\code{agauss}, \code{gauss}, \code{aunif}, \code{unif}, \code{limit}) from that
+seed -- the same seed gives the same circuit on every platform --
+and seeds the transient noise (\code{TRNOISE}, \code{devnoise}). \code{"random"}
+draws a seed with R's random number generator, so \code{\link[=set.seed]{set.seed()}}
+makes it reproducible; so does a deck that says \verb{.options seed=random}. The seed used comes back in the result's \code{seed}, and
+\code{options = list(seed = res$seed)} repeats the run. Without a seed
+the random functions take their nominal value.}
 
 \item{tmax_divisor}{As in \code{\link[=spice_run]{spice_run()}} (it divides the maximum step
 of the stabilization transient).}

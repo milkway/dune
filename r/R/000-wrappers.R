@@ -94,8 +94,8 @@ NULL
 #' failure list (kind `pss` with `iterations`, `residuals` and
 #' `period` when the shooting did not converge).
 #' @noRd
-`ffi_pss_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `freq`, `tstab`, `osc_node`, `points`, `harmonics`, `max_iter`, `steady_coeff`, `uic`) {
-  .Call(savvy_ffi_pss_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `freq`, `tstab`, `osc_node`, `points`, `harmonics`, `max_iter`, `steady_coeff`, `uic`)
+`ffi_pss_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`, `freq`, `tstab`, `osc_node`, `points`, `harmonics`, `max_iter`, `steady_coeff`, `uic`) {
+  .Call(savvy_ffi_pss_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`, `freq`, `tstab`, `osc_node`, `points`, `harmonics`, `max_iter`, `steady_coeff`, `uic`)
 }
 
 #' Read a rawfile: `list(plots, warnings)`. The 3f5 reader takes the
@@ -108,10 +108,11 @@ NULL
 #' Run a deck. `deck` is a path when `is_path`, netlist text
 #' otherwise; includes are parallel name/text vectors (text decks
 #' only); options are names plus a list of length-1 values;
-#' `tmax_divisor` is `numeric(0)` for none.
+#' `tmax_divisor` and `random_seed` (the seed R drew for `seed =
+#' "random"`) are `numeric(0)` for none.
 #' @noRd
-`ffi_run_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`) {
-  .Call(savvy_ffi_run_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`)
+`ffi_run_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`) {
+  .Call(savvy_ffi_run_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`)
 }
 
 #' Sweep a deck (issue #10): the deck, includes and options as in
@@ -122,8 +123,8 @@ NULL
 #' run is `list(ok, plots, notes, measurements, fourier)` or
 #' `list(ok = FALSE, kind, message)`.
 #' @noRd
-`ffi_sweep_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `params`, `values`, `threads`) {
-  .Call(savvy_ffi_sweep_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `params`, `values`, `threads`)
+`ffi_sweep_deck` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`, `params`, `values`, `threads`) {
+  .Call(savvy_ffi_sweep_deck__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`, `params`, `values`, `threads`)
 }
 
 #' Write plots (each a list as `plot_to_r` makes) to a rawfile.
@@ -243,8 +244,8 @@ NULL
 
 ### associated functions for SpiceSession
 
-`SpiceSession`$`open` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`) {
-  .savvy_wrap_SpiceSession(.Call(savvy_SpiceSession_open__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`))
+`SpiceSession`$`open` <- function(`deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`) {
+  .savvy_wrap_SpiceSession(.Call(savvy_SpiceSession_open__impl, `deck`, `is_path`, `include_names`, `include_texts`, `opt_names`, `opt_values`, `tmax_divisor`, `random_seed`))
 }
 
 

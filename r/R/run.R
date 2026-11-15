@@ -27,14 +27,24 @@
 #'   `"spice3"`, the 'SPICE3f5' defaults: a trapezoidal `.tran`,
 #'   switches flipping on the time grid, `ltrabkrate` 0),
 #'   `ltrabkrate`, `ltrafit`, `maxord`, `nopage`, `defl`, `defw`,
-#'   `defad`, `defas`, `seed` (the transient-noise seed, a whole number
-#'   `>= 1`; no `"random"`), `notrnoise`, `devnoise`, `devnt` (the
-#'   device-noise grid step, seconds, `> 0`), `keepopinfo` and
-#'   `trytocompact`. The flags
+#'   `defad`, `defas`, `seed` (see below), `notrnoise`, `devnoise`,
+#'   `devnt` (the device-noise grid step, seconds, `> 0`), `keepopinfo`
+#'   and `trytocompact`. The flags
 #'   `noopiter`, `nopage`, `ltrafit`, `notrnoise`, `devnoise` and
 #'   `keepopinfo` take `TRUE`/`FALSE` (`FALSE` clears a flag the deck's
 #'   card set). Unlike a `.options` card, which only warns, an unknown
 #'   name or a value of the wrong type is an error.
+#'
+#'   `seed` is exactly `.options seed=` written in the deck: a whole
+#'   number from 1 to 4294967295 (`2^32 - 1`) draws the deck's random
+#'   functions (`agauss`, `gauss`, `aunif`, `unif`, `limit`) from that
+#'   seed -- the same seed gives the same circuit on every platform --
+#'   and seeds the transient noise (`TRNOISE`, `devnoise`). `"random"`
+#'   draws a seed with R's random number generator, so [set.seed()]
+#'   makes it reproducible; so does a deck that says `.options
+#'   seed=random`. The seed used comes back in the result's `seed`, and
+#'   `options = list(seed = res$seed)` repeats the run. Without a seed
+#'   the random functions take their nominal value.
 #' @param tmax_divisor `NULL` (the default) or a finite number `>= 1` that
 #'   divides the maximum step of every `.tran` card -- its TMAX argument,
 #'   else the default `min(TSTEP, (TSTOP - TSTART) / 50)`. The run is, bit
@@ -66,6 +76,11 @@
 #'     (zero rows without `.four` cards). A vector that cannot be
 #'     analysed (no transient, an unknown vector, a run shorter than the
 #'     periods asked for) is a row with `error` set.
+#'   * `seed`: the seed the run was drawn with (a double) -- the `seed`
+#'     option, the one `"random"` drew, or the deck's `.options seed` --
+#'     or `NA` when there was none;
+#'   * `random_mode`: `"seeded"` when the deck's random functions were
+#'     drawn from `seed`, `"nominal"` when they took their nominal value.
 #'
 #' @section Errors:
 #' Failures are signalled with [cli::cli_abort()] as conditions of class
@@ -113,10 +128,12 @@ spice_run <- function(deck, includes = NULL, options = NULL, tmax_divisor = NULL
   opt <- check_options(options, call = call)
   div <- check_tmax_divisor(tmax_divisor, call = call)
 
-  out <- ffi_run_deck(
-    src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
-    as.character(names(opt)), unname(opt), div
-  )
+  out <- with_random_seed(opt, function(seed) {
+    ffi_run_deck(
+      src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
+      as.character(names(opt)), unname(opt), div, seed
+    )
+  })
   diagnostics <- tibble::tibble(
     severity = out$diagnostics$severity,
     message = out$diagnostics$message
@@ -124,11 +141,33 @@ spice_run <- function(deck, includes = NULL, options = NULL, tmax_divisor = NULL
   if (!isTRUE(out$ok)) {
     abort_engine(out$kind, out$message, diagnostics, call = call, failure = out)
   }
-  new_spice_result(out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier)
+  new_spice_result(
+    out$title, out$plots, out$notes, diagnostics, out$measurements, out$fourier,
+    seed = out$seed
+  )
 }
 
+# The seed of a run (D-0075). `options$seed` is `.options seed=` written
+# in the deck; `"random"` -- the option's, or a deck's own `.options
+# seed=random` -- is a seed drawn with R's RNG, so `set.seed()` governs
+# it. `ffi` takes that seed (`numeric(0)` for none) and returns the
+# engine's list; a deck that asks for a seed the call did not bring
+# answers kind "seed", and the call is made again with one. R's RNG is
+# touched only when a seed is needed.
+with_random_seed <- function(opt, ffi) {
+  wants <- is.character(opt$seed) && identical(tolower(opt$seed), "random")
+  out <- ffi(if (wants) draw_seed() else numeric(0))
+  if (!isTRUE(out$ok) && identical(out$kind, "seed")) {
+    out <- ffi(draw_seed())
+  }
+  out
+}
+
+# A seed in 1..2^32 - 1 from R's RNG.
+draw_seed <- function() as.double(sample.int(4294967295, 1L))
+
 new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements = NULL,
-                             fourier = NULL) {
+                             fourier = NULL, seed = NULL) {
   plots <- lapply(raw_plots, new_spice_plot)
   labels <- make.unique(vapply(plots, `[[`, "", "plotname"))
   for (i in seq_along(plots)) plots[[i]]$label <- labels[[i]]
@@ -140,7 +179,9 @@ new_spice_result <- function(title, raw_plots, notes, diagnostics, measurements 
       notes = as.character(notes),
       diagnostics = diagnostics,
       measurements = measurements_tibble(measurements, labels),
-      fourier = fourier_tibble(fourier)
+      fourier = fourier_tibble(fourier),
+      seed = if (is.null(seed)) NA_real_ else as.double(seed),
+      random_mode = if (is.null(seed)) "nominal" else "seeded"
     ),
     class = "spice_result"
   )
@@ -356,6 +397,9 @@ print.spice_result <- function(x, ...) {
   }
   if (length(x$notes) > 0L) {
     out <- c(out, cli::format_inline("{length(x$notes)} note{?s}:"), bullets("i", x$notes))
+  }
+  if (length(x$seed) == 1L && !is.na(x$seed)) {
+    out <- c(out, paste("Seed:", format(x$seed, scientific = FALSE)))
   }
   nm <- if (is.null(x$measurements)) 0L else nrow(x$measurements)
   if (nm > 0L) {

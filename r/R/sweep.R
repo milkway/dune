@@ -99,11 +99,13 @@ spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
     sweep_zip(params, call = call)
   }
 
-  out <- ffi_sweep_deck(
-    src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
-    as.character(names(opt)), unname(opt), div,
-    names(params), as.double(unlist(values, use.names = FALSE)), threads
-  )
+  out <- with_random_seed(opt, function(seed) {
+    ffi_sweep_deck(
+      src$deck, src$is_path, as.character(names(inc)), unname(as.character(inc)),
+      as.character(names(opt)), unname(opt), div, seed,
+      names(params), as.double(unlist(values, use.names = FALSE)), threads
+    )
+  })
   diagnostics <- tibble::tibble(
     severity = out$diagnostics$severity,
     message = out$diagnostics$message
@@ -135,7 +137,10 @@ spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
         call = call, failure = r
       )
     }
-    runs[[i]] <- new_spice_result(out$title, r$plots, r$notes, diagnostics[0, ], r$measurements, r$fourier)
+    runs[[i]] <- new_spice_result(
+      out$title, r$plots, r$notes, diagnostics[0, ], r$measurements, r$fourier,
+      seed = r$seed
+    )
   }
   structure(
     list(title = out$title, params = tab, runs = runs, diagnostics = diagnostics),

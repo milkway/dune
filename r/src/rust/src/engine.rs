@@ -8,11 +8,11 @@ use std::path::Path;
 use dune_core::consts::CTOK;
 use dune_core::{
     AlterValue, Circuit, Compat, FourError, FourParams, Fourier, MeasureError, Measurement, Method,
-    Options, OutExpr, PSS_FREQ_PLOT, PSS_TIME_PLOT, PssParams, Session, Solution, SweepParam,
-    four_all, measure_all,
+    Options, OutExpr, PSS_FREQ_PLOT, PSS_TIME_PLOT, PssParams, SEED_MAX, Session, Solution,
+    SweepParam, four_all, measure_all,
 };
-use dune_netlist::ir::{Output, OutputKind};
-use dune_netlist::{IncludeLoader, ParseOutcome, Severity};
+use dune_netlist::ir::{Netlist, Output, OutputKind, RandomMode};
+use dune_netlist::{Diagnostic, IncludeLoader, ParseOutcome, Severity};
 use dune_raw::{Data, Plot, Rawfile};
 
 /// Name a text deck is parsed under (as in `dune-wasm`): `.include`
@@ -172,6 +172,8 @@ pub struct RunOutput {
     pub fourier: Vec<FourRow>,
     pub notes: Vec<String>,
     pub diagnostics: Vec<Diag>,
+    /// The seed the run was drawn with (`None`: nominal, D-0075).
+    pub seed: Option<u64>,
 }
 
 /// One harmonic of one `.four` vector as plain data (a row of the R
@@ -493,16 +495,6 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
             _ => Err(format!("option `{name}` needs a non-negative whole number")),
         }
     }
-    fn seed(name: &str, v: &OptValue) -> Result<u64, String> {
-        match v {
-            OptValue::Num(x) if *x >= 1.0 && *x < 9.007_199_254_740_992e15 && x.fract() == 0.0 => {
-                Ok(*x as u64)
-            }
-            _ => Err(format!(
-                "option `{name}` needs a whole number >= 1 (no \"random\": runs are reproducible)"
-            )),
-        }
-    }
     fn step(name: &str, v: &OptValue) -> Result<f64, String> {
         match v {
             OptValue::Num(x) if x.is_finite() && *x > 0.0 => Ok(*x),
@@ -567,7 +559,12 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
             "defw" => opts.defw = num(n, v)?,
             "defad" => opts.defad = num(n, v)?,
             "defas" => opts.defas = num(n, v)?,
-            "seed" => opts.seed = seed(n, v)?,
+            // Validated only: the seed draws the netlist again before
+            // the options are settled (`prepare`), and the drawn
+            // netlist carries `seed=N` for the transient noise.
+            "seed" => {
+                seed_option(v)?;
+            }
             "notrnoise" => opts.notrnoise = flag(n, v)?,
             "devnoise" => opts.dev_noise = flag(n, v)?,
             "devnt" => opts.dev_noise_step = Some(step(n, v)?),
@@ -577,6 +574,44 @@ pub fn apply_options(opts: &mut Options, user: &[(String, OptValue)]) -> Result<
         }
     }
     Ok(())
+}
+
+/// The caller's `seed` option (D-0075): `.options seed=N` written in
+/// the deck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeedOpt {
+    /// Draw the deck with this seed.
+    Seed(u64),
+    /// Draw it with a seed R picks (`seed = "random"`).
+    Random,
+}
+
+/// Read a `seed` value: a whole number from 1 to 2^32 - 1
+/// ([`SEED_MAX`]; ngspice reads a seed as an unsigned 32-bit integer)
+/// or `"random"`.
+pub fn seed_option(v: &OptValue) -> Result<SeedOpt, String> {
+    match v {
+        OptValue::Num(x) if *x >= 1.0 && *x <= SEED_MAX as f64 && x.fract() == 0.0 => {
+            Ok(SeedOpt::Seed(*x as u64))
+        }
+        OptValue::Str(s) if s.eq_ignore_ascii_case("random") => Ok(SeedOpt::Random),
+        _ => Err(
+            "option `seed` needs a whole number from 1 to 4294967295 (2^32 - 1) or \"random\""
+                .into(),
+        ),
+    }
+}
+
+/// A `random_seed` from R (the seed R drew for `"random"`): `None`
+/// or a whole number in `1..=SEED_MAX`.
+pub fn check_random_seed(s: Option<f64>) -> Result<Option<u64>, String> {
+    match s {
+        None => Ok(None),
+        Some(x) if x >= 1.0 && x <= SEED_MAX as f64 && x.fract() == 0.0 => Ok(Some(x as u64)),
+        Some(x) => Err(format!(
+            "`random_seed` must be a whole number in 1..2^32-1, got {x}"
+        )),
+    }
 }
 
 /// Check a `tmax_divisor` argument: `None` or a finite number ≥ 1.
@@ -614,19 +649,84 @@ struct Prepared {
     /// deck's `.options` (what its `.four` cards use).
     four: FourParams,
     diagnostics: Vec<Diag>,
+    /// The seed the deck was drawn with (`None`: nominal).
+    seed: Option<u64>,
+    /// The note a seed picked by R (`"random"`) adds to the run.
+    seed_note: Option<String>,
+}
+
+impl Prepared {
+    /// The elaboration notes with the seed note first.
+    fn notes(&self, elaboration: Vec<String>) -> Vec<String> {
+        self.seed_note.iter().cloned().chain(elaboration).collect()
+    }
+}
+
+/// The kind of the failure that asks R for a seed: the deck says
+/// `.options seed=random` (or the option is `"random"`) and no
+/// `random_seed` came with the call. The R side draws one with its
+/// RNG (so `set.seed()` governs it) and calls again.
+pub const SEED_REQUESTED: &str = "seed";
+
+/// The seed a run asks for: the caller's `seed` option, else the
+/// deck's `.options seed=random`, both resolved with `random_seed`;
+/// else none (the deck as parsed, nominal or with its own `.options
+/// seed=N`). Returns the seed and whether it was picked by R.
+fn wanted_seed(
+    netlist: &Netlist,
+    opt: Option<SeedOpt>,
+    random_seed: Option<u64>,
+) -> Result<Option<(u64, bool)>, Failure> {
+    let picked = || {
+        random_seed.map(|s| Some((s, true))).ok_or_else(|| {
+            Failure::new(
+                SEED_REQUESTED,
+                "the run needs a random seed (seed = \"random\")",
+            )
+        })
+    };
+    match opt {
+        Some(SeedOpt::Seed(s)) => Ok(Some((s, false))),
+        Some(SeedOpt::Random) => picked(),
+        None if netlist.random_mode() == RandomMode::SeedRequested => picked(),
+        None => Ok(None),
+    }
+}
+
+/// A parser warning that a seed from the caller makes moot: the
+/// request for one (`.options seed=random`) and the note that random
+/// functions stay nominal (the CLI drops the same two).
+fn moot_with_seed(d: &Diagnostic) -> bool {
+    d.message.starts_with("`.options seed=random`")
+        || d.message.starts_with("random functions (agauss")
+}
+
+/// The seed a netlist was drawn with (`None`: nominal).
+fn seed_of(netlist: &Netlist) -> Option<u64> {
+    match netlist.random_mode() {
+        RandomMode::Seeded(s) => Some(s),
+        _ => None,
+    }
 }
 
 fn prepare(
     source: Source<'_>,
     user: &[(String, OptValue)],
     tmax_divisor: Option<f64>,
+    random_seed: Option<u64>,
 ) -> Result<Prepared, Failure> {
     // Validate the overrides before any work.
     let mut options = Options::default();
     apply_options(&mut options, user).map_err(|m| Failure::new("options", m))?;
     check_divisor(tmax_divisor).map_err(|m| Failure::new("options", m))?;
+    let seed_opt = user
+        .iter()
+        .find(|(n, _)| n == "seed")
+        .map(|(_, v)| seed_option(v))
+        .transpose()
+        .map_err(|m| Failure::new("options", m))?;
 
-    let parsed = match source {
+    let mut parsed = match source {
         Source::Path(p) => {
             dune_netlist::parse_file(p).map_err(|e| Failure::new("io", e.to_string()))?
         }
@@ -636,29 +736,64 @@ fn prepare(
             &mut MapLoader(includes),
         ),
     };
-    let mut diagnostics = render_diags(&parsed, &parsed.diags);
     if let Some(first) = parsed.diags.iter().find(|d| d.severity == Severity::Error) {
         return Err(Failure {
             kind: "parse",
             message: first.render(&parsed.sources),
-            diagnostics,
+            diagnostics: render_diags(&parsed, &parsed.diags),
             pss: None,
         });
     }
+    let wanted = wanted_seed(&parsed.netlist, seed_opt, random_seed)?;
+    let kept: Vec<Diagnostic> = parsed
+        .diags
+        .iter()
+        .filter(|d| wanted.is_none() || !moot_with_seed(d))
+        .cloned()
+        .collect();
+    let mut diagnostics = render_diags(&parsed, &kept);
+    // A seed from the caller: the deck drawn with it, as `.options
+    // seed=N` in it would (D-0075); its options then carry `seed=N`
+    // for the engine's transient noise. The new evaluation's warnings
+    // repeat the parse's, so only its errors are kept.
+    let (netlist, seed_note) = match wanted {
+        Some((s, picked)) => {
+            let (nl, d) = parsed.netlist.with_seed(s);
+            if let Some(first) = d.iter().find(|d| d.severity == Severity::Error) {
+                diagnostics.extend(render_diags(&parsed, &d));
+                return Err(Failure {
+                    kind: "parse",
+                    message: first.render(&parsed.sources),
+                    diagnostics,
+                    pss: None,
+                });
+            }
+            let note = picked.then(|| {
+                format!(
+                    "seed = \"random\": random functions drawn with seed {s} \
+                     (options = list(seed = {s}) repeats this run)"
+                )
+            });
+            (nl, note)
+        }
+        None => (std::mem::take(&mut parsed.netlist), None),
+    };
 
     let mut options = Options::default();
     let mut opt_diags = Vec::new();
-    options.apply(&parsed.netlist.options, &mut opt_diags);
-    let four = FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
+    options.apply(&netlist.options, &mut opt_diags);
+    let four = FourParams::from_options(&netlist.options, &mut opt_diags);
     diagnostics.extend(render_diags(&parsed, &opt_diags));
     // Cannot fail: validated above on a fresh `Options`.
     apply_options(&mut options, user).map_err(|m| Failure::new("options", m))?;
     options.tmax_divisor = tmax_divisor;
     Ok(Prepared {
-        netlist: parsed.netlist,
+        seed: seed_of(&netlist),
+        netlist,
         options,
         four,
         diagnostics,
+        seed_note,
     })
 }
 
@@ -671,23 +806,30 @@ fn to_plots(title: &str, solutions: &[Solution]) -> Vec<(Plot, Option<usize>)> {
 
 /// Parse, elaborate and run every analysis card in deck order — what
 /// `dune -b` runs — through [`Circuit::run`]. The deck's `.options`
-/// apply first, then `user` and `tmax_divisor` on top.
+/// apply first, then `user` and `tmax_divisor` on top. `random_seed`
+/// is the seed R drew for a `seed = "random"` (the option's or the
+/// deck's); without one such a run fails with kind
+/// [`SEED_REQUESTED`].
 pub fn run(
     source: Source<'_>,
     user: &[(String, OptValue)],
     tmax_divisor: Option<f64>,
+    random_seed: Option<u64>,
 ) -> Result<RunOutput, Failure> {
+    let prepared = prepare(source, user, tmax_divisor, random_seed)?;
+    let (circuit, notes) = Circuit::from_netlist(&prepared.netlist).map_err(|e| Failure {
+        diagnostics: prepared.diagnostics.clone(),
+        ..Failure::new("elaborate", e.to_string())
+    })?;
+    let mut notes = prepared.notes(notes);
     let Prepared {
         netlist,
         options,
         four,
         mut diagnostics,
-    } = prepare(source, user, tmax_divisor)?;
-
-    let (circuit, mut notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
-        diagnostics: std::mem::take(&mut diagnostics),
-        ..Failure::new("elaborate", e.to_string())
-    })?;
+        seed,
+        ..
+    } = prepared;
 
     let mut solutions: Vec<Solution> = Vec::new();
     for analysis in &netlist.analyses {
@@ -712,6 +854,7 @@ pub fn run(
         title,
         notes,
         diagnostics,
+        seed,
     })
 }
 
@@ -744,18 +887,22 @@ pub fn pss(
     source: Source<'_>,
     user: &[(String, OptValue)],
     tmax_divisor: Option<f64>,
+    random_seed: Option<u64>,
     p: &PssParams,
 ) -> Result<PssOutput, Failure> {
+    let prepared = prepare(source, user, tmax_divisor, random_seed)?;
+    let (circuit, notes) = Circuit::from_netlist(&prepared.netlist).map_err(|e| Failure {
+        diagnostics: prepared.diagnostics.clone(),
+        ..Failure::new("elaborate", e.to_string())
+    })?;
+    let mut notes = prepared.notes(notes);
     let Prepared {
         netlist,
         options,
         mut diagnostics,
+        seed,
         ..
-    } = prepare(source, user, tmax_divisor)?;
-    let (circuit, mut notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
-        diagnostics: std::mem::take(&mut diagnostics),
-        ..Failure::new("elaborate", e.to_string())
-    })?;
+    } = prepared;
     let pss = circuit
         .pss(&options, p)
         .map_err(|e| Failure::analysis(e, std::mem::take(&mut diagnostics)))?;
@@ -769,6 +916,7 @@ pub fn pss(
             title,
             notes,
             diagnostics,
+            seed,
         },
         period: pss.period,
         t0: pss.t0,
@@ -790,6 +938,8 @@ pub struct LiveSession {
     /// every run) and the `.options` they read.
     outputs: Vec<Output>,
     four: FourParams,
+    /// The seed the deck was drawn with when the session opened.
+    seed: Option<u64>,
 }
 
 /// A refused alteration (kind `alter`; the circuit is unchanged).
@@ -798,22 +948,30 @@ fn alter_failure(e: dune_core::Error) -> Failure {
 }
 
 impl LiveSession {
+    /// Open a session; the deck's random functions are drawn once,
+    /// here (`random_seed` as in [`run`]).
     pub fn open(
         source: Source<'_>,
         user: &[(String, OptValue)],
         tmax_divisor: Option<f64>,
+        random_seed: Option<u64>,
     ) -> Result<Self, Failure> {
+        let prepared = prepare(source, user, tmax_divisor, random_seed)?;
+        let (circuit, notes) = Circuit::from_netlist(&prepared.netlist).map_err(|e| Failure {
+            diagnostics: prepared.diagnostics.clone(),
+            ..Failure::new("elaborate", e.to_string())
+        })?;
+        let notes = prepared.notes(notes);
         let Prepared {
             netlist,
             options,
             four,
-            mut diagnostics,
-        } = prepare(source, user, tmax_divisor)?;
-        let (circuit, notes) = Circuit::from_netlist(&netlist).map_err(|e| Failure {
-            diagnostics: std::mem::take(&mut diagnostics),
-            ..Failure::new("elaborate", e.to_string())
-        })?;
+            diagnostics,
+            seed,
+            ..
+        } = prepared;
         Ok(LiveSession {
+            seed,
             session: Session::new(circuit, options, netlist.analyses.clone()),
             title: netlist.title.clone(),
             notes,
@@ -898,6 +1056,7 @@ impl LiveSession {
             title: self.title.clone(),
             notes,
             diagnostics: self.diagnostics.clone(),
+            seed: self.seed,
         })
     }
 }
@@ -911,6 +1070,9 @@ pub enum SweepRunOutput {
         /// The deck's `.four` cards on this run's plots.
         fourier: Vec<FourRow>,
         notes: Vec<String>,
+        /// The seed the run was drawn with: the swept one when `seed`
+        /// is swept, else the deck's (`None`: nominal).
+        seed: Option<u64>,
     },
     Failed {
         kind: &'static str,
@@ -937,6 +1099,7 @@ pub fn sweep(
     source: Source<'_>,
     user: &[(String, OptValue)],
     tmax_divisor: Option<f64>,
+    random_seed: Option<u64>,
     params: &[String],
     rows: &[Vec<f64>],
     threads: usize,
@@ -951,7 +1114,13 @@ pub fn sweep(
         options,
         four,
         diagnostics,
-    } = prepare(source, user, tmax_divisor)?;
+        seed,
+        seed_note,
+    } = prepare(source, user, tmax_divisor, random_seed)?;
+    // A swept seed wins over the option's and the deck's; the note of
+    // a seed R picked then does not apply.
+    let swept = params.iter().position(|p| *p == SweepParam::Seed);
+    let seed_note = seed_note.filter(|_| swept.is_none());
     let runs = if threads == 1 {
         dune_core::sweep(&netlist, &options, &params, rows)
     } else {
@@ -972,7 +1141,11 @@ pub fn sweep(
                     })
                     .collect(),
                 fourier: deck_fourier(&netlist.outputs, &o.solutions, &four),
-                notes: o.notes,
+                notes: seed_note.iter().cloned().chain(o.notes).collect(),
+                seed: match swept {
+                    Some(k) => r.values.get(k).map(|&v| v as u64),
+                    None => seed,
+                },
             },
             Err(e) => SweepRunOutput::Failed {
                 pss: PssHistory::of(&e),
@@ -1043,7 +1216,7 @@ mod tests {
                 text: deck,
                 includes: &inc,
             };
-            let out = run(source, &[], None).ok().expect("runs");
+            let out = run(source, &[], None, None).ok().expect("runs");
             out.plots
                 .iter()
                 .flat_map(|(p, _)| match &p.data {
@@ -1072,6 +1245,7 @@ mod tests {
             },
             &[],
             None,
+            None,
         )
     }
 
@@ -1083,7 +1257,7 @@ mod tests {
             text: deck,
             includes: &inc,
         };
-        let mut s = LiveSession::open(src(), &[], None).ok().unwrap();
+        let mut s = LiveSession::open(src(), &[], None, None).ok().unwrap();
         let v2 = |o: &RunOutput| o.plots[0].0.real_values("v(2)").unwrap()[0];
         s.alter("r2", "", AlterValue::Num(3e3)).ok().unwrap();
         let altered = deck.replace("r2 2 0 1k", "r2 2 0 3k");
@@ -1093,6 +1267,7 @@ mod tests {
                 includes: &inc,
             },
             &[],
+            None,
             None,
         )
         .ok()
@@ -1104,6 +1279,56 @@ mod tests {
         assert_eq!(f.kind, "alter");
         assert_eq!(s.alterable("r1").ok().unwrap(), ["resistance"].as_slice());
         assert_eq!(s.title(), "divider");
+    }
+
+    #[test]
+    fn the_seed_option_is_the_card_and_random_asks_r_for_a_seed() {
+        let inc = BTreeMap::new();
+        let deck =
+            "mc\n.param rv=agauss(1k,100,3)\nv1 1 0 dc 2\nr1 1 2 {rv}\nr2 2 0 1k\n.op\n.end\n";
+        let go = |t: &str, user: &[(String, OptValue)], rs: Option<u64>| {
+            run(
+                Source::Text {
+                    text: t,
+                    includes: &inc,
+                },
+                user,
+                None,
+                rs,
+            )
+        };
+        let v2 = |o: &RunOutput| o.plots[0].0.real_values("v(2)").unwrap()[0].to_bits();
+        let card = go(
+            &deck.replace(".param", ".options seed=7\n.param"),
+            &[],
+            None,
+        )
+        .ok()
+        .unwrap();
+        let opt = go(deck, &[("seed".into(), OptValue::Num(7.0))], None)
+            .ok()
+            .unwrap();
+        assert_eq!((v2(&card), card.seed), (v2(&opt), Some(7)));
+        let nominal = go(deck, &[], None).ok().unwrap();
+        assert_eq!(nominal.seed, None);
+        assert_ne!(v2(&nominal), v2(&opt));
+        // "random" (or the deck's seed=random) without a seed from R
+        // asks for one; with it, it is that seed.
+        let random = [("seed".into(), OptValue::Str("random".into()))];
+        let Err(f) = go(deck, &random, None) else {
+            panic!("expected a seed request");
+        };
+        assert_eq!(f.kind, SEED_REQUESTED);
+        let asked = deck.replace(".param", ".options seed=random\n.param");
+        assert_eq!(go(&asked, &[], None).err().unwrap().kind, SEED_REQUESTED);
+        let r = go(deck, &random, Some(7)).ok().unwrap();
+        assert_eq!((v2(&r), r.seed), (v2(&opt), Some(7)));
+        assert!(r.notes[0].contains("seed 7"));
+        // Out of range: an options failure.
+        for bad in [0.0, 1.5, 4_294_967_296.0] {
+            let e = go(deck, &[("seed".into(), OptValue::Num(bad))], None);
+            assert_eq!(e.err().unwrap().kind, "options");
+        }
     }
 
     #[test]
@@ -1134,6 +1359,7 @@ mod tests {
             },
             &[("reltl".into(), OptValue::Num(1e-4))],
             None,
+            None,
         ) else {
             panic!("expected an options error");
         };
@@ -1148,7 +1374,7 @@ mod tests {
             includes: &inc,
         };
         let rows = vec![vec![1e3], vec![3e3]];
-        let out = sweep(src(), &[], None, &["R2".into()], &rows, 1)
+        let out = sweep(src(), &[], None, None, &["R2".into()], &rows, 1)
             .ok()
             .unwrap();
         assert_eq!(out.params, ["r2"]);
@@ -1161,7 +1387,7 @@ mod tests {
             })
             .collect();
         assert!((v2[0] - 1.0).abs() < 1e-9 && (v2[1] - 1.5).abs() < 1e-9);
-        let Err(f) = sweep(src(), &[], None, &["r9".into()], &[vec![1.0]], 1) else {
+        let Err(f) = sweep(src(), &[], None, None, &["r9".into()], &[vec![1.0]], 1) else {
             panic!("expected a sweep error");
         };
         assert_eq!(f.kind, "sweep");
@@ -1184,6 +1410,7 @@ mod tests {
                 includes: &inc,
             },
             &[],
+            None,
             None,
             &p,
         )
@@ -1234,6 +1461,7 @@ mod tests {
                 includes: &inc,
             },
             &[],
+            None,
             None,
         )
         .ok()

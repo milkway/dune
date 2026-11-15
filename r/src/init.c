@@ -69,8 +69,8 @@ SEXP savvy_ffi_pic_texlabels__impl(void) {
     return handle_result(res);
 }
 
-SEXP savvy_ffi_pss_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__freq, SEXP c_arg__tstab, SEXP c_arg__osc_node, SEXP c_arg__points, SEXP c_arg__harmonics, SEXP c_arg__max_iter, SEXP c_arg__steady_coeff, SEXP c_arg__uic) {
-    SEXP res = savvy_ffi_pss_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor, c_arg__freq, c_arg__tstab, c_arg__osc_node, c_arg__points, c_arg__harmonics, c_arg__max_iter, c_arg__steady_coeff, c_arg__uic);
+SEXP savvy_ffi_pss_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__random_seed, SEXP c_arg__freq, SEXP c_arg__tstab, SEXP c_arg__osc_node, SEXP c_arg__points, SEXP c_arg__harmonics, SEXP c_arg__max_iter, SEXP c_arg__steady_coeff, SEXP c_arg__uic) {
+    SEXP res = savvy_ffi_pss_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor, c_arg__random_seed, c_arg__freq, c_arg__tstab, c_arg__osc_node, c_arg__points, c_arg__harmonics, c_arg__max_iter, c_arg__steady_coeff, c_arg__uic);
     return handle_result(res);
 }
 
@@ -79,13 +79,13 @@ SEXP savvy_ffi_read_raw__impl(SEXP c_arg__path) {
     return handle_result(res);
 }
 
-SEXP savvy_ffi_run_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor) {
-    SEXP res = savvy_ffi_run_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor);
+SEXP savvy_ffi_run_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__random_seed) {
+    SEXP res = savvy_ffi_run_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor, c_arg__random_seed);
     return handle_result(res);
 }
 
-SEXP savvy_ffi_sweep_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__params, SEXP c_arg__values, SEXP c_arg__threads) {
-    SEXP res = savvy_ffi_sweep_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor, c_arg__params, c_arg__values, c_arg__threads);
+SEXP savvy_ffi_sweep_deck__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__random_seed, SEXP c_arg__params, SEXP c_arg__values, SEXP c_arg__threads) {
+    SEXP res = savvy_ffi_sweep_deck__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor, c_arg__random_seed, c_arg__params, c_arg__values, c_arg__threads);
     return handle_result(res);
 }
 
@@ -104,8 +104,8 @@ SEXP savvy_SpiceSession_alterable__impl(SEXP self__, SEXP c_arg__refdes) {
     return handle_result(res);
 }
 
-SEXP savvy_SpiceSession_open__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor) {
-    SEXP res = savvy_SpiceSession_open__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor);
+SEXP savvy_SpiceSession_open__impl(SEXP c_arg__deck, SEXP c_arg__is_path, SEXP c_arg__include_names, SEXP c_arg__include_texts, SEXP c_arg__opt_names, SEXP c_arg__opt_values, SEXP c_arg__tmax_divisor, SEXP c_arg__random_seed) {
+    SEXP res = savvy_SpiceSession_open__ffi(c_arg__deck, c_arg__is_path, c_arg__include_names, c_arg__include_texts, c_arg__opt_names, c_arg__opt_values, c_arg__tmax_divisor, c_arg__random_seed);
     return handle_result(res);
 }
 
@@ -172,14 +172,14 @@ static const R_CallMethodDef CallEntries[] = {
     {"savvy_ffi_pic_extract__impl", (DL_FUNC) &savvy_ffi_pic_extract__impl, 5},
     {"savvy_ffi_pic_svg__impl", (DL_FUNC) &savvy_ffi_pic_svg__impl, 2},
     {"savvy_ffi_pic_texlabels__impl", (DL_FUNC) &savvy_ffi_pic_texlabels__impl, 0},
-    {"savvy_ffi_pss_deck__impl", (DL_FUNC) &savvy_ffi_pss_deck__impl, 15},
+    {"savvy_ffi_pss_deck__impl", (DL_FUNC) &savvy_ffi_pss_deck__impl, 16},
     {"savvy_ffi_read_raw__impl", (DL_FUNC) &savvy_ffi_read_raw__impl, 1},
-    {"savvy_ffi_run_deck__impl", (DL_FUNC) &savvy_ffi_run_deck__impl, 7},
-    {"savvy_ffi_sweep_deck__impl", (DL_FUNC) &savvy_ffi_sweep_deck__impl, 10},
+    {"savvy_ffi_run_deck__impl", (DL_FUNC) &savvy_ffi_run_deck__impl, 8},
+    {"savvy_ffi_sweep_deck__impl", (DL_FUNC) &savvy_ffi_sweep_deck__impl, 11},
     {"savvy_ffi_write_raw__impl", (DL_FUNC) &savvy_ffi_write_raw__impl, 3},
     {"savvy_SpiceSession_alter__impl", (DL_FUNC) &savvy_SpiceSession_alter__impl, 5},
     {"savvy_SpiceSession_alterable__impl", (DL_FUNC) &savvy_SpiceSession_alterable__impl, 2},
-    {"savvy_SpiceSession_open__impl", (DL_FUNC) &savvy_SpiceSession_open__impl, 7},
+    {"savvy_SpiceSession_open__impl", (DL_FUNC) &savvy_SpiceSession_open__impl, 8},
     {"savvy_SpiceSession_param__impl", (DL_FUNC) &savvy_SpiceSession_param__impl, 3},
     {"savvy_SpiceSession_run__impl", (DL_FUNC) &savvy_SpiceSession_run__impl, 1},
     {"savvy_SpiceSession_set_temp__impl", (DL_FUNC) &savvy_SpiceSession_set_temp__impl, 2},
