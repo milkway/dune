@@ -1131,6 +1131,15 @@ impl Engine {
         self.ag = [0.0; 7];
         self.states.copy01();
         let mut optime = 0.0f64;
+        // Dune's step budget, as in `.tran` (D-0022): the C marches
+        // this pseudo-transient without any bound, and a device whose
+        // equations make it crawl in picosecond steps (a VBIC pnp with
+        // excess phase needed 2.5e5, then 7.8e5, then over 2e6
+        // attempts per `.dc` point) keeps both programs busy for
+        // hours. A transient operating point that needs more than the
+        // budget is a failed one (D-0077).
+        let step_budget = opts.tran_step_budget(final_time, max_step);
+        let mut steps = 0usize;
 
         'next_time: loop {
             if optime > breaks[0] {
@@ -1170,6 +1179,13 @@ impl Engine {
             self.states.rotate(self.maxord);
 
             loop {
+                steps += 1;
+                if steps > step_budget {
+                    return Err(Error::StepLimit {
+                        steps: step_budget,
+                        time: optime,
+                    });
+                }
                 let olddelta = delta;
                 optime += delta;
                 self.delta_old[0] = delta;
@@ -1212,6 +1228,13 @@ impl Engine {
                         optime -= delta;
                         delta = new;
                     }
+                }
+                // A NaN step (a device that returned NaN charges makes
+                // the truncation estimate NaN) compares false against
+                // every floor and would loop forever, as it does in the
+                // C: it is a failed step, not a small one.
+                if !delta.is_finite() {
+                    return Err(Error::Timestep { time: optime });
                 }
                 if delta <= delmin {
                     if olddelta > delmin {
@@ -1896,6 +1919,10 @@ impl Engine {
                         delta = new;
                     }
                 }
+                // A NaN step would never reach the floor (see `op_tran_loop`).
+                if !delta.is_finite() {
+                    return Err(Error::Timestep { time: self.time });
+                }
                 if delta <= delmin {
                     if olddelta > delmin {
                         delta = delmin;
@@ -2242,6 +2269,10 @@ impl Engine {
             if !ok {
                 *delta /= 8.0;
                 self.order = 1;
+            }
+            // A NaN step would never reach the floor (see `op_tran_loop`).
+            if !delta.is_finite() {
+                return Err(Error::Timestep { time: self.time });
             }
             if *delta <= delmin {
                 if olddelta > delmin {

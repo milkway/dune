@@ -2481,3 +2481,26 @@ Sem a feature (`--no-default-features --features solver-faer`):
 Regra para modelo novo desta família: tudo o que cita o módulo leva
 `#[cfg(feature = "bsim")]`, e o ramo de `LEVEL` em `elaborate.rs`
 ganha a mensagem do caminho desligado.
+
+## `OPtran` com orçamento de passos (D-0077)
+
+O último grau da cadeia do ponto de operação é o transiente de
+`optran.c` (`0 → 10 µs`, passo máximo 100 ns). No C ele não tem teto
+de passos. Um dispositivo cujas equações o fazem rastejar em passos de
+picossegundo — o caso medido é um VBIC pnp com excesso de fase (`TD`),
+bug do ngspice portado fiel — precisou de 2,5e5, 7,8e5 e mais de 2e6
+tentativas nos três primeiros pontos de um `.dc` de 81; o `dune -b`
+ficou 24 h nesse deck e o ngspice-47 também não sai dele.
+
+O `OPtran` do Dune usa o mesmo orçamento do `.tran`
+(`Options::tran_step_budget(10 µs, 100 ns)`: 10 000 tentativas,
+aceitas ou não; `max_tran_steps` muda). Estourado, o grau falha e o
+ponto de operação devolve o erro de convergência do grau anterior. No
+corpus só `vbic_thermal_dc` e mais um deck chegam ao `OPtran`, com 107
+passos cada. Teste: `crates/dune-core/tests/optran_budget.rs`.
+
+Junto entrou uma guarda nos três laços de passo (`OPtran`, `.tran`,
+`.pss`): um passo não finito (`NaN`) compara falso contra qualquer
+piso e, como no C, nunca chegaria a "timestep too small"; agora é
+passo falho. Não tenho deck que produza esse `NaN`; é guarda, não
+conserto de um caso observado.
