@@ -1369,7 +1369,9 @@ impl Engine {
         for d in &mut devices {
             d.alloc(&mut mb);
         }
-        if devices.len() != self.devices.len() || mb.num_slots() > self.mb.num_slots() {
+        // The same matrix pattern, entry for entry: a re-expanded
+        // netlist (`retemp.rs`) must not move a slot.
+        if devices.len() != self.devices.len() || mb.entries() != self.mb.entries() {
             return Err(Error::Build(
                 "internal: rebuilt device list does not match the circuit".into(),
             ));

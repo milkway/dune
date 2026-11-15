@@ -212,6 +212,18 @@ impl Circuit {
         value: impl Into<AlterValue>,
     ) -> Result<(), Error> {
         let value = value.into();
+        self.alter_spec(refdes, param, &value)?;
+        // Replayed if the circuit is re-expanded at another
+        // temperature (`retemp.rs`).
+        self.record_alter(
+            &refdes.to_ascii_lowercase(),
+            &param.to_ascii_lowercase(),
+            &value,
+        );
+        Ok(())
+    }
+
+    fn alter_spec(&mut self, refdes: &str, param: &str, value: &AlterValue) -> Result<(), Error> {
         let name = refdes.to_ascii_lowercase();
         let param_lc = param.to_ascii_lowercase();
         let spec = self

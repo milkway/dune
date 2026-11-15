@@ -22,7 +22,20 @@ impl Circuit {
     /// Build a circuit from a parsed (and already subcircuit-
     /// expanded) netlist. `notes` collects remarks worth printing;
     /// anything the engine cannot represent faithfully is an error.
+    ///
+    /// A netlist that [uses `temper`](Netlist::uses_temper) is kept
+    /// with the circuit: built at another temperature than the one
+    /// it was evaluated at, the circuit re-expands it there first
+    /// (D-0075; `.dc temp`, [`Session::set_temp`](crate::Session::set_temp),
+    /// swept `temp`, an `Options::temp` override).
     pub fn from_netlist(nl: &Netlist) -> Result<(Circuit, Vec<String>), Error> {
+        let (mut ckt, notes) = Circuit::elaborate(nl)?;
+        ckt.attach_temper(nl);
+        Ok((ckt, notes))
+    }
+
+    /// [`Circuit::from_netlist`] without the re-expansion handle.
+    pub(crate) fn elaborate(nl: &Netlist) -> Result<(Circuit, Vec<String>), Error> {
         let mut problems: Vec<String> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
 

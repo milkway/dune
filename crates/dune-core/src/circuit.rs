@@ -867,6 +867,12 @@ pub struct Circuit {
     /// empty for a plain circuit (the engine then runs exactly the
     /// 3f5 path).
     pub(crate) warm: crate::session::WarmSlot,
+    /// The netlist to re-expand at another temperature, when it
+    /// reads `temper` (`retemp.rs`, D-0075); `None` otherwise.
+    pub(crate) temper: Option<std::sync::Arc<crate::retemp::TemperDeck>>,
+    /// The alterations to replay on a re-expanded circuit (kept only
+    /// when `temper` is set).
+    pub(crate) alters: Vec<(String, String, crate::session::AlterValue)>,
 }
 
 impl Circuit {
@@ -1202,6 +1208,11 @@ impl Circuit {
 
     fn build_job(&self, opts: &Options, noise_job: bool) -> Result<Built, Error> {
         use crate::devices::*;
+        // A netlist that reads `temper`, evaluated at another
+        // temperature: build its re-expansion at this one (D-0075).
+        if let Some(other) = self.at_temp(opts)? {
+            return other.build_job(opts, noise_job);
+        }
         #[cfg(not(feature = "bsim"))]
         let _ = noise_job;
 

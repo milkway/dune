@@ -276,8 +276,55 @@ fn assign(nl: &mut Netlist, opts: &mut Options, slots: &[Slot], values: &[f64]) 
     }
 }
 
+/// One run of a netlist that reads `temper` (D-0075): elaborate it
+/// re-expanded at the run's temperature, then set the swept values
+/// with [`Circuit::alter`] — recorded, so a `.dc temp` card of the
+/// deck, which re-expands it again at every point, keeps them.
+fn run_temper(
+    nl: &Netlist,
+    opts: &Options,
+    slots: &[Slot],
+    values: &[f64],
+) -> Result<SweepOutput, Error> {
+    let mut opts = opts.clone();
+    for (slot, &v) in slots.iter().zip(values) {
+        if *slot == Slot::Temp {
+            opts.temp = v + CTOK;
+        }
+    }
+    let (circuit, mut notes) = Circuit::from_netlist(nl)?;
+    let mut circuit = match circuit.at_temp(&opts)? {
+        Some(c) => c,
+        None => circuit,
+    };
+    for (slot, &v) in slots.iter().zip(values) {
+        let (i, param) = match *slot {
+            Slot::Temp => continue,
+            Slot::Value(i) => (i, ""),
+            Slot::SrcDc(i) => (i, "dc"),
+            Slot::SrcAcMag(i) => (i, "acmag"),
+            Slot::SrcAcPhase(i) => (i, "acphase"),
+            Slot::MosGeom(i, key) => (i, key),
+        };
+        circuit.alter(&nl.elements[i].name, param, v)?;
+    }
+    let mut solutions = Vec::new();
+    for analysis in &nl.analyses {
+        let (sols, n) = circuit.run(analysis, &opts)?;
+        notes.extend(n);
+        solutions.extend(sols);
+    }
+    Ok(SweepOutput { solutions, notes })
+}
+
 /// One run: assign, elaborate, run every analysis card.
 fn run_one(nl: &Netlist, opts: &Options, slots: &[Slot], values: &[f64]) -> SweepRun {
+    if nl.uses_temper() {
+        return SweepRun {
+            values: values.to_vec(),
+            outcome: run_temper(nl, opts, slots, values),
+        };
+    }
     let mut nl = nl.clone();
     let mut opts = opts.clone();
     assign(&mut nl, &mut opts, slots, values);
@@ -326,6 +373,10 @@ fn prepare(nl: &Netlist, params: &[SweepParam], runs: &[Vec<f64>]) -> Result<Vec
 /// `opts.temp` per run. Every run is independent and identical to
 /// simulating the deck with those values written into it — bit for
 /// bit, the same path as [`Circuit::from_netlist`] + [`Circuit::run`].
+///
+/// A netlist that reads `temper` ([`Netlist::uses_temper`], D-0075)
+/// is re-expanded at each run's temperature and its swept values are
+/// set with [`Circuit::alter`] instead of being written into the IR.
 ///
 /// The outer error is for the sweep itself (an unknown element or
 /// parameter, a duplicate, a row of the wrong length, a non-finite

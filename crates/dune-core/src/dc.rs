@@ -93,10 +93,42 @@ impl Circuit {
         // A temperature level rebuilds the devices at each point
         // (`CKTtemp`): instance `TEMP=` values stay, everything that
         // follows the circuit temperature moves.
+        // Each temperature point of a netlist that reads `temper`
+        // parses the deck again: bound how many (`retemp.rs`).
+        if self.temper.is_some()
+            && let Some(level) = refs
+                .iter()
+                .position(|r| matches!(r.target, SweepTarget::Temp))
+        {
+            let points: f64 = refs[level..]
+                .iter()
+                .map(|s| ((s.stop - s.start) / s.step).abs().floor() + 1.0)
+                .product();
+            if points.is_nan() || points > crate::retemp::MAX_REEXPANSIONS as f64 {
+                return Err(Error::Build(format!(
+                    "this .dc temp sweep would re-expand the netlist (it reads `temper`) about \
+                     {points:.0} times; at most {} are allowed",
+                    crate::retemp::MAX_REEXPANSIONS
+                )));
+            }
+        }
+        // A netlist that reads `temper` is re-expanded at each point
+        // (`retemp.rs`); its unknowns must stay those of the first.
+        let names = self.temper.as_ref().map(|_| engine.vars.names.clone());
         let mut retemp = |celsius: f64| -> Result<Vec<Box<dyn crate::devices::Device>>, Error> {
             let mut o = opts.clone();
             o.temp = celsius + CTOK;
-            Ok(self.build(&o)?.devices)
+            let built = self.build(&o)?;
+            if let Some(names) = &names
+                && built.vars.names != *names
+            {
+                return Err(Error::Build(format!(
+                    "at {celsius} °C the netlist (it reads `temper`) has other unknowns than at \
+                     the start of the .dc temp sweep; the topology cannot depend on the \
+                     temperature"
+                )));
+            }
+            Ok(built.devices)
         };
         let rows = engine.dc(opts, &refs, &mut retemp)?;
 
