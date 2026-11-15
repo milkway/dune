@@ -64,9 +64,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 use dune_core::{CardOutput, Circuit, FourParams, Options, Solution};
+use dune_netlist::ir::RandomMode;
 use dune_netlist::{IncludeLoader, Severity};
 use dune_pic::{ExtractOptions, PicError};
 use dune_raw::{Data, Plot};
+use overrides::SeedChoice;
 use serde::de::DeserializeOwned;
 use wasm_bindgen::prelude::*;
 
@@ -302,6 +304,8 @@ pub struct RunData {
     pub diagnostics: Vec<DiagnosticJson>,
     /// One per `.pss` card (as [`RawfileJson::pss`]).
     pub pss: Vec<PssJson>,
+    /// The seed the run was drawn with (as [`RawfileJson::seed`]).
+    pub seed: Option<u64>,
 }
 
 impl RunData {
@@ -314,6 +318,8 @@ impl RunData {
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
             pss: self.pss.clone(),
+            seed: self.seed,
+            random_mode: random_mode(self.seed).into(),
         }
     }
 
@@ -327,6 +333,8 @@ impl RunData {
             notes: self.notes.clone(),
             diagnostics: self.diagnostics.clone(),
             pss: self.pss.clone(),
+            seed: self.seed,
+            random_mode: random_mode(self.seed).into(),
         }
     }
 }
@@ -350,7 +358,7 @@ fn run_includes(
     includes: &BTreeMap<String, String>,
     overrides: &Overrides,
 ) -> Result<RunData, SimError> {
-    let mut prepared = prepare(netlist, includes)?;
+    let mut prepared = prepare(netlist, includes, overrides.seed_choice())?;
     let (options, override_diags) = overrides.apply(&prepared.options);
     prepared.override_diagnostics = override_diags;
     let mut out = Outcome::new(prepared.notes.clone());
@@ -416,6 +424,10 @@ pub(crate) struct Prepared {
     pub diagnostics: Vec<DiagnosticJson>,
     /// Warnings of the run's `SimOptions.options` (after the deck's).
     pub override_diagnostics: Vec<DiagnosticJson>,
+    /// The seed the deck was drawn with (`None`: nominal).
+    pub seed: Option<u64>,
+    /// Whether the deck calls a random function.
+    pub random: bool,
 }
 
 impl Prepared {
@@ -466,58 +478,168 @@ impl Prepared {
                 .cloned()
                 .collect(),
             pss,
+            seed: self.seed,
         }
     }
 }
 
-/// Parse and elaborate `netlist` (`.include` from `includes`).
+/// `"seeded"` or `"nominal"` ([`RawfileJson::random_mode`]).
+fn random_mode(seed: Option<u64>) -> &'static str {
+    if seed.is_some() { "seeded" } else { "nominal" }
+}
+
+/// Parse and elaborate `netlist` (`.include` from `includes`), its
+/// random functions drawn from `seed` (the `seed` entry of
+/// `SimOptions.options`; D-0075): an integer seed is `.options seed=N`
+/// written in the deck; `"random"` — or, without a `seed` entry, the
+/// deck's own `.options seed=random` — draws from [`fresh_seed`].
 pub(crate) fn prepare(
     netlist: &str,
     includes: &BTreeMap<String, String>,
+    seed: Option<SeedChoice>,
 ) -> Result<Prepared, SimError> {
-    let parsed = dune_netlist::parse_with_loader(
+    let mut parsed = dune_netlist::parse_with_loader(
         Path::new(DECK_NAME),
         netlist.to_string(),
         &mut MapLoader(includes),
     );
-    let mut diagnostics: Vec<DiagnosticJson> = parsed
-        .diags
-        .iter()
-        .map(|d| DiagnosticJson::from_diag(d, &parsed.sources))
-        .collect();
+    let render = |diags: &[dune_netlist::Diagnostic], sources: &dune_netlist::SourceMap| {
+        diags
+            .iter()
+            .map(|d| DiagnosticJson::from_diag(d, sources))
+            .collect::<Vec<_>>()
+    };
     if let Some(first) = parsed.diags.iter().find(|d| d.severity == Severity::Error) {
         return Err(SimError {
             kind: "parse".into(),
             message: first.render(&parsed.sources),
-            diagnostics,
+            diagnostics: render(&parsed.diags, &parsed.sources),
             pic: None,
             pss: None,
         });
     }
+    let wanted = match seed {
+        Some(SeedChoice::Seed(s)) => Some((s, false)),
+        Some(SeedChoice::Random) => Some((fresh_seed(), true)),
+        None if parsed.netlist.random_mode() == RandomMode::SeedRequested => {
+            Some((fresh_seed(), true))
+        }
+        None => None,
+    };
+    // With a seed from the caller, the parser's request for one and
+    // its note that random functions stay nominal are moot (the CLI
+    // drops the same two).
+    let kept: Vec<dune_netlist::Diagnostic> = parsed
+        .diags
+        .iter()
+        .filter(|d| {
+            wanted.is_none()
+                || !(d.message.starts_with("`.options seed=random`")
+                    || d.message.starts_with("random functions (agauss"))
+        })
+        .cloned()
+        .collect();
+    let mut diagnostics = render(&kept, &parsed.sources);
+    let mut seed_note = None;
+    if let Some((s, picked)) = wanted {
+        // The deck drawn with the seed; its options carry `seed=N` for
+        // the transient noise. The new evaluation's warnings repeat
+        // the parse's, so only its errors are kept.
+        let (nl, d) = parsed.netlist.with_seed(s);
+        if let Some(first) = d.iter().find(|d| d.severity == Severity::Error) {
+            diagnostics.extend(render(&d, &parsed.sources));
+            return Err(SimError {
+                kind: "parse".into(),
+                message: first.render(&parsed.sources),
+                diagnostics,
+                pic: None,
+                pss: None,
+            });
+        }
+        parsed.netlist = nl;
+        seed_note = picked.then(|| {
+            format!(
+                "seed \"random\": random functions drawn with seed {s} \
+                 (options: {{ seed: {s} }} repeats this run)"
+            )
+        });
+    }
+    let netlist = &parsed.netlist;
 
-    let (circuit, notes) = Circuit::from_netlist(&parsed.netlist)
-        .map_err(|e| SimError::new("elaborate", e.to_string()))?;
+    let (circuit, elab_notes) =
+        Circuit::from_netlist(netlist).map_err(|e| SimError::new("elaborate", e.to_string()))?;
+    let notes = seed_note.into_iter().chain(elab_notes).collect();
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
-    options.apply(&parsed.netlist.options, &mut opt_diags);
-    let four = FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
-    diagnostics.extend(
-        opt_diags
-            .iter()
-            .map(|d| DiagnosticJson::from_diag(d, &parsed.sources)),
-    );
+    options.apply(&netlist.options, &mut opt_diags);
+    let four = FourParams::from_options(&netlist.options, &mut opt_diags);
+    diagnostics.extend(render(&opt_diags, &parsed.sources));
     Ok(Prepared {
         circuit,
         options,
-        analyses: parsed.netlist.analyses.clone(),
-        measures: parsed.netlist.measures.clone(),
-        outputs: parsed.netlist.outputs.clone(),
+        analyses: netlist.analyses.clone(),
+        measures: netlist.measures.clone(),
+        outputs: netlist.outputs.clone(),
         four,
-        title: parsed.netlist.title.clone(),
+        title: netlist.title.clone(),
         notes,
         diagnostics,
         override_diagnostics: Vec::new(),
+        seed: match netlist.random_mode() {
+            RandomMode::Seeded(s) => Some(s),
+            _ => None,
+        },
+        random: netlist.uses_random(),
     })
+}
+
+/// A fresh seed in `1..=SEED_MAX` for `seed: "random"`.
+///
+/// In the browser and in Node ≥ 19, from Web Crypto
+/// (`globalThis.crypto.getRandomValues`); where that global is missing
+/// (older Node), from `Math.random()`, 16 bits at a time. Native
+/// builds (the tests) mix the clock, the process id and a counter, as
+/// the dune CLI does.
+pub(crate) fn fresh_seed() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_seed()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let mut z = nanos
+            ^ (u64::from(std::process::id()) << 32)
+            ^ COUNT.fetch_add(0x9E37_79B9_7F4A_7C15, Ordering::Relaxed);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z & dune_core::SEED_MAX).max(1)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_seed() -> u64 {
+    use wasm_bindgen::JsCast;
+    let crypto = js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("crypto"))
+        .ok()
+        .filter(|c| c.is_object());
+    if let Some(crypto) = crypto {
+        let get = js_sys::Reflect::get(&crypto, &JsValue::from_str("getRandomValues")).ok();
+        if let Some(f) = get.as_ref().and_then(|f| f.dyn_ref::<js_sys::Function>()) {
+            let buf = js_sys::Uint32Array::new_with_length(1);
+            if f.call1(&crypto, &buf).is_ok() {
+                return u64::from(buf.get_index(0)).max(1);
+            }
+        }
+    }
+    let half = || (js_sys::Math::random() * 65536.0) as u64 & 0xFFFF;
+    ((half() << 16) | half()).max(1)
 }
 
 /// `simulate(netlist, opts?)` — run a SPICE3 deck.

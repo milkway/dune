@@ -148,7 +148,10 @@ espelhados: `npm/test/smoke.mjs`, `python/tests/test_options.py`,
   cartão novo passa sem tocar o binding (entrada inválida = aviso).
 - **Python/R**: lista fechada e estrita (nome desconhecido ou tipo
   errado = erro: `ValueError`/`TypeError`, `spice_error_options`).
-  Entraram `seed` (inteiro em `[1, 2^53)`; sem `random`),
+  Entraram `seed` (inteiro em `[1, 2^53)`; sem `random` — revisto em
+  2026-11-14: `[1, 2^32 − 1]` ou `"random"`, e sorteia as funções
+  aleatórias do deck; ver "Semente nos bindings" em
+  `docs/dune-netlist.md`),
   `notrnoise`, `devnoise`, `devnt` (passo > 0, s) e `keepopinfo`;
   `ltrafit`, `ltrabkrate` e `method="trbdf2"` já estavam (a doc do R
   não os listava — corrigida). `False`/`FALSE` limpa a flag do deck.

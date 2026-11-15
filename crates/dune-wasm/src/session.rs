@@ -12,7 +12,7 @@
 use dune_core::{AlterValue, Session, WarmStats};
 use wasm_bindgen::prelude::*;
 
-use crate::overrides::{Overrides, check_divisor};
+use crate::overrides::{Overrides, SeedChoice, check_divisor, warning};
 use crate::schema::{PicJson, PicSimOptions, SimError, SimOptions};
 use crate::{
     Outcome, Prepared, RunData, extract_runnable, guarded, js_error, opts_text, parse_options,
@@ -32,6 +32,9 @@ pub struct SimSession {
     /// The last [`SimSession::set_temp`], °C: it wins over the deck's
     /// and the overrides' `temp`.
     temp: Option<f64>,
+    /// The `seed` entry the session opened with: the deck's random
+    /// functions were drawn then, once.
+    opened_seed: Option<SeedChoice>,
 }
 
 impl SimSession {
@@ -42,6 +45,7 @@ impl SimSession {
             session,
             base,
             pic,
+            opened_seed: overrides.seed_choice(),
             overrides,
             temp: None,
         };
@@ -52,7 +56,21 @@ impl SimSession {
     /// The session's options from scratch: the deck's, the overrides
     /// on top, then the `set_temp` temperature.
     fn retune(&mut self) {
-        let (mut options, diags) = self.overrides.apply(&self.base.options);
+        let (mut options, mut diags) = self.overrides.apply(&self.base.options);
+        let now = self.overrides.seed_choice();
+        if self.base.random && now.is_some() && now != self.opened_seed {
+            // The draws were made when the session opened; the noise
+            // keeps their seed too, as one seed drives both.
+            options.seed = self.base.options.seed;
+            let drawn = match self.base.seed {
+                Some(s) => format!("drawn with seed {s}"),
+                None => "at their nominal value".into(),
+            };
+            diags.push(warning(format!(
+                "the seed of a Session is fixed when it opens (its random functions were {drawn}); \
+                 open a new Session to draw with another seed"
+            )));
+        }
         if let Some(t) = self.temp {
             // `Session::set_temp` validated it; same `+ CTOK`.
             options.temp = t + dune_core::consts::CTOK;
@@ -67,7 +85,7 @@ impl SimSession {
             let overrides = opts.overrides();
             overrides.check()?;
             Ok(SimSession::from_prepared(
-                prepare(netlist, &opts.includes)?,
+                prepare(netlist, &opts.includes, overrides.seed_choice())?,
                 None,
                 overrides,
             ))
@@ -81,7 +99,7 @@ impl SimSession {
             let overrides = opts.overrides();
             overrides.check()?;
             let pic = extract_runnable(src, opts.snap)?;
-            match prepare(&pic.netlist, &opts.includes) {
+            match prepare(&pic.netlist, &opts.includes, overrides.seed_choice()) {
                 Ok(p) => Ok(SimSession::from_prepared(p, Some(pic), overrides)),
                 Err(mut e) => {
                     e.pic = Some(Box::new(pic));

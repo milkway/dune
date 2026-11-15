@@ -120,10 +120,19 @@ export interface RenderOptions {}
  * trapezoidal `.tran`, switches flipping on the time grid, no cap on
  * LTRA breakpoints), `maxord`, `ltrabkrate` (unset: 10; 0: no cap), `ltrafit`,
  * `nopage`, `defl`, `defw`, `defad`, `defas`, `trytocompact`, `keepopinfo` (the small-signal
- * analyses emit their operating point first), `seed` (transient-noise seed, an
- * integer ≥ 1; no `"random"`), `notrnoise`, `devnoise` and `devnt` (device
- * noise in `.tran` and its grid step, s). A number is taken exactly; a string
+ * analyses emit their operating point first), `seed` (see below), `notrnoise`,
+ * `devnoise` and `devnt` (device noise in `.tran` and its grid step, s). A number is taken exactly; a string
  * as the card's text (`"1u"`); `true` is the bare flag, `false` clears it.
+ *
+ * `seed` is exactly `.options seed=` written in the deck (D-0075): an integer
+ * from 1 to 4294967295 (2^32 - 1) draws the deck's random functions (`agauss`,
+ * `gauss`, `aunif`, `unif`, `limit`) from that seed -- the same seed, the same
+ * circuit, on every platform -- and seeds the transient noise. `"random"`
+ * draws a fresh seed from `crypto.getRandomValues` (`Math.random` where Web
+ * Crypto is missing, Node < 19), as does a deck that says `.options
+ * seed=random`; the seed used comes back in {@link Rawfile.seed}. Without a
+ * seed the random functions take their nominal value. On a `Session` the
+ * draws are made when it opens: a different `seed` later is a warning.
  */
 export type EngineOptions = Record<string, number | string | boolean>;
 
@@ -179,6 +188,15 @@ export interface Rawfile {
    * its two plots do not carry. `[]` when the deck has none.
    */
   pss: PssInfo[];
+  /**
+   * The seed the run was drawn with: `options.seed` (an integer, or the one
+   * `"random"` picked) or the deck's `.options seed`; `null` when there was
+   * none. `{ options: { seed } }` with it repeats the run. Python's
+   * `Result.seed` / R's `res$seed`.
+   */
+  seed: number | null;
+  /** `"seeded"` when the deck's random functions were drawn from `seed`. */
+  randomMode: "nominal" | "seeded";
 }
 
 /**

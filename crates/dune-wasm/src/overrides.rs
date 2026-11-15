@@ -10,7 +10,7 @@
 //! `"gear"`). Invalid entries are warnings in the run's
 //! `diagnostics`, as an invalid `.options` card is, never a throw.
 
-use dune_core::Options;
+use dune_core::{Options, SEED_MAX};
 use dune_netlist::ir::{Param, ParamValue};
 use dune_netlist::{Diagnostic, Severity};
 use serde_json::{Map, Value};
@@ -46,6 +46,40 @@ impl Overrides {
     }
 }
 
+/// The `seed` entry of `SimOptions.options` (D-0075): `.options
+/// seed=N` written in the deck, or a seed the host picks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SeedChoice {
+    /// Draw the deck's random functions from this seed.
+    Seed(u64),
+    /// Draw them from a fresh seed (`crypto.getRandomValues`).
+    Random,
+}
+
+impl Overrides {
+    /// The valid `seed` entry (any key case), if any; an invalid one
+    /// is a warning of [`Overrides::apply`] and counts as absent.
+    pub(crate) fn seed_choice(&self) -> Option<SeedChoice> {
+        self.options
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("seed"))
+            .and_then(|(_, v)| seed_value(v))
+    }
+}
+
+/// A seed value: a whole number from 1 to [`SEED_MAX`] (ngspice reads
+/// a seed as an unsigned 32-bit integer), or `"random"` (any case).
+fn seed_value(v: &Value) -> Option<SeedChoice> {
+    match v {
+        Value::Number(n) => n
+            .as_f64()
+            .filter(|x| x.fract() == 0.0 && (1.0..=SEED_MAX as f64).contains(x))
+            .map(|x| SeedChoice::Seed(x as u64)),
+        Value::String(s) if s.eq_ignore_ascii_case("random") => Some(SeedChoice::Random),
+        _ => None,
+    }
+}
+
 /// `tmaxDivisor` must be a finite number ≥ 1 (or absent).
 pub fn check_divisor(d: Option<f64>) -> Result<(), SimError> {
     match d {
@@ -57,7 +91,7 @@ pub fn check_divisor(d: Option<f64>) -> Result<(), SimError> {
     }
 }
 
-fn warning(message: String) -> DiagnosticJson {
+pub(crate) fn warning(message: String) -> DiagnosticJson {
     DiagnosticJson {
         severity: "warning".into(),
         kind: None,
@@ -81,6 +115,20 @@ fn apply_options(o: &mut Options, map: &Map<String, Value>) -> Vec<DiagnosticJso
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
         if !ok_name {
             out.push(warning(format!("bad option name {key:?}; ignored")));
+            continue;
+        }
+        if name == "seed" {
+            // The draws are made when the deck is prepared
+            // (`seed_choice`); here only the transient-noise seed
+            // follows an integer seed, and a bad value warns.
+            match seed_value(value) {
+                Some(SeedChoice::Seed(s)) => o.seed = s,
+                Some(SeedChoice::Random) => {}
+                None => out.push(warning(format!(
+                    "option seed must be a whole number from 1 to {SEED_MAX} or \"random\", \
+                     got {value}; ignored"
+                ))),
+            }
             continue;
         }
         let param = match value {

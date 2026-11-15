@@ -24,7 +24,9 @@ use crate::overrides::Overrides;
 ///   "fourier": [ FourierJson, ... ],
 ///   "notes": [ "string", ... ],
 ///   "diagnostics": [ DiagnosticJson, ... ],
-///   "pss": [ PssJson, ... ]
+///   "pss": [ PssJson, ... ],
+///   "seed": 7,
+///   "randomMode": "seeded"
 /// }
 /// ```
 ///
@@ -46,6 +48,14 @@ use crate::overrides::Overrides;
 /// * `pss` — one entry per `.pss` card of the deck, in deck order
 ///   ([`PssJson`]): the numbers of the shooting that the two plots
 ///   alone do not carry. Empty when the deck has no `.pss` card.
+/// * `seed` — the seed the run was drawn with (D-0075): the
+///   `options.seed` (an integer, or the one `"random"` picked) or the
+///   deck's `.options seed`; `null` when there was none (the deck's
+///   random functions at their nominal value). `options: { seed }`
+///   with it repeats the run.
+/// * `randomMode` — `"seeded"` when the deck's random functions
+///   (`agauss`, `gauss`, `aunif`, `unif`, `limit`) were drawn from
+///   `seed`, `"nominal"` otherwise.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawfileJson {
     pub plots: Vec<PlotJson>,
@@ -57,6 +67,15 @@ pub struct RawfileJson {
     pub diagnostics: Vec<DiagnosticJson>,
     #[serde(default)]
     pub pss: Vec<PssJson>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(rename = "randomMode", default = "nominal")]
+    pub random_mode: String,
+}
+
+/// The `randomMode` of a result read without one.
+fn nominal() -> String {
+    "nominal".into()
 }
 
 /// The periodic steady state of one `.pss` card: what Python's

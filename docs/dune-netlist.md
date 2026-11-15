@@ -441,6 +441,39 @@ exemplo `base + i`) — o `dune_core::sweep` faz isso com o parâmetro
 chama alguma função aleatória (com ou sem semente); sem elas outra
 semente só muda o ruído transiente do motor.
 
+**Semente nos bindings** (2026-11-14). A opção `seed` de R
+(`options = list(seed = …)`), Python (`options={"seed": …}`) e wasm
+(`options: { seed }`) é exatamente o cartão `.options seed=` escrito no
+deck, em toda entrada que recebe opções (run/simulate, sweep, sessão,
+pss, figura pic): o binding parseia, chama `Netlist::with_seed(s)` e só
+então assenta as opções (o netlist sorteado leva `seed = s`, que o
+`Options::apply` lê para o ruído transiente). Antes ela só mudava o
+`Options::seed` do ruído transiente. Valores: inteiro de 1 a 2³² − 1
+(`dune_core::SEED_MAX`; antes `[1, 2^53)` em R/Python — estreitado
+porque acima de 2³² a semente só apelidaria outra) ou `"random"`.
+`"random"` — e um deck com `.options seed=random`, sem `seed` do
+chamador — pega a semente no hospedeiro: R pelo RNG do R
+(`sample.int(4294967295, 1)`, então `set.seed()` governa; o R só toca o
+RNG quando precisa: a chamada nativa devolve o tipo `seed` quando o
+deck pede semente e não veio nenhuma, e o R repete com uma), Python
+pelo `secrets` (sorteada a cada chamada e usada só se preciso), wasm
+pelo `crypto.getRandomValues` (`Math.random` sem Web Crypto, Node < 19;
+nativo, nos testes: relógio + PID + contador, como o CLI). Os avisos do
+parser que a semente torna mudos (o pedido `seed=random` e o "random
+functions … nominal value") saem dos diagnósticos, como no CLI; a
+semente escolhida no hospedeiro vira uma nota (`seed="random": random
+functions drawn with seed S (… repeats this run)`). O resultado leva a
+semente e o modo: Python `Result.seed: int | None` e
+`Result.random_mode: "nominal" | "seeded"`; R `res$seed` (double, `NA`
+no nominal) e `res$random_mode`; wasm `seed: number | null` e
+`randomMode`. `Seeded(s)` vem do `Netlist::random_mode()` do netlist
+que rodou — também com `.options seed=N` do próprio deck e em deck sem
+função aleatória (é a semente do ruído). Numa varredura cada rodada
+leva a sua (a varrida, quando `seed` é parâmetro). Sessão: sorteia uma
+vez, ao abrir; no wasm, `session.options` com outra `seed` num deck com
+função aleatória avisa e não muda nada (sem função aleatória, a semente
+do ruído segue a nova, como antes).
+
 ### `temper` (G7)
 
 Fase 8 (2026-11-14). No ngspice-47 o `temper` não é um parâmetro do

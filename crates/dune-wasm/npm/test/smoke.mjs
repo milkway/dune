@@ -324,4 +324,27 @@ assert.deepEqual(
 const badNoise = simulate(noisy(''), { options: { seed: 0, devnt: -1, notrnoise: 'yes' } });
 assert.equal(badNoise.diagnostics.filter((x) => x.message.startsWith('opts.options: ')).length, 3);
 
+// Seeded random functions (D-0075): `options.seed` is `.options seed=` in
+// the deck; "random" comes back with its seed, and re-running with it
+// repeats the run (mirrors python/tests/test_seed.py, r/.../test-seed.R).
+const mismatch = (card) =>
+  `mismatch\n${card}\n.param rv=agauss(1k, 100, 3)\nv1 1 0 dc 2\nr1 1 2 {rv}\nr2 2 0 1k\n.op\n.end\n`;
+const nominal = simulate(mismatch(''));
+assert.equal(nominal.seed, null);
+assert.equal(nominal.randomMode, 'nominal');
+const card9 = simulateTyped(mismatch('.options seed=9'));
+assert.equal(card9.seed, 9);
+assert.equal(card9.randomMode, 'seeded');
+assert.deepEqual(bits(simulateTyped(mismatch(''), { options: { seed: 9 } })), bits(card9));
+assert.notDeepEqual(bits(card9), bits(simulateTyped(mismatch(''))));
+const seeded = Session.fromDeck(mismatch(''), { options: { seed: 9 } });
+assert.deepEqual(bits(seeded.runTyped()), bits(card9));
+seeded.free();
+const drawn = simulateTyped(mismatch(''), { options: { seed: 'random' } });
+assert.ok(Number.isInteger(drawn.seed) && drawn.seed >= 1 && drawn.seed <= 4294967295);
+assert.deepEqual(bits(simulateTyped(mismatch(''), { options: { seed: drawn.seed } })), bits(drawn));
+const asked = simulate(mismatch('.options seed=random'));
+assert.ok(asked.seed !== null);
+assert.deepEqual(simulate(mismatch(`.options seed=${asked.seed}`)).plots, asked.plots);
+
 console.log('dune-sim smoke: ok');

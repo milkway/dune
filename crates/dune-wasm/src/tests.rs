@@ -1272,3 +1272,115 @@ fn pss_cards_run_as_the_engine_runs_them() {
         );
     }
 }
+
+/// Mismatch through a `.param` (redrawn at each reference), a model and
+/// a subcircuit, plus a value that reads `temper` (D-0075; the deck of
+/// `python/tests/test_seed.py` and `r/tests/testthat/test-seed.R`).
+fn mismatch(card: &str) -> String {
+    format!(
+        "mismatch\n{card}\n.param rv=agauss(1k, 100, 3) q=aunif(1, 0.05)\n\
+         .model dm d is={{1e-14*q}}\n.subckt seg a b\nr1 a b {{rv}}\n.ends\n\
+         v1 1 0 dc 2\nx1 1 2 seg\nx2 2 3 seg\nd1 3 0 dm\nr9 3 0 {{rv + temper}}\n\
+         .op\n.dc v1 0 2 0.5\n.end\n"
+    )
+}
+
+fn sim(deck: &str, opts: &str) -> RawfileJson {
+    parse(&simulate_json(deck, Some(opts)).unwrap())
+}
+
+#[test]
+fn random_functions_are_nominal_without_a_seed() {
+    let raw = parse(&simulate_json(&mismatch(""), None).unwrap());
+    assert_eq!((raw.seed, raw.random_mode.as_str()), (None, "nominal"));
+    assert!(
+        raw.diagnostics
+            .iter()
+            .any(|d| d.message.contains("nominal value"))
+    );
+    let json = simulate_json(&mismatch(""), None).unwrap();
+    assert!(json.contains(r#""seed":null"#) && json.contains(r#""randomMode":"nominal""#));
+}
+
+#[test]
+fn the_seed_option_is_the_deck_card() {
+    for seed in [1u64, 9, 4_294_967_295] {
+        let want = sim(&mismatch(&format!(".options seed={seed}")), "{}");
+        assert_eq!(
+            (want.seed, want.random_mode.as_str()),
+            (Some(seed), "seeded")
+        );
+        let opts = format!(r#"{{"options": {{"seed": {seed}}}}}"#);
+        assert_eq!(sim(&mismatch(""), &opts), want, "seed {seed}");
+        // The option wins over the deck's own seed.
+        assert_eq!(sim(&mismatch(".options seed=3"), &opts), want);
+        let o: SimOptions = serde_json::from_str(&opts).unwrap();
+        let mut s = SimSession::open(&mismatch(""), &o).unwrap();
+        assert_eq!(s.run().unwrap().to_json(), want);
+    }
+    assert_ne!(
+        sim(&mismatch(""), r#"{"options": {"seed": 9}}"#).plots,
+        sim(&mismatch(""), r#"{"options": {"seed": 10}}"#).plots
+    );
+}
+
+#[test]
+fn random_returns_its_seed_and_rerunning_with_it_repeats_the_run() {
+    let raw = sim(&mismatch(""), r#"{"options": {"seed": "random"}}"#);
+    let s = raw.seed.expect("a seed");
+    assert!((1..=dune_core::SEED_MAX).contains(&s));
+    assert_eq!(raw.random_mode, "seeded");
+    assert!(raw.notes.iter().any(|n| n.contains(&format!("seed {s}"))));
+    let again = sim(&mismatch(""), &format!(r#"{{"options": {{"seed": {s}}}}}"#));
+    assert_eq!(again.plots, raw.plots);
+    // A deck asking for one gets one, and its warnings are gone.
+    let asked = sim(&mismatch(".options seed=random"), "{}");
+    let s = asked.seed.expect("a seed");
+    assert!(
+        !asked
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("seed=random"))
+    );
+    let want = sim(&mismatch(&format!(".options seed={s}")), "{}");
+    assert_eq!(asked.plots, want.plots);
+}
+
+#[test]
+fn bad_seeds_are_warnings_and_a_session_keeps_its_draws() {
+    for bad in ["0", "-1", "1.5", "4294967296", "\"rand\"", "true"] {
+        let raw = sim(
+            &mismatch(""),
+            &format!(r#"{{"options": {{"seed": {bad}}}}}"#),
+        );
+        assert_eq!(raw.seed, None, "{bad}");
+        assert!(
+            raw.diagnostics
+                .iter()
+                .any(|d| d.message.starts_with("opts.options: option seed")),
+            "{bad}"
+        );
+    }
+    // A session draws once: another seed later warns and changes
+    // nothing; without random functions it reseeds the noise as before.
+    let o: SimOptions = serde_json::from_str(r#"{"options": {"seed": 5}}"#).unwrap();
+    let mut s = SimSession::open(&mismatch(""), &o).unwrap();
+    let first = s.run().unwrap();
+    let mut other = serde_json::Map::new();
+    other.insert("seed".into(), serde_json::json!(6));
+    s.set_options(other.clone());
+    let later = s.run().unwrap();
+    assert_eq!(later.plots, first.plots);
+    assert_eq!(later.seed, Some(5));
+    assert!(
+        later
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("fixed when it opens"))
+    );
+    let noisy = "n\nvn 1 0 dc 0 trnoise(10m 1u 0 0)\nr1 1 0 1k\n.tran 1u 10u\n.end\n";
+    let mut s = SimSession::open(noisy, &SimOptions::default()).unwrap();
+    s.set_options(other);
+    let want = sim(&noisy.replace(".tran", ".options seed=6\n.tran"), "{}");
+    assert_eq!(s.run().unwrap().to_json().plots, want.plots);
+}

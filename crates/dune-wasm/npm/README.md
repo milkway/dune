@@ -111,6 +111,16 @@ await ready(wasmUrl);
   at a tenth. On a `Session`, `session.options = {…}` and
   `session.tmaxDivisor = n` change them for the next `run()` without
   reopening (`null` restores the deck's): a "fine steps" toggle.
+- Seeded random functions: `options.seed` is exactly `.options seed=` in
+  the deck — an integer from 1 to 2^32 − 1 draws the deck's `agauss`,
+  `gauss`, `aunif`, `unif` and `limit` from that seed (and seeds the
+  transient noise); without a seed they take their nominal value.
+  `seed: 'random'`, and a deck that says `.options seed=random`, draw a
+  fresh seed from `crypto.getRandomValues` (`Math.random` where Web
+  Crypto is missing). Every result carries `seed` (the seed it was drawn
+  with, or `null`) and `randomMode` (`'nominal'` | `'seeded'`);
+  `{ options: { seed: res.seed } }` repeats a run. A `Session` draws
+  once, when it opens.
 - `renderPic(src)` → SVG text of the figure, compiled with the dune
   prelude by dune's own rpic — the same compile `map` indexes, so the
   `<g id="sN">` groups always line up with it, whatever rpic version the
