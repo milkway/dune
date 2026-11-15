@@ -39,6 +39,25 @@ v2 = plot.column("v(2)")     # zero-copy, read-only numpy array
   draws it as SVG (with typeset `$...$` labels).
 - Faithful netlist semantics: decks that run under `spice3 -b` or
   `ngspice -b` run here, with structured, span-carrying errors.
+- Sweeps and Monte Carlo (`spice.sweep()`), in parallel and bit for bit
+  reproducible. A deck that draws its own mismatch with `agauss`,
+  `gauss`, `aunif`, `unif` or `limit` is sampled over `"seed"`: run `i`
+  is the deck with `.options seed=s_i` in it.
+
+```python
+deck = """mismatch
+.param rv=agauss(1k, 50, 3)
+v1 1 0 dc 1
+r1 1 2 {rv}
+r2 2 0 1k
+.op
+.end
+"""
+mc = spice.sweep(deck, {"seed": range(1, 201)}, threads=0)
+mc.df("op")["v(2)"].std()      # spread of the divider over 200 draws
+spice.simulate(deck, options={"seed": 17})       # one draw, reproducible
+spice.simulate(deck, options={"seed": "random"}).seed  # a fresh one, reported
+```
 
 ![How a simulation runs: the deck is parsed and built into a circuit; for every point of an analysis the devices are linearized, the linear system is solved and convergence is tested, iterating until it holds; an accepted point goes to the results.](https://milkway.github.io/dune/diagrams/simulation.svg)
 

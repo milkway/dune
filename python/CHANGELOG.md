@@ -12,6 +12,17 @@
   was drawn with (`None` when nominal) and `Result.random_mode` is
   `"nominal"` or `"seeded"`; `options={"seed": result.seed}` repeats a
   run. New type alias `spice.RandomMode`.
+- **Monte Carlo of the deck's own random functions:** `spice.sweep()`
+  takes `"seed"` as a parameter: run `i` is the deck with `.options
+  seed=s_i` in it (`{"seed": range(base, base + n)}` for n samples),
+  composing with the other parameters in grid and zip mode, in
+  parallel, bit for bit. The swept seed is an `Int64` column of
+  `SweepResult.params` and `SweepResult.df()`; on a deck without random
+  functions each run notes that the seed only changes the transient
+  noise (or nothing).
+- A deck that reads `temper` follows `options={"temp": ...}`,
+  `Session.temp` and a swept `temp` exactly as `.options temp=` written
+  in it (now tested).
 - **Breaking:** `seed` must be an int from 1 to `2**32 - 1` (was below
   `2**53`): ngspice reads a seed as an unsigned 32-bit integer, so a
   larger one only aliased a smaller one.
