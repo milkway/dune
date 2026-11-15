@@ -35,24 +35,29 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: André Leite \email{leite@castlab.org}
+\strong{Maintainer}: André Leite \email{leite@castlab.org} [copyright holder]
 
 Authors:
 \itemize{
-  \item André Leite \email{leite@castlab.org}
+  \item André Leite \email{leite@castlab.org} [copyright holder]
 }
 
 Other contributors:
 \itemize{
-  \item The Regents of the University of California ('SPICE3f5', from which the simulation engine is derived, and 'BSIM3v3.3.0' and 'BSIM4' 4.8.3 (UC Berkeley BSIM Research Group; 'BSIM4' under the Educational Community License 2.0), translated in src/rust dune-core/src/bsim3 and dune-core/src/bsim4) [copyright holder]
-  \item The ngspice team and contributors ('ngspice' 47: translated or followed in dune-core and dune-netlist (cktop.c, com_measure2.c, fourier.c, inpcom.c, the vdmos, vbic, txl, cpl and dio device directories, the switch, source, noise and other device routines revised by 'ngspice'); see inst/COPYRIGHTS) [copyright holder]
-  \item Holger Vogt ('ngspice' files optran.c, 1-f-code.c and randnumb.c, followed in dune-core engine.rs and trnoise.rs, and the 'VDMOS' model, translated in dune-core/src/vdmos) [copyright holder]
-  \item Dietmar Warning ('ngspice' implementation of the 'VBIC' model and revisions of the 'VDMOS' model and of the diode, translated in dune-core/src/vbic, dune-core/src/vdmos and dune-core dioext.rs) [copyright holder]
-  \item Colin McAndrew (author of the 'VBIC' model, translated in dune-core/src/vbic) [copyright holder]
-  \item Arpad Buermen ('ngspice' revision of the diode, translated in dune-core dioext.rs) [copyright holder]
-  \item Alessio Cacciatori ('ngspice' file span.c and RF ports, translated in dune-core sp.rs) [copyright holder]
-  \item Paolo Nenzi ('ngspice' files b1noi.c and b2noi.c, translated in dune-core bsim1.rs and bsim2.rs, and revision of the diode, translated in dune-core dioext.rs) [copyright holder]
-  \item The authors of the dependency Rust crates (see inst/AUTHORS for details) [copyright holder]
+  \item The Regents of the University of California ('SPICE3f5', from which the simulation engine is translated, and the 'BSIM3v3.3.0' and 'BSIM4' 4.8.3 models ('BSIM4' under the Educational Community License 2.0); see inst/COPYRIGHTS) [copyright holder]
+  \item Thomas L. Quarles (principal author of 'SPICE3f5'; the other authors are named in the file headers reproduced in inst/COPYRIGHTS) [contributor]
+  \item Wayne A. Christopher ('SPICE3' front end: fourier.c and inpcom.c, translated or followed in dune-core four.rs and in dune-netlist) [contributor]
+  \item Charles Hough ('KSPICE' transmission lines (txl, cpl), translated in dune-core/src/kspice) [contributor]
+  \item UC Berkeley BSIM Research Group (authors of the 'BSIM3v3.3.0' and 'BSIM4' 4.8.3 models, translated in dune-core/src/bsim3 and dune-core/src/bsim4) [contributor]
+  \item The ngspice team and contributors ('ngspice' 47: translated or followed in dune-core and dune-netlist (cktop.c, com_measure2.c, the vdmos, vbic and dio device directories, the switch, source, noise and other device routines revised by 'ngspice'); see inst/COPYRIGHTS) [contributor, copyright holder]
+  \item Holger Vogt ('ngspice' files optran.c, 1-f-code.c and randnumb.c, followed in dune-core engine.rs and trnoise.rs, and the 'VDMOS' model, translated in dune-core/src/vdmos) [contributor, copyright holder]
+  \item Dietmar Warning ('ngspice' implementation of the 'VBIC' model and revisions of the 'VDMOS' model and of the diode, translated in dune-core/src/vbic, dune-core/src/vdmos and dune-core dioext.rs) [contributor]
+  \item Colin McAndrew (author of the 'VBIC' model, translated in dune-core/src/vbic) [contributor]
+  \item Alan Gillespie ('ngspice' gmin and source stepping in cktop.c and device fixes ('AlansFixes'), followed in dune-core) [contributor]
+  \item Alessio Cacciatori ('ngspice' file span.c and RF ports, translated in dune-core sp.rs) [contributor]
+  \item Paolo Nenzi ('ngspice' files b1noi.c and b2noi.c, translated in dune-core bsim1.rs and bsim2.rs, and revision of the diode, translated in dune-core dioext.rs) [contributor]
+  \item Arpad Buermen ('ngspice' revision of the diode, translated in dune-core dioext.rs) [contributor]
+  \item The authors of the dependency Rust crates (see inst/AUTHORS for details) [contributor, copyright holder]
 }
 
 }
