@@ -42,9 +42,13 @@ Description: Runs 'SPICE3' circuit netlists (operating point, DC sweep,
     This is an independent project, not affiliated with or endorsed by
     the University of California, Berkeley or the 'ngspice' project.
 License: BSD_3_clause + file LICENSE
-Copyright: See the file inst/COPYRIGHTS for the copyright and licence
-    notices of 'SPICE3f5', 'ngspice', 'BSIM3' and 'BSIM4', and inst/AUTHORS for
-    the vendored 'Rust' crates.
+Copyright: See the file LICENSE.note for the licences of the parts of
+    the package: the 'BSIM4' model is under the Educational Community
+    License 2.0 and 'BSIM3' carries the 'BSIM' terms of use. The file
+    inst/COPYRIGHTS reproduces the copyright and licence notices of
+    'SPICE3f5', 'ngspice', 'BSIM3' and 'BSIM4', with the full text of
+    the Educational Community License 2.0, and inst/AUTHORS lists the
+    vendored 'Rust' crates.
 URL: https://milkway.github.io/dune/r/, https://github.com/milkway/dune
 BugReports: https://github.com/milkway/dune/issues
 Encoding: UTF-8

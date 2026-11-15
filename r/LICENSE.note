@@ -1,0 +1,32 @@
+The R package 'spice' is distributed under the BSD 3-Clause licence
+(see the files DESCRIPTION and LICENSE).
+
+It contains source code derived from other works, which remains under the
+licences of those works. All of them permit redistribution, modification
+and use; their copyright and licence notices are reproduced in full in the
+installed file COPYRIGHTS (inst/COPYRIGHTS in the sources).
+
+  Component                         Licence                          Where
+  --------------------------------  -------------------------------  ------------------------------
+  The engine and the package        BSD 3-Clause                     everything not listed below
+  SPICE3f5 (University of           BSD (Berkeley)                   src/rust and the vendored
+    California, Berkeley)                                            dune-core, dune-netlist,
+                                                                     dune-raw (translated code)
+  ngspice 47 (the ngspice team      Modified BSD (BSD 3-Clause)      dune-core, dune-netlist
+    and contributors)                                                (translated code)
+  BSIM3v3.3.0 (UC Berkeley BSIM     Modified BSD, with the BSIM      dune-core/src/bsim3
+    Research Group)                 terms of use (B3TERMS_OF_USE)
+  BSIM4 4.8.3 (UC Berkeley BSIM     Educational Community License,   dune-core/src/bsim4
+    Research Group)                 Version 2.0 (ECL-2.0)
+  Rust crates the package           each crate's own licence         src/rust/vendor.tar.xz;
+    depends on                      (MIT, Apache-2.0, BSD, ...)      listed in inst/AUTHORS
+
+The full text of the Educational Community License, Version 2.0, is in
+section 4 of COPYRIGHTS, together with the BSIM4 copyright notice and the
+statement that the Rust files are modified versions (a translation) of the
+BSIM4 4.8.3 files distributed with ngspice 47. The BSIM terms of use that
+accompany BSIM3 are in section 3.
+
+BSIM3 and BSIM4 are compiled through the cargo feature 'bsim' of the
+vendored crate 'dune-core'. A build of the package without that feature
+contains neither model and is entirely under BSD-style licences.
