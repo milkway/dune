@@ -95,6 +95,9 @@ pub(crate) struct Reexpand {
     /// The deck read `temper` (or a behavioural `tc1`/`tc2`) where a
     /// device sees it.
     temper: bool,
+    /// The deck called a random function (`agauss`, `gauss`, `aunif`,
+    /// `unif`, `limit`).
+    random: bool,
 }
 
 /// Where the seed a deck asks for comes from (`.options seed=`).
@@ -110,6 +113,7 @@ impl std::fmt::Debug for Reexpand {
             .field("cards", &self.cards.len())
             .field("overrides", &self.overrides)
             .field("temper", &self.temper)
+            .field("random", &self.random)
             .finish_non_exhaustive()
     }
 }
@@ -203,6 +207,16 @@ impl Netlist {
     /// (D-0075).
     pub fn random_mode(&self) -> RandomMode {
         self.random_mode
+    }
+
+    /// Whether the deck calls a random function (`agauss`, `gauss`,
+    /// `aunif`, `unif`, `limit`) — through a `.param`, a model, a
+    /// device value or a `.func` — so that [`Netlist::with_seed`]
+    /// draws other values for another seed. A netlist built by hand,
+    /// or a deck without random functions, answers `false`: another
+    /// seed then only changes the engine's transient-noise sources.
+    pub fn uses_random(&self) -> bool {
+        self.reexpand.as_ref().is_some_and(|r| r.random)
     }
 
     /// The same deck with its random functions drawn from `seed`,
@@ -731,12 +745,14 @@ fn parse_cards(
         (None, DeckSeed::None) => RandomMode::Nominal,
     };
     let temper = env.temper_first().is_some();
-    if temper || env.random_used() {
+    let random = env.random_used();
+    if temper || random {
         nl.reexpand = Some(Arc::new(Reexpand {
             title: nl.title.clone(),
             cards: Arc::clone(cards_arc),
             overrides,
             temper,
+            random,
         }));
     }
     (nl, all_diags)

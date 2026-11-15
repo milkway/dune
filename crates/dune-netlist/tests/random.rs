@@ -364,6 +364,33 @@ fn the_seed_option_as_ngspice_reads_it() {
 }
 
 #[test]
+fn uses_random_tells_whether_a_seed_draws_anything() {
+    // Nominal or seeded, a deck that calls a random function says so
+    // (through a .param, a model, a device value, a .func); one that
+    // does not — even with a seed — does not.
+    for deck in [
+        ".param p=agauss(1k,100,3)\nr1 1 0 {p}",
+        ".options seed=4\n.param p=agauss(1k,100,3)\nr1 1 0 {p}",
+        ".model rm r rsh={aunif(1,0.1)}\nr1 1 0 rm l=1 w=1",
+        "r1 1 0 {unif(1k,0.1)}",
+        ".func f(x)={x*gauss(1,0.1,1)}\nr1 1 0 {f(1k)}",
+    ] {
+        let nl = clean(deck);
+        assert!(nl.uses_random(), "{deck}");
+        assert!(nl.with_seed(3).0.uses_random(), "{deck}");
+    }
+    for deck in [
+        "r1 1 0 1k",
+        ".options seed=7\nr1 1 0 1k",
+        "r1 1 0 {1k+temper}",
+    ] {
+        let nl = clean(deck);
+        assert!(!nl.uses_random(), "{deck}");
+        assert!(!nl.with_seed(3).0.uses_random(), "{deck}");
+    }
+}
+
+#[test]
 fn re_expansion_at_another_temperature_repeats_the_draws() {
     // A seeded deck that also reads temper: the re-expansion at any
     // temperature gives the same draws, so a temperature sweep does
