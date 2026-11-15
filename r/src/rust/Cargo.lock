@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "dune-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "dune-netlist",
  "dune-raw",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "dune-netlist"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "libm",
  "thiserror 2.0.21",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "dune-pic"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "rpic-core",
  "thiserror 2.0.21",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "dune-raw"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "num-complex",
  "thiserror 2.0.21",

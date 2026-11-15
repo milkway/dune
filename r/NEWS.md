@@ -1,5 +1,11 @@
 # spice (development version)
 
+* **A deck can no longer run without end in the operating point.** The
+  last convergence fallback, the transient operating point, had no step
+  limit (ngspice has none either): a circuit that makes it crawl in
+  picosecond steps kept a run busy for hours. It now gives up after the
+  step budget the transient analysis has (10 000 attempts by default)
+  and the operating point reports a convergence error.
 * **Temperature sweeps re-evaluate the deck:** `temper` and the
   `tc1`/`tc2` of behavioural R, C and L follow every point of a
   `.dc temp` sweep, a `temp` option given after parsing and the
