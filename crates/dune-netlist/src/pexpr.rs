@@ -269,24 +269,52 @@ pub(crate) struct Expr {
 }
 
 /// How the random functions (`agauss gauss aunif unif limit`) are
-/// evaluated. ngspice-47 draws without a fixed seed on every run
-/// (`docs/pdk-parser.md` S11); which policy Dune exposes is pending
-/// an owner decision, so only [`RandomPolicy::Nominal`] is reachable
-/// from the parser today.
+/// evaluated (D-0065, D-0075). ngspice-47 draws on every run, seeded
+/// by `.options seed=N` or by the clock; Dune evaluates at the nominal
+/// value unless the deck (or the caller, `Netlist::with_seed`) gives
+/// a seed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RandomPolicy {
     /// Every random function returns its nominal (first) argument.
     Nominal,
-    /// Draws from a deterministic generator seeded with the value.
-    #[allow(dead_code)] // reachable from tests until a public switch exists
+    /// Draws keyed by the seed and the place of the draw.
     Seeded(u64),
 }
 
 /// State shared by the evaluations of one deck.
+///
+/// **Draw keys.** A seeded draw is not taken from a running stream
+/// (whose position would depend on the order of evaluation) but is a
+/// pure function of `(seed, root, n)`: `root` names the evaluation
+/// that asked for it — a value on a card, a `.param` definition, an
+/// `X`-line actual, a `.model` parameter: the instance path and the
+/// byte position of the value ([`EvalCtx::with_root`]) — and `n`
+/// counts the draws made inside that evaluation, in program order
+/// (a random `.param` read twice draws twice). Evaluating the same
+/// value again — the global scope resolved a second time at the
+/// circuit temperature, a re-expansion at another temperature
+/// (`Netlist::at_temperature`) — repeats its draws exactly; distinct
+/// values, or one card in two subcircuit instances, draw
+/// independently. Nothing depends on hash-map order, threads or the
+/// platform: the mixing is integer arithmetic and the normal deviate
+/// uses `libm` (pure Rust, the same bits on every target, wasm
+/// included).
 #[derive(Debug)]
 pub(crate) struct EvalCtx {
     pub policy: RandomPolicy,
-    rng: Cell<u64>,
+    /// Key of the evaluation being computed (see above).
+    draw_root: Cell<u64>,
+    /// Draws made so far inside it.
+    draw_n: Cell<u64>,
+    /// Nesting of [`EvalCtx::with_root`] calls: only the outermost
+    /// sets the root.
+    root_depth: Cell<u32>,
+    /// The card being read, when draws are on: a hash of its text and
+    /// where it starts (`ParamEnv::with_card`).
+    pub card: Cell<Option<(u64, u32, u32)>>,
+    /// Random `.param`s being re-evaluated inside each other right now
+    /// (`param.rs`, bounded by [`MAX_RANDOM_DEPTH`]).
+    pub random_depth: Cell<u32>,
     /// Set once any random function has been evaluated.
     pub random_used: Cell<bool>,
     /// Work spent in user-function bodies so far ([`MAX_FN_WORK`]).
@@ -298,15 +326,58 @@ pub(crate) struct EvalCtx {
     pub temper_touched: Cell<bool>,
 }
 
+/// Most random `.param`s re-evaluated inside one another (each
+/// reference to one evaluates its expression again, D-0075).
+pub(crate) const MAX_RANDOM_DEPTH: u32 = 64;
+
+/// SplitMix64's finalizer: a bijective 64-bit mix.
+pub(crate) fn mix64(mut z: u64) -> u64 {
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Fold `x` into the key `h`.
+pub(crate) fn mix_in(h: u64, x: u64) -> u64 {
+    mix64(h ^ mix64(x.wrapping_add(0x9E37_79B9_7F4A_7C15)))
+}
+
+/// The uniforms of one draw: SplitMix64 from the draw's key.
+struct Stream(u64);
+
+impl Stream {
+    /// Uniform on `[0, 1)`, 53 bits.
+    fn uniform(&mut self) -> f64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        (mix64(self.0) >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+
+    /// Standard normal, Marsaglia's polar method (`libm` for the
+    /// logarithm and the root: the same bits on every platform). The
+    /// rejection loop is capped; 64 rejections in a row (probability
+    /// 0.215⁶⁴) give 0.
+    fn normal(&mut self) -> f64 {
+        for _ in 0..64 {
+            let u = 2.0 * self.uniform() - 1.0;
+            let v = 2.0 * self.uniform() - 1.0;
+            let s = u * u + v * v;
+            if s > 0.0 && s < 1.0 {
+                return u * libm::sqrt(-2.0 * libm::log(s) / s);
+            }
+        }
+        0.0
+    }
+}
+
 impl EvalCtx {
     pub fn new(policy: RandomPolicy) -> Self {
-        let seed = match policy {
-            RandomPolicy::Nominal => 0,
-            RandomPolicy::Seeded(s) => s,
-        };
         EvalCtx {
             policy,
-            rng: Cell::new(seed),
+            draw_root: Cell::new(0),
+            draw_n: Cell::new(0),
+            root_depth: Cell::new(0),
+            card: Cell::new(None),
+            random_depth: Cell::new(0),
             random_used: Cell::new(false),
             fn_work: Cell::new(0),
             in_body: Cell::new(0),
@@ -321,21 +392,26 @@ impl EvalCtx {
         w <= MAX_FN_WORK
     }
 
-    /// SplitMix64 step, mapped to [0, 1).
-    fn uniform01(&self) -> f64 {
-        let mut z = self.rng.get().wrapping_add(0x9E37_79B9_7F4A_7C15);
-        self.rng.set(z);
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+    /// Run `f` as the evaluation keyed `root` (see the type's notes),
+    /// unless one is already running (then its draws continue that
+    /// one's count).
+    pub fn with_root<R>(&self, root: u64, f: impl FnOnce() -> R) -> R {
+        let depth = self.root_depth.get();
+        if depth == 0 {
+            self.draw_root.set(root);
+            self.draw_n.set(0);
+        }
+        self.root_depth.set(depth + 1);
+        let r = f();
+        self.root_depth.set(depth);
+        r
     }
 
-    /// Standard normal by Box–Muller.
-    fn normal(&self) -> f64 {
-        let u1 = 1.0 - self.uniform01(); // (0, 1]
-        let u2 = self.uniform01();
-        (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+    /// The stream of the next draw of the running evaluation.
+    fn next_stream(&self, seed: u64) -> Stream {
+        let n = self.draw_n.get();
+        self.draw_n.set(n.wrapping_add(1));
+        Stream(mix_in(mix_in(mix64(seed), self.draw_root.get()), n))
     }
 }
 
@@ -343,6 +419,11 @@ impl Expr {
     /// Names the expression reads, in order of appearance.
     pub fn vars(&self) -> &[VarRef] {
         &self.vars
+    }
+
+    /// Size of the compiled program (a work unit for budgets).
+    pub fn size(&self) -> usize {
+        self.code.len()
     }
 
     /// The calls the expression makes, in order of appearance.
@@ -646,28 +727,35 @@ fn call(f: Func, a: &[f64], ctx: &EvalCtx) -> f64 {
             ctx.random_used.set(true);
             match ctx.policy {
                 RandomPolicy::Nominal => x,
-                RandomPolicy::Seeded(_) => draw(f, a, ctx),
+                RandomPolicy::Seeded(seed) => draw(f, a, ctx, seed),
             }
         }
     }
 }
 
 /// One draw, with the meanings the ngspice manual gives:
-/// `agauss(nom, avar, sigma)`, `gauss(nom, rvar, sigma)` (relative),
-/// `aunif(nom, avar)`, `unif(nom, rvar)` (relative), `limit(nom,
-/// avar)` (either `nom-avar` or `nom+avar`). A missing `sigma` is
-/// taken as 1 (an assumption: ngspice accepts the two-argument form).
-fn draw(f: Func, a: &[f64], ctx: &EvalCtx) -> f64 {
+/// `agauss(nom, avar, sigma)` = nom + avar/sigma·N(0,1), `gauss(nom,
+/// rvar, sigma)` = nom + nom·rvar/sigma·N(0,1) (relative), `aunif(nom,
+/// avar)` uniform on nom ± avar, `unif(nom, rvar)` uniform on
+/// nom·(1 ± rvar), `limit(nom, avar)` either `nom-avar` or `nom+avar`
+/// with probability ½ each. The two-argument `agauss`/`gauss` gives
+/// the nominal value, as ngspice-47 does (probes `temper-seed-probes
+/// t3 c_two_args`, `c_gauss_two_args`), and draws nothing.
+fn draw(f: Func, a: &[f64], ctx: &EvalCtx, seed: u64) -> f64 {
     let nom = a.first().copied().unwrap_or(f64::NAN);
     let var = a.get(1).copied().unwrap_or(f64::NAN);
+    if matches!(f, Func::Agauss | Func::Gauss) && a.len() < 3 {
+        return nom;
+    }
     let sigma = a.get(2).copied().unwrap_or(1.0);
+    let mut st = ctx.next_stream(seed);
     match f {
-        Func::Agauss => nom + var / sigma * ctx.normal(),
-        Func::Gauss => nom + nom * var / sigma * ctx.normal(),
-        Func::Aunif => nom + var * (2.0 * ctx.uniform01() - 1.0),
-        Func::Unif => nom + nom * var * (2.0 * ctx.uniform01() - 1.0),
+        Func::Agauss => nom + var / sigma * st.normal(),
+        Func::Gauss => nom + nom * var / sigma * st.normal(),
+        Func::Aunif => nom + var * (2.0 * st.uniform() - 1.0),
+        Func::Unif => nom + nom * var * (2.0 * st.uniform() - 1.0),
         Func::Limit => {
-            if ctx.uniform01() < 0.5 {
+            if st.uniform() < 0.5 {
                 nom - var
             } else {
                 nom + var

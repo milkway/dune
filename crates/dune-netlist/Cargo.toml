@@ -13,3 +13,6 @@ categories.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+# Portable `log`/`sqrt` for the seeded normal deviates (pure Rust,
+# the same bits on every target, wasm included).
+libm.workspace = true

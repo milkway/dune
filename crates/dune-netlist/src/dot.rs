@@ -781,6 +781,17 @@ fn dot_options(ctx: &mut DotCtx, nl: &mut Netlist) {
             }
             continue;
         }
+        // `seed=random` (ngspice-47 `inp.c`): a word, not a number.
+        if (name == "seed" || name == "rndseed") && sc.peek_tok().is_some_and(|t| t.eq_ic("random"))
+        {
+            sc.next_tok();
+            nl.options.push(Param {
+                name,
+                value: ParamValue::Str("random".into()),
+                span,
+            });
+            continue;
+        }
         let mut nums = Vec::new();
         while let Some(v) = ctx.option_value(&mut sc) {
             nums.push(v);

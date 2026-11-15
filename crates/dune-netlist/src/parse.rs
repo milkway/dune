@@ -15,8 +15,9 @@ use crate::deck::{self, Card, Deck, IncludeLoader};
 use crate::diag::Diagnostic;
 use crate::elem::{ElemCtx, parse_element};
 use crate::func::{FuncScope, FuncTable};
-use crate::ir::{Model, Netlist, Param, ParamValue};
+use crate::ir::{Model, Netlist, Param, ParamValue, RandomMode};
 use crate::param::{ParamDef, ParamEnv, TemperUse};
+use crate::pexpr::RandomPolicy;
 use crate::scan::Scanner;
 use crate::span::{FileId, SourceMap, Span};
 use crate::subckt::{
@@ -96,13 +97,20 @@ pub(crate) struct Reexpand {
     temper: bool,
 }
 
+/// Where the seed a deck asks for comes from (`.options seed=`).
+enum DeckSeed {
+    None,
+    Seed(u64),
+    Random,
+}
+
 impl std::fmt::Debug for Reexpand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Reexpand")
             .field("cards", &self.cards.len())
             .field("overrides", &self.overrides)
             .field("temper", &self.temper)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -112,12 +120,21 @@ pub(crate) struct Overrides {
     /// The circuit temperature `temper` reads (°C), instead of the
     /// deck's `.temp`/`.options temp`.
     pub temperature: Option<f64>,
+    /// The seed of the random functions, instead of the deck's
+    /// `.options seed`.
+    pub seed: Option<u64>,
 }
 
 impl Overrides {
     /// The same settings with `temper` = `t` (°C).
     fn at(mut self, t: f64) -> Self {
         self.temperature = Some(t);
+        self
+    }
+
+    /// The same settings with the random functions drawn from `seed`.
+    fn seeded(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
         self
     }
 }
@@ -173,6 +190,126 @@ impl Netlist {
             span: at,
         });
         (nl, diags)
+    }
+}
+
+impl Netlist {
+    /// How the deck's random functions (`agauss`, `gauss`, `aunif`,
+    /// `unif`, `limit`) were evaluated: at their nominal value (the
+    /// default), drawn from a seed (`.options seed=N`, or
+    /// [`Netlist::with_seed`]), or at nominal because the deck asks for
+    /// `.options seed=random`, which only the caller can resolve —
+    /// pick a fresh seed, call [`Netlist::with_seed`] and report it
+    /// (D-0075).
+    pub fn random_mode(&self) -> RandomMode {
+        self.random_mode
+    }
+
+    /// The same deck with its random functions drawn from `seed`,
+    /// whatever its own `.options seed` says (a `seed=random` deck
+    /// resolved by the caller; run `i` of a Monte Carlo). The draws
+    /// are a function of the seed and the deck only (see
+    /// `docs/dune-netlist.md`, "Funções aleatórias"); every `seed`
+    /// option of the netlist is replaced by `seed = seed`, so the
+    /// transient-noise sources of the engine follow the same seed, as
+    /// one `rndseed` drives both in ngspice-47. The cards are those of
+    /// the original parse (nothing is read from disk again); the
+    /// diagnostics are those of the new evaluation, with spans of the
+    /// original [`SourceMap`]. A re-expansion at another temperature
+    /// ([`Netlist::at_temperature`]) keeps the seed and repeats the
+    /// same draws.
+    pub fn with_seed(&self, seed: u64) -> (Netlist, Vec<Diagnostic>) {
+        match &self.reexpand {
+            Some(r) => parse_cards(r.title.clone(), &r.cards, r.overrides.seeded(seed)),
+            None => {
+                let mut nl = self.clone();
+                nl.random_mode = RandomMode::Seeded(seed);
+                set_seed_option(&mut nl, seed);
+                (nl, Vec::new())
+            }
+        }
+    }
+}
+
+/// Replace every `seed`/`rndseed` option by `seed = seed`.
+fn set_seed_option(nl: &mut Netlist, seed: u64) {
+    let span = nl
+        .options
+        .iter()
+        .find(|p| p.name == "seed" || p.name == "rndseed")
+        .map(|p| p.span)
+        .unwrap_or(Span::new(FileId(0), 0, 0));
+    nl.options
+        .retain(|p| p.name != "seed" && p.name != "rndseed");
+    nl.options.push(Param {
+        name: "seed".into(),
+        value: ParamValue::Num(seed as f64),
+        span,
+    });
+}
+
+/// The seed a deck's `.options` ask for, as ngspice-47 reads it
+/// (`inp.c`; probes `temper-seed-probes t2 a_*`): the first
+/// `seed=` card counts, a later one is ignored with a warning
+/// ("Multiple 'option seed=val|random' found!") and dropped from the
+/// options, so the engine's transient noise sees the same seed; the
+/// value is truncated to an integer and taken modulo 2³² (`7.6` and
+/// `4294967303` are 7); zero, negative or non-numeric values are
+/// "Cannot convert … skipped" (here: a warning and no drawing);
+/// `random` asks for a fresh seed. Without `seed`, `.options
+/// rndseed=N` does the same (`a_rndseed`).
+fn deck_seed(nl: &mut Netlist, diags: &mut Vec<Diagnostic>) -> DeckSeed {
+    let key = if nl.options.iter().any(|p| p.name == "seed") {
+        "seed"
+    } else {
+        "rndseed"
+    };
+    let mut first: Option<Param> = None;
+    let mut extra = false;
+    for p in nl.options.iter().filter(|p| p.name == key) {
+        if first.is_none() {
+            first = Some(p.clone());
+        } else {
+            extra = true;
+            diags.push(Diagnostic::warning(
+                format!(
+                    "more than one `.options {key}=`: the first one counts (as in ngspice-47); \
+                     this one is ignored"
+                ),
+                p.span,
+            ));
+        }
+    }
+    let Some(p) = first else {
+        return DeckSeed::None;
+    };
+    if extra {
+        // Keep the first, so the engine's noise seed agrees.
+        let mut kept = false;
+        nl.options.retain(|q| {
+            if q.name != key {
+                return true;
+            }
+            let keep = !kept;
+            kept = true;
+            keep
+        });
+    }
+    match &p.value {
+        ParamValue::Num(v) if v.is_finite() && *v >= 1.0 => {
+            DeckSeed::Seed((v.trunc().min(u64::MAX as f64) as u64) & 0xFFFF_FFFF)
+        }
+        ParamValue::Str(w) if w == "random" => DeckSeed::Random,
+        _ => {
+            diags.push(Diagnostic::warning(
+                format!(
+                    "`.options {key}=` needs a positive integer or `random` (ngspice-47 skips \
+                     this value); random functions stay at their nominal value"
+                ),
+                p.span,
+            ));
+            DeckSeed::None
+        }
     }
 }
 
@@ -276,16 +413,28 @@ fn parse_cards(
     // again at the circuit temperature, which may itself read global
     // parameters (`.options temp={t0}`).
     let mut first_diags = Vec::new();
-    let env = crate::param::resolve(&param_defs, Some(&global_scope), 27.0, &mut first_diags);
-    let temperature = overrides
-        .temperature
-        .unwrap_or_else(|| circuit_temperature(cards, &env));
-    let env = if temperature != 27.0 && env.has_tainted() {
+    let env = crate::param::resolve(
+        &param_defs,
+        Some(&global_scope),
+        27.0,
+        RandomPolicy::Nominal,
+        &mut first_diags,
+    );
+    let (deck_temperature, mut deck_opts) = circuit_temperature(cards, &env);
+    let temperature = overrides.temperature.unwrap_or(deck_temperature);
+    // The seed: the caller's, else the deck's `.options seed`.
+    let asked = deck_seed(&mut deck_opts, &mut Vec::new());
+    let policy = match (overrides.seed, &asked) {
+        (Some(s), _) | (None, &DeckSeed::Seed(s)) => RandomPolicy::Seeded(s),
+        _ => RandomPolicy::Nominal,
+    };
+    let env = if (temperature != 27.0 && env.has_tainted()) || policy != RandomPolicy::Nominal {
         drop(env);
         crate::param::resolve(
             &param_defs,
             Some(&global_scope),
             temperature,
+            policy,
             &mut all_diags,
         )
     } else {
@@ -555,8 +704,34 @@ fn parse_cards(
     nl.elements = elements;
     nl.models = models;
     all_diags.extend(env.random_note());
+    // The seed again, now with its diagnostics (and the later `seed`
+    // options dropped from the netlist).
+    let _ = deck_seed(&mut nl, &mut all_diags);
+    nl.random_mode = match (overrides.seed, &asked) {
+        (Some(s), _) => {
+            set_seed_option(&mut nl, s);
+            RandomMode::Seeded(s)
+        }
+        (None, DeckSeed::Seed(s)) => RandomMode::Seeded(*s),
+        (None, DeckSeed::Random) => {
+            let span = nl
+                .options
+                .iter()
+                .find(|p| p.name == "seed" || p.name == "rndseed")
+                .map(|p| p.span);
+            let msg = "`.options seed=random`: the seed must come from the caller (the dune CLI \
+                       picks one and reports it; libraries call Netlist::with_seed); until then \
+                       random functions stay at their nominal value";
+            all_diags.push(match span {
+                Some(sp) => Diagnostic::warning(msg, sp),
+                None => Diagnostic::global_warning(msg),
+            });
+            RandomMode::SeedRequested
+        }
+        (None, DeckSeed::None) => RandomMode::Nominal,
+    };
     let temper = env.temper_first().is_some();
-    if temper {
+    if temper || env.random_used() {
         nl.reexpand = Some(Arc::new(Reexpand {
             title: nl.title.clone(),
             cards: Arc::clone(cards_arc),
@@ -567,14 +742,15 @@ fn parse_cards(
     (nl, all_diags)
 }
 
-/// The circuit temperature `temper` reads (°C): the last `.temp` card
+/// The circuit temperature `temper` reads (°C), and a scratch netlist
+/// holding every `.options` card (for the seed): the last `.temp` card
 /// in effect, else the last `.options temp=`, else 27 — as the engine
 /// will run (`dot.rs` `dot_temp`; probes `g9-probes t1 t_opt50_*`,
 /// `t_temp75_*`, `t_temp_and_opt`, `t_opt50_after`, `t_temp_if`). A
 /// quiet pre-pass over the top level: `.options` count wherever they
 /// stand (they ignore `.if`, `i4 i_d_options_*`), a `.temp` only in a
 /// branch taken; diagnostics are left to the real pass.
-fn circuit_temperature(cards: &[Card], env: &ParamEnv) -> f64 {
+fn circuit_temperature(cards: &[Card], env: &ParamEnv) -> (f64, Netlist) {
     let mut scratch = Netlist::default();
     let mut temp_card: Option<Param> = None;
     let mut quiet = Vec::new();
@@ -615,7 +791,7 @@ fn circuit_temperature(cards: &[Card], env: &ParamEnv) -> f64 {
         ParamValue::Num(v) if v.is_finite() => Some(v),
         _ => None,
     };
-    temp_card
+    let t = temp_card
         .as_ref()
         .and_then(num)
         .or_else(|| {
@@ -626,7 +802,8 @@ fn circuit_temperature(cards: &[Card], env: &ParamEnv) -> f64 {
                 .find(|p| p.name == "temp")
                 .and_then(num)
         })
-        .unwrap_or(27.0)
+        .unwrap_or(27.0);
+    (t, scratch)
 }
 
 /// Record the name a `.func` (or function-form `.param`) card defines.
@@ -833,6 +1010,10 @@ pub(crate) fn parse_model(
     diags: &mut Vec<Diagnostic>,
     env: &ParamEnv,
 ) -> Option<Model> {
+    env.with_card(card, || parse_model_card(card, diags, env))
+}
+
+fn parse_model_card(card: &Card, diags: &mut Vec<Diagnostic>, env: &ParamEnv) -> Option<Model> {
     let span = card.span();
     let mut ctx = ElemCtx {
         sc: Scanner::new(card),

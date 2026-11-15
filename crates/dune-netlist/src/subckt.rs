@@ -83,6 +83,9 @@ pub(crate) struct ModelCard<'c> {
     /// For a local card: the names its values read, deduplicated, or
     /// `None` when some value does not parse (no sharing then).
     free: Option<Vec<Box<str>>>,
+    /// The card's text names a random function (no sharing between
+    /// instances when draws are on).
+    random: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -140,6 +143,10 @@ impl<'c> ModelCard<'c> {
             names.sort_unstable();
             names.dedup();
         }
+        let lc = card.text.to_ascii_lowercase();
+        let random = ["agauss", "gauss", "aunif", "unif", "limit"]
+            .iter()
+            .any(|f| lc.contains(f));
         ModelCard {
             card,
             name,
@@ -147,6 +154,7 @@ impl<'c> ModelCard<'c> {
             keys,
             guard: None,
             free,
+            random,
         }
     }
 
@@ -166,8 +174,10 @@ impl<'c> ModelCard<'c> {
             KeyVal::Num(v) => Some(v),
             KeyVal::Text(s, e) => {
                 let card = self.card;
-                env.eval_value(&card.text[s..e], &|a, b| card.span_of(s + a, s + b))
-                    .ok()
+                env.with_card(card, || {
+                    env.eval_value(&card.text[s..e], &|a, b| card.span_of(s + a, s + b))
+                        .ok()
+                })
             }
         }
     }
@@ -848,7 +858,12 @@ impl<'c> Expander<'_, 'c> {
         // Instances that agree on every name the card reads share one
         // evaluated copy (named after the first of them): a 1000-device
         // array of one geometry evaluates a 300-parameter PDK bin once.
-        let key = mc.free.as_ref().and_then(|names| {
+        // With draws on, a card that calls a random function itself is
+        // evaluated per instance, as ngspice-47 draws it (probe
+        // `temper-seed-probes t2 b_sub_model`); one that reads a random
+        // `.param` has no shared key either (`ParamEnv::get` draws).
+        let shareable = !(mc.random && f.env.seeded());
+        let key = mc.free.as_ref().filter(|_| shareable).and_then(|names| {
             let mut k = Vec::with_capacity(names.len() + 1);
             k.push(std::ptr::from_ref(mc.card) as usize as u64);
             for n in names {
@@ -1018,8 +1033,13 @@ impl<'c> Expander<'_, 'c> {
             table: &def.funcs,
             parent: container,
         };
+        let inst_path = if path.is_empty() {
+            call.name.clone()
+        } else {
+            format!("{path}.{}", call.name)
+        };
         let mut ds = Vec::new();
-        let env = param::resolve_local(&defs, caller_env, Some(&funcs), &mut ds);
+        let env = param::resolve_local(&defs, caller_env, Some(&funcs), &inst_path, &mut ds);
         self.report_all(ds);
         // The instance's `.if` branches (`g9-probes i_sub_param2`:
         // two instances, two branches).
@@ -1051,11 +1071,6 @@ impl<'c> Expander<'_, 'c> {
             None
         };
 
-        let inst_path = if path.is_empty() {
-            call.name.clone()
-        } else {
-            format!("{path}.{}", call.name)
-        };
         // Ports bind to the caller's (already mapped) nodes.
         let mut inner_nodes = HashMap::new();
         for (port, actual) in def.ports.iter().zip(&call.nodes) {

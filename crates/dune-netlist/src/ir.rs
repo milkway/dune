@@ -34,6 +34,26 @@ pub struct Netlist {
     /// ([`Netlist::at_temperature`]); `None` for a netlist built by
     /// hand or one that does not need it.
     pub(crate) reexpand: Option<std::sync::Arc<crate::parse::Reexpand>>,
+    /// How the random functions were evaluated
+    /// ([`Netlist::random_mode`]).
+    pub(crate) random_mode: RandomMode,
+}
+
+/// How a deck's random functions (`agauss`, `gauss`, `aunif`, `unif`,
+/// `limit`) were evaluated (D-0075; [`Netlist::random_mode`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RandomMode {
+    /// At their nominal (first) argument — the default, without
+    /// `.options seed`.
+    #[default]
+    Nominal,
+    /// Drawn from this seed (`.options seed=N`, or
+    /// [`Netlist::with_seed`]): the same seed gives the same draws.
+    Seeded(u64),
+    /// At nominal: the deck asks for `.options seed=random`, a fresh
+    /// seed only the caller can supply ([`Netlist::with_seed`]).
+    SeedRequested,
 }
 
 /// One circuit element (an instance line).

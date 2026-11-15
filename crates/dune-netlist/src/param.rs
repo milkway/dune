@@ -62,6 +62,19 @@ pub(crate) struct ParamEnv<'p> {
     random_first: Cell<Option<Span>>,
     /// Names of this scope whose value depends on `temper`.
     tainted: HashSet<String>,
+    /// Seeded mode only: the `.param`s of this scope whose own
+    /// expression calls a random function. ngspice-47 makes each of
+    /// them a function, so every reference evaluates it again and
+    /// draws anew (probes `temper-seed-probes t2 b_glob_two_devices`,
+    /// `b_twice_in_expr`, `b_sub_local`, `b_sub_default`, `t3
+    /// c_expr_param`); a parameter that only reads one (`q={p}`) keeps
+    /// one value (`b_through_param`, `c_local_of_global`). The span
+    /// is the definition's value.
+    random_defs: HashMap<String, (Expr, Span)>,
+    /// The key of this scope in the draw keys: 0 for the global
+    /// scope, a hash of the instance path for a subcircuit instance
+    /// (`pexpr::EvalCtx` notes).
+    path: u64,
     /// Global scope only: the circuit temperature (°C) `temper` reads,
     /// where the card being evaluated may read it, and the first
     /// place it was read.
@@ -102,6 +115,8 @@ impl Default for ParamEnv<'_> {
             ctx: EvalCtx::new(RandomPolicy::Nominal),
             random_first: Cell::new(None),
             tainted: HashSet::new(),
+            random_defs: HashMap::new(),
+            path: 0,
             temperature: Cell::new(DEFAULT_TEMP),
             temper_use: Cell::new(TemperUse::Forbidden("this position")),
             temper_first: Cell::new(None),
@@ -140,12 +155,28 @@ impl<'p> ParamEnv<'p> {
         env
     }
 
-    /// The value of `name` in this scope or an enclosing one.
+    /// The value of `name` in this scope or an enclosing one. A random
+    /// `.param` (seeded mode) is drawn, keyed by this scope and the
+    /// name.
     pub fn get(&self, name: &str) -> Option<f64> {
         let mut env = self;
         loop {
             if let Some(v) = env.map.get(name) {
                 return Some(*v);
+            }
+            if env.random_defs.contains_key(name) {
+                let v = VarRef {
+                    name: name.into(),
+                    start: 0,
+                    end: name.len().min(u32::MAX as usize) as u32,
+                };
+                let silenced = Cell::new(false);
+                let root = pexpr::mix_in(self.path, fnv(name));
+                return self
+                    .root()
+                    .ctx
+                    .with_root(root, || self.lookup(&v, &silenced))
+                    .ok();
             }
             if env.poisoned.contains(name) {
                 return None;
@@ -157,12 +188,43 @@ impl<'p> ParamEnv<'p> {
     /// The warning that random functions were evaluated at their
     /// nominal value, once per deck, at the first such call.
     pub fn random_note(&self) -> Option<Diagnostic> {
-        let span = self.root().random_first.get()?;
+        let root = self.root();
+        let span = root.random_first.get()?;
+        if root.ctx.policy != RandomPolicy::Nominal {
+            return None;
+        }
         Some(Diagnostic::warning(
             "random functions (agauss, gauss, aunif, unif, limit) are evaluated at their \
-             nominal value; ngspice draws a new random value on every run",
+             nominal value; ngspice draws a new random value on every run (`.options seed=N` \
+             draws them reproducibly)",
             span,
         ))
+    }
+
+    /// Run `f` reading `card`: with draws on, its draws are keyed by
+    /// the card's text (see `span_key`).
+    pub fn with_card<R>(&self, card: &Card, f: impl FnOnce() -> R) -> R {
+        if !self.seeded() {
+            return f();
+        }
+        let ctx = &self.root().ctx;
+        let at = card.span();
+        let before = ctx
+            .card
+            .replace(Some((fnv(&card.text), at.file.0, at.start)));
+        let r = f();
+        ctx.card.set(before);
+        r
+    }
+
+    /// Whether random functions draw (a seed is in effect).
+    pub fn seeded(&self) -> bool {
+        self.root().ctx.policy != RandomPolicy::Nominal
+    }
+
+    /// Whether some random function was evaluated (nominal or not).
+    pub fn random_used(&self) -> bool {
+        self.root().random_first.get().is_some() || self.root().ctx.random_used.get()
     }
 
     /// Whether some parameter of this scope depends on `temper`.
@@ -191,7 +253,7 @@ impl<'p> ParamEnv<'p> {
     pub fn is_tainted(&self, name: &str) -> bool {
         let mut env = self;
         loop {
-            if env.map.contains_key(name) {
+            if env.map.contains_key(name) || env.random_defs.contains_key(name) {
                 return env.tainted.contains(name);
             }
             if env.poisoned.contains(name) {
@@ -236,7 +298,8 @@ impl<'p> ParamEnv<'p> {
         };
         let silenced = Cell::new(false);
         let before = root.ctx.temper_touched.replace(false);
-        let r = self.lookup(&v, &silenced);
+        let key = span_key(self.path, at, root.ctx.card.get());
+        let r = root.ctx.with_root(key, || self.lookup(&v, &silenced));
         let touched = root.ctx.temper_touched.get();
         root.ctx.temper_touched.set(before || touched);
         match r {
@@ -345,6 +408,12 @@ impl<'p> ParamEnv<'p> {
                 }
                 return Ok(*x);
             }
+            if let Some((expr, at)) = env.random_defs.get(&*v.name) {
+                if env.tainted.contains(&*v.name) {
+                    env.read_temper(v, outer, 0.0)?;
+                }
+                return env.eval_random(expr, *at, v, silenced);
+            }
             outer = true;
             let (s, e) = (v.start as usize, v.end as usize);
             if env.poisoned.contains(&*v.name) {
@@ -360,6 +429,60 @@ impl<'p> ParamEnv<'p> {
         }
     }
 
+    /// Evaluate random `.param` `v` of this scope again (seeded mode:
+    /// every reference draws anew). Nested re-evaluations are bounded
+    /// by [`pexpr::MAX_RANDOM_DEPTH`] and charged to the deck's
+    /// function budget; a failure inside the definition points at it.
+    fn eval_random(
+        &self,
+        expr: &Expr,
+        at: Span,
+        v: &VarRef,
+        silenced: &Cell<bool>,
+    ) -> Result<f64, PError> {
+        let root = self.root();
+        let (s, e) = (v.start as usize, v.end as usize);
+        let depth = root.ctx.random_depth.get();
+        if depth >= pexpr::MAX_RANDOM_DEPTH {
+            return Err(PError::new(
+                format!(
+                    "random parameters re-evaluated inside each other more than {} deep at `{}`",
+                    pexpr::MAX_RANDOM_DEPTH,
+                    v.name
+                ),
+                s,
+                e,
+            ));
+        }
+        if !root.ctx.charge(1 + expr.size() as u64) {
+            return Err(PError::new(
+                format!(
+                    "the deck's evaluation budget is spent re-drawing random parameter `{}`",
+                    v.name
+                ),
+                s,
+                e,
+            ));
+        }
+        root.ctx.random_depth.set(depth + 1);
+        let r = expr.eval_in(
+            &mut |w| match self.parent {
+                // A definition naming itself reads the enclosing scope.
+                Some(p) if *w.name == *v.name => p.lookup(w, silenced),
+                _ => self.lookup(w, silenced),
+            },
+            &root.ctx,
+            self.funcs,
+        );
+        root.ctx.random_depth.set(depth);
+        r.map_err(|mut err| {
+            if err.at.is_none() && !err.msg.is_empty() {
+                err.at = Some(at);
+            }
+            err
+        })
+    }
+
     /// Evaluate a compiled expression in this scope. `own`, in an
     /// instance scope, is the name being defined: it reads the
     /// enclosing scope's value. `span_of` maps byte ranges of the
@@ -373,14 +496,17 @@ impl<'p> ParamEnv<'p> {
         let silenced = Cell::new(false);
         let root = self.root();
         let random_before = root.ctx.random_used.get();
-        let r = expr.eval_in(
-            &mut |v| match (own, self.parent) {
-                (Some(n), Some(p)) if *v.name == *n => p.lookup(v, &silenced),
-                _ => self.lookup(v, &silenced),
-            },
-            &root.ctx,
-            self.funcs,
-        );
+        let key = span_key(self.path, span_of(0, 0), root.ctx.card.get());
+        let r = root.ctx.with_root(key, || {
+            expr.eval_in(
+                &mut |v| match (own, self.parent) {
+                    (Some(n), Some(p)) if *v.name == *n => p.lookup(v, &silenced),
+                    _ => self.lookup(v, &silenced),
+                },
+                &root.ctx,
+                self.funcs,
+            )
+        });
         match r {
             Ok(v) => {
                 if root.ctx.temper_touched.get()
@@ -492,26 +618,57 @@ const CYCLE_NAMES_SHOWN: usize = 8;
 /// Resolve the global `.param` definitions (in deck order) into the
 /// global scope, reporting every failure.
 /// `temperature` is the circuit temperature `temper` reads (°C).
+/// `policy` says how random functions are evaluated (D-0075).
 pub(crate) fn resolve<'p>(
     defs: &[ParamDef],
     funcs: Option<&'p FuncScope<'p>>,
     temperature: f64,
+    policy: RandomPolicy,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
-    resolve_scope(defs, None, funcs, Some(temperature), diags)
+    resolve_scope(defs, None, funcs, Some((temperature, policy)), 0, diags)
 }
 
 /// Resolve one subcircuit instance's definitions — the `.subckt`
 /// line defaults and body `.param`s in order, then the `X` line's
 /// actual parameters (which therefore win) — into a scope that reads
 /// through to `parent`, the caller's scope.
+/// `path` is the instance's expanded name (`x1.x2`), which keys its
+/// draws.
 pub(crate) fn resolve_local<'p>(
     defs: &[ParamDef],
     parent: &'p ParamEnv<'p>,
     funcs: Option<&'p FuncScope<'p>>,
+    path: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
-    resolve_scope(defs, Some(parent), funcs, None, diags)
+    resolve_scope(defs, Some(parent), funcs, None, fnv(path), diags)
+}
+
+/// FNV-1a of a name (draw keys).
+pub(crate) fn fnv(name: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in name.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// The draw key of an evaluation at `at` in the scope keyed `path`:
+/// the text of the card being read and the offset of `at` in it — so
+/// a title, a comment or a card added elsewhere does not move the
+/// draws — else (no card known) the file and byte position.
+fn span_key(path: u64, at: Span, card: Option<(u64, u32, u32)>) -> u64 {
+    match card {
+        Some((text, file, start)) if file == at.file.0 && at.start >= start => {
+            pexpr::mix_in(pexpr::mix_in(path, text), u64::from(at.start - start))
+        }
+        _ => {
+            let k = pexpr::mix_in(path ^ 0x5bd1_e995, u64::from(at.file.0));
+            pexpr::mix_in(k, u64::from(at.start))
+        }
+    }
 }
 
 /// Resolve the definitions of one scope (in order) into an
@@ -527,17 +684,21 @@ fn resolve_scope<'p>(
     defs: &[ParamDef],
     parent: Option<&'p ParamEnv<'p>>,
     funcs: Option<&'p FuncScope<'p>>,
-    temperature: Option<f64>,
+    global: Option<(f64, RandomPolicy)>,
+    path: u64,
     diags: &mut Vec<Diagnostic>,
 ) -> ParamEnv<'p> {
     let mut env = ParamEnv {
         parent,
         funcs,
+        path,
         ..ParamEnv::default()
     };
-    if let Some(t) = temperature {
+    if let Some((t, policy)) = global {
         env.temperature.set(t);
+        env.ctx = EvalCtx::new(policy);
     }
+    let seeded = env.root().ctx.policy != RandomPolicy::Nominal;
     let mut via_funcs: Vec<Box<str>> = Vec::new();
     let local = parent.is_some();
     let n_defs = defs.len();
@@ -671,14 +832,36 @@ fn resolve_scope<'p>(
             };
             let tctx = &env.root().ctx;
             tctx.temper_touched.set(false);
+            let mut random = None;
             let value = match pexpr::parse(d.value) {
-                Ok(expr) => env.with_temper(rules, || env.eval_expr(&expr, own, &span_of)),
+                Ok(expr) => {
+                    let v = env.with_card(d.card, || {
+                        env.with_temper(rules, || env.eval_expr(&expr, own, &span_of))
+                    });
+                    // Seeded: a definition that calls a random function
+                    // itself becomes a function of its scope (evaluated
+                    // once above for its diagnostics).
+                    // An `X`-line actual (`temper_ok` false) stays one
+                    // value per instance (`t2 b_sub_actual`).
+                    if seeded && d.temper_ok && expr.first_random_call().is_some() {
+                        random = Some(expr);
+                    }
+                    v
+                }
                 Err(e) => Err(Some(Diagnostic::error(e.msg, span_of(e.start, e.end)))),
             };
             let touched = env.root().ctx.temper_touched.replace(false);
             match value {
                 Ok(v) => {
-                    env.map.insert(d.name.clone(), v);
+                    match random {
+                        Some(expr) => {
+                            let at = span_of(0, d.value.len());
+                            env.random_defs.insert(d.name.clone(), (expr, at));
+                        }
+                        None => {
+                            env.map.insert(d.name.clone(), v);
+                        }
+                    }
                     if touched {
                         env.tainted.insert(d.name.clone());
                     }

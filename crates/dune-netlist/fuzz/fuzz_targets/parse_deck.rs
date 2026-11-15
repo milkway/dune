@@ -70,6 +70,20 @@ fuzz_target!(|data: &[u8]| {
          r1 a 0 {{h(2)}}\n.endif\n.ends\nx1 2 s k={{{line}}}\nx2 3 s\n.end\n"
     );
     let _ = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), fase8, &mut NoFs);
+    // Seeded random functions and re-expansion (D-0075): the bytes as
+    // a seed, as a random `.param` read by devices, a subcircuit and a
+    // model, next to `temper`; then the netlist re-expanded at another
+    // temperature and reseeded.
+    let seeded = format!(
+        "t\n.options seed={line}\n.param p=agauss(1,{line},3) q={{p+{line}}}\n\
+         .subckt s a lp=aunif(1,0.1)\n.param lq={{lp*{line}}}\n.model rm r rsh={{lq+temper}}\n\
+         r1 a 0 {{lp*p}}\nr2 a 0 rm l=1 w=1\n.ends\nx1 1 s\nx2 2 s lp={{{line}}}\n\
+         r3 3 0 {{q+temper+{line}}}\n.end\n"
+    );
+    let out = dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), seeded, &mut NoFs);
+    let (hot, _) = out.netlist.at_temperature(85.0);
+    let _ = hot.with_seed(data.len() as u64);
+    let _ = out.netlist.with_seed(7).0.at_temperature(-40.0);
     let _ =
         dune_netlist::parse_with_loader(std::path::Path::new("fuzz.cir"), text.clone(), &mut NoFs);
     let _ = dune_netlist::parse_with_loader(

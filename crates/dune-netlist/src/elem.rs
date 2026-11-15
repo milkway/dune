@@ -213,6 +213,20 @@ pub(crate) fn parse_element_in(
     env: &ParamEnv,
     replaced_m: bool,
 ) -> Vec<Element> {
+    // Draws on this card are keyed by its text (`ParamEnv::with_card`).
+    env.with_card(card, || {
+        parse_element_card(card, diags, model_names, vdmos_models, env, replaced_m)
+    })
+}
+
+fn parse_element_card(
+    card: &Card,
+    diags: &mut Vec<Diagnostic>,
+    model_names: &HashSet<String>,
+    vdmos_models: &HashSet<String>,
+    env: &ParamEnv,
+    replaced_m: bool,
+) -> Vec<Element> {
     let mut ctx = ElemCtx {
         sc: Scanner::new(card),
         card,
