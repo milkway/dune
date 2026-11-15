@@ -27,10 +27,10 @@ use std::path::{Path, PathBuf};
 use dune_core::consts::CTOK;
 use dune_core::{
     AlterValue, Circuit, Compat, Data, FourError, FourParams, Fourier, MeasureError, Measurement,
-    Method, Options, OutExpr, PSS_FREQ_PLOT, PSS_TIME_PLOT, PssParams, Session, Solution,
+    Method, Options, OutExpr, PSS_FREQ_PLOT, PSS_TIME_PLOT, PssParams, SEED_MAX, Session, Solution,
     SweepParam, SweepRun, VarType, four_all, measure_all,
 };
-use dune_netlist::ir::{Netlist, Output as OutputCard, OutputKind};
+use dune_netlist::ir::{Netlist, Output as OutputCard, OutputKind, RandomMode};
 use dune_netlist::{Diagnostic, IncludeLoader, ParseOutcome, Severity, SourceMap};
 use num_complex::Complex64;
 use numpy::{PyArray1, PyReadonlyArray1};
@@ -204,6 +204,8 @@ struct Output {
     fourier: Vec<FourRow>,
     notes: Vec<String>,
     diags: Vec<Diag>,
+    /// The seed the run was drawn with (`None`: nominal).
+    seed: Option<u64>,
 }
 
 /// One harmonic of one `.four` vector, as plain data (a row of
@@ -410,10 +412,51 @@ struct Prepared {
     /// deck's `.options` (what its `.four` cards use).
     four: FourParams,
     diags: Vec<Diag>,
+    /// The seed the deck was drawn with (`None`: nominal).
+    seed: Option<u64>,
+    /// The note a seed picked here (`"random"`) adds to the run.
+    seed_note: Option<String>,
+}
+
+impl Prepared {
+    /// The elaboration notes with the seed note first.
+    fn notes(&self, elaboration: Vec<String>) -> Vec<String> {
+        self.seed_note.iter().cloned().chain(elaboration).collect()
+    }
+}
+
+/// The seed a run asks for: the caller's `seed` option, else the
+/// deck's `.options seed=random` — both resolved with the seed the
+/// Python layer drew (`random_seed`) — else none (the deck as parsed,
+/// nominal or with its own `.options seed=N`). Returns the seed and
+/// whether it was picked here.
+fn wanted_seed(netlist: &Netlist, ov: &Overrides) -> Result<Option<(u64, bool)>, Failure> {
+    let picked = || {
+        ov.random_seed.map(|s| Some((s, true))).ok_or_else(|| {
+            Failure::new(
+                "internal",
+                "seed=\"random\" without a seed from the Python layer (please report)",
+            )
+        })
+    };
+    match ov.seed {
+        Some(SeedOpt::Seed(s)) => Ok(Some((s, false))),
+        Some(SeedOpt::Random) => picked(),
+        None if netlist.random_mode() == RandomMode::SeedRequested => picked(),
+        None => Ok(None),
+    }
+}
+
+/// A parser warning that a seed from the caller makes moot: the
+/// request for one (`.options seed=random`) and the note that random
+/// functions stay nominal (the CLI drops the same two).
+fn moot_with_seed(d: &Diagnostic) -> bool {
+    d.message.starts_with("`.options seed=random`")
+        || d.message.starts_with("random functions (agauss")
 }
 
 /// Parse the deck and settle its options.
-fn prepare(source: &Source, overrides: &[Override]) -> Result<Prepared, Failure> {
+fn prepare(source: &Source, overrides: &Overrides) -> Result<Prepared, Failure> {
     let parsed: ParseOutcome = match source {
         Source::Text { text, includes } => dune_netlist::parse_with_loader(
             Path::new(DECK_NAME),
@@ -424,45 +467,95 @@ fn prepare(source: &Source, overrides: &[Override]) -> Result<Prepared, Failure>
             dune_netlist::parse_file(path).map_err(|e| Failure::new("io", e.to_string()))?
         }
     };
+    let parse_failure = |first: &Diagnostic, diags: Vec<Diag>| Failure {
+        kind: "parse",
+        message: first.render(&parsed.sources),
+        diags,
+        pss: None,
+    };
+    let wanted = match parsed.diags.iter().find(|d| d.severity == Severity::Error) {
+        Some(first) => {
+            let diags = parsed
+                .diags
+                .iter()
+                .map(|d| Diag::new(d, &parsed.sources))
+                .collect();
+            return Err(parse_failure(first, diags));
+        }
+        None => wanted_seed(&parsed.netlist, overrides)?,
+    };
     let mut diags: Vec<Diag> = parsed
         .diags
         .iter()
+        .filter(|d| wanted.is_none() || !moot_with_seed(d))
         .map(|d| Diag::new(d, &parsed.sources))
         .collect();
-    if let Some(first) = parsed.diags.iter().find(|d| d.severity == Severity::Error) {
-        return Err(Failure {
-            kind: "parse",
-            message: first.render(&parsed.sources),
-            diags,
-            pss: None,
-        });
-    }
+    // A seed from the caller: the deck drawn with it, as `.options
+    // seed=N` in it would (D-0075); its options then carry `seed=N`
+    // for the engine's transient noise. The new evaluation's warnings
+    // repeat the parse's, so only its errors are kept.
+    let (netlist, seed_note) = match wanted {
+        Some((s, picked)) => {
+            let (nl, d) = parsed.netlist.with_seed(s);
+            if let Some(first) = d.iter().find(|d| d.severity == Severity::Error) {
+                diags.extend(d.iter().map(|d| Diag::new(d, &parsed.sources)));
+                return Err(parse_failure(first, diags));
+            }
+            let note = picked.then(|| {
+                format!(
+                    "seed=\"random\": random functions drawn with seed {s} \
+                     (options={{\"seed\": {s}}} repeats this run)"
+                )
+            });
+            (nl, note)
+        }
+        None => (parsed.netlist, None),
+    };
     let mut opt_diags = Vec::new();
     let mut options = Options::default();
-    options.apply(&parsed.netlist.options, &mut opt_diags);
-    let four = FourParams::from_options(&parsed.netlist.options, &mut opt_diags);
+    options.apply(&netlist.options, &mut opt_diags);
+    let four = FourParams::from_options(&netlist.options, &mut opt_diags);
     diags.extend(opt_diags.iter().map(|d| Diag::new(d, &parsed.sources)));
-    for set in overrides {
+    for set in &overrides.set {
         set(&mut options);
     }
     Ok(Prepared {
-        netlist: parsed.netlist,
+        seed: seed_of(&netlist),
+        netlist,
         options,
         four,
         diags,
+        seed_note,
     })
 }
 
+/// The seed a netlist was drawn with (`None`: nominal).
+fn seed_of(netlist: &Netlist) -> Option<u64> {
+    match netlist.random_mode() {
+        RandomMode::Seeded(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// `"seeded"` or `"nominal"`: the random mode of a result.
+fn random_mode(seed: Option<u64>) -> &'static str {
+    if seed.is_some() { "seeded" } else { "nominal" }
+}
+
 /// Parse, elaborate and run every analysis card (what `dune -b` runs).
-fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
+fn run(source: &Source, overrides: &Overrides) -> Result<Output, Failure> {
+    let prepared = prepare(source, overrides)?;
+    let (circuit, notes) = Circuit::from_netlist(&prepared.netlist)
+        .map_err(|e| Failure::new("elaborate", e.to_string()))?;
+    let mut notes = prepared.notes(notes);
     let Prepared {
         netlist,
         options,
         four,
         diags,
-    } = prepare(source, overrides)?;
-    let (circuit, mut notes) =
-        Circuit::from_netlist(&netlist).map_err(|e| Failure::new("elaborate", e.to_string()))?;
+        seed,
+        ..
+    } = prepared;
 
     let mut solutions = Vec::new();
     for analysis in &netlist.analyses {
@@ -483,6 +576,7 @@ fn run(source: &Source, overrides: &[Override]) -> Result<Output, Failure> {
         fourier,
         notes,
         diags,
+        seed,
     })
 }
 
@@ -509,12 +603,18 @@ struct SweepOut {
     outputs: Vec<OutputCard>,
     four: FourParams,
     diags: Vec<Diag>,
+    /// The seed of every run (`None`: nominal) — the swept one when
+    /// `seed` is swept, else the deck's.
+    seeds: Vec<Option<u64>>,
+    /// The note of a seed picked here, for every run (none when `seed`
+    /// is swept: the swept seeds win).
+    seed_note: Option<String>,
 }
 
 /// Parse once, then run the deck per row of `rows` (issue #10).
 fn run_sweep(
     source: &Source,
-    overrides: &[Override],
+    overrides: &Overrides,
     params: &[SweepParam],
     rows: &[Vec<f64>],
     threads: usize,
@@ -524,7 +624,18 @@ fn run_sweep(
         options,
         four,
         diags,
+        seed,
+        seed_note,
     } = prepare(source, overrides)?;
+    let swept = params.iter().position(|p| *p == SweepParam::Seed);
+    let seeds = rows
+        .iter()
+        .map(|row| match swept {
+            Some(k) => row.get(k).map(|&v| v as u64),
+            None => seed,
+        })
+        .collect();
+    let seed_note = seed_note.filter(|_| swept.is_none());
     let runs = if threads == 1 {
         dune_core::sweep(&netlist, &options, params, rows)
     } else {
@@ -539,6 +650,8 @@ fn run_sweep(
         outputs: netlist.outputs.clone(),
         four,
         diags,
+        seeds,
+        seed_note,
     })
 }
 
@@ -579,23 +692,42 @@ fn count_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<usize> {
     Ok(n as usize)
 }
 
-/// A `seed` value: an int in `[1, 2^53)`, the card's range (Dune
-/// never seeds from the clock, so there is no `"random"`).
-fn seed_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<u64> {
+/// A `seed` value: an int in `[1, 2**32 - 1]` (ngspice reads a seed
+/// as an unsigned 32-bit integer, `dune_core::SEED_MAX`), or the str
+/// `"random"` (case-insensitive) for a seed the Python layer picks.
+fn seed_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<SeedOpt> {
     if v.is_instance_of::<PyBool>() {
         return Err(PyTypeError::new_err(format!(
-            "option {key} must be an int, not bool"
+            "option {key} must be an int or \"random\", not bool"
+        )));
+    }
+    if let Ok(s) = v.cast::<PyString>() {
+        let s = s.to_str()?;
+        if s.eq_ignore_ascii_case("random") {
+            return Ok(SeedOpt::Random);
+        }
+        return Err(PyValueError::new_err(format!(
+            "option {key} must be an int or \"random\", got {s:?}"
         )));
     }
     let n: i64 = v
         .extract()
-        .map_err(|_| PyTypeError::new_err(format!("option {key} must be an int")))?;
-    if !(1..9_007_199_254_740_992).contains(&n) {
+        .map_err(|_| PyTypeError::new_err(format!("option {key} must be an int or \"random\"")))?;
+    if !(1..=SEED_MAX as i64).contains(&n) {
         return Err(PyValueError::new_err(format!(
-            "option {key} must be a positive int below 2**53, got {n}"
+            "option {key} must be an int from 1 to 2**32 - 1, got {n}"
         )));
     }
-    Ok(n as u64)
+    Ok(SeedOpt::Seed(n as u64))
+}
+
+/// The caller's `seed` option.
+#[derive(Clone, Copy, Debug)]
+enum SeedOpt {
+    /// Draw the deck with this seed.
+    Seed(u64),
+    /// Draw it with the seed the Python layer picked (`random_seed`).
+    Random,
 }
 
 /// A positive finite time step (`devnt`).
@@ -619,10 +751,24 @@ fn bool_value(key: &str, v: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// One validated `options` entry, applied after the deck's `.options`.
 type Override = Box<dyn Fn(&mut Options) + Send + Sync>;
 
-/// Validate the caller's `options` dict into setters. Keys are
-/// case-insensitive, like `.options`; temperatures are in °C, like
-/// the card.
-fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
+/// The caller's `options` and `tmax_divisor`, validated.
+#[derive(Default)]
+struct Overrides {
+    /// Setters applied after the deck's `.options`.
+    set: Vec<Override>,
+    /// The `seed` option: it draws the deck again (`Netlist::with_seed`)
+    /// before the options are settled, so it is not a setter.
+    seed: Option<SeedOpt>,
+    /// The seed the Python layer drew for `"random"` (the option's or
+    /// the deck's `.options seed=random`).
+    random_seed: Option<u64>,
+}
+
+/// Validate the caller's `options` dict into setters and the seed.
+/// Keys are case-insensitive, like `.options`; temperatures are in
+/// °C, like the card.
+fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Overrides> {
+    let mut seed = None;
     macro_rules! set {
         ($field:ident, $value:expr) => {{
             let x = $value;
@@ -637,6 +783,10 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
             .to_str()?
             .to_ascii_lowercase();
         let key = key.as_str();
+        if key == "seed" {
+            seed = Some(seed_value(key, &v)?);
+            continue;
+        }
         out.push(match key {
             "reltol" => set!(reltol, float_value(key, &v)?),
             "abstol" => set!(abstol, float_value(key, &v)?),
@@ -696,7 +846,6 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
             "defw" => set!(defw, float_value(key, &v)?),
             "defad" => set!(defad, float_value(key, &v)?),
             "defas" => set!(defas, float_value(key, &v)?),
-            "seed" => set!(seed, seed_value(key, &v)?),
             "notrnoise" => set!(notrnoise, bool_value(key, &v)?),
             "devnoise" => set!(dev_noise, bool_value(key, &v)?),
             "devnt" => set!(dev_noise_step, Some(step_value(key, &v)?)),
@@ -710,7 +859,11 @@ fn parse_overrides(dict: &Bound<'_, PyDict>) -> PyResult<Vec<Override>> {
             }
         });
     }
-    Ok(out)
+    Ok(Overrides {
+        set: out,
+        seed,
+        random_seed: None,
+    })
 }
 
 /// A `tmax_divisor` argument: `None`, or a finite number >= 1 (bools
@@ -737,19 +890,34 @@ fn divisor_value(v: Option<&Bound<'_, PyAny>>) -> PyResult<Option<f64>> {
     Ok(Some(d))
 }
 
-/// The caller's `options` and `tmax_divisor` as setters, validated
-/// before any parsing work and applied over the deck's `.options`.
+/// A `random_seed` argument (the seed the Python layer drew for
+/// `"random"`): `None` or an int in `[1, 2**32 - 1]`.
+fn random_seed_value(v: Option<u64>) -> PyResult<Option<u64>> {
+    match v {
+        Some(s) if !(1..=SEED_MAX).contains(&s) => Err(PyValueError::new_err(format!(
+            "random_seed must be an int from 1 to 2**32 - 1, got {s}"
+        ))),
+        _ => Ok(v),
+    }
+}
+
+/// The caller's `options`, `tmax_divisor` and `random_seed`,
+/// validated before any parsing work and applied over the deck's
+/// `.options`.
 fn overrides_of(
     options: Option<&Bound<'_, PyDict>>,
     tmax_divisor: Option<&Bound<'_, PyAny>>,
-) -> PyResult<Vec<Override>> {
+    random_seed: Option<u64>,
+) -> PyResult<Overrides> {
     let mut out = match options {
         Some(d) => parse_overrides(d)?,
-        None => Vec::new(),
+        None => Overrides::default(),
     };
     if let Some(d) = divisor_value(tmax_divisor)? {
-        out.push(Box::new(move |o: &mut Options| o.tmax_divisor = Some(d)));
+        out.set
+            .push(Box::new(move |o: &mut Options| o.tmax_divisor = Some(d)));
     }
+    out.random_seed = random_seed_value(random_seed)?;
     Ok(out)
 }
 
@@ -1019,10 +1187,12 @@ fn _fourier<'py>(
 /// `{"title", "plots": [{"title", "plotname", "variables": [(name,
 /// type)], "scale": int | None, "complex": bool, "columns":
 /// [ndarray]}], "measurements": [dict], "fourier": {column: list},
-/// "notes": [str], "diagnostics": [dict]}`. The GIL is
-/// released while the simulation runs.
+/// "notes": [str], "diagnostics": [dict], "seed": int | None,
+/// "random_mode": "nominal" | "seeded"}`. `random_seed` is the seed
+/// a `seed="random"` (the option's or the deck's) draws with. The GIL
+/// is released while the simulation runs.
 #[pyfunction]
-#[pyo3(signature = (text, path, includes, options, tmax_divisor=None))]
+#[pyo3(signature = (text, path, includes, options, tmax_divisor=None, random_seed=None))]
 fn _simulate<'py>(
     py: Python<'py>,
     text: Option<String>,
@@ -1030,11 +1200,12 @@ fn _simulate<'py>(
     includes: Option<BTreeMap<String, String>>,
     options: Option<Bound<'py, PyDict>>,
     tmax_divisor: Option<Bound<'py, PyAny>>,
+    random_seed: Option<u64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let source = source(text, path, includes)?;
     // Validated before any parsing work; applied over the deck's
     // `.options` inside `run`.
-    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
+    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref(), random_seed)?;
     let outcome = py.detach(|| guarded(|| run(&source, &overrides)));
 
     outcome_dict(py, outcome)
@@ -1053,17 +1224,21 @@ struct PssOut {
 
 /// Parse and elaborate the deck, then run [`Circuit::pss`] with `p`
 /// (the deck's own analysis cards are not run).
-fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<PssOut, Failure> {
+fn run_pss(source: &Source, overrides: &Overrides, p: &PssParams) -> Result<PssOut, Failure> {
+    let prepared = prepare(source, overrides)?;
+    let (circuit, notes) = Circuit::from_netlist(&prepared.netlist)
+        .map_err(|e| Failure::new("elaborate", e.to_string()))?;
+    let mut notes = prepared.notes(notes);
+    let pss = circuit
+        .pss(&prepared.options, p)
+        .map_err(Failure::analysis)?;
+    notes.extend(pss.notes);
     let Prepared {
         netlist,
-        options,
         diags,
+        seed,
         ..
-    } = prepare(source, overrides)?;
-    let (circuit, mut notes) =
-        Circuit::from_netlist(&netlist).map_err(|e| Failure::new("elaborate", e.to_string()))?;
-    let pss = circuit.pss(&options, p).map_err(Failure::analysis)?;
-    notes.extend(pss.notes);
+    } = prepared;
     Ok(PssOut {
         output: Output {
             title: netlist.title.clone(),
@@ -1072,6 +1247,7 @@ fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<Pss
             fourier: Vec::new(),
             notes,
             diags,
+            seed,
         },
         period: pss.period,
         t0: pss.t0,
@@ -1091,7 +1267,7 @@ fn run_pss(source: &Source, overrides: &[Override], p: &PssParams) -> Result<Pss
 /// raises `NativeError("pss", message, diagnostics, {"iterations",
 /// "residuals", "period"})`. The GIL is released while it runs.
 #[pyfunction]
-#[pyo3(signature = (text, path, includes, options, tmax_divisor, freq, tstab, osc_node, points, harmonics, max_iter, steady_coeff, uic))]
+#[pyo3(signature = (text, path, includes, options, tmax_divisor, freq, tstab, osc_node, points, harmonics, max_iter, steady_coeff, uic, random_seed=None))]
 #[allow(clippy::too_many_arguments)]
 fn _pss<'py>(
     py: Python<'py>,
@@ -1108,9 +1284,10 @@ fn _pss<'py>(
     max_iter: usize,
     steady_coeff: f64,
     uic: bool,
+    random_seed: Option<u64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let source = source(text, path, includes)?;
-    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
+    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref(), random_seed)?;
     let params = PssParams {
         freq: (freq != 0.0).then_some(freq),
         tstab,
@@ -1172,6 +1349,8 @@ fn outcome_dict<'py>(
             result.set_item("fourier", four_dict(py, &out.fourier)?)?;
             result.set_item("notes", out.notes)?;
             result.set_item("diagnostics", diag_list(py, &out.diags)?)?;
+            result.set_item("seed", out.seed)?;
+            result.set_item("random_mode", random_mode(out.seed))?;
             Ok(result)
         }
         Err(f) => Err(native_error(py, f)),
@@ -1190,6 +1369,8 @@ struct SessionBase {
     /// every run) and the `.options` they read.
     outputs: Vec<OutputCard>,
     four: FourParams,
+    /// The seed the deck was drawn with when the session opened.
+    seed: Option<u64>,
 }
 
 impl SessionBase {
@@ -1206,6 +1387,7 @@ impl SessionBase {
             solutions,
             notes,
             diags: self.diags.clone(),
+            seed: self.seed,
         }
     }
 }
@@ -1227,7 +1409,7 @@ fn alter_failure(py: Python<'_>, e: dune_core::Error) -> PyErr {
 #[pymethods]
 impl NativeSession {
     #[new]
-    #[pyo3(signature = (text, path, includes, options, tmax_divisor=None))]
+    #[pyo3(signature = (text, path, includes, options, tmax_divisor=None, random_seed=None))]
     fn new(
         py: Python<'_>,
         text: Option<String>,
@@ -1235,19 +1417,24 @@ impl NativeSession {
         includes: Option<BTreeMap<String, String>>,
         options: Option<Bound<'_, PyDict>>,
         tmax_divisor: Option<Bound<'_, PyAny>>,
+        random_seed: Option<u64>,
     ) -> PyResult<Self> {
         let source = source(text, path, includes)?;
-        let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
+        let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref(), random_seed)?;
         let opened = py.detach(|| {
             guarded(|| {
+                let prepared = prepare(&source, &overrides)?;
+                let (circuit, notes) = Circuit::from_netlist(&prepared.netlist)
+                    .map_err(|e| Failure::new("elaborate", e.to_string()))?;
+                let notes = prepared.notes(notes);
                 let Prepared {
                     netlist,
                     options,
                     four,
                     diags,
-                } = prepare(&source, &overrides)?;
-                let (circuit, notes) = Circuit::from_netlist(&netlist)
-                    .map_err(|e| Failure::new("elaborate", e.to_string()))?;
+                    seed,
+                    ..
+                } = prepared;
                 Ok(NativeSession {
                     session: Session::new(circuit, options, netlist.analyses.clone()),
                     base: SessionBase {
@@ -1257,6 +1444,7 @@ impl NativeSession {
                         measures: netlist.measures.clone(),
                         outputs: netlist.outputs.clone(),
                         four,
+                        seed,
                     },
                 })
             })
@@ -1373,12 +1561,14 @@ impl NativeSession {
 /// `dune_core::SweepParam`), `rows` one list of values per run,
 /// `threads` 1 for the sequential path, 0 for one per core. Returns
 /// `{"title", "params": [canonical key], "diagnostics": [dict],
-/// "runs": [{"ok": True, "plots", "measurements", "fourier", "notes"} | {"ok": False, "kind",
-/// "message"}]}` — a failed run of kind `pss` also has `"iterations"`,
-/// `"residuals"` and `"period"`. Bad parameter names or rows raise `ValueError`.
-/// The GIL is released while the runs execute.
+/// "runs": [{"ok": True, "plots", "measurements", "fourier", "notes",
+/// "seed", "random_mode"} | {"ok": False, "kind", "message"}]}` — a
+/// failed run of kind `pss` also has `"iterations"`, `"residuals"` and
+/// `"period"`. Bad parameter names or rows raise `ValueError`.
+/// `random_seed` as in `_simulate`. The GIL is released while the
+/// runs execute.
 #[pyfunction]
-#[pyo3(signature = (text, path, includes, options, params, rows, threads, tmax_divisor=None))]
+#[pyo3(signature = (text, path, includes, options, params, rows, threads, tmax_divisor=None, random_seed=None))]
 #[allow(clippy::too_many_arguments)]
 fn _sweep<'py>(
     py: Python<'py>,
@@ -1390,9 +1580,10 @@ fn _sweep<'py>(
     rows: Vec<Vec<f64>>,
     threads: usize,
     tmax_divisor: Option<Bound<'py, PyAny>>,
+    random_seed: Option<u64>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let source = source(text, path, includes)?;
-    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref())?;
+    let overrides = overrides_of(options.as_ref(), tmax_divisor.as_ref(), random_seed)?;
     let params = params
         .iter()
         .map(|p| SweepParam::parse(p).map_err(|e| PyValueError::new_err(e.to_string())))
@@ -1414,11 +1605,13 @@ fn _sweep<'py>(
     result.set_item("params", out.keys)?;
     result.set_item("diagnostics", diag_list(py, &out.diags)?)?;
     let runs = PyList::empty(py);
-    for run in out.runs {
+    for (run, seed) in out.runs.into_iter().zip(out.seeds) {
         let d = PyDict::new(py);
         match run.outcome {
             Ok(o) => {
                 d.set_item("ok", true)?;
+                d.set_item("seed", seed)?;
+                d.set_item("random_mode", random_mode(seed))?;
                 let measures = PyList::empty(py);
                 for r in measure_all(&out.measures, &o.solutions) {
                     let m = &out.measures[r.card];
@@ -1433,7 +1626,8 @@ fn _sweep<'py>(
                     plots.append(plot_dict(py, &out.title, s)?)?;
                 }
                 d.set_item("plots", plots)?;
-                d.set_item("notes", o.notes)?;
+                let notes: Vec<String> = out.seed_note.iter().cloned().chain(o.notes).collect();
+                d.set_item("notes", notes)?;
             }
             Err(e) => {
                 d.set_item("ok", false)?;

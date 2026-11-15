@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import os
+import secrets
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +22,18 @@ OptionValue = float | int | bool | str
 
 OPTION_NAMES: tuple[str, ...] = tuple(_spice.OPTION_NAMES)
 """Every key :func:`simulate` accepts in ``options`` (the 3f5 ``.options`` names)."""
+
+SEED_MAX = 2**32 - 1
+"""The largest ``seed``: ngspice reads a seed as an unsigned 32-bit integer."""
+
+
+def _random_seed() -> int:
+    """A fresh seed in ``[1, SEED_MAX]`` for ``seed="random"`` (OS entropy, :mod:`secrets`).
+
+    Drawn on every call that takes ``options``; the engine uses it only when
+    the option, or the deck's ``.options seed=random``, asks for one.
+    """
+    return secrets.randbelow(SEED_MAX) + 1
 
 
 def _deck_source(
@@ -141,10 +154,20 @@ def simulate(
             switches flipping on the time grid, ``ltrabkrate`` 0),
             flags as bools
             (``noopiter``, ``nopage``, ``ltrafit``, ``keepopinfo``, ``trytocompact``,
-            ``notrnoise``, ``devnoise``), ``seed`` as a positive int (the
-            transient-noise seed; no ``"random"``) and ``devnt`` (the
-            device-noise grid step, s) as a positive number. ``False``
+            ``notrnoise``, ``devnoise``), ``seed`` (see below) and ``devnt``
+            (the device-noise grid step, s) as a positive number. ``False``
             clears a flag the deck's card set.
+
+            ``seed`` is exactly ``.options seed=`` written in the deck: an
+            int from 1 to ``2**32 - 1`` draws the deck's random functions
+            (``agauss``, ``gauss``, ``aunif``, ``unif``, ``limit``) from
+            that seed -- the same seed, the same circuit, on every platform
+            -- and seeds the transient noise (``TRNOISE``, ``devnoise``).
+            ``"random"`` picks a fresh seed with :mod:`secrets` (as does a
+            deck that says ``.options seed=random``); the seed used comes
+            back in :attr:`Result.seed`, and passing it as ``seed`` repeats
+            the run. Without a seed the random functions take their nominal
+            value (:attr:`Result.random_mode` ``"nominal"``).
         tmax_divisor: Divide the maximum step of every ``.tran`` card -- its
             TMAX argument, else the default ``min(TSTEP, (TSTOP-TSTART)/50)``
             -- by this finite number ``>= 1``: the run is, bit for bit, that
@@ -177,5 +200,6 @@ def simulate(
             inc,
             None if options is None else dict(options),
             tmax_divisor,
+            _random_seed(),
         )
     return Result(native)

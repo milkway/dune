@@ -13,6 +13,7 @@ def _simulate(
     includes: dict[str, str] | None,
     options: dict[str, Any] | None,
     tmax_divisor: float | None = None,
+    random_seed: int | None = None,
 ) -> dict[str, Any]: ...
 
 def _sweep(
@@ -24,6 +25,7 @@ def _sweep(
     rows: list[list[float]],
     threads: int,
     tmax_divisor: float | None = None,
+    random_seed: int | None = None,
 ) -> dict[str, Any]: ...
 
 def _measure(
@@ -62,6 +64,7 @@ def _pss(
     max_iter: int,
     steady_coeff: float,
     uic: bool,
+    random_seed: int | None = None,
 ) -> dict[str, Any]: ...
 
 class _Session:
@@ -72,6 +75,7 @@ class _Session:
         includes: dict[str, str] | None,
         options: dict[str, Any] | None,
         tmax_divisor: float | None = None,
+        random_seed: int | None = None,
     ) -> None: ...
     def alter(self, refdes: str, param: str, value: object) -> None: ...
     def param(self, refdes: str, param: str) -> float | list[float] | None: ...

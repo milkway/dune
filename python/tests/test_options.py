@@ -85,10 +85,12 @@ def test_new_names_are_listed() -> None:
     [
         ({"seed": 0}, ValueError),
         ({"seed": -2}, ValueError),
+        ({"seed": 2**32}, ValueError),
         ({"seed": 2**53}, ValueError),
         ({"seed": 1.5}, TypeError),
         ({"seed": True}, TypeError),
-        ({"seed": "random"}, TypeError),
+        ({"seed": "rand"}, ValueError),
+        ({"seed": None}, TypeError),
         ({"devnt": 0}, ValueError),
         ({"devnt": -1e-9}, ValueError),
         ({"devnt": float("inf")}, ValueError),

@@ -11,7 +11,7 @@ import numpy.typing as npt
 
 from . import _spice
 from ._result import Result
-from ._simulate import OptionValue, _deck_source, _native_errors
+from ._simulate import OptionValue, _deck_source, _native_errors, _random_seed
 from .pic import PicExtraction
 
 __all__ = ["AlterValue", "Session", "WarmStats"]
@@ -34,7 +34,9 @@ class Session:
 
     The deck argument, ``includes``, ``options`` and ``tmax_divisor`` are
     those of :func:`simulate` (:attr:`tmax_divisor` can change between
-    runs). :meth:`alter` changes one element parameter in place
+    runs). The deck's random functions are drawn once, when the session
+    opens (``options={"seed": ...}``, or the deck's ``.options seed``);
+    every run's :attr:`Result.seed` reports that seed. :meth:`alter` changes one element parameter in place
     (the spice3 ``alter`` command, with ngspice's parameter names) and
     :meth:`run` runs every analysis card of the deck again, skipping the
     parse and the elaboration.
@@ -78,6 +80,7 @@ class Session:
                 inc,
                 None if options is None else dict(options),
                 tmax_divisor,
+                _random_seed(),
             )
 
     @overload

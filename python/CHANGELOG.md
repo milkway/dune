@@ -1,5 +1,21 @@
 # Changelog — spice3 (Python)
 
+## Unreleased
+
+- **Seeded random functions:** `options={"seed": n}` is now exactly
+  `.options seed=n` in the deck, in `simulate`, `sweep`, `Session`, `pss`
+  and figure runs: it draws the deck's `agauss`, `gauss`, `aunif`, `unif`
+  and `limit` from the seed (before, it only seeded the transient
+  noise). Without a seed they keep their nominal value.
+  `options={"seed": "random"}`, and a deck with `.options seed=random`,
+  draw a fresh seed with `secrets`. `Result.seed` reports the seed a run
+  was drawn with (`None` when nominal) and `Result.random_mode` is
+  `"nominal"` or `"seeded"`; `options={"seed": result.seed}` repeats a
+  run. New type alias `spice.RandomMode`.
+- **Breaking:** `seed` must be an int from 1 to `2**32 - 1` (was below
+  `2**53`): ngspice reads a seed as an unsigned 32-bit integer, so a
+  larger one only aliased a smaller one.
+
 ## 0.8.0
 
 The engine gains the ngspice-47 models and the netlist language that the

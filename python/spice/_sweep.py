@@ -14,7 +14,7 @@ import polars as pl
 from . import _spice
 from ._errors import Diagnostic, ErrorKind, SpiceError
 from ._result import Result
-from ._simulate import OptionValue, _deck_source, _native_errors, _pss_error
+from ._simulate import OptionValue, _deck_source, _native_errors, _pss_error, _random_seed
 from .pic import PicExtraction
 
 if TYPE_CHECKING:
@@ -27,6 +27,11 @@ SweepMode = Literal["grid", "zip"]
 
 RUN_COLUMN = "run"
 """Name of the run-index column :meth:`SweepResult.df` puts first."""
+
+
+def _dtype(key: str) -> type[pl.DataType]:
+    """The frame type of a swept parameter: ``Int64`` for ``seed``, else ``Float64``."""
+    return pl.Int64 if key == "seed" else pl.Float64
 
 
 def sweep(
@@ -53,6 +58,23 @@ def sweep(
         spice.sweep(deck, {"r1": rng.normal(1e3, 50, 200),
                            "temp": rng.uniform(0, 70, 200)}, mode="zip")
 
+    A deck that draws its own mismatch (``agauss``, ``gauss``, ``aunif``,
+    ``unif``, ``limit``) is swept over ``"seed"``: run ``i`` is the deck with
+    ``.options seed=s_i`` in it, so N samples from a base seed are
+    ``{"seed": range(base, base + n)}``, and a grid crosses them with the
+    other parameters (every seed at every temperature, with the same draws
+    at each temperature)::
+
+        mc = spice.sweep(\"\"\"mismatch
+        .param rv=agauss(1k, 50, 3)
+        v1 1 0 dc 1
+        r1 1 2 {rv}
+        r2 2 0 1k
+        .op
+        .end
+        \"\"\", {"seed": range(1, 101), "temp": [0, 70]})
+        mc.df("op").group_by("temp").agg(pl.col("v(2)").std())
+
     Args:
         netlist: The deck, as in :func:`simulate` (deck text or a path).
         params: Swept quantity -> its values (any 1-D array-like of numbers;
@@ -63,7 +85,11 @@ def sweep(
             level; or the ngspice form ``"@name[param]"``:
             ``@r1[resistance]``, ``@c1[capacitance]``, ``@l1[inductance]``,
             ``@vin[dc]``, ``@vin[acmag]``, ``@vin[acphase]`` (degrees),
-            ``@m1[w]``, ``@m1[l]`` (MOSFET width/length, m). Elements inside
+            ``@m1[w]``, ``@m1[l]`` (MOSFET width/length, m); or ``"seed"``,
+            ints from 1 to ``2**32 - 1`` (the deck drawn with each, as
+            ``options={"seed": s}``, which a swept seed overrides; on a
+            deck without random functions it only reseeds the transient
+            noise, and each run's notes say so). Elements inside
             subcircuits go by their expanded names (``r.x1.r1``). Model
             parameters are not sweepable yet.
         mode: ``"grid"`` runs every combination (the Cartesian product, the
@@ -72,7 +98,9 @@ def sweep(
         includes: As in :func:`simulate`.
         options: As in :func:`simulate`; applied over the deck's
             ``.options`` for every run (a swept ``temp`` overrides
-            ``options["temp"]``).
+            ``options["temp"]``, a swept ``seed`` ``options["seed"]``;
+            ``"seed": "random"`` draws every run with one seed, reported
+            in each run's :attr:`Result.seed`).
         threads: Worker threads: ``1`` (the default) runs sequentially;
             ``0`` uses one per core; ``n`` uses ``n``. Results are identical
             either way -- every run is an independent circuit. The GIL is
@@ -137,6 +165,7 @@ def sweep(
             rows,
             threads,
             tmax_divisor,
+            _random_seed(),
         )
     keys: list[str] = native["params"]
     for i, run in enumerate(native["runs"]):
@@ -178,6 +207,7 @@ class SweepResult(Sequence[Result]):
                     "measurements": r["measurements"],
                     "fourier": r["fourier"],
                     "diagnostics": [],
+                    "seed": r["seed"],
                 }
             )
             for r in native["runs"]
@@ -190,9 +220,15 @@ class SweepResult(Sequence[Result]):
 
     @property
     def params(self) -> pl.DataFrame:
-        """One row per run: ``run`` (0-based) then the value of every swept parameter."""
+        """One row per run: ``run`` (0-based) then the value of every swept parameter.
+
+        Parameters are ``Float64`` columns, except a swept ``seed``, which is
+        ``Int64``.
+        """
         cols = [pl.Series(RUN_COLUMN, np.arange(len(self._results), dtype=np.int64))]
-        cols += [pl.Series(k, self._values[:, j]) for j, k in enumerate(self._keys)]
+        cols += [
+            pl.Series(k, self._values[:, j], dtype=_dtype(k)) for j, k in enumerate(self._keys)
+        ]
         return pl.DataFrame(cols)
 
     @property
@@ -210,7 +246,8 @@ class SweepResult(Sequence[Result]):
         """One plot of every run, stacked into one tidy frame.
 
         The columns are ``run`` (``Int64``, 0-based), one ``Float64`` column
-        per swept parameter (named as in :attr:`names`), then the plot's own
+        per swept parameter (named as in :attr:`names`; a swept ``seed`` is
+        ``Int64``), then the plot's own
         columns exactly as :meth:`Plot.df` gives them; rows are run 0's
         points, then run 1's, and so on. Group by ``run`` (or by a
         parameter) to get one curve per run.
@@ -224,7 +261,7 @@ class SweepResult(Sequence[Result]):
             frame = res.plot(plot).df()
             lead = [pl.lit(i, dtype=pl.Int64).alias(RUN_COLUMN)]
             lead += [
-                pl.lit(float(self._values[i, j]), dtype=pl.Float64).alias(k)
+                pl.lit(self._values[i, j].item()).cast(_dtype(k)).alias(k)
                 for j, k in enumerate(self._keys)
             ]
             frames.append(frame.select([*lead, pl.all()]))

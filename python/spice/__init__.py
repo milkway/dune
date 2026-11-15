@@ -30,7 +30,7 @@ from ._errors import Diagnostic, ErrorKind, PssConvergenceError, Severity, Spice
 from ._fourier import FOURIER_SCHEMA, fourier
 from ._measure import MeasureAnalysis, Measurement, measure
 from ._pss import PSS_FREQ_PLOT, PSS_TIME_PLOT, PssResult, pss
-from ._result import Column, Plot, Result, Variable
+from ._result import Column, Plot, RandomMode, Result, Variable
 from ._session import AlterValue, Session, WarmStats
 from ._simulate import OPTION_NAMES, OptionValue, simulate
 from ._spice import __version__
@@ -51,6 +51,7 @@ __all__ = [
     "Plot",
     "PssConvergenceError",
     "PssResult",
+    "RandomMode",
     "Result",
     "Session",
     "Severity",

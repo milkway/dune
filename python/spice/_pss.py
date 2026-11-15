@@ -9,7 +9,7 @@ from typing import Any
 
 from . import _spice
 from ._result import Plot, Result
-from ._simulate import OptionValue, _deck_source, _native_errors
+from ._simulate import OptionValue, _deck_source, _native_errors, _random_seed
 from .pic import PicExtraction
 
 __all__ = ["PSS_FREQ_PLOT", "PSS_TIME_PLOT", "PssResult", "pss"]
@@ -243,5 +243,6 @@ def pss(
             it,
             sc,
             uic,
+            random_seed=_random_seed(),
         )
     return PssResult(native)

@@ -17,10 +17,13 @@ from ._repr import has_preview, plot_html, plot_svg, result_html
 if TYPE_CHECKING:
     import pandas  # type: ignore[import-untyped,unused-ignore]
 
-__all__ = ["Column", "Plot", "Result", "Variable"]
+__all__ = ["Column", "Plot", "RandomMode", "Result", "Variable"]
 
 Column = npt.NDArray[np.float64] | npt.NDArray[np.complex128]
 """A plot vector: ``float64`` in real plots, ``complex128`` in complex ones."""
+
+RandomMode = Literal["nominal", "seeded"]
+"""How a run evaluated the deck's random functions (:attr:`Result.random_mode`)."""
 
 
 #: Short names of the analyses, for :meth:`Result.plot`: the rawfile
@@ -296,10 +299,30 @@ class Result(Sequence[Plot]):
     iteration work as on a list.
     """
 
-    __slots__ = ("_plots", "diagnostics", "fourier", "measurements", "notes", "title")
+    __slots__ = (
+        "_plots",
+        "diagnostics",
+        "fourier",
+        "measurements",
+        "notes",
+        "random_mode",
+        "seed",
+        "title",
+    )
 
     title: str
     """The deck's title line."""
+    seed: int | None
+    """The seed the run was drawn with -- the ``seed`` option (an int, or the
+    one ``"random"`` picked), the deck's ``.options seed``, or the swept seed
+    of a :func:`spice.sweep` run -- or ``None`` when no seed was given (the
+    random functions at their nominal value; transient noise then uses the
+    engine's default seed, 1). ``options={"seed": result.seed}`` repeats the
+    run."""
+    random_mode: RandomMode
+    """``"seeded"`` when the deck's random functions (``agauss``, ``gauss``,
+    ``aunif``, ``unif``, ``limit``) were drawn from :attr:`seed`,
+    ``"nominal"`` when they took their nominal value (no seed)."""
     notes: list[str]
     """Informational remarks from elaboration and from each analysis, in order."""
     diagnostics: list[Diagnostic]
@@ -324,6 +347,9 @@ class Result(Sequence[Plot]):
         self.diagnostics = [Diagnostic._from_native(d) for d in native["diagnostics"]]
         self.measurements = [Measurement._from_native(m) for m in native["measurements"]]
         self.fourier = _fourier_frame(native.get("fourier"))
+        seed = native.get("seed")
+        self.seed = None if seed is None else int(seed)
+        self.random_mode = "nominal" if self.seed is None else "seeded"
 
     def measurement(self, name: str) -> Measurement:
         """A deck measurement by name (case-insensitive; the first if repeated).
