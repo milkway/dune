@@ -436,7 +436,10 @@ o deck usa função aleatória ou `temper`.
 
 **Monte Carlo** (`docs/dune-sweep.md`): rodada `i` ↔
 `netlist.with_seed(s_i)`, com `s_i` escolhido por quem chama (por
-exemplo `base + i`).
+exemplo `base + i`) — o `dune_core::sweep` faz isso com o parâmetro
+`seed` (`SweepParam::Seed`). `Netlist::uses_random()` diz se o deck
+chama alguma função aleatória (com ou sem semente); sem elas outra
+semente só muda o ruído transiente do motor.
 
 ### `temper` (G7)
 

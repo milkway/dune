@@ -119,7 +119,7 @@ pub use sp::Sp;
 pub use srcfn::Wave;
 #[cfg(feature = "parallel")]
 pub use sweep::sweep_parallel;
-pub use sweep::{SweepOutput, SweepParam, SweepRun, sweep};
+pub use sweep::{SEED_MAX, SweepOutput, SweepParam, SweepRun, sweep};
 pub use switch::{CswModel, SwModel};
 pub use tf::{OutputVar, Tf};
 pub use tran::Tran;

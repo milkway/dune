@@ -20,8 +20,15 @@
 //!
 //! Parameter names follow the ngspice `@device[param]` syntax, plus
 //! two shorthands (see [`SweepParam::parse`]).
+//!
+//! A deck's own random functions (`agauss`, `gauss`, `aunif`, `unif`,
+//! `limit`, D-0075) are swept through [`SweepParam::Seed`]: each run
+//! is the deck drawn with that run's seed ([`Netlist::with_seed`]),
+//! exactly what `.options seed=N` written in it gives. The engine
+//! still holds no RNG: the seeds are the caller's list.
 
-use dune_netlist::ir::{AcSpec, Device, Netlist, Param, ParamValue};
+use dune_netlist::Severity;
+use dune_netlist::ir::{AcSpec, Device, Netlist, Param, ParamValue, TranFnKind};
 
 use crate::circuit::Circuit;
 use crate::consts::CTOK;
@@ -46,12 +53,19 @@ use crate::solution::Solution;
 /// | `@l1[inductance]`, `@l1[l]` | inductor value |
 /// | `@vin[dc]`, `@vin[acmag]`, `@vin[acphase]` | V/I source DC level, AC magnitude, AC phase (degrees) |
 /// | `@m1[w]`, `@m1[l]` | MOSFET drawn width and length (m) |
+/// | `seed` | the seed of the deck's random functions and transient noise (as `.options seed=`) |
 ///
 /// Model parameters are not sweepable yet (v2 of issue #10).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SweepParam {
     /// Circuit temperature (`TEMP`), in °C.
     Temp,
+    /// The seed of the run (D-0075): the deck is drawn again with it
+    /// ([`Netlist::with_seed`]) and the engine's transient-noise
+    /// sources follow it (`Options::seed`) — what `.options seed=N`
+    /// written in the deck does. Values are whole numbers from 1 to
+    /// [`SEED_MAX`].
+    Seed,
     /// A parameter of one element: `param` is the canonical ngspice
     /// name (`resistance`, `capacitance`, `inductance`, `dc`,
     /// `acmag`, `acphase`, `w`, `l`); `None` is the element's primary
@@ -60,18 +74,23 @@ pub enum SweepParam {
 }
 
 impl SweepParam {
-    /// Parse `temp`, `name` or `@name[param]` (see the type's table).
+    /// Parse `temp`, `seed`, `name` or `@name[param]` (see the type's
+    /// table; an element named `seed` is addressed as `@seed[...]`).
     /// Whether the element exists and takes the parameter is checked
     /// against a netlist by [`sweep`].
     pub fn parse(text: &str) -> Result<Self, Error> {
         let t = text.trim().to_ascii_lowercase();
         let bad = || {
             Error::Build(format!(
-                "sweep parameter `{text}`: expected `temp`, an element name or `@name[param]`"
+                "sweep parameter `{text}`: expected `temp`, `seed`, an element name or \
+                 `@name[param]`"
             ))
         };
         if t == "temp" {
             return Ok(SweepParam::Temp);
+        }
+        if t == "seed" {
+            return Ok(SweepParam::Seed);
         }
         if let Some(rest) = t.strip_prefix('@') {
             let (name, param) = rest
@@ -101,11 +120,12 @@ impl SweepParam {
         })
     }
 
-    /// The canonical text form (`temp`, `r1`, `@m1[w]`), which
+    /// The canonical text form (`temp`, `seed`, `r1`, `@m1[w]`), which
     /// [`parse`](Self::parse) maps back to `self`.
     pub fn key(&self) -> String {
         match self {
             SweepParam::Temp => "temp".into(),
+            SweepParam::Seed => "seed".into(),
             SweepParam::Instance { name, param: None } => name.clone(),
             SweepParam::Instance {
                 name,
@@ -153,10 +173,17 @@ pub struct SweepRun {
     pub outcome: Result<SweepOutput, Error>,
 }
 
+/// The largest seed a sweep takes: ngspice-47 reads a seed as an
+/// unsigned 32-bit integer (`.options seed=4294967303` draws as 7),
+/// so a larger one would only alias a smaller one.
+pub const SEED_MAX: u64 = 0xFFFF_FFFF;
+
 /// How a resolved parameter writes into the IR.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Slot {
     Temp,
+    /// The run's seed: the netlist is drawn again with it.
+    Seed,
     /// R/C/L `value`.
     Value(usize),
     SrcDc(usize),
@@ -171,12 +198,20 @@ enum Slot {
 fn resolve(nl: &Netlist, params: &[SweepParam]) -> Result<Vec<Slot>, Error> {
     let mut slots = Vec::with_capacity(params.len());
     for p in params {
-        let SweepParam::Instance { name, param } = p else {
-            if slots.contains(&Slot::Temp) {
-                return Err(Error::Build("sweep parameter `temp` given twice".into()));
+        let (name, param) = match p {
+            SweepParam::Instance { name, param } => (name, param),
+            SweepParam::Temp | SweepParam::Seed => {
+                let slot = if *p == SweepParam::Temp {
+                    Slot::Temp
+                } else {
+                    Slot::Seed
+                };
+                if slots.contains(&slot) {
+                    return Err(Error::Build(format!("sweep parameter `{p}` given twice")));
+                }
+                slots.push(slot);
+                continue;
             }
-            slots.push(Slot::Temp);
-            continue;
         };
         let Some(idx) = nl.elements.iter().position(|e| &e.name == name) else {
             return Err(Error::Build(format!(
@@ -205,7 +240,7 @@ fn resolve(nl: &Netlist, params: &[SweepParam]) -> Result<Vec<Slot>, Error> {
             (_, Some(other)) => {
                 return Err(Error::Build(format!(
                     "sweep parameter `{p}`: `{name}` has no sweepable parameter `{other}` \
-                     (sweepable: R/C/L value, V/I dc/acmag/acphase, MOSFET w/l, temp)"
+                     (sweepable: R/C/L value, V/I dc/acmag/acphase, MOSFET w/l, temp, seed)"
                 )));
             }
         };
@@ -226,6 +261,8 @@ fn assign(nl: &mut Netlist, opts: &mut Options, slots: &[Slot], values: &[f64]) 
         match *slot {
             // °C, like the `.options temp=` card (`Options::apply`).
             Slot::Temp => opts.temp = v + CTOK,
+            // Drawn into the netlist before (`run_one`).
+            Slot::Seed => {}
             Slot::Value(i) => match &mut nl.elements[i].device {
                 Device::Resistor { value, .. }
                 | Device::Capacitor { value, .. }
@@ -299,7 +336,7 @@ fn run_temper(
     };
     for (slot, &v) in slots.iter().zip(values) {
         let (i, param) = match *slot {
-            Slot::Temp => continue,
+            Slot::Temp | Slot::Seed => continue,
             Slot::Value(i) => (i, ""),
             Slot::SrcDc(i) => (i, "dc"),
             Slot::SrcAcMag(i) => (i, "acmag"),
@@ -317,26 +354,82 @@ fn run_temper(
     Ok(SweepOutput { solutions, notes })
 }
 
-/// One run: assign, elaborate, run every analysis card.
-fn run_one(nl: &Netlist, opts: &Options, slots: &[Slot], values: &[f64]) -> SweepRun {
-    if nl.uses_temper() {
-        return SweepRun {
-            values: values.to_vec(),
-            outcome: run_temper(nl, opts, slots, values),
-        };
-    }
+/// One run of a netlist without `temper`: assign the values into a
+/// copy of the IR, elaborate, run every analysis card.
+fn run_plain(
+    nl: &Netlist,
+    opts: &Options,
+    slots: &[Slot],
+    values: &[f64],
+) -> Result<SweepOutput, Error> {
     let mut nl = nl.clone();
     let mut opts = opts.clone();
     assign(&mut nl, &mut opts, slots, values);
+    let (circuit, mut notes) = Circuit::from_netlist(&nl)?;
+    let mut solutions = Vec::new();
+    for analysis in &nl.analyses {
+        let (sols, n) = circuit.run(analysis, &opts)?;
+        notes.extend(n);
+        solutions.extend(sols);
+    }
+    Ok(SweepOutput { solutions, notes })
+}
+
+/// The netlist drawn with `seed` ([`Netlist::with_seed`]); an error of
+/// the new evaluation fails the run. Its warnings are those the
+/// original parse already gave (the draws change values, not cards),
+/// so they are not repeated per run.
+fn reseed(nl: &Netlist, seed: u64) -> Result<Netlist, Error> {
+    let (seeded, diags) = nl.with_seed(seed);
+    let errors: Vec<&str> = diags
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.message.as_str())
+        .collect();
+    if !errors.is_empty() {
+        return Err(Error::Build(format!(
+            "drawing the random functions with seed {seed}: {}",
+            errors.join("; ")
+        )));
+    }
+    Ok(seeded)
+}
+
+/// One run: draw the netlist with the run's seed (when `seed` is
+/// swept), then assign, elaborate and run every analysis card.
+fn run_one(nl: &Netlist, opts: &Options, plan: &Plan<'_>, values: &[f64]) -> SweepRun {
     let outcome = (|| {
-        let (circuit, mut notes) = Circuit::from_netlist(&nl)?;
-        let mut solutions = Vec::new();
-        for analysis in &nl.analyses {
-            let (sols, n) = circuit.run(analysis, &opts)?;
-            notes.extend(n);
-            solutions.extend(sols);
+        let seed = plan
+            .slots
+            .iter()
+            .zip(values)
+            .find(|(s, _)| **s == Slot::Seed)
+            .map(|(_, &v)| v as u64);
+        let mut opts = opts.clone();
+        let seeded;
+        let reslots;
+        let (nl, slots) = match seed {
+            None => (nl, plan.slots.as_slice()),
+            Some(s) => {
+                // `.options seed=s` in the deck: the draws and the
+                // engine's transient noise.
+                opts.seed = s;
+                seeded = reseed(nl, s)?;
+                // Resolved again on the drawn netlist (its elements are
+                // the original's unless a `.if` reads a draw).
+                reslots = resolve(&seeded, plan.params)?;
+                (&seeded, reslots.as_slice())
+            }
+        };
+        let mut out = if nl.uses_temper() {
+            run_temper(nl, &opts, slots, values)
+        } else {
+            run_plain(nl, &opts, slots, values)
+        }?;
+        if let Some(note) = &plan.seed_note {
+            out.notes.push(note.clone());
         }
-        Ok(SweepOutput { solutions, notes })
+        Ok(out)
     })();
     SweepRun {
         values: values.to_vec(),
@@ -344,9 +437,38 @@ fn run_one(nl: &Netlist, opts: &Options, slots: &[Slot], values: &[f64]) -> Swee
     }
 }
 
+/// A checked sweep: the parameters, where each one writes, and the
+/// note every run carries when `seed` is swept over a deck without
+/// random functions.
+struct Plan<'a> {
+    params: &'a [SweepParam],
+    slots: Vec<Slot>,
+    seed_note: Option<String>,
+}
+
+/// Whether a run with `opts` draws transient noise from the seed: a
+/// `TRNOISE`/`TRRANDOM` source (unless `notrnoise`) or the transient
+/// device noise (`devnoise`).
+fn draws_noise(nl: &Netlist, opts: &Options) -> bool {
+    let sources = !opts.notrnoise
+        && nl.elements.iter().any(|e| {
+            matches!(
+                &e.device,
+                Device::Source { tran: Some(f), .. }
+                    if matches!(f.kind, TranFnKind::TrNoise | TranFnKind::TrRandom)
+            )
+        });
+    sources || opts.dev_noise
+}
+
 /// Check the shape and values of the runs and resolve the
 /// parameters.
-fn prepare(nl: &Netlist, params: &[SweepParam], runs: &[Vec<f64>]) -> Result<Vec<Slot>, Error> {
+fn prepare<'a>(
+    nl: &Netlist,
+    opts: &Options,
+    params: &'a [SweepParam],
+    runs: &[Vec<f64>],
+) -> Result<Plan<'a>, Error> {
     let slots = resolve(nl, params)?;
     for (r, row) in runs.iter().enumerate() {
         if row.len() != params.len() {
@@ -361,8 +483,37 @@ fn prepare(nl: &Netlist, params: &[SweepParam], runs: &[Vec<f64>]) -> Result<Vec
                 "sweep run {r}: `{p}` = {v} is not finite"
             )));
         }
+        if let Some((_, v)) = slots
+            .iter()
+            .zip(row)
+            .find(|(s, v)| **s == Slot::Seed && !is_seed(**v))
+        {
+            return Err(Error::Build(format!(
+                "sweep run {r}: `seed` = {v} is not a seed (a whole number from 1 to {SEED_MAX})"
+            )));
+        }
     }
-    Ok(slots)
+    let seed_note = (slots.contains(&Slot::Seed) && !nl.uses_random()).then(|| {
+        if draws_noise(nl, opts) {
+            "`seed` is swept but the deck has no random function (agauss, gauss, aunif, unif, \
+             limit): the seed only changes its transient noise"
+                .to_string()
+        } else {
+            "`seed` is swept but the deck has no random function (agauss, gauss, aunif, unif, \
+             limit) and no transient noise: every run is the same circuit"
+                .to_string()
+        }
+    });
+    Ok(Plan {
+        params,
+        slots,
+        seed_note,
+    })
+}
+
+/// A whole number in `1..=SEED_MAX`.
+fn is_seed(v: f64) -> bool {
+    v.fract() == 0.0 && (1.0..=SEED_MAX as f64).contains(&v)
 }
 
 /// Run the deck once per row of `runs`, each row assigning
@@ -378,9 +529,20 @@ fn prepare(nl: &Netlist, params: &[SweepParam], runs: &[Vec<f64>]) -> Result<Vec
 /// is re-expanded at each run's temperature and its swept values are
 /// set with [`Circuit::alter`] instead of being written into the IR.
 ///
+/// A swept `seed` ([`SweepParam::Seed`]) draws the netlist again per
+/// run with [`Netlist::with_seed`] and sets `opts.seed`, winning over
+/// the deck's `.options seed` and the caller's; the other parameters
+/// then apply to the drawn netlist as usual (a swept `temp`
+/// re-expands it with the same draws). Over a deck with no random
+/// function ([`Netlist::uses_random`]) the seed only changes the
+/// transient noise (`TRNOISE`/`TRRANDOM` sources, `devnoise`); every
+/// run then carries a note saying so — or saying that the runs are
+/// all the same circuit, when the deck has no transient noise either.
+///
 /// The outer error is for the sweep itself (an unknown element or
 /// parameter, a duplicate, a row of the wrong length, a non-finite
-/// value), checked before any run; each run's own failure is in its
+/// value, a seed that is not a whole number in `1..=`[`SEED_MAX`]),
+/// checked before any run; each run's own failure is in its
 /// [`SweepRun::outcome`].
 pub fn sweep(
     netlist: &Netlist,
@@ -388,10 +550,10 @@ pub fn sweep(
     params: &[SweepParam],
     runs: &[Vec<f64>],
 ) -> Result<Vec<SweepRun>, Error> {
-    let slots = prepare(netlist, params, runs)?;
+    let plan = prepare(netlist, opts, params, runs)?;
     Ok(runs
         .iter()
-        .map(|row| run_one(netlist, opts, &slots, row))
+        .map(|row| run_one(netlist, opts, &plan, row))
         .collect())
 }
 
@@ -410,14 +572,14 @@ pub fn sweep_parallel(
     threads: usize,
 ) -> Result<Vec<SweepRun>, Error> {
     use rayon::prelude::*;
-    let slots = prepare(netlist, params, runs)?;
+    let plan = prepare(netlist, opts, params, runs)?;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
         .map_err(|e| Error::Build(format!("sweep thread pool: {e}")))?;
     Ok(pool.install(|| {
         runs.par_iter()
-            .map(|row| run_one(netlist, opts, &slots, row))
+            .map(|row| run_one(netlist, opts, &plan, row))
             .collect()
     }))
 }
@@ -429,6 +591,12 @@ mod tests {
     #[test]
     fn parse_forms() {
         assert_eq!(SweepParam::parse("TEMP").unwrap(), SweepParam::Temp);
+        assert_eq!(SweepParam::parse(" Seed ").unwrap(), SweepParam::Seed);
+        assert_eq!(SweepParam::Seed.key(), "seed");
+        assert_eq!(
+            SweepParam::parse("@seed[r]").unwrap().key(),
+            "@seed[resistance]"
+        );
         assert_eq!(
             SweepParam::parse("R1").unwrap(),
             SweepParam::Instance {

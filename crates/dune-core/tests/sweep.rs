@@ -319,3 +319,165 @@ fn a_seeded_sweep_is_thread_count_independent() {
         assert_runs_bits(&seq, &par);
     }
 }
+
+/// `seeded_deck` with its seed, `v1` and temperature written in.
+fn seeded_edited(seed: u64, v1: &str, temp: &str) -> String {
+    seeded_deck()
+        .replace(
+            ".options seed=21",
+            &format!(".options seed={seed} temp={temp}"),
+        )
+        .replace("v1 1 0 2\n", &format!("v1 1 0 {v1}\n"))
+}
+
+#[test]
+fn a_seed_sweep_reproduces_the_seeded_decks_bit_for_bit() {
+    // `seed` composes with a value and the temperature: every run is
+    // the deck with `.options seed=S temp=T` and the value written in.
+    let base = parse(&seeded_deck());
+    assert!(base.uses_random() && base.uses_temper());
+    let params: Vec<SweepParam> = ["seed", "v1", "temp"]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+    let rows = vec![
+        vec![21.0, 2.0, 27.0],
+        vec![22.0, 2.0, 27.0],
+        vec![7.0, 1.5, -10.0],
+        vec![4_294_967_295.0, 1.0, 80.0],
+    ];
+    let runs = sweep(&base, &options(&base), &params, &rows).unwrap();
+    let texts = [
+        seeded_edited(21, "2", "27"),
+        seeded_edited(22, "2", "27"),
+        seeded_edited(7, "1.5", "-10"),
+        seeded_edited(4_294_967_295, "1", "80"),
+    ];
+    for (r, (run, text)) in runs.iter().zip(&texts).enumerate() {
+        let out = run.outcome.as_ref().expect("run succeeds");
+        assert!(out.notes.iter().all(|n| !n.contains("`seed` is swept")));
+        let want = single(&parse(text));
+        assert_eq!(out.solutions.len(), want.len());
+        for (a, b) in out.solutions.iter().zip(&want) {
+            assert_bits(a, b, &format!("seed run {r}"));
+        }
+    }
+    // Seed 21 is the deck's own; 22 draws other numbers.
+    let v = |r: usize| {
+        runs[r].outcome.as_ref().unwrap().solutions[0]
+            .column("v(3)")
+            .unwrap()[0]
+    };
+    assert_ne!(v(0).to_bits(), v(1).to_bits());
+}
+
+#[test]
+fn a_seed_sweep_matches_with_seed_and_wins_over_the_callers_seed() {
+    // The caller's options say seed 5; the swept seed wins, and each
+    // run is `with_seed` of the deck.
+    let base = parse(&seeded_deck());
+    let mut opts = options(&base);
+    opts.seed = 5;
+    let seeds: Vec<Vec<f64>> = (100..104).map(|s| vec![s as f64]).collect();
+    let runs = sweep(&base, &opts, &[SweepParam::Seed], &seeds).unwrap();
+    for (run, s) in runs.iter().zip(100u64..) {
+        let (nl, diags) = base.with_seed(s);
+        assert!(
+            diags
+                .iter()
+                .all(|d| d.severity != dune_netlist::Severity::Error)
+        );
+        let want = single(&nl);
+        for (a, b) in run.outcome.as_ref().unwrap().solutions.iter().zip(&want) {
+            assert_bits(a, b, &format!("seed {s}"));
+        }
+    }
+}
+
+#[test]
+fn a_seed_sweep_refuses_what_is_not_a_seed() {
+    let base = parse(&seeded_deck());
+    let opts = options(&base);
+    let err = |names: &[&str], v: f64| {
+        let params: Vec<SweepParam> = names.iter().map(|s| s.parse().unwrap()).collect();
+        let row = vec![v; params.len()];
+        sweep(&base, &opts, &params, &[vec![3.0; params.len()], row])
+            .unwrap_err()
+            .to_string()
+    };
+    for bad in [0.0, -3.0, 1.5, 4_294_967_296.0, 1e300] {
+        let e = err(&["seed"], bad);
+        assert!(
+            e.contains("sweep run 1") && e.contains("not a seed"),
+            "{bad}: {e}"
+        );
+    }
+    assert!(err(&["seed"], f64::INFINITY).contains("not finite"));
+    assert!(err(&["seed", "SEED"], 3.0).contains("`seed` given twice"));
+}
+
+#[test]
+fn a_seed_sweep_without_random_functions_says_what_the_seed_changes() {
+    // No random function, no transient noise: the runs are the same
+    // circuit, and each one says so.
+    let quiet = parse("div\nv1 1 0 dc 2\nr1 1 2 1k\nr2 2 0 1k\n.op\n.end\n");
+    assert!(!quiet.uses_random());
+    let runs = sweep(
+        &quiet,
+        &options(&quiet),
+        &[SweepParam::Seed],
+        &[vec![1.0], vec![2.0]],
+    )
+    .unwrap();
+    let a = runs[0].outcome.as_ref().unwrap();
+    let b = runs[1].outcome.as_ref().unwrap();
+    assert!(
+        a.notes
+            .iter()
+            .any(|n| n.contains("every run is the same circuit"))
+    );
+    assert_bits(&a.solutions[0], &b.solutions[0], "seed-independent");
+    // A TRNOISE source: the seed changes the noise only, and each run
+    // is the deck with `.options seed=S`.
+    let noisy_text = |opt: &str| {
+        format!("noisy\n{opt}v1 1 0 dc 0 trnoise(1m 1n 0 0)\nr1 1 0 1k\n.tran 1n 20n\n.end\n")
+    };
+    let noisy = parse(&noisy_text(""));
+    let runs = sweep(
+        &noisy,
+        &options(&noisy),
+        &[SweepParam::Seed],
+        &[vec![1.0], vec![2.0]],
+    )
+    .unwrap();
+    let a = runs[0].outcome.as_ref().unwrap();
+    let b = runs[1].outcome.as_ref().unwrap();
+    assert!(
+        a.notes
+            .iter()
+            .any(|n| n.contains("only changes its transient noise"))
+    );
+    assert_ne!(
+        format!("{:?}", a.solutions[0].data),
+        format!("{:?}", b.solutions[0].data),
+        "another seed, other noise"
+    );
+    let want = single(&parse(&noisy_text(".options seed=2\n")));
+    assert_bits(&b.solutions[0], &want[0], "seed 2 = .options seed=2");
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn a_seed_sweep_is_thread_count_independent() {
+    let base = parse(&seeded_deck());
+    let params: Vec<SweepParam> = vec!["seed".parse().unwrap(), "temp".parse().unwrap()];
+    let rows: Vec<Vec<f64>> = (0..10)
+        .map(|i| vec![1000.0 + i as f64, -40.0 + 15.0 * i as f64])
+        .collect();
+    let opts = options(&base);
+    let seq = sweep(&base, &opts, &params, &rows).unwrap();
+    for threads in [0, 1, 3, 8] {
+        let par = dune_core::sweep_parallel(&base, &opts, &params, &rows, threads).unwrap();
+        assert_runs_bits(&seq, &par);
+    }
+}

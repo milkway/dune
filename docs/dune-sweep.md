@@ -37,13 +37,15 @@ ngspice em modo batch também não).
 | `@l1[inductance]` / `@l1[l]` | valor do indutor |
 | `@vin[dc]`, `@vin[acmag]`, `@vin[acphase]` | DC, módulo AC e fase AC (graus) de V/I |
 | `@m1[w]`, `@m1[l]` | W e L desenhados do MOSFET (m) |
+| `seed` | semente das funções aleatórias do deck e do ruído transiente (como `.options seed=`; abaixo) |
 
 Sintaxe `@dev[param]` do ngspice, mais os atalhos de nome nu. Nomes
 sem diferença de caixa; elementos de subcircuito pelo nome expandido
-(`r.x1.r1`). Parâmetros de **modelo** ficam para a v2. Erros de
-varredura (elemento inexistente, parâmetro que o elemento não tem, o
-mesmo alvo duas vezes — inclusive `r1` e `@r1[r]` —, linha de
-tamanho errado, valor não finito) são checados antes de qualquer
+(`r.x1.r1`; um elemento chamado `seed` é `@seed[...]`). Parâmetros de
+**modelo** ficam para a v2. Erros de varredura (elemento inexistente,
+parâmetro que o elemento não tem, o mesmo alvo duas vezes — inclusive
+`r1` e `@r1[r]` —, linha de tamanho errado, valor não finito, semente
+que não é inteiro de 1 a 2³² − 1) são checados antes de qualquer
 rodada.
 
 Fonte sem especificação AC que recebe `acmag` (ou `acphase`) ganha
@@ -54,8 +56,9 @@ uma com a outra metade zero — módulo 0 excita nada, como sem spec.
 ### Rust (`dune-core`)
 
 ```rust
-pub enum SweepParam { Temp, Instance { name: String, param: Option<String> } }
+pub enum SweepParam { Temp, Seed, Instance { name: String, param: Option<String> } }
 impl SweepParam { fn parse(&str) -> Result<Self, Error>; fn key(&self) -> String }
+pub const SEED_MAX: u64 = 0xFFFF_FFFF;
 pub struct SweepOutput { pub solutions: Vec<Solution>, pub notes: Vec<String> }
 pub struct SweepRun { pub values: Vec<f64>, pub outcome: Result<SweepOutput, Error> }
 pub fn sweep(nl: &Netlist, opts: &Options, params: &[SweepParam], runs: &[Vec<f64>])
@@ -152,21 +155,47 @@ Um deck com `agauss`/`gauss`/`aunif`/`unif`/`limit` roda no nominal sem
 deck) — o mesmo em toda rodada de um `sweep`, em qualquer número de
 threads (`tests/sweep.rs::a_seeded_sweep_is_thread_count_independent`),
 e a mesma coisa a qualquer temperatura varrida (a reexpansão repete os
-sorteios). **Monte Carlo do próprio deck:** rodada `i` ↔
-`netlist.with_seed(s_i)` (por exemplo `s_i = base + i`), cada uma uma
-leitura nova dos cartões guardados, sem API nova no `dune-core`:
+sorteios).
 
-```rust
-let runs: Vec<_> = (0..n)
-    .map(|i| {
-        let (nl, _diags) = netlist.with_seed(base + i);
-        let (ckt, _) = Circuit::from_netlist(&nl)?;
-        nl.analyses.iter().map(|a| ckt.run(a, &opts)).collect::<Result<Vec<_>, _>>()
-    })
-    .collect();
-```
+**Monte Carlo do próprio deck: `seed` como parâmetro de varredura**
+(`SweepParam::Seed`, texto `seed`, 2026-11-14). Uma lista de sementes
+vira N rodadas; a rodada com semente `s` é exatamente o deck com
+`.options seed=s` escrito nele: `netlist.with_seed(s)` (nova leitura
+dos cartões guardados) e `opts.seed = s` (o ruído transiente segue a
+mesma semente, como um só `rndseed` no ngspice-47). A semente varrida
+vence a do deck e a do chamador, como o `temp` varrido vence
+`opts.temp`. Compõe como os outros parâmetros (grade ou zip é do
+binding; o core recebe linhas): os valores e o `temp` da linha se
+aplicam ao netlist sorteado — num deck que lê `temper` a reexpansão na
+temperatura da rodada repete os sorteios da semente. Os alvos são
+resolvidos de novo no netlist sorteado (só difeririam se um `.if`
+lesse um sorteio; então a rodada falha com o erro de resolução). Erro
+da reavaliação (raro: um valor sorteado que o parser recusa) falha a
+rodada; os avisos dela são os da leitura original e não se repetem.
+Sequencial = paralelo bit a bit, em qualquer número de threads
+(`tests/sweep.rs::a_seed_sweep_is_thread_count_independent`, 0/1/3/8),
+e cada rodada = o deck editado com `.options seed=S temp=T` e o valor
+escrito (`a_seed_sweep_reproduces_the_seeded_decks_bit_for_bit`).
 
-Não feito (pediria API pública): um parâmetro `seed` como `SweepParam`
-(o `sweep` então chamaria `with_seed` por rodada, e o `sweep_parallel`
-herdaria a independência de threads), ou um `monte_carlo(netlist, opts,
-seeds)`. Os bindings podem fazer o laço acima.
+Valores: inteiro de 1 a `SEED_MAX` = 2³² − 1. O ngspice-47 lê a
+semente como inteiro de 32 bits sem sinal (`.options seed=4294967303`
+sorteia como 7, e `4294967296` daria 0): numa lista explícita um valor
+acima só seria apelido de outro, então é recusado antes de qualquer
+rodada, com 0, negativo, fracionário e não finito. Lista sem limite
+próprio — como as outras listas de varredura (uma linha por rodada).
+
+**Deck sem função aleatória** (`Netlist::uses_random() == false`, API
+nova do `dune-netlist`): a varredura roda (é o jeito de variar só o
+ruído transiente) e cada rodada leva uma nota nas suas `notes`:
+"`seed` is swept but the deck has no random function (…): the seed
+only changes its transient noise" quando há fonte
+`TRNOISE`/`TRRANDOM` (sem `notrnoise`) ou `devnoise`; senão "… and no
+transient noise: every run is the same circuit". Não é erro: a
+semente continua sendo `.options seed=` daquela rodada.
+
+**Atalho "N amostras a partir de uma semente base": só nos bindings,
+não no core.** O core recebe conjuntos concretos (D-0028) — um
+`monte_carlo(netlist, opts, base, n)` seria só `base..base+n` com
+outro nome. Nos bindings a lista é uma expressão (`seed = 1:100` em R,
+`{"seed": range(1, 101)}` em Python) e compõe com grade e zip; o
+atalho fica documentado ali, sem argumento novo.
