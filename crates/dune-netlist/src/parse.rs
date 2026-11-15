@@ -8,16 +8,17 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::cond::{Activity, Conds};
 use crate::deck::{self, Card, Deck, IncludeLoader};
 use crate::diag::Diagnostic;
 use crate::elem::{ElemCtx, parse_element};
 use crate::func::{FuncScope, FuncTable};
-use crate::ir::{Analysis, Model, Netlist, Param, ParamValue};
+use crate::ir::{Model, Netlist, Param, ParamValue};
 use crate::param::{ParamDef, ParamEnv, TemperUse};
 use crate::scan::Scanner;
-use crate::span::SourceMap;
+use crate::span::{FileId, SourceMap, Span};
 use crate::subckt::{
     BodyItem, ExpandCtx, GlobalModel, ModelCard, SubcktDef, TopItem, TopScope, expand,
 };
@@ -82,6 +83,99 @@ fn first_keyword(card: &Card) -> String {
         .unwrap_or_default()
 }
 
+/// What [`Netlist::at_temperature`] needs to evaluate a deck again
+/// (D-0075): the cards as they were read — includes already resolved,
+/// so no file is read twice (wasm has no file system) — and the
+/// settings of the parse that produced the netlist.
+pub(crate) struct Reexpand {
+    title: String,
+    cards: Arc<Vec<Card>>,
+    overrides: Overrides,
+    /// The deck read `temper` (or a behavioural `tc1`/`tc2`) where a
+    /// device sees it.
+    temper: bool,
+}
+
+impl std::fmt::Debug for Reexpand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reexpand")
+            .field("cards", &self.cards.len())
+            .field("overrides", &self.overrides)
+            .field("temper", &self.temper)
+            .finish()
+    }
+}
+
+/// Settings a caller imposes on a parse instead of the deck's own.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Overrides {
+    /// The circuit temperature `temper` reads (°C), instead of the
+    /// deck's `.temp`/`.options temp`.
+    pub temperature: Option<f64>,
+}
+
+impl Overrides {
+    /// The same settings with `temper` = `t` (°C).
+    fn at(mut self, t: f64) -> Self {
+        self.temperature = Some(t);
+        self
+    }
+}
+
+impl Netlist {
+    /// Whether the netlist depends on the circuit temperature beyond
+    /// what the devices compute from it: some device or model value
+    /// read `temper` (directly, through a `.param`, a subcircuit
+    /// default or a `.func`), or a behavioural R/C/L carries
+    /// `tc1`/`tc2`. Such a netlist was evaluated at one temperature
+    /// and must be re-expanded with [`Netlist::at_temperature`] to be
+    /// simulated at another; `dune-core` does it by itself (D-0075).
+    /// A netlist built by hand, or one whose deck does not depend on
+    /// the temperature, answers `false`.
+    pub fn uses_temper(&self) -> bool {
+        self.reexpand.as_ref().is_some_and(|r| r.temper)
+    }
+
+    /// The same deck evaluated with `temper` = `temp_celsius` (°C), as
+    /// ngspice-47 re-evaluates it at every temperature it simulates
+    /// (`inp_evaluate_temper`, called by `cktdojob.c` and at each
+    /// point of a `.dc temp` sweep). The cards are those read by the
+    /// original parse — nothing is read from disk again — and the
+    /// returned netlist carries `temp = temp_celsius` as its last
+    /// option, so it is simulated at the temperature it was evaluated
+    /// at.
+    ///
+    /// The diagnostics are those of the new evaluation (warnings
+    /// included); their spans resolve against the [`SourceMap`] of
+    /// the original parse. A netlist that does not
+    /// [use `temper`](Netlist::uses_temper) comes back as a copy (with
+    /// the `temp` option appended). Changes made to `self` after the
+    /// parse are not carried over: the deck is evaluated anew.
+    pub fn at_temperature(&self, temp_celsius: f64) -> (Netlist, Vec<Diagnostic>) {
+        let at = Span::new(FileId(0), 0, 0);
+        if !temp_celsius.is_finite() {
+            return (
+                self.clone(),
+                vec![Diagnostic::global_error(format!(
+                    "temperature must be finite, got {temp_celsius}"
+                ))],
+            );
+        }
+        let (mut nl, diags) = match &self.reexpand {
+            Some(r) if r.temper => {
+                parse_cards(r.title.clone(), &r.cards, r.overrides.at(temp_celsius))
+            }
+            _ => (self.clone(), Vec::new()),
+        };
+        nl.options.push(Param {
+            name: "temp".into(),
+            value: ParamValue::Num(temp_celsius),
+            span: at,
+        });
+        (nl, diags)
+    }
+}
+
 fn parse_deck(deck: Deck) -> ParseOutcome {
     let Deck {
         title,
@@ -89,7 +183,24 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
         sources,
         diags: mut all_diags,
     } = deck;
+    let cards = Arc::new(cards);
+    let (netlist, diags) = parse_cards(title, &cards, Overrides::default());
+    all_diags.extend(diags);
+    ParseOutcome {
+        netlist,
+        diags: all_diags,
+        sources,
+    }
+}
 
+/// The real parse, over cards already read.
+fn parse_cards(
+    title: String,
+    cards_arc: &Arc<Vec<Card>>,
+    overrides: Overrides,
+) -> (Netlist, Vec<Diagnostic>) {
+    let cards: &[Card] = cards_arc;
+    let mut all_diags = Vec::new();
     let mut nl = Netlist {
         title,
         ..Netlist::default()
@@ -108,7 +219,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     let mut func_names: HashSet<String> = HashSet::new();
     let mut in_control = false;
     let mut subckt_depth = 0usize;
-    for card in &cards {
+    for card in cards {
         let kw = first_keyword(card);
         if in_control {
             in_control = kw != ".endc";
@@ -166,7 +277,9 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     // parameters (`.options temp={t0}`).
     let mut first_diags = Vec::new();
     let env = crate::param::resolve(&param_defs, Some(&global_scope), 27.0, &mut first_diags);
-    let temperature = circuit_temperature(&cards, &env);
+    let temperature = overrides
+        .temperature
+        .unwrap_or_else(|| circuit_temperature(cards, &env));
     let env = if temperature != 27.0 && env.has_tainted() {
         drop(env);
         crate::param::resolve(
@@ -197,7 +310,7 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     let mut top_conds = Conds::default();
     let mut top_act = Activity::default();
 
-    for card in &cards {
+    for card in cards {
         let kw = first_keyword(card);
         if saw_end {
             after_end += 1;
@@ -442,15 +555,16 @@ fn parse_deck(deck: Deck) -> ParseOutcome {
     nl.elements = elements;
     nl.models = models;
     all_diags.extend(env.random_note());
-    if let Some(at) = env.temper_first() {
-        temper_checks(&nl, at, &env, &mut all_diags);
+    let temper = env.temper_first().is_some();
+    if temper {
+        nl.reexpand = Some(Arc::new(Reexpand {
+            title: nl.title.clone(),
+            cards: Arc::clone(cards_arc),
+            overrides,
+            temper,
+        }));
     }
-
-    ParseOutcome {
-        netlist: nl,
-        diags: all_diags,
-        sources,
-    }
+    (nl, all_diags)
 }
 
 /// The circuit temperature `temper` reads (°C): the last `.temp` card
@@ -513,37 +627,6 @@ fn circuit_temperature(cards: &[Card], env: &ParamEnv) -> f64 {
                 .and_then(num)
         })
         .unwrap_or(27.0)
-}
-
-/// After a deck read `temper` (first at `at`): it was evaluated once,
-/// at the circuit temperature. A `.dc temp` sweep would need the deck
-/// re-expanded at every point — ngspice-47 re-evaluates such
-/// expressions there (`g9-probes t2 t_dc_sweep_model`); the parser
-/// here runs once, before the engine, so the sweep is refused. Any
-/// later change of the temperature (an engine-option override from a
-/// binding) does not reach `temper` either: a warning says so.
-fn temper_checks(nl: &Netlist, at: crate::span::Span, env: &ParamEnv, diags: &mut Vec<Diagnostic>) {
-    for a in &nl.analyses {
-        if let Analysis::Dc { sweeps, span } = a
-            && sweeps.iter().any(|s| s.src.eq_ignore_ascii_case("temp"))
-        {
-            diags.push(Diagnostic::error(
-                "a .dc temp sweep cannot be combined with `temper` (or tc1/tc2 on a \
-                 behavioural R/C/L): Dune evaluates them once, when the netlist is read, and \
-                 re-expanding the deck at every temperature point is not supported yet",
-                *span,
-            ));
-        }
-    }
-    let t = env.temperature();
-    diags.push(Diagnostic::warning(
-        format!(
-            "`temper` (and tc1/tc2 on a behavioural R/C/L) is evaluated once, at the circuit \
-             temperature {t} °C; changing the temperature after the netlist is read does not \
-             re-evaluate it"
-        ),
-        at,
-    ));
 }
 
 /// Record the name a `.func` (or function-form `.param`) card defines.

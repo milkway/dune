@@ -30,6 +30,10 @@ pub struct Netlist {
     /// `.width out=N`: print column width (the `in=` half only ever
     /// mattered to punched-card decks and is ignored).
     pub width_out: Option<usize>,
+    /// The cards and settings to evaluate the deck again
+    /// ([`Netlist::at_temperature`]); `None` for a netlist built by
+    /// hand or one that does not need it.
+    pub(crate) reexpand: Option<std::sync::Arc<crate::parse::Reexpand>>,
 }
 
 /// One circuit element (an instance line).

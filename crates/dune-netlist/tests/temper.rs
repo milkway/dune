@@ -265,32 +265,82 @@ fn errors_where_ngspice_errs_t1_t2() {
 }
 
 #[test]
-fn temperature_sweeps_are_refused_with_temper() {
+fn temperature_sweeps_re_expand_the_deck() {
     // ngspice re-evaluates temper at each point of a .dc temp sweep
-    // (t2 t_dc_sweep_model); Dune evaluates it once.
-    let e = err(".model rm r rsh={temper}\nr1 1 0 rm l=1 w=1\ni1 0 1 1\n.dc temp 0 100 50");
-    assert!(e.contains(".dc temp"), "{e}");
-    // A sweep without temper, or temper without a sweep, is fine; a
-    // temper-dependent .param nobody uses does not count.
-    clean("r1 1 0 1k\ni1 0 1 1\n.dc temp 0 100 50");
-    clean(".param p={temper}\nr1 1 0 1k\ni1 0 1 1\n.dc temp 0 100 50");
-    // The once-only evaluation is said as a warning.
-    let out = parse("r1 1 0 {temper}");
+    // (t2 t_dc_sweep_model; temper-seed-probes t1): the netlist knows
+    // it depends on temper and re-expands at another temperature
+    // (D-0075). No warning, no refusal.
+    let out = parse(".model rm r rsh={temper}\nr1 1 0 rm l=1 w=1\ni1 0 1 1\n.dc temp 0 100 50");
+    assert!(errors(&out).is_empty(), "{:?}", errors(&out));
     assert!(
         out.diags
             .iter()
-            .any(|d| d.severity == Severity::Warning && d.message.contains("evaluated once"))
+            .all(|d| !d.message.contains("evaluated once"))
     );
+    assert!(out.netlist.uses_temper());
+    let (at, diags) = out.netlist.at_temperature(85.0);
+    assert!(
+        diags.iter().all(|d| d.severity != Severity::Error),
+        "{diags:?}"
+    );
+    let rsh = |nl: &Netlist| {
+        nl.models[0]
+            .params
+            .iter()
+            .find_map(|p| match (p.name.as_str(), &p.value) {
+                ("rsh", ParamValue::Num(v)) => Some(*v),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert_eq!(rsh(&out.netlist), 27.0);
+    assert_eq!(rsh(&at), 85.0);
+    // The re-expanded netlist is simulated where it was evaluated:
+    // `temp` is its last option, and it re-expands again.
+    let last = at.options.last().unwrap();
+    assert_eq!(
+        (last.name.as_str(), &last.value),
+        ("temp", &ParamValue::Num(85.0))
+    );
+    assert!(at.uses_temper());
+    assert_eq!(rsh(&at.at_temperature(-40.0).0), -40.0);
+    // Back at the deck's own temperature: the same netlist.
+    let (back, _) = at.at_temperature(27.0);
+    assert_eq!(
+        format!("{:?}", back.elements),
+        format!("{:?}", out.netlist.elements)
+    );
+    assert_eq!(
+        format!("{:?}", back.models),
+        format!("{:?}", out.netlist.models)
+    );
+    // A deck without temper, or with a temper-dependent .param nobody
+    // uses, does not depend on the temperature.
+    for deck in [
+        "r1 1 0 1k\ni1 0 1 1\n.dc temp 0 100 50",
+        ".param p={temper}\nr1 1 0 1k\ni1 0 1 1\n.dc temp 0 100 50",
+    ] {
+        let nl = clean(deck);
+        assert!(!nl.uses_temper(), "{deck}");
+        let (same, d) = nl.at_temperature(85.0);
+        assert!(d.is_empty());
+        assert_eq!(format!("{:?}", same.elements), format!("{:?}", nl.elements));
+    }
+    // A hand-built netlist cannot be re-expanded either.
+    assert!(!Netlist::default().uses_temper());
+    // Non-finite temperatures are refused.
+    let (_, d) = out.netlist.at_temperature(f64::NAN);
+    assert!(d.iter().any(|d| d.severity == Severity::Error));
 }
 
 // --- `temper`, `tc1`/`tc2` and `.func` in behavioural R/C/L. Probes
 // `bN case` are in `.claude/scratch/behav-probes/bN.txt` (rules in
 // `docs/dune-netlist.md`, "R, C e L comportamentais").
 
+/// The deck depends on the circuit temperature (it is re-expanded at
+/// every temperature it is simulated at, D-0075).
 fn once_warning(out: &ParseOutcome) -> bool {
-    out.diags
-        .iter()
-        .any(|d| d.severity == Severity::Warning && d.message.contains("evaluated once"))
+    out.netlist.uses_temper()
 }
 
 /// The tree of element `name`'s B source with `v(…)` read from `v`.
@@ -365,9 +415,12 @@ fn temper_inside_a_behavioural_expression() {
     });
     assert!((i - 1.0 / (1.06 * 500.0 * 1.01)).abs() < 1e-15, "{i}");
     // ngspice re-evaluates it at each point of a .dc temp sweep (b1
-    // r_dcsweep_v); Dune refuses the combination.
-    let e = err("r1 1 0 r={1k*(1+temper/100)*(1+0.1*v(1))}\ni1 0 1 1m\n.dc temp 0 100 50");
-    assert!(e.contains(".dc temp"), "{e}");
+    // r_dcsweep_v); so does Dune, by re-expanding (D-0075).
+    let out = parse("r1 1 0 r={1k*(1+temper/100)*(1+0.1*v(1))}\ni1 0 1 1m\n.dc temp 0 100 50");
+    assert!(errors(&out).is_empty(), "{:?}", errors(&out));
+    let (at, _) = out.netlist.at_temperature(50.0);
+    let i = eval(bexpr(&at, "br1"), &|n| if n == "1" { 2.0 } else { 0.0 });
+    assert!((i - 2.0 / (1e3 * 1.5 * 1.2)).abs() < 1e-15, "{i}");
     // The other rules of temper hold: not from an enclosing scope.
     let e = err(".param p={temper}\n.subckt s a\nr1 a 0 r={p*(1+v(a))}\n.ends\nx1 1 s");
     assert!(e.contains("enclosing scope"), "{e}");
@@ -451,9 +504,12 @@ fn tc_on_a_behavioural_rcl() {
     });
     assert!((v - 2e-6 / 2.0 * k).abs() < 1e-20, "{v}");
     // ngspice re-evaluates the factor in a .dc temp sweep; Dune
-    // refuses, as for temper.
-    let e = err(".temp 85\nr1 1 0 r={1k*(1+0.1*v(1))} tc1=0.01\ni1 0 1 1m\n.dc temp 0 100 50");
-    assert!(e.contains(".dc temp"), "{e}");
+    // re-expands (D-0075).
+    let out = parse(".temp 85\nr1 1 0 r={1k*(1+0.1*v(1))} tc1=0.01\ni1 0 1 1m\n.dc temp 0 100 50");
+    assert!(errors(&out).is_empty() && out.netlist.uses_temper());
+    let (at, _) = out.netlist.at_temperature(37.0);
+    let i = eval(bexpr(&at, "br1"), &|n| if n == "1" { 1.0 } else { 0.0 });
+    assert!((i - 1.0 / 1100.0 / 1.1).abs() < 1e-18, "{i}");
 }
 
 #[test]
