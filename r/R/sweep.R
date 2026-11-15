@@ -10,6 +10,13 @@
 #' sweep over draws you make with [stats::rnorm()] and friends, so it is
 #' reproducible from your own [set.seed()].
 #'
+#' A deck that draws its own mismatch with `agauss`, `gauss`, `aunif`,
+#' `unif` or `limit` is sampled by sweeping `seed`: run `i` is the deck with
+#' `.options seed=` its seed, so `n` samples from a base seed are
+#' `seed = base + seq_len(n) - 1`, and a grid crosses them with the other
+#' parameters (every seed at every temperature, with the same draws at
+#' each temperature).
+#'
 #' @section Parameter names:
 #' Matched case-insensitively:
 #' * `temp`: circuit temperature in degrees Celsius (as `.options temp=`);
@@ -19,7 +26,11 @@
 #'   `@c1[capacitance]`, `@l1[inductance]`, `@vin[dc]`, `@vin[acmag]`,
 #'   `@vin[acphase]` (degrees), `@m1[w]`, `@m1[l]` (MOSFET width and
 #'   length, m). Non-syntactic names need backticks:
-#'   `` spice_sweep(deck, `@m1[w]` = c(2e-6, 4e-6)) ``.
+#'   `` spice_sweep(deck, `@m1[w]` = c(2e-6, 4e-6)) ``;
+#' * `seed`: whole numbers from 1 to 4294967295 (`2^32 - 1`), each run
+#'   the deck drawn with that seed (as `options = list(seed = )`, which a
+#'   swept seed overrides); on a deck without random functions it only
+#'   reseeds the transient noise, and each run's notes say so.
 #'
 #' Elements inside subcircuits go by their expanded names (`r.x1.r1`).
 #' Model parameters are not sweepable yet.
@@ -32,7 +43,9 @@
 #'   row and needs equal lengths (length-one values are recycled).
 #' @param .includes,.options As `includes` and `options` in
 #'   [spice_run()]; the options apply to every run (a swept `temp`
-#'   overrides `options$temp`).
+#'   overrides `options$temp`, a swept `seed` `options$seed`; `seed =
+#'   "random"` draws every run with one seed, reported in each run's
+#'   `seed`).
 #' @param .tmax_divisor As `tmax_divisor` in [spice_run()], for every run.
 #' @param .threads Worker threads: `1` (the default) runs sequentially,
 #'   `0` uses one per core, `n` uses `n`. Results are identical either
@@ -42,7 +55,7 @@
 #'   * `title`: the deck's title line;
 #'   * `params`: a tibble with `run` (the run index, from 1) and one
 #'     double column per swept parameter, named in canonical form
-#'     (`"r1"`, `"@m1[w]"`, `"temp"`);
+#'     (`"r1"`, `"@m1[w]"`, `"temp"`, `"seed"`);
 #'   * `runs`: a list of `spice_result`, one per run (each with the
 #'     deck's `.measure` cards evaluated in its `measurements` and its
 #'     `.four` cards in its `fourier`);
@@ -82,6 +95,20 @@
 #'   .mode = "zip"
 #' )
 #' mc$params
+#'
+#' # Monte Carlo of the deck's own random functions: 50 seeds
+#' mismatch <- "mismatch
+#' .param rv=agauss(1k, 50, 3)
+#' v1 1 0 dc 1
+#' r1 1 2 {rv}
+#' r2 2 0 1k
+#' .op
+#' .end"
+#' draws <- spice_sweep(mismatch, seed = 1:50)
+#' v2 <- subset(spice_tidy(draws, plots = "op"), variable == "v(2)")
+#' sd(v2$value)
+#' # One draw again, from its seed
+#' spice_run(mismatch, options = list(seed = 17))$seed
 spice_sweep <- function(deck, ..., .mode = c("grid", "zip"), .includes = NULL,
                         .options = NULL, .threads = 1L, .tmax_divisor = NULL) {
   call <- rlang::current_env()

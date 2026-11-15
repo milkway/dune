@@ -103,6 +103,19 @@ parâmetros, `runs` = lista de `spice_result`, `diagnostics`);
 os parâmetros na frente. Grade na ordem do `tidyr::expand_grid()`
 (primeiro mais lento — a mesma do Python). `zip` recicla comprimento 1.
 
+**`seed` nos bindings** (2026-11-14): é só mais um nome de parâmetro —
+`spice.sweep(deck, {"seed": range(1, 101)})`,
+`spice_sweep(deck, seed = 1:100)` — e vira a coluna `seed` de
+`params`/`df()`/`spice_tidy()` (`Int64` no polars; double no R, que não
+tem inteiro de 32 bits sem sinal). Cada rodada traz a sua semente em
+`Result.seed`/`res$seed`. "N amostras a partir de uma base" é
+`range(base, base + n)` / `base + seq_len(n) - 1`, sem argumento novo.
+O `options seed` do binding vale para todas as rodadas (inclusive
+`"random"`: uma semente sorteada para a varredura toda) e a semente
+varrida vence. Exemplos de Monte Carlo com `agauss` no `README` do
+Python, na docstring de `spice.sweep` e nos exemplos de `spice_sweep()`.
+O wasm não tem varredura (acima), então não há `seed` varrível lá.
+
 ### wasm / JS
 
 Fora desta leva: o `dune-core` compila para `wasm32` com `sweep`

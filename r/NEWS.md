@@ -10,6 +10,16 @@
   `set.seed()` makes it reproducible. Results gain `seed` (the seed the
   run was drawn with, `NA` when nominal) and `random_mode` (`"nominal"`
   or `"seeded"`); `options = list(seed = res$seed)` repeats a run.
+* **Monte Carlo of the deck's own random functions:** `spice_sweep()`
+  takes `seed` as a swept parameter: run `i` is the deck with `.options
+  seed=` its seed (`seed = 1:n` for `n` samples), composing with the
+  other parameters in grid and zip mode, in parallel, bit for bit. The
+  swept seed is a column of `params` and of `spice_tidy()`'s long
+  tibble; on a deck without random functions each run notes that the
+  seed only changes the transient noise (or nothing).
+* A deck that reads `temper` follows the `temp` option,
+  `spice_set_temp()` and a swept `temp` exactly as `.options temp=`
+  written in it (now tested).
 * `seed` must now be a whole number from 1 to `2^32 - 1` (was below
   `2^53`): ngspice reads a seed as an unsigned 32-bit integer, so a
   larger one only aliased a smaller one.

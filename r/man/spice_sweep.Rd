@@ -26,7 +26,8 @@ row and needs equal lengths (length-one values are recycled).}
 
 \item{.includes, .options}{As \code{includes} and \code{options} in
 \code{\link[=spice_run]{spice_run()}}; the options apply to every run (a swept \code{temp}
-overrides \code{options$temp}).}
+overrides \code{options$temp}, a swept \code{seed} \code{options$seed}; \code{seed = "random"} draws every run with one seed, reported in each run's
+\code{seed}).}
 
 \item{.threads}{Worker threads: \code{1} (the default) runs sequentially,
 \code{0} uses one per core, \code{n} uses \code{n}. Results are identical either
@@ -40,7 +41,7 @@ A \code{spice_sweep}: a list with
 \item \code{title}: the deck's title line;
 \item \code{params}: a tibble with \code{run} (the run index, from 1) and one
 double column per swept parameter, named in canonical form
-(\code{"r1"}, \code{"@m1[w]"}, \code{"temp"});
+(\code{"r1"}, \code{"@m1[w]"}, \code{"temp"}, \code{"seed"});
 \item \code{runs}: a list of \code{spice_result}, one per run (each with the
 deck's \code{.measure} cards evaluated in its \code{measurements} and its
 \code{.four} cards in its \code{fourier});
@@ -60,6 +61,13 @@ would on the deck edited by hand -- bit for bit.
 The simulator holds no random generator: a Monte Carlo is a \code{"zip"}
 sweep over draws you make with \code{\link[stats:rnorm]{stats::rnorm()}} and friends, so it is
 reproducible from your own \code{\link[=set.seed]{set.seed()}}.
+
+A deck that draws its own mismatch with \code{agauss}, \code{gauss}, \code{aunif},
+\code{unif} or \code{limit} is sampled by sweeping \code{seed}: run \code{i} is the deck with
+\verb{.options seed=} its seed, so \code{n} samples from a base seed are
+\code{seed = base + seq_len(n) - 1}, and a grid crosses them with the other
+parameters (every seed at every temperature, with the same draws at
+each temperature).
 }
 \section{Parameter names}{
 
@@ -72,7 +80,11 @@ source's DC level;
 \verb{@c1[capacitance]}, \verb{@l1[inductance]}, \verb{@vin[dc]}, \verb{@vin[acmag]},
 \verb{@vin[acphase]} (degrees), \verb{@m1[w]}, \verb{@m1[l]} (MOSFET width and
 length, m). Non-syntactic names need backticks:
-\code{spice_sweep(deck, `@m1[w]` = c(2e-6, 4e-6))}.
+\code{spice_sweep(deck, `@m1[w]` = c(2e-6, 4e-6))};
+\item \code{seed}: whole numbers from 1 to 4294967295 (\code{2^32 - 1}), each run
+the deck drawn with that seed (as \code{options = list(seed = )}, which a
+swept seed overrides); on a deck without random functions it only
+reseeds the transient noise, and each run's notes say so.
 }
 
 Elements inside subcircuits go by their expanded names (\code{r.x1.r1}).
@@ -113,6 +125,20 @@ mc <- spice_sweep(deck,
   .mode = "zip"
 )
 mc$params
+
+# Monte Carlo of the deck's own random functions: 50 seeds
+mismatch <- "mismatch
+.param rv=agauss(1k, 50, 3)
+v1 1 0 dc 1
+r1 1 2 {rv}
+r2 2 0 1k
+.op
+.end"
+draws <- spice_sweep(mismatch, seed = 1:50)
+v2 <- subset(spice_tidy(draws, plots = "op"), variable == "v(2)")
+sd(v2$value)
+# One draw again, from its seed
+spice_run(mismatch, options = list(seed = 17))$seed
 }
 \seealso{
 \code{\link[=spice_tidy]{spice_tidy()}}, \code{\link[=spice_run]{spice_run()}}.
