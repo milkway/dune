@@ -23,7 +23,7 @@ corpus circuit, simulated · [Known differences](corpus/KNOWN_DIFFS.md)
 [![PyPI spice3](https://img.shields.io/pypi/v/spice3.svg?label=pypi%20spice3)](https://pypi.org/project/spice3/)
 [![npm dune-sim](https://img.shields.io/npm/v/%40strategicprojects%2Fdune-sim.svg?label=npm%20dune-sim)](https://www.npmjs.com/package/@strategicprojects/dune-sim)
 [![R spice](https://img.shields.io/badge/R-spice-276DC3.svg)](https://milkway.github.io/dune/r/)
-[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+[![License: BSD-3-Clause AND ECL-2.0](https://img.shields.io/badge/license-BSD--3--Clause%20AND%20ECL--2.0-blue.svg)](#license)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24052213.svg)](https://doi.org/10.5281/zenodo.24052213)
 
 ## Packages
@@ -213,3 +213,17 @@ The BSIM4 model (`crates/dune-core/src/bsim4`, compiled with the default
 California, under the Educational Community License 2.0; the packages
 that include it are `BSD-3-Clause AND ECL-2.0`. A build without the
 `bsim` feature is plain BSD-3-Clause.
+
+The BSIM3 model, behind the same feature, also carries the BSIM terms
+of use of the UC Berkeley BSIM Research Group, reproduced in
+[NOTICE](NOTICE).
+
+The third-party Rust crates the packages link are all under permissive
+licences; none is copyleft. [`deny.toml`](deny.toml) is the accepted
+list, and CI checks it on every push. The `dune` command and the Python
+and R packages also embed the KaTeX fonts, which are under the SIL Open
+Font License; see [NOTICE](NOTICE).
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
