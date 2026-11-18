@@ -465,3 +465,12 @@ The Educational Community License, Version 2.0, in full:
 The compiled packages link third-party Rust crates, each under its own
 licence (see Cargo.lock; the R package lists them in inst/AUTHORS and
 ships their licence texts inside the vendored sources).
+All of them are under permissive licences (MIT, Apache-2.0, BSD
+2-Clause and 3-Clause, Zlib, Unlicense, Unicode-3.0); none requires the
+GPL, the LGPL or the AGPL. The accepted list is the file deny.toml of
+the repository, checked against the three lockfiles on every push.
+
+The `dune` command and the Python and R packages typeset figure labels
+with rpic-render and RaTeX, and through them embed the KaTeX fonts,
+which are under the SIL Open Font License 1.1. The four Rust crates and
+the npm package embed no fonts.

@@ -1,0 +1,25 @@
+# Licence policy for every third-party crate the workspace links.
+# Checked by `cargo deny check licenses` in CI and in tools/preflight.sh
+# for the three lockfiles (workspace, python/, r/src/rust/).
+#
+# Only permissive licences are accepted. No copyleft licence (GPL, LGPL,
+# AGPL) is on the list, so a dependency that requires one fails the check.
+# A crate offered under a choice ("MIT OR Apache-2.0 OR LGPL-2.1-or-later")
+# passes through its permissive option.
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ECL-2.0",
+    "Zlib",
+    "Unlicense",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9

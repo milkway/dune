@@ -37,6 +37,12 @@ for f in crates/dune-netlist crates/dune-raw crates/dune-core crates/dune-pic \
     cmp LICENSE "$f/LICENSE"
 done
 cmp NOTICE r/inst/COPYRIGHTS
+# Licence policy of the third-party crates (deny.toml), as in CI's
+# `licenses` job. Needs cargo-deny (`brew install cargo-deny`).
+echo "== dependency licences"
+for m in Cargo.toml python/Cargo.toml r/src/rust/Cargo.toml; do
+    cargo deny --all-features --manifest-path "$m" check licenses
+done
 echo "== fmt" && cargo +stable fmt --check
 echo "== clippy" && cargo +stable clippy --all-targets -- -D warnings
 echo "== clippy (parallel)" && cargo +stable clippy -p dune-core --features parallel --all-targets -- -D warnings
